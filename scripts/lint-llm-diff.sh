@@ -19,8 +19,9 @@
 #   first so the ref resolves.
 #
 # Exit codes are llmlint's own (0 clean, 1 violations, 2 config/harness error);
-# a diff with no lintable files is a clean 0.
-# llmlint: ignore[robust_shell] `set -e` deliberately omitted — the script controls its own exit codes (2 on resolve errors, 0 on no-diff) and must not abort early
+# a diff with no lintable files is a clean 0. `set -e` is deliberately omitted —
+# the script owns its exit codes (2 on resolve errors, 0 on no-diff) and must not
+# abort early.
 set -uo pipefail
 
 base_ref="origin/main"

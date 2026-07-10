@@ -1,6 +1,6 @@
 //! [`OneharnessProvider`]: the default [`Provider`], which runs each prompt on a
 //! real harness through the [`oneharness`](https://github.com/nickderobertis/oneharness)
-//! CLI (`oneharness run --format json`) and parses its report.
+//! CLI (`oneharness run`, whose report is JSON by default) and parses its report.
 //!
 //! It targets **oneharness v0.3.13+** for the uniform `--session <name>` handle:
 //! the engine threads one caller-owned name across turns and oneharness maps it to
@@ -137,12 +137,12 @@ fn respond_args(
     instructions: &str,
     session: Option<&str>,
 ) -> Vec<String> {
+    // `oneharness run` emits a JSON report by default; `--compact` makes it a
+    // single line. There is no `--format` flag on `run`.
     let mut args = vec![
         "run".into(),
         "--harness".into(),
         platform.into(),
-        "--format".into(),
-        "json".into(),
         "--compact".into(),
         "--events".into(),
         "--system".into(),
@@ -171,8 +171,6 @@ fn judge_side_args(harness: &str, model: &str, session: Option<&str>) -> Vec<Str
         "run".into(),
         "--harness".into(),
         harness.into(),
-        "--format".into(),
-        "json".into(),
         "--compact".into(),
         "--prompt-file".into(),
         "-".into(),
@@ -371,6 +369,8 @@ mod tests {
             .any(|w| w == ["--session", "run-1-skill"]));
         assert!(capable.windows(2).any(|w| w == ["--model", "sonnet"]));
         assert!(capable.iter().any(|a| a == "--events"));
+        // `oneharness run` has no `--format` flag; passing it is a live-path bug.
+        assert!(!capable.iter().any(|a| a == "--format"));
 
         // goose is not session-capable: the name is dropped even if supplied.
         let incapable = respond_args("goose", "sonnet", "do x", Some("run-1-skill"));

@@ -3,8 +3,10 @@
 //! real subprocess, real report parsing) without a live harness or model.
 //!
 //! It reads the prompt from stdin (`--prompt-file -`), classifies it by shape
-//! (skill respond / simulated user / judge), and emits a `oneharness run
-//! --format json` report on stdout. Markers in the `--system` value steer the
+//! (skill respond / simulated user / judge), and emits a `oneharness run` JSON
+//! report on stdout. It mirrors the real `run` flag contract (unrecognized flags
+//! exit non-zero), so a live-path arg bug is caught here. Markers in `--system`
+//! steer the
 //! skill turn: `[[reply:TEXT]]` sets the reply, `[[event:CMD]]` adds a `bash`
 //! tool event, `[[fail:KIND]]` returns a classified `failure_kind`. The judge
 //! turn decides `true` iff the criterion appears in the transcript it was given —
@@ -65,26 +67,47 @@ fn emit_error(message: &str) -> ! {
     std::process::exit(2);
 }
 
-/// Collect `--flag value` pairs from argv (enough for the flags onejudge passes).
+/// Parse argv, mirroring the real `oneharness run` flag contract so an invalid
+/// flag onejudge might pass (e.g. a `--format` that `run` does not accept) is
+/// caught here instead of slipping through a lenient double. Unrecognized `--`
+/// flags exit non-zero, exactly as the real CLI would.
 fn parse_flags() -> HashMap<String, String> {
+    // The value-bearing and toggle flags `oneharness run` actually exposes.
+    const VALUE_FLAGS: &[&str] = &[
+        "--harness",
+        "--model",
+        "--system",
+        "--system-file",
+        "--session",
+        "--session-dir",
+        "--prompt",
+        "--prompt-file",
+        "--output-format",
+    ];
+    const TOGGLES: &[&str] = &["--events", "--compact"];
+
     let args: Vec<String> = std::env::args().skip(1).collect();
     let mut flags = HashMap::new();
     let mut i = 0;
     while i < args.len() {
-        let arg = &args[i];
-        if arg.starts_with("--") {
-            // Value-bearing flags onejudge uses; the rest (e.g. --events) are toggles.
-            if matches!(
-                arg.as_str(),
-                "--harness" | "--model" | "--system" | "--session" | "--prompt-file" | "--format"
-            ) {
-                if let Some(value) = args.get(i + 1) {
-                    flags.insert(arg.clone(), value.clone());
-                    i += 2;
-                    continue;
-                }
-            }
+        let arg = args[i].as_str();
+        if VALUE_FLAGS.contains(&arg) {
+            let value = args
+                .get(i + 1)
+                .cloned()
+                .unwrap_or_else(|| emit_error(&format!("{arg} needs a value")));
+            flags.insert(arg.to_string(), value);
+            i += 2;
+            continue;
         }
+        if TOGGLES.contains(&arg) {
+            flags.insert(arg.to_string(), String::new());
+        } else if arg.starts_with("--") {
+            emit_error(&format!(
+                "unrecognized flag `{arg}` (the fake mirrors `oneharness run`)"
+            ));
+        }
+        // `run` (the subcommand) and any trailing positional fall through.
         i += 1;
     }
     flags

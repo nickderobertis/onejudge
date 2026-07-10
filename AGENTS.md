@@ -52,6 +52,8 @@ Built up from the `create-repo` skill's reference axes, not a single template.
   deny` + `cargo machete` supply-chain job.
 - **Cross-cutting:** `ci.md` (always) and `releasing.md` (applies — the crate is
   a versioned artifact published to crates.io; `release-plz` drives it).
+- **References composed:** base.md, shapes/library.md, languages/rust.md, ci.md,
+  llmlint.md, releasing.md
 - **Excluded, and why:** `shapes/cli.md` — onejudge ships no user-facing binary
   (the two `[[bin]]`s are deterministic test doubles behind the non-default
   `fake-provider` feature, never published); `intersections/rust-cli.md` and its
@@ -135,7 +137,7 @@ Use the `just` recipes; do not hand-roll equivalents. `just --list` is the index
 
 `onejudge` never talks to a model directly; a `Provider` (`provider.rs`) runs the
 skill, plays the simulated user, and judges the transcript. Two backends:
-`OneharnessProvider` (default; shells out to `oneharness run --format json`,
+`OneharnessProvider` (default; shells out to `oneharness run` — JSON report,
 targeting **v0.3.13+** for the uniform `--session` handle) and `CommandProvider`
 (a small JSON-lines subprocess protocol — see `docs/protocol.md` — backing the
 deterministic test doubles and any custom provider). Both feed tool `events` into
