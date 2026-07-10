@@ -96,16 +96,21 @@ jobs:
       - name: Fetch main (diff base)
         run: git fetch --no-tags --depth=2147483647 origin main
       - uses: extractions/setup-just@v3
+      - uses: astral-sh/setup-uv@v6   # setup-llmlint.sh installs oneharness + llmlint via `uv tool`
+      - name: Install the Claude Code harness
+        # llmlint drives the claude-code harness (llmlint.yml); oneharness shells
+        # out to the `claude` binary, so the harness itself must be on PATH too.
+        run: npm install -g @anthropic-ai/claude-code
       - name: Install oneharness + llmlint
         run: |
           ./scripts/setup-llmlint.sh
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       - name: Lint changed files
         env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
         run: |
-          if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
-            echo "::error::llmlint needs a harness credential (ANTHROPIC_API_KEY)." \
+          if [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
+            echo "::error::llmlint needs a harness credential (CLAUDE_CODE_OAUTH_TOKEN)." \
                  "Add the repo secret (Settings → Secrets and variables → Actions)." \
                  "Fork PRs are gated by require-approval-for-fork-workflows; see references/ci.md." >&2
             exit 1

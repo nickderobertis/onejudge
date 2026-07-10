@@ -25,17 +25,19 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-nextest
+      - uses: astral-sh/setup-uv@v6   # setup-llmlint.sh installs oneharness via `uv tool`
       - name: Install oneharness + an authenticated harness (Claude Code)
         run: |
-          ./scripts/setup-llmlint.sh   # installs oneharness (and llmlint) via uv
+          npm install -g @anthropic-ai/claude-code   # the harness binary oneharness shells out to (`claude`)
+          ./scripts/setup-llmlint.sh                 # installs oneharness (and llmlint) via uv
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       - name: Run the live tier
         env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           ONEJUDGE_LIVE_HARNESS: claude-code
         run: |
-          if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
-            echo "::error::the live tier needs a real harness credential (ANTHROPIC_API_KEY)." \
+          if [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
+            echo "::error::the live tier needs a real harness credential (CLAUDE_CODE_OAUTH_TOKEN)." \
                  "Add the repo secret; fork PRs are gated by require-approval-for-fork-workflows." >&2
             exit 1
           fi

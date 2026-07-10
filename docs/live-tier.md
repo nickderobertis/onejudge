@@ -20,7 +20,7 @@ live code can't rot; it just does not execute there.
 ```sh
 # Install oneharness + an authenticated harness first (see scripts/setup-llmlint.sh
 # for the oneharness install; authenticate your harness, e.g. Claude Code).
-export ANTHROPIC_API_KEY=...            # or your harness's credential
+export CLAUDE_CODE_OAUTH_TOKEN=...      # Claude Code harness credential (or your harness's own)
 just test-live
 ```
 

@@ -6,3 +6,5 @@
 /*.profraw
 # Local env
 .env
+# gh-secrets sync state (local bookkeeping; the manifest itself is committed)
+.gh-secrets-state.json
