@@ -25,9 +25,11 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-nextest
+      - uses: astral-sh/setup-uv@v6   # setup-llmlint.sh installs oneharness via `uv tool`
       - name: Install oneharness + an authenticated harness (Claude Code)
         run: |
-          ./scripts/setup-llmlint.sh   # installs oneharness (and llmlint) via uv
+          npm install -g @anthropic-ai/claude-code   # the harness binary oneharness shells out to (`claude`)
+          ./scripts/setup-llmlint.sh                 # installs oneharness (and llmlint) via uv
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       - name: Run the live tier
         env:

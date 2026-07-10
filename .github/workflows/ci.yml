@@ -96,6 +96,11 @@ jobs:
       - name: Fetch main (diff base)
         run: git fetch --no-tags --depth=2147483647 origin main
       - uses: extractions/setup-just@v3
+      - uses: astral-sh/setup-uv@v6   # setup-llmlint.sh installs oneharness + llmlint via `uv tool`
+      - name: Install the Claude Code harness
+        # llmlint drives the claude-code harness (llmlint.yml); oneharness shells
+        # out to the `claude` binary, so the harness itself must be on PATH too.
+        run: npm install -g @anthropic-ai/claude-code
       - name: Install oneharness + llmlint
         run: |
           ./scripts/setup-llmlint.sh
