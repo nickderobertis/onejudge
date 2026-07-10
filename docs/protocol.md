@@ -1,0 +1,88 @@
+# The CommandProvider JSON-lines protocol
+
+`CommandProvider` speaks a small, stable protocol so any command — a custom
+backend, or the deterministic test doubles — can act as a `Provider`. It is a
+one-shot exchange per operation: onejudge spawns the command, writes **one JSON
+request object** and a newline to the child's stdin, closes stdin, and reads
+**one JSON response object** from stdout. A non-zero exit, empty stdout, or
+unparseable/wrong-shaped output is a loud error (a classified
+`ProviderErrorKind::Protocol` / `Spawn`), never a silent empty turn.
+
+All three operations are distinguished by the request's `op` field.
+
+## `respond` — run one skill turn
+
+Request:
+
+```json
+{
+  "op": "respond",
+  "platform": "claude-code",
+  "model": "sonnet",
+  "skill": { "name": "greeter", "path": "/skills/greeter", "instructions": "..." },
+  "messages": [ { "role": "user", "content": "hi" } ],
+  "session": "run-42-skill"
+}
+```
+
+- `session` is present only on a session-capable provider (the caller-owned name
+  the engine threads across turns); omit it otherwise.
+- `messages` is the transcript so far; each message is `{role, content, events?}`
+  where `role` is `user` / `assistant` / `system`.
+
+Response:
+
+```json
+{
+  "message": "Hello! How can I help?",
+  "done": false,
+  "usage": { "input_tokens": 12, "output_tokens": 8, "cost_usd": 0.0 },
+  "events": [
+    { "kind": "tool_call", "name": "bash", "input": { "command": "ls" }, "index": 0 }
+  ]
+}
+```
+
+- `message` (required) is the assistant reply.
+- `done` (default `false`) signals the skill considers the task complete.
+- `usage` (optional) — any subset of the three fields; omit what you can't report
+  (`null`/absent means "no signal", never zero).
+- `events` (optional) — the normalized tool events the skill took this turn;
+  each is `{kind, name?, input?, output?, index}`. They are attached to the
+  assistant turn so the judge and `ToolQuery` can reason over them.
+
+## `user` — produce one simulated-user turn
+
+Request:
+
+```json
+{ "op": "user", "model": "opus", "persona": "A hurried shopper.", "messages": [ ... ], "session": "run-42-user" }
+```
+
+Response:
+
+```json
+{ "message": "And can I get it by Friday?", "stop": false, "usage": { ... } }
+```
+
+- `stop` (default `false`) ends the conversation.
+
+## `judge` — score a criterion against the transcript
+
+Request:
+
+```json
+{ "op": "judge", "model": "opus", "kind": "boolean", "criterion": "the reply was polite", "messages": [ ... ] }
+```
+
+- `kind` is `boolean` or `numeric`; a numeric query also carries `min` and `max`.
+
+Response:
+
+```json
+{ "value": true, "reason": "the assistant used courteous phrasing", "usage": { ... } }
+```
+
+- `value` is a boolean for a `boolean` query and a number for a `numeric` one;
+  onejudge type-checks it against the requested `kind`.
+- `reason` (optional) is the one-sentence justification.

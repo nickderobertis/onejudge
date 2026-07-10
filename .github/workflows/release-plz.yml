@@ -1,0 +1,55 @@
+# Fully automated releases (no manual deploy step): release-plz reads the merged
+# Conventional-Commits history, opens a release PR that bumps the version and
+# writes CHANGELOG.md, and — when that PR merges — tags `vX.Y.Z` and publishes to
+# crates.io. The only human action is merging the release PR. See references/
+# releasing.md and the "Commits, releases, and merging" section of AGENTS.md.
+
+name: release-plz
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  # On merge to main: tag and publish anything the release PR marked releasable.
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          # A PAT (not GITHUB_TOKEN) so the pushed tag fires downstream workflows.
+          token: ${{ secrets.RELEASE_PLZ_TOKEN }}
+      - name: Install pinned toolchain (from rust-toolchain.toml)
+        run: rustup show
+      - uses: release-plz/action@v0
+        with:
+          command: release
+        env:
+          GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+  # On merge to main: open/update the release PR (version bump + changelog).
+  release-pr:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.RELEASE_PLZ_TOKEN }}
+      - name: Install pinned toolchain (from rust-toolchain.toml)
+        run: rustup show
+      - uses: release-plz/action@v0
+        with:
+          command: release-pr
+        env:
+          GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}

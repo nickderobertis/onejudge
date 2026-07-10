@@ -1,0 +1,13 @@
+# release-plz drives releasing: version + changelog from Conventional Commits,
+# then tag + publish to crates.io. Bump policy and the model are recorded in
+# AGENTS.md ("Commits, releases, and merging").
+[workspace]
+# Pre-1.0: a breaking change bumps the minor, not to 1.0, until we consciously go
+# 1.0 by removing this rule (mirrors the bump policy in AGENTS.md).
+version_group = "onejudge"
+
+[[package]]
+name = "onejudge"
+# Review + Conventional Commits are the semver gate here, not an automated API
+# diff; flip this on once the public API stabilizes if you want the extra check.
+semver_check = false

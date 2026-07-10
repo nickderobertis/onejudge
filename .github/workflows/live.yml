@@ -1,0 +1,42 @@
+# The live tier: drive a REAL oneharness + harness so the OneharnessProvider path
+# is proven against the genuine external service. Deliberately OUT of the `check`
+# gate (non-deterministic, credentialed, networked). It REQUIRES its credential
+# and fails fast without it — it never no-ops to a green pass. Fork PRs are gated
+# by the repo's require-approval-for-fork-workflows setting (see references/ci.md),
+# not by a no-op branch here. Not in the required-checks set. See docs/live-tier.md.
+
+name: live
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  live:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned toolchain (from rust-toolchain.toml)
+        run: rustup show
+      - uses: extractions/setup-just@v3
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+      - name: Install oneharness + an authenticated harness (Claude Code)
+        run: |
+          ./scripts/setup-llmlint.sh   # installs oneharness (and llmlint) via uv
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Run the live tier
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ONEJUDGE_LIVE_HARNESS: claude-code
+        run: |
+          if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
+            echo "::error::the live tier needs a real harness credential (ANTHROPIC_API_KEY)." \
+                 "Add the repo secret; fork PRs are gated by require-approval-for-fork-workflows." >&2
+            exit 1
+          fi
+          just test-live

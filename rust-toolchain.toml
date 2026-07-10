@@ -1,0 +1,6 @@
+# The single source of truth for the dev toolchain. CI installs from this file
+# (dtolnay/rust-toolchain reads it) so local and CI run the same compiler.
+# `rust-version` in Cargo.toml is the separate, lower MSRV floor (see `just msrv`).
+[toolchain]
+channel = "1.96.0"
+components = ["rustfmt", "clippy", "llvm-tools-preview"]

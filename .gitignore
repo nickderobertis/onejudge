@@ -1,0 +1,8 @@
+/target
+**/*.rs.bk
+*.pdb
+# Coverage artifacts
+/lcov.info
+/*.profraw
+# Local env
+.env

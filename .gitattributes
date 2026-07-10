@@ -1,0 +1,3 @@
+# Normalize line endings so the Windows CI runner checks out LF and tests,
+# formatters, and the fake-provider protocol behave identically across the matrix.
+* text=auto eol=lf

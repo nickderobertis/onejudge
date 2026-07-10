@@ -1,0 +1,44 @@
+[package]
+name = "onejudge"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description.workspace = true
+readme = "../../README.md"
+keywords = ["llm", "agent", "evaluation", "oneharness", "judge"]
+categories = ["development-tools::testing"]
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[features]
+# The deterministic test doubles the e2e suite drives as real subprocesses.
+# Non-default so a published `cargo add onejudge` / library build ships only the
+# engine — the doubles are test-only. `just check` and coverage enable it.
+fake-provider = []
+
+# `onejudge-echo-provider` speaks the CommandProvider JSON-lines protocol;
+# `onejudge-fake-oneharness` emulates `oneharness run --format json`. Both are
+# deterministic doubles for the e2e suite, gated behind `fake-provider` so they
+# are never built into a normal library consumer's dependency graph.
+[[bin]]
+name = "onejudge-echo-provider"
+path = "src/bin/echo_provider.rs"
+required-features = ["fake-provider"]
+
+[[bin]]
+name = "onejudge-fake-oneharness"
+path = "src/bin/fake_oneharness.rs"
+required-features = ["fake-provider"]
+
+[lints.rust]
+missing_docs = "warn"
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }

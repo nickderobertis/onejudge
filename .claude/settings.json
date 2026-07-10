@@ -1,0 +1,55 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "command": "bash \"$CLAUDE_PROJECT_DIR/scripts/setup-llmlint.sh\"",
+            "timeout": 180,
+            "type": "command"
+          }
+        ],
+        "matcher": "startup|resume"
+      }
+    ]
+  },
+  "permissions": {
+    "allow": [
+      "Bash(just bootstrap)",
+      "Bash(just check)",
+      "Bash(just test)",
+      "Bash(just test-fast)",
+      "Bash(just test-e2e)",
+      "Bash(just lint)",
+      "Bash(just format)",
+      "Bash(just format-check)",
+      "Bash(just doc)",
+      "Bash(just audit)",
+      "Bash(just msrv)",
+      "Bash(just upgrade)",
+      "Bash(just setup-llmlint)",
+      "Bash(just lint-llm:*)",
+      "Bash(just lint-llm-diff:*)",
+      "Bash(llmlint:*)",
+      "Bash(./scripts/setup-llmlint.sh)",
+      "Bash(./scripts/lint-llm-diff.sh:*)",
+      "Bash(cargo build:*)",
+      "Bash(cargo test:*)",
+      "Bash(cargo nextest run:*)",
+      "Bash(cargo fmt:*)",
+      "Bash(cargo clippy:*)",
+      "Bash(cargo llvm-cov:*)",
+      "Bash(cargo deny check:*)",
+      "Bash(cargo machete:*)",
+      "Bash(cargo update:*)",
+      "Bash(cargo fetch)",
+      "Bash(cargo doc:*)",
+      "Bash(git status)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)"
+    ],
+    "deny": []
+  }
+}

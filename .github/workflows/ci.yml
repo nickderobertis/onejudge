@@ -1,0 +1,124 @@
+# Prove the artifact from a clean checkout: bootstrap the dev toolchain, then run
+# the full gate. The pinned toolchain comes from rust-toolchain.toml (rustup reads
+# it), so local and CI run the same compiler. See the create-repo skill's ci.md.
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Least privilege: read-only by default, widened per job only where needed.
+permissions:
+  contents: read
+
+jobs:
+  # THE gate: format, lint, doc, coverage-enforced tests (incl. e2e), and the
+  # supply-chain audit. Linux-only, because the audit runs once (not per-OS).
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned toolchain (from rust-toolchain.toml)
+        run: rustup show
+      - uses: extractions/setup-just@v3
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest,cargo-llvm-cov,cargo-deny,cargo-machete
+      - name: Bootstrap
+        run: just bootstrap
+      - name: Check
+        run: just check
+
+  # Portability: run the test suite (no coverage/audit) on macOS and Windows so
+  # the engine and its real-subprocess e2e are proven cross-platform.
+  test-os:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned toolchain (from rust-toolchain.toml)
+        run: rustup show
+      - uses: extractions/setup-just@v3
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+      - name: Test
+        run: just test
+
+  # MSRV: the crate still builds on the declared minimum Rust (Cargo.toml
+  # `rust-version`). A real, checked commitment, not just documentation.
+  msrv:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install MSRV toolchain
+        run: rustup toolchain install 1.82.0 --profile minimal
+      - uses: extractions/setup-just@v3
+      - run: just msrv
+
+  # Prove the end-user install path: the publishable crate packages cleanly and
+  # builds from its packaged form — what a consumer gets from `cargo add onejudge`.
+  # Separate from the dev gate, which never packages.
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned toolchain (from rust-toolchain.toml)
+        run: rustup show
+      - name: Package (verify the publishable artifact builds)
+        run: cargo publish --dry-run -p onejudge --locked
+
+  # LLM-judge tier (llmlint) — a blocking PR check, SEPARATE from `check`. It is
+  # non-deterministic and needs an authenticated harness, so it never runs inside
+  # `just check`. Scoped to the merge-base diff so a PR pays for its own changes.
+  # It REQUIRES the harness credential and fails fast without it — never no-ops to
+  # green. Fork PRs are gated by the repo's require-approval-for-fork-workflows
+  # setting (see references/ci.md), not by a no-op branch here.
+  llmlint:
+    if: github.event_name == 'pull_request' && github.event.action != 'edited'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+      - name: Fetch main (diff base)
+        run: git fetch --no-tags --depth=2147483647 origin main
+      - uses: extractions/setup-just@v3
+      - name: Install oneharness + llmlint
+        run: |
+          ./scripts/setup-llmlint.sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Lint changed files
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
+            echo "::error::llmlint needs a harness credential (ANTHROPIC_API_KEY)." \
+                 "Add the repo secret (Settings → Secrets and variables → Actions)." \
+                 "Fork PRs are gated by require-approval-for-fork-workflows; see references/ci.md." >&2
+            exit 1
+          fi
+          just lint-llm-diff origin/main
+
+  # Lint the PR title as a required check: under squash-merge it becomes the one
+  # commit that lands and that release-plz reads, so a malformed title must not
+  # merge. The required context is named `commitlint` in branch protection.
+  commitlint:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    steps:
+      - uses: amannn/action-semantic-pull-request@v5
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
