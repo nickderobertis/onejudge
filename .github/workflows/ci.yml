@@ -52,7 +52,9 @@ jobs:
         with:
           tool: cargo-nextest
       - name: Test
-        run: just test
+        # test-fast (plain nextest, no coverage): coverage is enforced once, on
+        # the Linux `check` job; these prove the engine + e2e are cross-platform.
+        run: just test-fast
 
   # MSRV: the crate still builds on the declared minimum Rust (Cargo.toml
   # `rust-version`). A real, checked commitment, not just documentation.
