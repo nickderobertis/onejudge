@@ -29,7 +29,7 @@ case "$os" in
     Darwin) case "$arch" in
         arm64 | aarch64) target="aarch64-apple-darwin" ;;
         x86_64) target="x86_64-apple-darwin" ;;
-        *) fail "unsupported macOS arch '$arch'" ;;
+        *) fail "unsupported macOS arch '$arch' — build from source (cargo install onejudge --features cli)" ;;
     esac ;;
     *) fail "unsupported OS '$os' — on Windows download the .zip from the releases page, or use cargo install" ;;
 esac
@@ -44,8 +44,9 @@ fi
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
-echo "Downloading $archive ($version)…"
-curl -fsSL "$url" -o "$tmp/$archive" || fail "could not download $url"
+# Quiet on success (curl -sS stays silent unless it errors); the one success line
+# is printed at the end.
+curl -fsSL "$url" -o "$tmp/$archive" || fail "could not download $url ($archive $version)"
 tar xzf "$tmp/$archive" -C "$tmp"
 
 mkdir -p "$install_dir"

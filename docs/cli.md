@@ -85,47 +85,22 @@ stopped, or a single-turn run answered once).
 
 ## Config
 
-Run `onejudge schema` (or open a file written by `onejudge init`) for the annotated
-form. The shape:
+The authoritative, annotated config is what **`onejudge schema`** prints (and what
+`onejudge init` writes) — a single tested source (`starter.yaml`), so this page
+describes the fields rather than restating the YAML that would then drift from it.
 
-```yaml
-provider:
-  kind: oneharness            # oneharness | command | api | split
-  bin: oneharness             # oneharness: binary to shell out to
-  judge_harness: claude-code  # oneharness: harness the judge + user run on
-  # kind: command  ->  command: ["my-provider", "--flag"]
-  # kind: api      ->  vendor: anthropic|openai, base_url?, max_tokens?
-  #                    (key from ANTHROPIC_API_KEY / OPENAI_API_KEY)
-  # kind: split    ->  skill: {..provider..}, judge: {..provider..}
+Top-level keys:
 
-harness: claude-code          # platform the agent runs on
-model: ""                     # "" => the harness default
-judge_model: ""               # "" => same as model
-
-agent:
-  name: agent
-  dir: .
-  instructions: |
-    You are a senior engineer. Complete the task and keep tests green.
-
-task: "Refactor src/foo.rs to remove duplication and add unit tests."
-
-user:                         # the simulated supervisor that drives the loop
-  persona: |
-    You are a demanding tech lead. Push for tests and edge cases; do not accept
-    "done" until you have verified it.
-  done_when: "the refactor is complete and all tests pass"
-  max_turns: 12
-
-session: onejudge             # caller-owned session name, threaded across turns
-
-evals:                        # optional: score the finished transcript
-  - criterion: "the code compiles and tests pass"
-    kind: boolean
-  - criterion: "duplication was reduced"
-    kind: numeric
-    scale: [1, 5]
-```
+| key | purpose |
+|-----|---------|
+| `provider` | which backend runs the harness: `kind` is `oneharness` (`bin`, `judge_harness`), `command` (`command: [...]`), `api` (`vendor`, `base_url?`, `max_tokens?`; key from the env), or `split` (`skill:` + `judge:` sub-providers) |
+| `harness` | the platform the agent runs on (default `claude-code`) |
+| `model` / `judge_model` | the agent's model, and the simulated-user + judge model (empty ⇒ harness default / same as `model`) |
+| `agent` | `name`, `dir`, and the system `instructions` for the harness |
+| `task` | the task to drive to completion (or supply via `--task`) |
+| `user` | the simulated supervisor: `persona`, `done_when`, `max_turns` (omit for a single-turn run) |
+| `session` | the caller-owned session name threaded across turns |
+| `evals` | optional criteria to score the finished transcript: each has a `criterion`, a `kind` (`boolean` / `numeric`), and — for numeric — a `scale: [min, max]` |
 
 The config is validated strictly at the boundary (`deny_unknown_fields`): a typo'd
 key, a missing task, a provider field that does not belong to the chosen `kind`

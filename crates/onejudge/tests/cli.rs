@@ -17,7 +17,7 @@
 use std::path::Path;
 use std::process::Command;
 
-use onejudge::cli::{exit_code, render_human, run_plan, Config, Format};
+use onejudge::cli::{exit_code, render_human, run_plan, Config, EvalOutcome, Format};
 
 /// The built echo test double's path (a `CommandProvider` backend).
 fn echo_bin() -> String {
@@ -85,14 +85,14 @@ evals:
         .iter()
         .find(|r| r.criterion == "echo")
         .unwrap();
-    assert_eq!(echo_eval.passed, Some(true));
+    assert!(matches!(echo_eval.outcome, EvalOutcome::Boolean(true)));
     // The numeric eval scored the top of its scale (the criterion matched).
     let numeric = summary
         .eval_results
         .iter()
         .find(|r| r.criterion == "please")
         .unwrap();
-    assert_eq!(numeric.score, Some(5.0));
+    assert!(matches!(numeric.outcome, EvalOutcome::Numeric(n) if n == 5.0));
 
     // The human rendering reflects completion.
     let rendered = render_human(&summary);
@@ -140,7 +140,7 @@ evals:
     let summary = plan_from(body);
     assert!(summary.completed);
     let failed = &summary.eval_results[0];
-    assert_eq!(failed.passed, Some(false));
+    assert!(matches!(failed.outcome, EvalOutcome::Boolean(false)));
     assert_eq!(exit_code(&summary), 1);
 }
 
@@ -243,7 +243,10 @@ fn split_kind_json_covers_buffered_respond_and_judge() {
     let summary = run_plan(plan, Format::Json, &mut sink).unwrap();
     assert_eq!(summary.report.transcript.assistant_turns(), 2);
     // The echo judge scored the "working" criterion against the transcript.
-    assert_eq!(summary.eval_results[0].passed, Some(true));
+    assert!(matches!(
+        summary.eval_results[0].outcome,
+        EvalOutcome::Boolean(true)
+    ));
 }
 
 // --- Subprocess: the real `onejudge` binary --------------------------------

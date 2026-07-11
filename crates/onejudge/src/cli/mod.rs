@@ -305,16 +305,21 @@ pub struct DoneWhen {
     pub satisfied: bool,
 }
 
+/// An eval's verdict, carrying the kind-specific payload so an invalid
+/// combination (a boolean with a score, a mismatched kind) is unrepresentable.
+pub enum EvalOutcome {
+    /// A boolean eval and whether it passed. Gates the exit code.
+    Boolean(bool),
+    /// A numeric eval and its score on the configured scale (report-only).
+    Numeric(f64),
+}
+
 /// One eval's outcome.
 pub struct EvalResult {
     /// The criterion scored.
     pub criterion: String,
-    /// Boolean or numeric.
-    pub kind: JudgeKind,
-    /// For a boolean eval: whether it passed. `None` for numeric (score-only).
-    pub passed: Option<bool>,
-    /// For a numeric eval: the score. `None` for boolean.
-    pub score: Option<f64>,
+    /// The verdict (boolean pass/fail or numeric score).
+    pub outcome: EvalOutcome,
     /// The judge's stated reason.
     pub reason: String,
 }
@@ -399,9 +404,7 @@ pub fn run_plan(
                 ));
                 EvalResult {
                     criterion: eval.criterion.clone(),
-                    kind: JudgeKind::Boolean,
-                    passed: Some(passed),
-                    score: None,
+                    outcome: EvalOutcome::Boolean(passed),
                     reason,
                 }
             }
@@ -409,9 +412,11 @@ pub fn run_plan(
                 let (min, max) = eval.scale;
                 let verdict =
                     engine.judge_numeric(&eval.criterion, min, max, &outcome.transcript)?;
+                // A numeric query yields a number; treat a contract-violating bool
+                // as the scale floor rather than inventing a separate empty state.
                 let score = match verdict.value {
-                    JudgeValue::Number(n) => Some(n),
-                    JudgeValue::Bool(_) => None,
+                    JudgeValue::Number(n) => n,
+                    JudgeValue::Bool(_) => min,
                 };
                 let reason = verdict.reason.clone();
                 verdicts.push(NamedVerdict::new(
@@ -421,9 +426,7 @@ pub fn run_plan(
                 ));
                 EvalResult {
                     criterion: eval.criterion.clone(),
-                    kind: JudgeKind::Numeric,
-                    passed: None,
-                    score,
+                    outcome: EvalOutcome::Numeric(score),
                     reason,
                 }
             }
@@ -448,7 +451,10 @@ pub fn run_plan(
 /// the run (there is no threshold to fail against).
 #[must_use]
 pub fn exit_code(summary: &RunSummary) -> i32 {
-    let evals_pass = summary.eval_results.iter().all(|r| r.passed != Some(false));
+    let evals_pass = summary
+        .eval_results
+        .iter()
+        .all(|r| !matches!(r.outcome, EvalOutcome::Boolean(false)));
     if summary.completed && evals_pass {
         0
     } else {
@@ -508,11 +514,10 @@ pub fn render_human(summary: &RunSummary) -> String {
 
 /// One eval line for the human report.
 fn render_eval(r: &EvalResult) -> String {
-    let mark = match (r.kind, r.passed, r.score) {
-        (JudgeKind::Boolean, Some(true), _) => "[PASS]".to_string(),
-        (JudgeKind::Boolean, _, _) => "[FAIL]".to_string(),
-        (JudgeKind::Numeric, _, Some(score)) => format!("[{score}]"),
-        (JudgeKind::Numeric, _, None) => "[?]".to_string(),
+    let mark = match r.outcome {
+        EvalOutcome::Boolean(true) => "[PASS]".to_string(),
+        EvalOutcome::Boolean(false) => "[FAIL]".to_string(),
+        EvalOutcome::Numeric(score) => format!("[{score}]"),
     };
     let reason = if r.reason.is_empty() {
         String::new()
@@ -573,9 +578,7 @@ mod tests {
     fn bool_eval(passed: bool) -> EvalResult {
         EvalResult {
             criterion: "it works".into(),
-            kind: JudgeKind::Boolean,
-            passed: Some(passed),
-            score: None,
+            outcome: EvalOutcome::Boolean(passed),
             reason: "because".into(),
         }
     }
@@ -592,9 +595,7 @@ mod tests {
     fn numeric_eval_never_fails_the_run() {
         let numeric = EvalResult {
             criterion: "quality".into(),
-            kind: JudgeKind::Numeric,
-            passed: None,
-            score: Some(2.0),
+            outcome: EvalOutcome::Numeric(2.0),
             reason: String::new(),
         };
         assert_eq!(exit_code(&summary(true, false, vec![numeric])), 0);
@@ -627,9 +628,7 @@ mod tests {
         assert!(render_eval(&bool_eval(false)).starts_with("[FAIL]"));
         let numeric = EvalResult {
             criterion: "q".into(),
-            kind: JudgeKind::Numeric,
-            passed: None,
-            score: Some(4.5),
+            outcome: EvalOutcome::Numeric(4.5),
             reason: String::new(),
         };
         assert!(render_eval(&numeric).starts_with("[4.5]"));
