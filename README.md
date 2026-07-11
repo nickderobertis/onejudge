@@ -41,28 +41,18 @@ deps (clap, a YAML parser) are opt-in behind the non-default `cli` feature.
 ```sh
 cargo install onejudge --features cli   # or: install.sh (prebuilt archives)
 onejudge init                           # write a starter onejudge.yaml
-```
-
-Edit the three fields that make the run yours — `task`, `user.done_when`, and
-`agent.instructions`:
-
-```yaml
-task: "Fix the flaky retry test in client.rs and keep the suite green."
-agent:
-  instructions: "You are a senior engineer. Complete the task and keep tests green."
-user:                                   # omit this whole block for a single-turn run
-  persona: "A demanding tech lead; don't accept 'done' until you've verified it."
-  done_when: "the task is complete and all tests pass"
-  max_turns: 12
-```
-
-```sh
 onejudge run                            # reads ./onejudge.yaml, drives to completion
 ```
 
+`init` writes a fully-commented config; the three fields that make a run yours are
+`task` (what to do), `agent.instructions` (how to frame the harness), and the
+`user` block (`persona` / `done_when` / `max_turns` — omit it for a single-turn
+run). `onejudge schema` prints the annotated config, the single source of truth for
+every field.
+
 Flags override the file (flags > file > defaults), so one config serves many tasks:
 `onejudge run --task - < task.txt`, `--harness codex`, `--max-turns 8`,
-`--format json -o result.json`. `onejudge schema` prints the full annotated config.
+`--format json -o result.json`.
 
 Human output is the conversation + tool actions + completion status + eval
 verdicts; `--format json` emits the versioned [`Report`](docs/contract.md). The
