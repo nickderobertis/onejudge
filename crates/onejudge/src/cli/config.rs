@@ -611,6 +611,57 @@ user:
     }
 
     #[test]
+    fn overrides_apply_model_judge_session_and_persona() {
+        let mut cfg = Config::from_yaml("task: t\n").unwrap();
+        cfg.apply(Overrides {
+            model: Some("m1".into()),
+            judge_model: Some("m2".into()),
+            session: Some("sess-9".into()),
+            persona: Some("a reviewer".into()),
+            ..Overrides::default()
+        });
+        let plan = cfg.into_plan().unwrap();
+        assert_eq!(plan.settings.model, "m1");
+        assert_eq!(plan.settings.judge_model, "m2");
+        // The session override threads a with_session_name; a multi-turn (persona)
+        // conversation was implied by the persona flag.
+        assert!(plan.conversation.user.is_some());
+        assert_eq!(plan.conversation.user.unwrap().persona, "a reviewer");
+    }
+
+    #[test]
+    fn split_requires_both_a_skill_and_a_judge() {
+        let only_skill = "task: x\nprovider:\n  kind: split\n  skill:\n    kind: oneharness\n";
+        let err = Config::from_yaml(only_skill)
+            .unwrap()
+            .into_plan()
+            .unwrap_err();
+        assert!(matches!(err, CliError::Config(m) if m.contains("judge")));
+
+        let only_judge = "task: x\nprovider:\n  kind: split\n  judge:\n    kind: oneharness\n";
+        let err = Config::from_yaml(only_judge)
+            .unwrap()
+            .into_plan()
+            .unwrap_err();
+        assert!(matches!(err, CliError::Config(m) if m.contains("skill")));
+    }
+
+    #[test]
+    fn api_anthropic_vendor_maps_through() {
+        let plan = Config::from_yaml("task: x\nprovider:\n  kind: api\n  vendor: anthropic\n")
+            .unwrap()
+            .into_plan()
+            .unwrap();
+        assert!(matches!(
+            plan.provider,
+            ProviderSpec::Api {
+                vendor: ApiVendor::Anthropic,
+                ..
+            }
+        ));
+    }
+
+    #[test]
     fn command_provider_requires_argv() {
         let err = Config::from_yaml("task: x\nprovider:\n  kind: command\n")
             .unwrap()

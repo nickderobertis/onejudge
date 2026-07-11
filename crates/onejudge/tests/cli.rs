@@ -203,6 +203,49 @@ fn split_provider_kind_composes_two_backends() {
     assert_eq!(summary.report.transcript.messages[1].content, "working");
 }
 
+#[test]
+fn oneharness_kind_json_covers_buffered_respond_and_user() {
+    // JSON format runs buffered (not streaming), and with no `done_when` the loop
+    // reaches the cap — so this exercises the buffered `respond` + `simulate_user`
+    // dispatch arms of an `AnyProvider::Oneharness` (the streaming/human test does
+    // not).
+    let bin = serde_json::to_string(&fake_oneharness_bin()).unwrap();
+    let yaml = format!(
+        "provider:\n  kind: oneharness\n  bin: {bin}\nharness: claude-code\n\
+         task: go\n\
+         agent:\n  instructions: '[[reply:working]]'\n\
+         user:\n  persona: A tester.\n  max_turns: 2\n",
+    );
+    let plan = Config::from_yaml(&yaml).unwrap().into_plan().unwrap();
+    let mut sink = |_: &str| {};
+    let summary = run_plan(plan, Format::Json, &mut sink).unwrap();
+    assert_eq!(summary.report.transcript.assistant_turns(), 2);
+    assert!(summary.hit_max_turns);
+}
+
+#[test]
+fn split_kind_json_covers_buffered_respond_and_judge() {
+    // JSON (buffered) + an eval, so the split's buffered `respond` (skill) and
+    // `judge` (judge backend) dispatch arms both run.
+    let oh = serde_json::to_string(&fake_oneharness_bin()).unwrap();
+    let echo = serde_json::to_string(&echo_bin()).unwrap();
+    let yaml = format!(
+        "provider:\n  kind: split\n  skill:\n    kind: oneharness\n    bin: {oh}\n  \
+         judge:\n    kind: command\n    command: [{echo}]\n\
+         harness: claude-code\n\
+         task: start\n\
+         agent:\n  instructions: '[[reply:working]]'\n\
+         user:\n  persona: A tester.\n  max_turns: 2\n\
+         evals:\n  - criterion: working\n    kind: boolean\n",
+    );
+    let plan = Config::from_yaml(&yaml).unwrap().into_plan().unwrap();
+    let mut sink = |_: &str| {};
+    let summary = run_plan(plan, Format::Json, &mut sink).unwrap();
+    assert_eq!(summary.report.transcript.assistant_turns(), 2);
+    // The echo judge scored the "working" criterion against the transcript.
+    assert_eq!(summary.eval_results[0].passed, Some(true));
+}
+
 // --- Subprocess: the real `onejudge` binary --------------------------------
 
 /// Write `body`'s config to a file under the integration-test tmp dir.
@@ -356,6 +399,146 @@ fn binary_init_writes_a_starter_config() {
         .status()
         .unwrap();
     assert_eq!(status.code(), Some(2));
+}
+
+#[test]
+fn binary_run_writes_json_to_an_output_file() {
+    let config = write_config(
+        "out.yaml",
+        "\
+task: greet me
+agent:
+  instructions: Be warm.
+",
+    );
+    let out_path = Path::new(env!("CARGO_TARGET_TMPDIR")).join("report.json");
+    let _ = std::fs::remove_file(&out_path);
+    let output = Command::new(onejudge_bin())
+        .args([
+            "run",
+            config.to_str().unwrap(),
+            "--format",
+            "json",
+            "--output",
+            out_path.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    // With --output, stdout carries no report; the file does.
+    assert!(String::from_utf8(output.stdout).unwrap().trim().is_empty());
+    let report: onejudge::Report =
+        serde_json::from_str(&std::fs::read_to_string(&out_path).unwrap()).unwrap();
+    assert_eq!(report.schema_version, onejudge::SCHEMA_VERSION);
+}
+
+#[test]
+fn binary_run_discovers_default_config_in_cwd() {
+    // `onejudge run` with no path reads ./onejudge.yaml from the working dir.
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("default-cfg");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("onejudge.yaml"),
+        config_yaml("task: hello\nagent:\n  instructions: Be helpful.\n"),
+    )
+    .unwrap();
+    let output = Command::new(onejudge_bin())
+        .arg("run")
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert!(String::from_utf8(output.stdout)
+        .unwrap()
+        .contains("Status: completed"));
+}
+
+#[test]
+fn binary_run_without_a_config_falls_back_to_defaults() {
+    // No config file and no default in cwd: the run starts from an empty config
+    // (default `oneharness` provider). With `oneharness` absent from PATH the spawn
+    // fails — a classified engine error, exit 2 — proving the flags-only path runs.
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("no-cfg");
+    std::fs::create_dir_all(&dir).unwrap();
+    let _ = std::fs::remove_file(dir.join("onejudge.yaml"));
+    let output = Command::new(onejudge_bin())
+        .args(["run", "--task", "do a thing", "--harness", "goose"])
+        .current_dir(&dir)
+        .env("PATH", "") // ensure `oneharness` cannot be found
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8(output.stderr)
+        .unwrap()
+        .contains("run failed"));
+}
+
+#[test]
+fn binary_run_missing_config_path_errors() {
+    let missing = Path::new(env!("CARGO_TARGET_TMPDIR")).join("does-not-exist.yaml");
+    let output = Command::new(onejudge_bin())
+        .args(["run", missing.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8(output.stderr)
+        .unwrap()
+        .contains("could not read config"));
+}
+
+#[test]
+fn binary_run_applies_model_session_and_persona_overrides() {
+    // Exercises the model / judge-model / session / persona / max-turns override
+    // path through the real binary. The command provider ignores model/session, so
+    // the assertion is on the run completing under the overridden turn cap.
+    let config = write_config(
+        "overrides.yaml",
+        "\
+task: start
+agent:
+  instructions: Be helpful.
+",
+    );
+    let output = Command::new(onejudge_bin())
+        .args([
+            "run",
+            config.to_str().unwrap(),
+            "--model",
+            "m1",
+            "--judge-model",
+            "m2",
+            "--session",
+            "sess-1",
+            "--persona",
+            "A demanding reviewer.",
+            "--max-turns",
+            "2",
+        ])
+        .output()
+        .unwrap();
+    // No done_when + persona-implied user hits the 2-turn cap -> incomplete -> 1.
+    assert_eq!(output.status.code(), Some(1));
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("hit the turn cap (2)"));
+}
+
+#[test]
+fn binary_run_provider_override_flag() {
+    // `--provider command` overrides just the backend kind; the file already
+    // supplies the echo argv.
+    let config = write_config(
+        "prov-override.yaml",
+        "\
+task: greet me
+agent:
+  instructions: Be warm.
+",
+    );
+    let output = Command::new(onejudge_bin())
+        .args(["run", config.to_str().unwrap(), "--provider", "command"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
 }
 
 #[test]
