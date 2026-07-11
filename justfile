@@ -20,8 +20,9 @@ bootstrap:
     done
     cargo fetch --locked
 
-# Full quality gate: format, lint, doc, coverage-enforced tests, and audit.
-check: format-check lint doc test audit
+# Full quality gate: format, lint, doc, coverage-enforced tests, audit, and the
+# release-target drift gate.
+check: format-check lint doc test audit check-release-targets
 
 # The deterministic gate runs on `--features fake-provider` (the e2e test doubles),
 # NOT `--all-features`: the optional `ureq-transport` feature pulls a TLS stack
@@ -98,6 +99,11 @@ doc:
 audit:
     cargo deny check
     cargo machete
+
+# Drift gate: every target install.sh downloads is built by release-binaries.yml
+# (deterministic, offline). Keeps the shipped-archive naming in one enforced place.
+check-release-targets:
+    ./scripts/check-release-targets.sh
 
 # Check the crate still builds on the declared MSRV (needs 1.82.0 installed). The
 # `ureq-transport` feature is excluded on purpose — its TLS deps need a newer Rust.

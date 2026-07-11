@@ -44,7 +44,8 @@ jobs:
         run: just build-cli ${{ matrix.target }}
       # The archive is named `onejudge-<target>.(tar.gz|zip)`. install.sh's
       # download URL assumes this exact naming and its os/arch cases mirror this
-      # matrix's `target`s — keep the two in sync (see install.sh's platform map).
+      # matrix's `target`s; `just check-release-targets` (in the gate) enforces
+      # that install.sh's targets stay a subset of this matrix.
       - name: Package (unix)
         if: matrix.os != 'windows-latest'
         shell: bash

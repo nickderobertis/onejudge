@@ -21,7 +21,8 @@ fail() {
 # Map the host os/arch to a release target triple. These triples — and the
 # `onejudge-<target>.tar.gz` archive name below — must match the build matrix and
 # packaging in .github/workflows/release-binaries.yml (the workflow produces the
-# archives this script downloads). Keep the two in sync.
+# archives this script downloads). `just check-release-targets`
+# (scripts/check-release-targets.sh, in the gate) enforces that they agree.
 os="$(uname -s)"
 arch="$(uname -m)"
 case "$os" in
