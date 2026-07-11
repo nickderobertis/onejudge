@@ -14,8 +14,8 @@
 use std::ops::ControlFlow;
 
 use onejudge::{
-    CommandProvider, Conversation, Engine, JudgeValue, OneharnessProvider, ProviderErrorKind,
-    Settings, SimulatedUser, Skill, ToolQuery,
+    CommandProvider, Conversation, Engine, JudgeKind, JudgeValue, NamedVerdict, OneharnessProvider,
+    ProviderErrorKind, Settings, SimulatedUser, Skill, SplitProvider, ToolQuery, SCHEMA_VERSION,
 };
 
 /// A [`CommandProvider`] pointed at the built echo test double.
@@ -370,4 +370,67 @@ fn oneharness_omits_session_on_non_capable_platform() {
         ))
         .unwrap();
     assert_eq!(outcome.transcript.messages[1].content, "no-session");
+}
+
+// --- SplitProvider journeys (two DIFFERENT real-subprocess backends) --------
+
+#[test]
+fn split_runs_the_skill_on_one_backend_and_judges_on_another() {
+    // The skill runs on the fake oneharness; the judge and simulated user run on
+    // the echo CommandProvider. Both are real subprocesses, composed by
+    // SplitProvider, so a run exercises the split dispatch end to end.
+    let split = SplitProvider::new(fake_oneharness(), echo());
+    let engine = Engine::new(&split, settings());
+    let outcome = engine
+        .run(&Conversation::single_turn(
+            skill_with("[[reply:hello there]]"),
+            "go",
+        ))
+        .unwrap();
+    assert_eq!(outcome.transcript.messages[1].content, "hello there");
+
+    // The judge side routes to the echo provider, which decides by substring.
+    let hit = engine.judge_boolean("hello", &outcome.transcript).unwrap();
+    assert_eq!(hit.value, JudgeValue::Bool(true));
+    let miss = engine
+        .judge_boolean("goodbye forever", &outcome.transcript)
+        .unwrap();
+    assert_eq!(miss.value, JudgeValue::Bool(false));
+}
+
+#[test]
+fn split_drives_a_multi_turn_conversation_across_both_backends() {
+    let split = SplitProvider::new(fake_oneharness(), echo());
+    let engine = Engine::new(&split, settings().with_session_name("split-run"));
+    let user = SimulatedUser::new("A patient tester.").max_turns(2);
+    let outcome = engine
+        .run(&Conversation::multi_turn(
+            skill_with("[[reply:working]]"),
+            "start",
+            user,
+        ))
+        .unwrap();
+    // Two skill turns (fake oneharness) with an echo simulated-user turn between.
+    assert_eq!(outcome.transcript.assistant_turns(), 2);
+    assert!(outcome
+        .transcript
+        .messages
+        .iter()
+        .any(|m| m.content.contains("what about the next step")));
+}
+
+// --- The versioned Report contract, assembled from a real run --------------
+
+#[test]
+fn outcome_bundles_into_a_versioned_report() {
+    let provider = echo();
+    let engine = Engine::new(&provider, settings());
+    let outcome = engine
+        .run(&Conversation::single_turn(skill_with("Be helpful."), "hi"))
+        .unwrap();
+    let verdict = engine.judge_boolean("echo", &outcome.transcript).unwrap();
+    let report = outcome.into_report(vec![NamedVerdict::new("echo", JudgeKind::Boolean, verdict)]);
+    assert_eq!(report.schema_version, SCHEMA_VERSION);
+    assert_eq!(report.verdicts.len(), 1);
+    assert_eq!(report.transcript.assistant_turns(), 1);
 }

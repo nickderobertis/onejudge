@@ -79,6 +79,24 @@ jobs:
       - name: Package (verify the publishable artifact builds)
         run: cargo publish --dry-run -p onejudge --locked
 
+  # The optional `ureq-transport` tier: the bundled HTTPS client for
+  # `ApiJudgeProvider`. Its TLS stack (ring) needs a C toolchain and a newer Rust
+  # than the crate's MSRV, so it is proven HERE — not in the deterministic `check`
+  # gate. The transport is exercised over a REAL local socket (offline), so this
+  # stays deterministic; only the *building* of it lives outside `check`.
+  http:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned toolchain (from rust-toolchain.toml)
+        run: rustup show
+      - uses: extractions/setup-just@v3
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+      - name: Prove the ureq-transport tier (lint, doc, real-socket test)
+        run: just check-http
+
   # LLM-judge tier (llmlint) — a blocking PR check, SEPARATE from `check`. It is
   # non-deterministic and needs an authenticated harness, so it never runs inside
   # `just check`. Scoped to the merge-base diff so a PR pays for its own changes.

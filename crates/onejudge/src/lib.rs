@@ -15,7 +15,9 @@
 //!   [`OneharnessProvider`] shells out to the `oneharness` CLI;
 //!   [`CommandProvider`] speaks a small JSON-lines protocol (see
 //!   `docs/protocol.md`) for the deterministic test doubles and any custom
-//!   backend.
+//!   backend; [`ApiJudgeProvider`] talks to Anthropic / OpenAI directly (no
+//!   harness) over a pluggable [`HttpTransport`]; and [`SplitProvider`] composes a
+//!   skill-running provider with a separate judge / simulated-user provider.
 //! - [`Engine`] runs a [`Conversation`] (a [`Skill`] plus an initial input and an
 //!   optional [`SimulatedUser`]) into a [`Transcript`], bounded by `max_turns` /
 //!   `done_when` / the skill declaring itself done, threading one caller-owned
@@ -23,6 +25,9 @@
 //! - [`Transcript`] carries each turn plus the normalized [`ToolEvent`]s the skill
 //!   took, so the judge — and a [`ToolQuery`] — can reason over *what the skill
 //!   did*, not just what it said.
+//! - [`Report`] is onejudge's own versioned contract ([`SCHEMA_VERSION`]): a
+//!   serializable bundle of the transcript, verdicts, and usage that downstream
+//!   SDKs compose over and re-export (see `docs/contract.md`).
 //!
 //! # Example
 //!
@@ -43,14 +48,20 @@
 //! # Ok::<(), onejudge::Error>(())
 //! ```
 
+mod api;
 mod command;
 mod engine;
 mod error;
 mod oneharness;
 mod provider;
+mod report;
+mod split;
 mod transcript;
 mod usage;
 
+#[cfg(feature = "ureq-transport")]
+pub use api::UreqTransport;
+pub use api::{ApiJudgeProvider, ApiVendor, HttpError, HttpResponse, HttpTransport};
 pub use command::CommandProvider;
 pub use engine::{Conversation, Engine, Outcome, Settings, SimulatedUser, Skill, StreamEvent};
 pub use error::{Error, ProviderErrorKind, Result};
@@ -60,5 +71,7 @@ pub use provider::{
     latest_user_message, parse_verdict, render_transcript, AssistantTurn, JudgeKind, JudgeQuery,
     JudgeValue, JudgeVerdict, Provider, SkillRef, UserTurn,
 };
+pub use report::{NamedVerdict, Report, SCHEMA_VERSION};
+pub use split::SplitProvider;
 pub use transcript::{Message, Role, ToolEvent, ToolQuery, Transcript};
 pub use usage::Usage;
