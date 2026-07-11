@@ -20,7 +20,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 
 use crate::{Engine, JudgeKind, JudgeValue, NamedVerdict, Report, Usage};
 
-pub use config::{Config, Eval, Overrides, Plan, ProviderKind, ProviderSpec};
+pub use config::{Config, Eval, EvalKind, Overrides, Plan, ProviderKind, ProviderSpec};
 pub use provider::AnyProvider;
 
 /// The default config filename, looked up in the working directory when `run` is
@@ -100,7 +100,7 @@ pub struct RunArgs {
     pub session: Option<String>,
     /// Override just the provider backend kind.
     #[arg(long, value_enum)]
-    pub provider: Option<ProviderKindArg>,
+    pub provider: Option<ProviderKind>,
 
     /// The output format.
     #[arg(long, value_enum, default_value_t = Format::Human)]
@@ -128,30 +128,6 @@ pub enum Format {
     Human,
     /// The versioned [`Report`] JSON contract.
     Json,
-}
-
-/// The `--provider` choices (a subset override of the config's provider kind).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-pub enum ProviderKindArg {
-    /// Shell out to `oneharness`.
-    Oneharness,
-    /// A custom JSON-lines command.
-    Command,
-    /// A direct model API.
-    Api,
-    /// A composed skill + judge backend.
-    Split,
-}
-
-impl From<ProviderKindArg> for ProviderKind {
-    fn from(a: ProviderKindArg) -> Self {
-        match a {
-            ProviderKindArg::Oneharness => ProviderKind::Oneharness,
-            ProviderKindArg::Command => ProviderKind::Command,
-            ProviderKindArg::Api => ProviderKind::Api,
-            ProviderKindArg::Split => ProviderKind::Split,
-        }
-    }
 }
 
 /// Run the CLI to completion, returning the process exit code.
@@ -197,7 +173,7 @@ fn run_task(args: RunArgs) -> Result<i32, CliError> {
         done_when,
         max_turns,
         session,
-        provider_kind: provider.map(Into::into),
+        provider_kind: provider,
     });
 
     let plan = cfg.into_plan()?;
@@ -393,7 +369,7 @@ pub fn run_plan(
     let mut eval_results = Vec::with_capacity(evals.len());
     for eval in &evals {
         let result = match eval.kind {
-            JudgeKind::Boolean => {
+            EvalKind::Boolean => {
                 let verdict = engine.judge_boolean(&eval.criterion, &outcome.transcript)?;
                 let passed = matches!(verdict.value, JudgeValue::Bool(true));
                 let reason = verdict.reason.clone();
@@ -408,8 +384,7 @@ pub fn run_plan(
                     reason,
                 }
             }
-            JudgeKind::Numeric => {
-                let (min, max) = eval.scale;
+            EvalKind::Numeric { scale: (min, max) } => {
                 let verdict =
                     engine.judge_numeric(&eval.criterion, min, max, &outcome.transcript)?;
                 // A numeric query yields a number; treat a contract-violating bool
@@ -661,14 +636,5 @@ mod tests {
         let cfg = Config::from_yaml(STARTER_CONFIG).unwrap();
         assert!(cfg.task.is_some());
         assert!(cfg.user.is_some());
-    }
-
-    #[test]
-    fn provider_kind_arg_maps_to_config_kind() {
-        assert_eq!(
-            ProviderKind::from(ProviderKindArg::Split),
-            ProviderKind::Split
-        );
-        assert_eq!(ProviderKind::from(ProviderKindArg::Api), ProviderKind::Api);
     }
 }

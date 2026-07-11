@@ -18,7 +18,10 @@ fail() {
     exit 1
 }
 
-# Map the host os/arch to a release target triple.
+# Map the host os/arch to a release target triple. These triples — and the
+# `onejudge-<target>.tar.gz` archive name below — must match the build matrix and
+# packaging in .github/workflows/release-binaries.yml (the workflow produces the
+# archives this script downloads). Keep the two in sync.
 os="$(uname -s)"
 arch="$(uname -m)"
 case "$os" in
@@ -46,7 +49,8 @@ trap 'rm -rf "$tmp"' EXIT
 
 # Quiet on success (curl -sS stays silent unless it errors); the one success line
 # is printed at the end.
-curl -fsSL "$url" -o "$tmp/$archive" || fail "could not download $url ($archive $version)"
+curl -fsSL "$url" -o "$tmp/$archive" \
+    || fail "could not download $archive ($version) — check that release '$version' exists at https://github.com/${repo}/releases and that you have network access, or install with 'cargo install onejudge --features cli'"
 tar xzf "$tmp/$archive" -C "$tmp"
 
 mkdir -p "$install_dir"

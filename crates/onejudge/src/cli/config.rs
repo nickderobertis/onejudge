@@ -143,8 +143,10 @@ pub struct ProviderConfig {
     pub judge: Option<Box<ProviderConfig>>,
 }
 
-/// The provider backends the CLI can build.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+/// The provider backends the CLI can build. One enum is the single source for
+/// both the YAML `kind:` (via `Deserialize`) and the `--provider` flag (via
+/// clap's `ValueEnum`), so the two surfaces cannot drift.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, clap::ValueEnum)]
 #[serde(rename_all = "lowercase")]
 pub enum ProviderKind {
     /// Shell out to the `oneharness` CLI (the default).
@@ -440,8 +442,7 @@ impl EvalConfig {
                 }
                 Ok(Eval {
                     criterion: self.criterion,
-                    kind: JudgeKind::Boolean,
-                    scale: (0.0, 0.0),
+                    kind: EvalKind::Boolean,
                 })
             }
             JudgeKind::Numeric => {
@@ -454,8 +455,7 @@ impl EvalConfig {
                 }
                 Ok(Eval {
                     criterion: self.criterion,
-                    kind: JudgeKind::Numeric,
-                    scale: (min, max),
+                    kind: EvalKind::Numeric { scale: (min, max) },
                 })
             }
         }
@@ -497,15 +497,27 @@ pub enum ProviderSpec {
     },
 }
 
-/// One resolved eval: criterion, kind, and (for numeric) its scale.
+/// The kind of a resolved eval, carrying only the data that kind needs — so a
+/// boolean eval cannot hold a scale (unlike a `kind` + always-present `scale`
+/// pair, where the boolean-with-a-scale combination is representable).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum EvalKind {
+    /// A yes/no verdict.
+    Boolean,
+    /// A score on an inclusive `(min, max)` scale.
+    Numeric {
+        /// The inclusive scale bounds.
+        scale: (f64, f64),
+    },
+}
+
+/// One resolved eval: the criterion and its kind (with a scale only for numeric).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Eval {
     /// The plain-English criterion.
     pub criterion: String,
-    /// Boolean or numeric.
-    pub kind: JudgeKind,
-    /// The numeric scale (meaningless for boolean).
-    pub scale: (f64, f64),
+    /// Boolean, or numeric with its scale.
+    pub kind: EvalKind,
 }
 
 /// Everything the run driver needs, resolved and validated from the config.
@@ -765,8 +777,8 @@ provider:
         .unwrap()
         .into_plan()
         .unwrap();
-        assert_eq!(plan.evals[0].scale, (0.0, 10.0));
-        assert_eq!(plan.evals[1].scale, (1.0, 5.0));
+        assert_eq!(plan.evals[0].kind, EvalKind::Numeric { scale: (0.0, 10.0) });
+        assert_eq!(plan.evals[1].kind, EvalKind::Numeric { scale: (1.0, 5.0) });
     }
 
     #[test]
@@ -786,6 +798,6 @@ provider:
             .unwrap()
             .into_plan()
             .unwrap();
-        assert_eq!(plan.evals[0].kind, JudgeKind::Boolean);
+        assert_eq!(plan.evals[0].kind, EvalKind::Boolean);
     }
 }

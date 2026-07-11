@@ -71,6 +71,13 @@ check-http:
 test-live-api:
     cargo nextest run --features fake-provider,ureq-transport --test live_api --run-ignored all
 
+# Build the shipped `onejudge` CLI binary — the artifact the `cli-binary` PR job
+# smoke-tests and `release-binaries.yml` packages. Bundles `ureq-transport` (the
+# `api` provider's HTTP client), unlike the offline gate. Optional `target`
+# cross-compiles for a release triple; empty builds for the host.
+build-cli target="":
+    cargo build --release --locked --features cli,ureq-transport --bin onejudge {{ if target == "" { "" } else { "--target " + target } }}
+
 # Lint: clippy across every target, warnings denied (gate feature set).
 lint:
     cargo clippy --all-targets --features {{gate_features}} -- -D warnings

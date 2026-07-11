@@ -35,13 +35,16 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install pinned toolchain (from rust-toolchain.toml)
         run: rustup show
+      - uses: extractions/setup-just@v3
       - name: Add target
         run: rustup target add ${{ matrix.target }}
       - name: Build the release binary
-        # The published binary bundles the `ureq-transport` HTTP client so the
-        # `api` provider kind works out of the box — the offline gate builds it
-        # without, but a shipped CLI includes it.
-        run: cargo build --release --locked --target ${{ matrix.target }} --features cli,ureq-transport --bin onejudge
+        # Same recipe the `cli-binary` PR job runs (bundles `ureq-transport` so the
+        # `api` provider kind works out of the box), just cross-compiled per target.
+        run: just build-cli ${{ matrix.target }}
+      # The archive is named `onejudge-<target>.(tar.gz|zip)`. install.sh's
+      # download URL assumes this exact naming and its os/arch cases mirror this
+      # matrix's `target`s — keep the two in sync (see install.sh's platform map).
       - name: Package (unix)
         if: matrix.os != 'windows-latest'
         shell: bash
