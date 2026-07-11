@@ -30,18 +30,24 @@ check: format-check lint doc test audit
 # The `ApiJudgeProvider` logic and its `HttpTransport` seam are in the gate; only
 # the bundled transport glue is out. Coverage excludes the src/bin/ doubles.
 
-# Gate test step: whole suite (unit + integration + e2e), coverage enforced.
+# The offline gate's feature set: the e2e test doubles PLUS the standalone `cli`
+# binary, so the real CLI e2e (`tests/cli.rs`, driving the built `onejudge` against
+# the doubles) is in the gate. Excludes `ureq-transport` (its TLS stack is proven
+# in the `http` tier); the CLI's `api` kind is covered there / in `live-api`.
+gate_features := "fake-provider,cli"
+
+# Gate test step: whole suite (unit + integration + e2e + cli), coverage enforced.
 test:
-    cargo llvm-cov nextest --features fake-provider --ignore-filename-regex 'src/bin/' \
+    cargo llvm-cov nextest --features {{gate_features}} --ignore-filename-regex 'src/bin/' \
         --fail-under-lines {{coverage_min}}
 
 # Quick inner loop: the suite with no coverage instrumentation.
 test-fast:
-    cargo nextest run --features fake-provider
+    cargo nextest run --features {{gate_features}}
 
-# The end-to-end suite alone (real subprocess boundary, test-double binaries).
+# The end-to-end suites alone (real subprocess boundary, test-double binaries).
 test-e2e:
-    cargo nextest run --features fake-provider --test e2e
+    cargo nextest run --features {{gate_features}} --test e2e --test cli
 
 # Opt-in live tier: drive a REAL oneharness + harness (never in `check`). See docs/live-tier.md.
 test-live:
@@ -67,7 +73,7 @@ test-live-api:
 
 # Lint: clippy across every target, warnings denied (gate feature set).
 lint:
-    cargo clippy --all-targets --features fake-provider -- -D warnings
+    cargo clippy --all-targets --features {{gate_features}} -- -D warnings
 
 # Format the codebase in place.
 format:
@@ -79,7 +85,7 @@ format-check:
 
 # Build the docs as a gate: broken intra-doc links and doc warnings fail.
 doc:
-    RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --features fake-provider
+    RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --features {{gate_features}}
 
 # Supply-chain audit: advisories + license policy and unused dependencies.
 audit:

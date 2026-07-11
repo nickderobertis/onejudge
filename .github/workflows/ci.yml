@@ -79,6 +79,23 @@ jobs:
       - name: Package (verify the publishable artifact builds)
         run: cargo publish --dry-run -p onejudge --locked
 
+  # Prove the SHIPPED CLI binary builds and runs — the release-archive artifact a
+  # user installs (`install.sh` / `cargo install onejudge --features cli`). Built
+  # with `ureq-transport` (its `api` provider kind bundles the HTTP client), which
+  # the offline `check` gate omits, so it is proven here on every PR — a tag push
+  # then builds the same binary per-platform in `release-binaries.yml`. The
+  # deterministic CLI e2e (`tests/cli.rs`) runs inside `check`.
+  cli-binary:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned toolchain (from rust-toolchain.toml)
+        run: rustup show
+      - name: Build the shipped binary (cli + bundled transport)
+        run: cargo build --release --locked --features cli,ureq-transport --bin onejudge
+      - name: Smoke-test the binary
+        run: ./target/release/onejudge schema >/dev/null
+
   # The optional `ureq-transport` tier: the bundled HTTPS client for
   # `ApiJudgeProvider`. Its TLS stack (ring) needs a C toolchain and a newer Rust
   # than the crate's MSRV, so it is proven HERE — not in the deterministic `check`

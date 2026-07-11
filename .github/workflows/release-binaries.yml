@@ -1,0 +1,71 @@
+# Cross-platform release archives for the `onejudge` CLI. release-plz publishes
+# the library to crates.io and tags `vX.Y.Z` (with a PAT, so this tag push fires
+# downstream workflows); this job builds the standalone binary for each supported
+# target and attaches the archives to that tag's GitHub Release, so `install.sh`
+# (and a manual download) have artifacts to fetch. The library publish is
+# unaffected — this only adds the binary install path (issue #8).
+
+name: release-binaries
+
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: read
+
+jobs:
+  archives:
+    permissions:
+      contents: write # upload release assets
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: macos-latest
+            target: aarch64-apple-darwin
+          - os: macos-latest
+            target: x86_64-apple-darwin
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned toolchain (from rust-toolchain.toml)
+        run: rustup show
+      - name: Add target
+        run: rustup target add ${{ matrix.target }}
+      - name: Build the release binary
+        # The published binary bundles the `ureq-transport` HTTP client so the
+        # `api` provider kind works out of the box — the offline gate builds it
+        # without, but a shipped CLI includes it.
+        run: cargo build --release --locked --target ${{ matrix.target }} --features cli,ureq-transport --bin onejudge
+      - name: Package (unix)
+        if: matrix.os != 'windows-latest'
+        shell: bash
+        run: |
+          staging="onejudge-${{ matrix.target }}"
+          mkdir "$staging"
+          cp "target/${{ matrix.target }}/release/onejudge" "$staging/"
+          cp README.md LICENSE "$staging/"
+          tar czf "$staging.tar.gz" "$staging"
+          echo "ASSET=$staging.tar.gz" >> "$GITHUB_ENV"
+      - name: Package (windows)
+        if: matrix.os == 'windows-latest'
+        shell: bash
+        run: |
+          staging="onejudge-${{ matrix.target }}"
+          mkdir "$staging"
+          cp "target/${{ matrix.target }}/release/onejudge.exe" "$staging/"
+          cp README.md LICENSE "$staging/"
+          7z a "$staging.zip" "$staging"
+          echo "ASSET=$staging.zip" >> "$GITHUB_ENV"
+      - name: Attach to the release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ env.ASSET }}
+          # Attach to the tag's release (release-plz created it); do not overwrite
+          # its notes.
+          tag_name: ${{ github.ref_name }}
