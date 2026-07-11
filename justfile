@@ -104,3 +104,7 @@ lint-llm *paths:
 # llmlint scoped to the merge-base diff with main — the blocking `llmlint` PR check.
 lint-llm-diff base="origin/main":
     ./scripts/lint-llm-diff.sh {{base}}
+
+# Deterministic llmlint config/ignore/version-bump validation.
+lint-llm-validate *args:
+    PATH="$HOME/.local/bin:$PATH" llmlint validate {{args}}
