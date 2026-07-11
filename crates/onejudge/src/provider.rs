@@ -258,14 +258,20 @@ pub fn build_user_prompt(persona: &str, messages: &[Message]) -> String {
 /// The prompt that asks the judge to evaluate `query` against the transcript.
 /// The transcript is rendered **with tool events** so the verdict can reason over
 /// the skill's actions, not just its words.
+///
+/// The large, invariant transcript is placed **first** and the varying criterion
+/// **last**: scoring one finished transcript against several criteria then shares
+/// a byte-identical prefix (framing + transcript), which the provider's prompt
+/// cache can reuse across those calls — criterion-first would push the varying
+/// text ahead of the transcript and defeat prefix caching entirely.
 #[must_use]
 pub fn build_judge_prompt(query: &JudgeQuery<'_>, messages: &[Message]) -> String {
     let transcript = render_transcript(messages, true);
     match query.kind {
         JudgeKind::Boolean => format!(
             "You are a strict, careful evaluator of an AI assistant's behavior.\n\n\
-             Criterion: {criterion}\n\n\
              Transcript (assistant tool actions are shown as `[tool]` lines):\n{transcript}\n\n\
+             Criterion: {criterion}\n\n\
              Decide whether the criterion is satisfied. Respond with ONLY a \
              single-line JSON object and nothing else:\n\
              {{\"value\": true or false, \"reason\": \"<one short sentence>\"}}",
@@ -275,8 +281,8 @@ pub fn build_judge_prompt(query: &JudgeQuery<'_>, messages: &[Message]) -> Strin
             let (min, max) = query.scale.unwrap_or((0.0, 10.0));
             format!(
                 "You are a strict, careful evaluator of an AI assistant's behavior.\n\n\
-                 Criterion: {criterion}\n\n\
                  Transcript (assistant tool actions are shown as `[tool]` lines):\n{transcript}\n\n\
+                 Criterion: {criterion}\n\n\
                  Score how well the criterion is satisfied on a scale from {min} to \
                  {max} (inclusive). Respond with ONLY a single-line JSON object and \
                  nothing else:\n\
@@ -411,6 +417,14 @@ mod tests {
         assert!(prompt.contains("[tool]"));
         assert!(prompt.contains("git commit"));
         assert!(prompt.contains("the change was committed"));
+        // The transcript must precede the criterion so the framing+transcript
+        // prefix is shared (and prompt-cacheable) across criteria.
+        let transcript_at = prompt.find("Transcript").unwrap();
+        let criterion_at = prompt.find("Criterion:").unwrap();
+        assert!(
+            transcript_at < criterion_at,
+            "transcript must come before the criterion for prefix caching"
+        );
     }
 
     #[test]

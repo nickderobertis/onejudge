@@ -75,9 +75,7 @@ Use the `just` recipes; do not hand-roll equivalents. `just --list` is the index
 - `just test` (coverage-enforced) / `just test-fast` / `just test-e2e` /
   `just lint` / `just format` / `just audit` / `just msrv` — individual steps
   (all on `--features fake-provider`, the deterministic gate's feature set).
-- `just test-http` — the bundled `ureq-transport` over a real local socket (CI
-  `http` job); `just test-live` / `just test-live-api` — the credentialed real
-  `oneharness` / real Anthropic-OpenAI tiers. All three are out of `check`.
+- `just test-live` — the credentialed real `oneharness` tier, out of `check`.
 - `just upgrade` — `cargo update`, then re-run the gate; commit refreshed lockfile.
 - `just lint-llm` / `just lint-llm-diff` — the llmlint LLM-judge tier, separate
   from `check` and non-deterministic; config in `llmlint.yml`. `just setup-llmlint`
@@ -94,8 +92,8 @@ Use the `just` recipes; do not hand-roll equivalents. `just --list` is the index
   `test-os (windows-latest)`, `msrv`, `package` (publishable-artifact build),
   `commitlint` (PR-title lint), and `llmlint` (the LLM-judge job), plus linear
   history, conversation resolution, no force-push/deletion. The `cli-binary` job
-  (builds + smoke-tests the shipped `onejudge` binary with `cli,ureq-transport`)
-  and `http` run on every PR; add `cli-binary` to branch protection once the CLI
+  (builds + smoke-tests the shipped `onejudge` binary with `cli`) runs on every
+  PR; add `cli-binary` to branch protection once the CLI
   stabilizes if you want it required. The live oneharness
   tier is *not* required (credential-gated; fork PRs need maintainer approval).
 - **PRs follow `.github/pull_request_template.md`** — terse **What** and **Why**;
@@ -134,12 +132,9 @@ Use the `just` recipes; do not hand-roll equivalents. `just --list` is the index
   into `just check` and fails below 95%. It excludes `src/bin/` — the two
   `fake-provider` doubles **and** the thin `onejudge` entrypoint are excluded (the
   CLI's real logic lives in the covered `src/cli/` library modules). The gate runs
-  on `--features fake-provider,cli` (`gate_features` in the justfile), **not**
-  `--all-features`: the optional
-  `ureq-transport` feature pulls a TLS stack (`ring`) needing a C toolchain and a
-  newer Rust than the MSRV, so it is proven in the `http` / `live-api` tiers, not
-  the offline gate. `ApiJudgeProvider`'s logic (over a fake `HttpTransport`) is in
-  the gate; only the bundled transport glue is out.
+  on `--features fake-provider,cli` (`gate_features` in the justfile). Every model
+  call goes through oneharness; the deterministic gate fakes only the model, via
+  the real subprocess doubles.
 - **E2E — real, in the gate.** `crates/onejudge/tests/e2e.rs` drives the real
   engine across a **real subprocess boundary**: it points `CommandProvider` and
   `OneharnessProvider` at deterministic test-double binaries
@@ -153,36 +148,37 @@ Use the `just` recipes; do not hand-roll equivalents. `just --list` is the index
   binary: it drives the real run driver in-process over the echo double **and**
   spawns the built `onejudge` binary as a subprocess, asserting on stdout, the
   `--format json` `Report`, and the exit code — only the model faked.
-- **Out-of-gate tiers, credential/toolchain-gated, `#[ignore]`-d or feature-off:**
-  `live` (`tests/live.rs`, real `oneharness`; `docs/live-tier.md`); `http`
-  (`just test-http`, the bundled `UreqTransport` over a **real local socket** —
-  offline but needs a C toolchain to build `ring`); and `live-api`
-  (`tests/live_api.rs`, a real Anthropic/OpenAI API; `docs/live-api-tier.md`).
-  None are in the required-checks set.
+- **Out-of-gate tier, credential-gated, `#[ignore]`-d:** `live` (`tests/live.rs`,
+  real `oneharness`; `docs/live-tier.md`). Not in the required-checks set.
 
 ## The provider boundary
 
-`onejudge` never talks to a model directly; a `Provider` (`provider.rs`) runs the
-skill, plays the simulated user, and judges the transcript. Four backends:
-`OneharnessProvider` (default; shells out to `oneharness run` — JSON report,
-targeting **v0.3.13+** for the uniform `--session` handle); `CommandProvider`
-(a small JSON-lines subprocess protocol — see `docs/protocol.md` — backing the
-deterministic test doubles and any custom provider); `ApiJudgeProvider`
-(`api.rs`; direct Anthropic/OpenAI, **no harness**, generic over an
-`HttpTransport` — the logic is pure and gate-covered, the bundled `UreqTransport`
-is behind the optional `ureq-transport` feature); and `SplitProvider` (`split.rs`;
-compose a skill-runner with a separate judge/simulated-user provider). The
-harness-backed backends feed tool `events` into the transcript the judge sees, and
-thread a **caller-owned session name** across turns on session-capable platforms
+`onejudge` never talks to a model directly, and every model call goes through
+`oneharness`; a `Provider` (`provider.rs`) runs the skill, plays the simulated
+user, and judges the transcript. Three backends: `OneharnessProvider` (default;
+shells out to `oneharness run` — JSON report, targeting **v0.3.13+** for the
+uniform `--session` handle); `CommandProvider` (a small JSON-lines subprocess
+protocol — see `docs/protocol.md` — backing the deterministic test doubles and any
+custom provider, which itself shells out to oneharness or an equivalent harness);
+and `SplitProvider` (`split.rs`; compose a skill-runner with a separate
+judge/simulated-user provider, e.g. skill on one harness and judge on another). The
+backends feed tool `events` into the transcript the judge sees, and thread a
+**caller-owned session name** across turns on session-capable platforms
 (claude-code, codex, opencode, cursor, qwen) rather than extracting and re-passing
 a native id; the rest fall back to re-prompting the inlined transcript.
+
+Prompt caching is oneharness's concern (the agent CLI it wraps caches by default,
+and oneharness has an explicit same-prefix batch/fork reuse path); onejudge stays
+out of enabling it but **surfaces** it — `Usage` carries `cache_read_tokens` /
+`cache_write_tokens`, and `build_judge_prompt` puts the transcript before the
+criterion so the framing+transcript prefix is cacheable across criteria.
 
 ## The Report contract
 
 `Report` (`report.rs`, `SCHEMA_VERSION`) is onejudge's own versioned wire contract
 — transcript + verdicts + usage — that SDKs compose over and re-export. The
 serialized shape is drift-gated against a golden
-(`tests/golden/report.schema-v1.json`, `tests/contract.rs`): a wire change fails
+(`tests/golden/report.schema-v2.json`, `tests/contract.rs`): a wire change fails
 the gate until it is a deliberate edit that bumps `SCHEMA_VERSION` and the golden.
 See `docs/contract.md`.
 

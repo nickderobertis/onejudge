@@ -15,11 +15,6 @@ categories = ["development-tools::testing"]
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
-# Only pulled by the optional `ureq-transport` feature — the bundled HTTP glue for
-# `ApiJudgeProvider`. The engine and the `ApiJudgeProvider` logic (request build /
-# response parse) need no HTTP dependency; a consumer implements `HttpTransport`
-# themselves or opts into this batteries-included transport.
-ureq = { version = "3", optional = true }
 # Only pulled by the optional `cli` feature — the `onejudge` binary. A library
 # consumer (`cargo add onejudge`) never sees clap or a YAML parser. `serde_yaml`
 # is archived/unmaintained, so the maintained `serde_yaml_ng` fork drives the
@@ -42,18 +37,8 @@ fake-provider = []
 # to complete one task, configured by YAML. Non-default so the library stays lean
 # (clap + the YAML parser never reach a `cargo add onejudge` consumer). The
 # deterministic gate (`just check`) enables it alongside `fake-provider` and drives
-# the built binary against the test doubles in `tests/cli.rs`. The `api` provider
-# kind additionally needs `ureq-transport` for its bundled HTTP client; without it
-# that kind is a loud, actionable error, not a silent failure.
+# the built binary against the test doubles in `tests/cli.rs`.
 cli = ["dep:clap", "dep:serde_yaml_ng"]
-
-# The bundled `UreqTransport` for `ApiJudgeProvider`: a blocking rustls HTTP client
-# so a consumer can call Anthropic / OpenAI with no extra wiring. Off by default so
-# the core crate (and `cargo deny`) carry no TLS stack; its transitive deps
-# (ring/zeroize) need a newer Rust than the crate's MSRV, so it is deliberately
-# outside the MSRV surface (see `just msrv`). The `HttpTransport` seam and the
-# provider logic stay in the strict, deterministically-covered gate.
-ureq-transport = ["dep:ureq"]
 
 # The user-facing standalone binary, behind the `cli` feature. Unlike the two
 # `fake-provider` doubles below, this one IS published and installed

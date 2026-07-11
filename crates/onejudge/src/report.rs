@@ -15,9 +15,10 @@ use crate::transcript::Transcript;
 use crate::usage::Usage;
 
 /// The version of the [`Report`] wire contract. Bump on any change to the
-/// serialized shape of a report or the types it embeds. `1` is the initial
-/// contract.
-pub const SCHEMA_VERSION: u32 = 1;
+/// serialized shape of a report or the types it embeds. `1` was the initial
+/// contract; `2` added the prompt-cache token fields to embedded [`Usage`]
+/// (`cache_read_tokens` / `cache_write_tokens`).
+pub const SCHEMA_VERSION: u32 = 2;
 
 /// A judge verdict paired with the criterion it scored and the kind of
 /// judgement, so a serialized report is self-describing.
@@ -117,6 +118,8 @@ mod tests {
             Some(Usage {
                 input_tokens: Some(12),
                 output_tokens: Some(3),
+                cache_read_tokens: Some(9),
+                cache_write_tokens: Some(4),
                 cost_usd: None,
             }),
             false,
@@ -142,6 +145,6 @@ mod tests {
         let json = serde_json::to_string(&report).unwrap();
         assert!(!json.contains("verdicts"));
         assert!(!json.contains("usage"));
-        assert!(json.contains("\"schema_version\":1"));
+        assert!(json.contains("\"schema_version\":2"));
     }
 }

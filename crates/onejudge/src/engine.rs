@@ -681,7 +681,7 @@ mod tests {
                 usage: Some(Usage {
                     input_tokens: Some(5),
                     output_tokens: Some(2),
-                    cost_usd: None,
+                    ..Usage::default()
                 }),
                 events: vec![],
             }],

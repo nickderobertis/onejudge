@@ -514,6 +514,12 @@ fn render_usage(usage: Option<&Usage>) -> String {
             if let Some(o) = u.output_tokens {
                 parts.push(format!("output={o}"));
             }
+            if let Some(r) = u.cache_read_tokens {
+                parts.push(format!("cache_read={r}"));
+            }
+            if let Some(w) = u.cache_write_tokens {
+                parts.push(format!("cache_write={w}"));
+            }
             if let Some(c) = u.cost_usd {
                 parts.push(format!("cost=${c:.4}"));
             }
@@ -615,11 +621,15 @@ mod tests {
         let u = Usage {
             input_tokens: Some(10),
             output_tokens: Some(3),
+            cache_read_tokens: Some(21),
+            cache_write_tokens: Some(4),
             cost_usd: Some(0.0123),
         };
         let rendered = render_usage(Some(&u));
         assert!(rendered.contains("input=10"));
         assert!(rendered.contains("output=3"));
+        assert!(rendered.contains("cache_read=21"));
+        assert!(rendered.contains("cache_write=4"));
         assert!(rendered.contains("cost=$0.0123"));
     }
 
@@ -627,7 +637,7 @@ mod tests {
     fn json_render_is_the_versioned_report() {
         let report = Report::new(Transcript::from_input("hi"), vec![], None, false);
         let json = render_json(&report).unwrap();
-        assert!(json.contains("\"schema_version\": 1"));
+        assert!(json.contains("\"schema_version\": 2"));
     }
 
     #[test]

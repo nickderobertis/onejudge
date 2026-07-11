@@ -36,7 +36,7 @@ Response:
 {
   "message": "Hello! How can I help?",
   "done": false,
-  "usage": { "input_tokens": 12, "output_tokens": 8, "cost_usd": 0.0 },
+  "usage": { "input_tokens": 12, "output_tokens": 8, "cache_read_tokens": 4, "cache_write_tokens": 0, "cost_usd": 0.0 },
   "events": [
     { "kind": "tool_call", "name": "bash", "input": { "command": "ls" }, "index": 0 }
   ]
@@ -45,7 +45,8 @@ Response:
 
 - `message` (required) is the assistant reply.
 - `done` (default `false`) signals the skill considers the task complete.
-- `usage` (optional) — any subset of the three fields; omit what you can't report
+- `usage` (optional) — any subset of `input_tokens`, `output_tokens`,
+  `cache_read_tokens`, `cache_write_tokens`, `cost_usd`; omit what you can't report
   (`null`/absent means "no signal", never zero).
 - `events` (optional) — the normalized tool events the skill took this turn;
   each is `{kind, name?, input?, output?, index}`. They are attached to the

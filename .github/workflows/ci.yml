@@ -80,11 +80,10 @@ jobs:
         run: cargo publish --dry-run -p onejudge --locked
 
   # Prove the SHIPPED CLI binary builds and runs — the release-archive artifact a
-  # user installs (`install.sh` / `cargo install onejudge --features cli`). Built
-  # with `ureq-transport` (its `api` provider kind bundles the HTTP client), which
-  # the offline `check` gate omits, so it is proven here on every PR — a tag push
-  # then builds the same binary per-platform in `release-binaries.yml`. The
-  # deterministic CLI e2e (`tests/cli.rs`) runs inside `check`.
+  # user installs (`install.sh` / `cargo install onejudge --features cli`). Proven
+  # here on every PR — a tag push then builds the same binary per-platform in
+  # `release-binaries.yml`. The deterministic CLI e2e (`tests/cli.rs`) runs inside
+  # `check`.
   cli-binary:
     runs-on: ubuntu-latest
     steps:
@@ -92,28 +91,10 @@ jobs:
       - name: Install pinned toolchain (from rust-toolchain.toml)
         run: rustup show
       - uses: extractions/setup-just@v3
-      - name: Build the shipped binary (cli + bundled transport)
+      - name: Build the shipped binary
         run: just build-cli
       - name: Smoke-test the binary
         run: ./target/release/onejudge schema >/dev/null
-
-  # The optional `ureq-transport` tier: the bundled HTTPS client for
-  # `ApiJudgeProvider`. Its TLS stack (ring) needs a C toolchain and a newer Rust
-  # than the crate's MSRV, so it is proven HERE — not in the deterministic `check`
-  # gate. The transport is exercised over a REAL local socket (offline), so this
-  # stays deterministic; only the *building* of it lives outside `check`.
-  http:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install pinned toolchain (from rust-toolchain.toml)
-        run: rustup show
-      - uses: extractions/setup-just@v3
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-nextest
-      - name: Prove the ureq-transport tier (lint, doc, real-socket test)
-        run: just check-http
 
   # LLM-judge tier (llmlint) — a blocking PR check, SEPARATE from `check`. It is
   # non-deterministic and needs an authenticated harness, so it never runs inside

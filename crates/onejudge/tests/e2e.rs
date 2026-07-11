@@ -280,7 +280,12 @@ fn oneharness_respond_parses_text_usage_and_events() {
             .count_tool_events(&ToolQuery::tool("bash")),
         1
     );
-    assert!(outcome.usage.is_some());
+    // Prompt-cache counts flow from the oneharness report through OneharnessUsage
+    // into the aggregated usage (a single respond call, so no summing to reason
+    // about).
+    let usage = outcome.usage.expect("usage aggregated");
+    assert_eq!(usage.cache_read_tokens, Some(7));
+    assert_eq!(usage.cache_write_tokens, Some(2));
 }
 
 #[test]

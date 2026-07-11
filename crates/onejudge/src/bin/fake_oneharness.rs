@@ -114,7 +114,14 @@ fn parse_flags() -> HashMap<String, String> {
 }
 
 fn usage(text: &str) -> Value {
-    json!({ "input_tokens": text.len(), "output_tokens": 1 })
+    // Deterministic prompt-cache counts so the e2e suite can prove they flow from
+    // the oneharness report through `OneharnessUsage` into the transcript usage.
+    json!({
+        "input_tokens": text.len(),
+        "output_tokens": 1,
+        "cache_read_tokens": 7,
+        "cache_write_tokens": 2,
+    })
 }
 
 /// Extract a `[[marker:ARG]]` directive's argument from `text`.

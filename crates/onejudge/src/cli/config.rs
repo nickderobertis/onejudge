@@ -7,7 +7,7 @@
 
 use serde::Deserialize;
 
-use crate::{ApiVendor, Conversation, JudgeKind, Settings, SimulatedUser, Skill};
+use crate::{Conversation, JudgeKind, Settings, SimulatedUser, Skill};
 
 use super::CliError;
 
@@ -114,7 +114,7 @@ pub struct EvalConfig {
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProviderConfig {
-    /// `oneharness` (default) | `command` | `api` | `split`.
+    /// `oneharness` (default) | `command` | `split`.
     #[serde(default)]
     pub kind: ProviderKind,
     /// `oneharness`: the `oneharness` binary (default `oneharness`).
@@ -126,15 +126,6 @@ pub struct ProviderConfig {
     /// `command`: the provider argv (program + args).
     #[serde(default)]
     pub command: Option<Vec<String>>,
-    /// `api`: the vendor (`anthropic` | `openai`); the key comes from the env.
-    #[serde(default)]
-    pub vendor: Option<ApiVendorConfig>,
-    /// `api`: override the vendor's base URL (a proxy / gateway).
-    #[serde(default)]
-    pub base_url: Option<String>,
-    /// `api`: the per-completion `max_tokens` cap.
-    #[serde(default)]
-    pub max_tokens: Option<u32>,
     /// `split`: the backend that runs the agent's turns.
     #[serde(default)]
     pub skill: Option<Box<ProviderConfig>>,
@@ -154,29 +145,8 @@ pub enum ProviderKind {
     Oneharness,
     /// A custom command speaking the JSON-lines protocol.
     Command,
-    /// A direct Anthropic / OpenAI API, no harness.
-    Api,
     /// Compose a skill-runner with a separate judge / simulated-user backend.
     Split,
-}
-
-/// The API vendor, as spelled in YAML.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum ApiVendorConfig {
-    /// Anthropic Messages API.
-    Anthropic,
-    /// OpenAI Chat Completions API.
-    Openai,
-}
-
-impl From<ApiVendorConfig> for ApiVendor {
-    fn from(v: ApiVendorConfig) -> Self {
-        match v {
-            ApiVendorConfig::Anthropic => ApiVendor::Anthropic,
-            ApiVendorConfig::Openai => ApiVendor::OpenAI,
-        }
-    }
 }
 
 // --- Overrides (flags win over file) --------------------------------------
@@ -334,9 +304,6 @@ impl ProviderConfig {
             bin,
             judge_harness,
             command,
-            vendor,
-            base_url,
-            max_tokens,
             skill,
             judge,
         } = self;
@@ -356,9 +323,6 @@ impl ProviderConfig {
         match kind {
             ProviderKind::Oneharness => {
                 reject(command.is_some(), "command")?;
-                reject(vendor.is_some(), "vendor")?;
-                reject(base_url.is_some(), "base_url")?;
-                reject(max_tokens.is_some(), "max_tokens")?;
                 reject(skill.is_some(), "skill")?;
                 reject(judge.is_some(), "judge")?;
                 Ok(ProviderSpec::Oneharness {
@@ -369,9 +333,6 @@ impl ProviderConfig {
             ProviderKind::Command => {
                 reject(bin.is_some(), "bin")?;
                 reject(judge_harness.is_some(), "judge_harness")?;
-                reject(vendor.is_some(), "vendor")?;
-                reject(base_url.is_some(), "base_url")?;
-                reject(max_tokens.is_some(), "max_tokens")?;
                 reject(skill.is_some(), "skill")?;
                 reject(judge.is_some(), "judge")?;
                 let command = command.filter(|c| !c.is_empty()).ok_or_else(|| {
@@ -379,30 +340,10 @@ impl ProviderConfig {
                 })?;
                 Ok(ProviderSpec::Command { command })
             }
-            ProviderKind::Api => {
-                reject(bin.is_some(), "bin")?;
-                reject(judge_harness.is_some(), "judge_harness")?;
-                reject(command.is_some(), "command")?;
-                reject(skill.is_some(), "skill")?;
-                reject(judge.is_some(), "judge")?;
-                let vendor = vendor.ok_or_else(|| {
-                    CliError::Config(
-                        "provider kind `api` needs a `vendor` (anthropic | openai)".into(),
-                    )
-                })?;
-                Ok(ProviderSpec::Api {
-                    vendor: vendor.into(),
-                    base_url,
-                    max_tokens,
-                })
-            }
             ProviderKind::Split => {
                 reject(bin.is_some(), "bin")?;
                 reject(judge_harness.is_some(), "judge_harness")?;
                 reject(command.is_some(), "command")?;
-                reject(vendor.is_some(), "vendor")?;
-                reject(base_url.is_some(), "base_url")?;
-                reject(max_tokens.is_some(), "max_tokens")?;
                 let skill = skill.ok_or_else(|| {
                     CliError::Config("provider kind `split` needs a `skill` provider".into())
                 })?;
@@ -424,7 +365,6 @@ impl ProviderKind {
         match self {
             ProviderKind::Oneharness => "oneharness",
             ProviderKind::Command => "command",
-            ProviderKind::Api => "api",
             ProviderKind::Split => "split",
         }
     }
@@ -478,15 +418,6 @@ pub enum ProviderSpec {
     Command {
         /// The provider argv.
         command: Vec<String>,
-    },
-    /// A direct model API.
-    Api {
-        /// The vendor.
-        vendor: ApiVendor,
-        /// An optional base-URL override.
-        base_url: Option<String>,
-        /// An optional `max_tokens` cap.
-        max_tokens: Option<u32>,
     },
     /// A composed skill-runner + judge backend.
     Split {
@@ -659,21 +590,6 @@ user:
     }
 
     #[test]
-    fn api_anthropic_vendor_maps_through() {
-        let plan = Config::from_yaml("task: x\nprovider:\n  kind: api\n  vendor: anthropic\n")
-            .unwrap()
-            .into_plan()
-            .unwrap();
-        assert!(matches!(
-            plan.provider,
-            ProviderSpec::Api {
-                vendor: ApiVendor::Anthropic,
-                ..
-            }
-        ));
-    }
-
-    #[test]
     fn command_provider_requires_argv() {
         let err = Config::from_yaml("task: x\nprovider:\n  kind: command\n")
             .unwrap()
@@ -701,27 +617,6 @@ user:
                 .into_plan()
                 .unwrap_err();
         assert!(matches!(err, CliError::Config(m) if m.contains("bin")));
-    }
-
-    #[test]
-    fn api_provider_needs_a_vendor() {
-        let err = Config::from_yaml("task: x\nprovider:\n  kind: api\n")
-            .unwrap()
-            .into_plan()
-            .unwrap_err();
-        assert!(matches!(err, CliError::Config(m) if m.contains("vendor")));
-
-        let plan = Config::from_yaml("task: x\nprovider:\n  kind: api\n  vendor: openai\n")
-            .unwrap()
-            .into_plan()
-            .unwrap();
-        assert!(matches!(
-            plan.provider,
-            ProviderSpec::Api {
-                vendor: ApiVendor::OpenAI,
-                ..
-            }
-        ));
     }
 
     #[test]
