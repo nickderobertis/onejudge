@@ -36,17 +36,39 @@ back, asking for verification, re-prompting — until a `done_when` condition ho
 or `max_turns` is hit. Configured by YAML; the library API is unchanged and CLI
 deps (clap, a YAML parser) are opt-in behind the non-default `cli` feature.
 
+**Spin up a run in three steps:**
+
 ```sh
-cargo install onejudge --features cli          # or: install.sh (prebuilt archives)
-onejudge init                                   # write a starter onejudge.yaml
-onejudge run onejudge.yaml                       # drive one task to completion
-onejudge run onejudge.yaml --format json         # emit the versioned Report
+cargo install onejudge --features cli   # or: install.sh (prebuilt archives)
+onejudge init                           # write a starter onejudge.yaml
 ```
+
+Edit the three fields that make the run yours — `task`, `user.done_when`, and
+`agent.instructions`:
+
+```yaml
+task: "Fix the flaky retry test in client.rs and keep the suite green."
+agent:
+  instructions: "You are a senior engineer. Complete the task and keep tests green."
+user:                                   # omit this whole block for a single-turn run
+  persona: "A demanding tech lead; don't accept 'done' until you've verified it."
+  done_when: "the task is complete and all tests pass"
+  max_turns: 12
+```
+
+```sh
+onejudge run                            # reads ./onejudge.yaml, drives to completion
+```
+
+Flags override the file (flags > file > defaults), so one config serves many tasks:
+`onejudge run --task - < task.txt`, `--harness codex`, `--max-turns 8`,
+`--format json -o result.json`. `onejudge schema` prints the full annotated config.
 
 Human output is the conversation + tool actions + completion status + eval
 verdicts; `--format json` emits the versioned [`Report`](docs/contract.md). The
-exit code is `0` only when the task completed and every boolean eval passed. Full
-docs: **[docs/cli.md](docs/cli.md)**.
+exit code is `0` only when the task completed and every boolean eval passed, `1`
+if it hit `max_turns` or a boolean eval failed, `2` on a bad config. Full docs:
+**[docs/cli.md](docs/cli.md)**.
 
 ## Concepts
 
