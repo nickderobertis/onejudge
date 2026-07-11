@@ -27,7 +27,7 @@ jobs:
           token: ${{ secrets.RELEASE_PLZ_TOKEN }}
       - name: Install pinned toolchain (from rust-toolchain.toml)
         run: rustup show
-      - uses: release-plz/action@v0
+      - uses: release-plz/action@v0.5
         with:
           command: release
         env:
@@ -47,7 +47,7 @@ jobs:
           token: ${{ secrets.RELEASE_PLZ_TOKEN }}
       - name: Install pinned toolchain (from rust-toolchain.toml)
         run: rustup show
-      - uses: release-plz/action@v0
+      - uses: release-plz/action@v0.5
         with:
           command: release-pr
         env:
