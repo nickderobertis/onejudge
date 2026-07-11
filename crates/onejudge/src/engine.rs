@@ -10,6 +10,7 @@ use crate::provider::{
     build_judge_prompt, AssistantTurn, JudgeKind, JudgeQuery, JudgeVerdict, Provider, SkillRef,
     UserTurn,
 };
+use crate::report::{NamedVerdict, Report};
 use crate::transcript::{Message, ToolEvent, Transcript};
 use crate::usage::Usage;
 
@@ -179,6 +180,16 @@ pub struct Outcome {
     pub usage: Option<Usage>,
     /// Whether a streaming sink asked to short-circuit the run.
     pub stopped_early: bool,
+}
+
+impl Outcome {
+    /// Bundle this outcome with the `verdicts` scored against it into onejudge's
+    /// versioned [`Report`] contract — the serializable wire form a consumer or
+    /// SDK persists and composes over.
+    #[must_use]
+    pub fn into_report(self, verdicts: Vec<NamedVerdict>) -> Report {
+        Report::new(self.transcript, verdicts, self.usage, self.stopped_early)
+    }
 }
 
 /// Drives conversations against a [`Provider`] and judges transcripts.

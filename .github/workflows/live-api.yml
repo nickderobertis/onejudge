@@ -1,0 +1,44 @@
+# The live-API tier: drive a REAL model API (Anthropic Messages / OpenAI Chat
+# Completions) through ApiJudgeProvider + the bundled UreqTransport, proving the
+# harness-free judge path against the genuine external service. Like the `live`
+# workflow, it is deliberately OUT of the `check` gate (non-deterministic,
+# credentialed, networked) and NOT in the required-checks set.
+#
+# Unlike `live`, this tier needs a **raw** vendor API key (`x-api-key` / `Bearer`),
+# not the harness OAuth token — `ApiJudgeProvider` calls the vendor API directly.
+# So it is `workflow_dispatch`-only: run it by hand once ANTHROPIC_API_KEY or
+# OPENAI_API_KEY is configured, rather than failing on every PR. See
+# docs/live-api-tier.md.
+
+name: live-api
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  live-api:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned toolchain (from rust-toolchain.toml)
+        run: rustup show
+      - uses: extractions/setup-just@v3
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+      - name: Run the live-API tier
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          if [ -z "${ANTHROPIC_API_KEY:-}" ] && [ -z "${OPENAI_API_KEY:-}" ]; then
+            echo "::error::the live-API tier needs a vendor credential" \
+                 "(ANTHROPIC_API_KEY or OPENAI_API_KEY). Add the repo secret (Settings" \
+                 "→ Secrets and variables → Actions); fork PRs are gated by" \
+                 "require-approval-for-fork-workflows." >&2
+            exit 1
+          fi
+          just test-live-api

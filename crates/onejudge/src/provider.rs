@@ -27,7 +27,8 @@ pub struct SkillRef<'a> {
 }
 
 /// The kind of judgement requested.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum JudgeKind {
     /// A yes/no verdict.
     Boolean,
@@ -94,14 +95,18 @@ pub struct UserTurn {
     pub usage: Option<Usage>,
 }
 
-/// A judge verdict: the raw value (bool or number) plus the stated reason.
-#[derive(Debug, Clone)]
+/// A judge verdict: the raw value (bool or number) plus the stated reason. Part
+/// of onejudge's versioned [`Report`](crate::Report) contract, so it round-trips
+/// through serde.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct JudgeVerdict {
     /// The parsed verdict value.
     pub value: JudgeValue,
     /// The judge's one-sentence justification.
+    #[serde(default)]
     pub reason: String,
     /// Cost/token usage for the judge call, if reported.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub usage: Option<Usage>,
 }
 

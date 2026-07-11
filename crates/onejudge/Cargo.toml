@@ -15,12 +15,30 @@ categories = ["development-tools::testing"]
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+# Only pulled by the optional `ureq-transport` feature — the bundled HTTP glue for
+# `ApiJudgeProvider`. The engine and the `ApiJudgeProvider` logic (request build /
+# response parse) need no HTTP dependency; a consumer implements `HttpTransport`
+# themselves or opts into this batteries-included transport.
+ureq = { version = "3", optional = true }
+
+[dev-dependencies]
+# The contract drift gate (`tests/contract.rs`) serializes the public `Report`
+# and diffs it against a checked-in golden.
+serde_json = { workspace = true }
 
 [features]
 # The deterministic test doubles the e2e suite drives as real subprocesses.
 # Non-default so a published `cargo add onejudge` / library build ships only the
 # engine — the doubles are test-only. `just check` and coverage enable it.
 fake-provider = []
+
+# The bundled `UreqTransport` for `ApiJudgeProvider`: a blocking rustls HTTP client
+# so a consumer can call Anthropic / OpenAI with no extra wiring. Off by default so
+# the core crate (and `cargo deny`) carry no TLS stack; its transitive deps
+# (ring/zeroize) need a newer Rust than the crate's MSRV, so it is deliberately
+# outside the MSRV surface (see `just msrv`). The `HttpTransport` seam and the
+# provider logic stay in the strict, deterministically-covered gate.
+ureq-transport = ["dep:ureq"]
 
 # `onejudge-echo-provider` speaks the CommandProvider JSON-lines protocol;
 # `onejudge-fake-oneharness` emulates `oneharness run --format json`. Both are

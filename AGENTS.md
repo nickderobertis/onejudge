@@ -70,7 +70,11 @@ Use the `just` recipes; do not hand-roll equivalents. `just --list` is the index
   coverage-enforced tests **including e2e**, and the supply-chain audit. Must
   pass before any commit or PR.
 - `just test` (coverage-enforced) / `just test-fast` / `just test-e2e` /
-  `just lint` / `just format` / `just audit` / `just msrv` — individual steps.
+  `just lint` / `just format` / `just audit` / `just msrv` — individual steps
+  (all on `--features fake-provider`, the deterministic gate's feature set).
+- `just test-http` — the bundled `ureq-transport` over a real local socket (CI
+  `http` job); `just test-live` / `just test-live-api` — the credentialed real
+  `oneharness` / real Anthropic-OpenAI tiers. All three are out of `check`.
 - `just upgrade` — `cargo update`, then re-run the gate; commit refreshed lockfile.
 - `just lint-llm` / `just lint-llm-diff` — the llmlint LLM-judge tier, separate
   from `check` and non-deterministic; config in `llmlint.yml`. `just setup-llmlint`
@@ -117,10 +121,14 @@ Use the `just` recipes; do not hand-roll equivalents. `just --list` is the index
 ## Coverage and e2e (the gate's depth)
 
 - **Coverage — enforced, 95% lines.** The gate's `just test` step (`cargo
-  llvm-cov nextest --all-features --fail-under-lines 95`) is wired into `just
-  check` and fails below 95%. It excludes `src/bin/` — the two `fake-provider`
-  test doubles are test infrastructure, not the shipped library, so the bar is on
-  the library's own lines (currently ~97%).
+  llvm-cov nextest --features fake-provider --fail-under-lines 95`) is wired into
+  `just check` and fails below 95%. It excludes `src/bin/` — the two
+  `fake-provider` doubles are test infrastructure. The gate runs on
+  `--features fake-provider`, **not** `--all-features`: the optional
+  `ureq-transport` feature pulls a TLS stack (`ring`) needing a C toolchain and a
+  newer Rust than the MSRV, so it is proven in the `http` / `live-api` tiers, not
+  the offline gate. `ApiJudgeProvider`'s logic (over a fake `HttpTransport`) is in
+  the gate; only the bundled transport glue is out.
 - **E2E — real, in the gate.** `crates/onejudge/tests/e2e.rs` drives the real
   engine across a **real subprocess boundary**: it points `CommandProvider` and
   `OneharnessProvider` at deterministic test-double binaries
@@ -128,23 +136,40 @@ Use the `just` recipes; do not hand-roll equivalents. `just --list` is the index
   resulting transcript, judge verdicts, events, and session threading — the only
   thing faked is the model, exactly as a consumer would fake it. It covers each
   journey happy-path **and** a failure/recovery path (provider spawn failure,
-  empty/malformed output, missing verdict field, non-session-capable fallback).
-  The **live** tier (`tests/live.rs`) drives a *real* `oneharness` binary; it
-  stays compiled but is `#[ignore]`-d out of the gate and runs only in the
-  credential-gated `live` workflow. See `docs/live-tier.md`.
+  empty/malformed output, missing verdict field, non-session-capable fallback),
+  plus a `SplitProvider` journey composing two different real-subprocess backends.
+- **Out-of-gate tiers, credential/toolchain-gated, `#[ignore]`-d or feature-off:**
+  `live` (`tests/live.rs`, real `oneharness`; `docs/live-tier.md`); `http`
+  (`just test-http`, the bundled `UreqTransport` over a **real local socket** —
+  offline but needs a C toolchain to build `ring`); and `live-api`
+  (`tests/live_api.rs`, a real Anthropic/OpenAI API; `docs/live-api-tier.md`).
+  None are in the required-checks set.
 
 ## The provider boundary
 
 `onejudge` never talks to a model directly; a `Provider` (`provider.rs`) runs the
-skill, plays the simulated user, and judges the transcript. Two backends:
+skill, plays the simulated user, and judges the transcript. Four backends:
 `OneharnessProvider` (default; shells out to `oneharness run` — JSON report,
-targeting **v0.3.13+** for the uniform `--session` handle) and `CommandProvider`
+targeting **v0.3.13+** for the uniform `--session` handle); `CommandProvider`
 (a small JSON-lines subprocess protocol — see `docs/protocol.md` — backing the
-deterministic test doubles and any custom provider). Both feed tool `events` into
-the transcript the judge sees, and thread a **caller-owned session name** across
-turns on session-capable platforms (claude-code, codex, opencode, cursor, qwen)
-rather than extracting and re-passing a native id; the rest fall back to
-re-prompting the inlined transcript.
+deterministic test doubles and any custom provider); `ApiJudgeProvider`
+(`api.rs`; direct Anthropic/OpenAI, **no harness**, generic over an
+`HttpTransport` — the logic is pure and gate-covered, the bundled `UreqTransport`
+is behind the optional `ureq-transport` feature); and `SplitProvider` (`split.rs`;
+compose a skill-runner with a separate judge/simulated-user provider). The
+harness-backed backends feed tool `events` into the transcript the judge sees, and
+thread a **caller-owned session name** across turns on session-capable platforms
+(claude-code, codex, opencode, cursor, qwen) rather than extracting and re-passing
+a native id; the rest fall back to re-prompting the inlined transcript.
+
+## The Report contract
+
+`Report` (`report.rs`, `SCHEMA_VERSION`) is onejudge's own versioned wire contract
+— transcript + verdicts + usage — that SDKs compose over and re-export. The
+serialized shape is drift-gated against a golden
+(`tests/golden/report.schema-v1.json`, `tests/contract.rs`): a wire change fails
+the gate until it is a deliberate edit that bumps `SCHEMA_VERSION` and the golden.
+See `docs/contract.md`.
 
 ## Scripts and output are context
 

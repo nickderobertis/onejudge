@@ -36,12 +36,22 @@ Minimum supported Rust version: **1.82**.
     OpenCode, …).
   - **`CommandProvider`** speaks a small [JSON-lines protocol](docs/protocol.md),
     for a custom backend or a deterministic test double.
+  - **`ApiJudgeProvider`** talks to Anthropic or OpenAI **directly** (no harness)
+    — a cheap, harness-free judge and simulated user. It is generic over an
+    **`HttpTransport`** you supply, or opt into the bundled `UreqTransport` with
+    `cargo add onejudge --features ureq-transport`.
+  - **`SplitProvider`** composes two providers — one that runs the skill, one that
+    judges and role-plays the user (e.g. run the skill on a real harness, judge
+    with a cheap direct-API model).
 - **`Engine`** runs a **`Conversation`** (a `Skill`, an initial input, and an
   optional `SimulatedUser`) into a **`Transcript`**, bounded by `max_turns` /
   `done_when` / the skill declaring itself done.
 - **`Transcript`** carries each turn plus the normalized **`ToolEvent`**s the
   skill took, so the judge — and a **`ToolQuery`** — can reason over *what the
   skill did*, not just what it said.
+- **`Report`** is onejudge's own versioned contract (`SCHEMA_VERSION`): a
+  serializable bundle of the transcript, the verdicts, and usage that higher-level
+  frameworks compose over and re-export. See [docs/contract.md](docs/contract.md).
 
 Two things it improves over the in-skilltest engine:
 
@@ -91,9 +101,16 @@ just test        # fast unit + integration + e2e
 ```
 
 The gate is deterministic and offline — the model is faked by **real subprocess
-test doubles**, never mocked. The `OneharnessProvider` path against a real
-harness is proven by the opt-in live tier (`just test-live`; see
-[docs/live-tier.md](docs/live-tier.md)).
+test doubles**, never mocked. Two paths that need a real external service are
+proven in opt-in tiers, kept out of `check`:
+
+- **`just test-live`** — the `OneharnessProvider` path against a real harness (see
+  [docs/live-tier.md](docs/live-tier.md)).
+- **`just test-live-api`** — the `ApiJudgeProvider` path against a real Anthropic /
+  OpenAI API (see [docs/live-api-tier.md](docs/live-api-tier.md)). The bundled
+  `ureq-transport` also has an offline `just test-http` tier that exercises it over
+  a real local socket (it needs a C toolchain for its TLS stack, so it is a CI job,
+  not part of `check`).
 
 See [AGENTS.md](AGENTS.md) for the durable contributor guide.
 
