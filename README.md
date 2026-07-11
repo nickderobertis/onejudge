@@ -50,19 +50,16 @@ docs: **[docs/cli.md](docs/cli.md)**.
 
 ## Concepts
 
-- **`Provider`** is the boundary — onejudge never talks to a model directly.
+- **`Provider`** is the boundary — onejudge never talks to a model directly. Every
+  model call goes through `oneharness`.
   - **`OneharnessProvider`** (default) shells out to the `oneharness` CLI
     (v0.3.13+), so it drives any harness oneharness supports (Claude Code, Codex,
     OpenCode, …).
   - **`CommandProvider`** speaks a small [JSON-lines protocol](docs/protocol.md),
     for a custom backend or a deterministic test double.
-  - **`ApiJudgeProvider`** talks to Anthropic or OpenAI **directly** (no harness)
-    — a cheap, harness-free judge and simulated user. It is generic over an
-    **`HttpTransport`** you supply, or opt into the bundled `UreqTransport` with
-    `cargo add onejudge --features ureq-transport`.
   - **`SplitProvider`** composes two providers — one that runs the skill, one that
-    judges and role-plays the user (e.g. run the skill on a real harness, judge
-    with a cheap direct-API model).
+    judges and role-plays the user (e.g. run the skill on one harness, judge on
+    another).
 - **`Engine`** runs a **`Conversation`** (a `Skill`, an initial input, and an
   optional `SimulatedUser`) into a **`Transcript`**, bounded by `max_turns` /
   `done_when` / the skill declaring itself done.
@@ -121,16 +118,11 @@ just test        # fast unit + integration + e2e
 ```
 
 The gate is deterministic and offline — the model is faked by **real subprocess
-test doubles**, never mocked. Two paths that need a real external service are
-proven in opt-in tiers, kept out of `check`:
+test doubles**, never mocked. The one path that needs a real external service is
+proven in an opt-in tier, kept out of `check`:
 
 - **`just test-live`** — the `OneharnessProvider` path against a real harness (see
   [docs/live-tier.md](docs/live-tier.md)).
-- **`just test-live-api`** — the `ApiJudgeProvider` path against a real Anthropic /
-  OpenAI API (see [docs/live-api-tier.md](docs/live-api-tier.md)). The bundled
-  `ureq-transport` also has an offline `just test-http` tier that exercises it over
-  a real local socket (it needs a C toolchain for its TLS stack, so it is a CI job,
-  not part of `check`).
 
 See [AGENTS.md](AGENTS.md) for the durable contributor guide.
 

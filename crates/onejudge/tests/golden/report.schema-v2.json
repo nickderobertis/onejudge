@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "transcript": {
     "messages": [
       {
@@ -34,7 +34,9 @@
   ],
   "usage": {
     "input_tokens": 12,
-    "output_tokens": 3
+    "output_tokens": 3,
+    "cache_read_tokens": 9,
+    "cache_write_tokens": 4
   },
   "stopped_early": false
 }

@@ -3,11 +3,11 @@
 //! criteria and role-plays the simulated user.
 //!
 //! The two responsibilities are genuinely separable: you might drive the skill on
-//! a real harness ([`OneharnessProvider`](crate::OneharnessProvider)) while
-//! judging and simulating the user with a cheaper direct-API model
-//! ([`ApiJudgeProvider`](crate::ApiJudgeProvider)) — or vice versa. `SplitProvider`
-//! routes each [`Provider`] operation to whichever backend owns it, so the engine
-//! sees one provider and neither backend needs to know the other exists.
+//! one harness ([`OneharnessProvider`](crate::OneharnessProvider) on a capable
+//! platform) while judging and simulating the user on a cheaper harness or model —
+//! or vice versa. `SplitProvider` routes each [`Provider`] operation to whichever
+//! backend owns it, so the engine sees one provider and neither backend needs to
+//! know the other exists.
 
 use std::ops::ControlFlow;
 

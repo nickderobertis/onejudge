@@ -1,10 +1,10 @@
 //! [`AnyProvider`]: a runtime-dispatched [`Provider`] the CLI builds from a
 //! validated [`ProviderSpec`]. The library's providers are static types
-//! (`SplitProvider<S, J>` is generic, `ApiJudgeProvider<T>` is generic over its
-//! transport), so the CLI — which picks a backend at runtime from YAML — needs one
-//! concrete type that erases the choice. `AnyProvider` is that type: it owns each
-//! backend as an enum variant and forwards every [`Provider`] method, dispatching
-//! a `split` to its two children exactly as [`SplitProvider`] would.
+//! (`SplitProvider<S, J>` is generic), so the CLI — which picks a backend at
+//! runtime from YAML — needs one concrete type that erases the choice.
+//! `AnyProvider` is that type: it owns each backend as an enum variant and forwards
+//! every [`Provider`] method, dispatching a `split` to its two children exactly as
+//! [`SplitProvider`] would.
 
 use std::ops::ControlFlow;
 
@@ -22,9 +22,6 @@ pub enum AnyProvider {
     Oneharness(OneharnessProvider),
     /// A custom JSON-lines command backend.
     Command(CommandProvider),
-    /// A direct model API (only when built with the `ureq-transport` feature).
-    #[cfg(feature = "ureq-transport")]
-    Api(crate::ApiJudgeProvider<crate::UreqTransport>),
     /// A composed skill-runner + judge backend, dispatched like
     /// [`crate::SplitProvider`].
     Split {
@@ -39,9 +36,7 @@ impl AnyProvider {
     /// Build a provider from a validated [`ProviderSpec`].
     ///
     /// # Errors
-    /// [`CliError::Config`] if the spec needs a capability this build lacks (an
-    /// `api` backend without the `ureq-transport` feature) or a required
-    /// environment variable (the API key) is missing.
+    /// [`CliError::Config`] if a backend's argv is empty or otherwise invalid.
     pub fn build(spec: &ProviderSpec) -> Result<Self, CliError> {
         match spec {
             ProviderSpec::Oneharness { bin, judge_harness } => Ok(AnyProvider::Oneharness(
@@ -54,57 +49,12 @@ impl AnyProvider {
                     .map_err(|e| CliError::Config(e.to_string()))?;
                 Ok(AnyProvider::Command(provider))
             }
-            ProviderSpec::Api {
-                vendor,
-                base_url,
-                max_tokens,
-            } => build_api(*vendor, base_url.as_deref(), *max_tokens),
             ProviderSpec::Split { skill, judge } => Ok(AnyProvider::Split {
                 skill: Box::new(AnyProvider::build(skill)?),
                 judge: Box::new(AnyProvider::build(judge)?),
             }),
         }
     }
-}
-
-#[cfg(feature = "ureq-transport")]
-fn build_api(
-    vendor: crate::ApiVendor,
-    base_url: Option<&str>,
-    max_tokens: Option<u32>,
-) -> Result<AnyProvider, CliError> {
-    use crate::{ApiJudgeProvider, ApiVendor};
-
-    let (env, label) = match vendor {
-        ApiVendor::Anthropic => ("ANTHROPIC_API_KEY", "anthropic"),
-        ApiVendor::OpenAI => ("OPENAI_API_KEY", "openai"),
-    };
-    let key = std::env::var(env).map_err(|_| {
-        CliError::Config(format!(
-            "provider kind `api` (vendor `{label}`) needs the {env} environment variable"
-        ))
-    })?;
-    let mut provider = ApiJudgeProvider::new(vendor, key, crate::UreqTransport::new());
-    if let Some(url) = base_url {
-        provider = provider.with_base_url(url);
-    }
-    if let Some(max) = max_tokens {
-        provider = provider.with_max_tokens(max);
-    }
-    Ok(AnyProvider::Api(provider))
-}
-
-#[cfg(not(feature = "ureq-transport"))]
-fn build_api(
-    _vendor: crate::ApiVendor,
-    _base_url: Option<&str>,
-    _max_tokens: Option<u32>,
-) -> Result<AnyProvider, CliError> {
-    Err(CliError::Config(
-        "provider kind `api` needs the bundled HTTP client: rebuild with \
-         `--features cli,ureq-transport` (or supply your own via the library)"
-            .into(),
-    ))
 }
 
 impl Provider for AnyProvider {
@@ -119,8 +69,6 @@ impl Provider for AnyProvider {
         match self {
             AnyProvider::Oneharness(p) => p.respond(platform, model, skill, messages, session),
             AnyProvider::Command(p) => p.respond(platform, model, skill, messages, session),
-            #[cfg(feature = "ureq-transport")]
-            AnyProvider::Api(p) => p.respond(platform, model, skill, messages, session),
             AnyProvider::Split { skill: s, .. } => {
                 s.respond(platform, model, skill, messages, session)
             }
@@ -143,10 +91,6 @@ impl Provider for AnyProvider {
             AnyProvider::Command(p) => {
                 p.respond_streaming(platform, model, skill, messages, session, on_event)
             }
-            #[cfg(feature = "ureq-transport")]
-            AnyProvider::Api(p) => {
-                p.respond_streaming(platform, model, skill, messages, session, on_event)
-            }
             AnyProvider::Split { skill: s, .. } => {
                 s.respond_streaming(platform, model, skill, messages, session, on_event)
             }
@@ -163,8 +107,6 @@ impl Provider for AnyProvider {
         match self {
             AnyProvider::Oneharness(p) => p.simulate_user(model, persona, messages, session),
             AnyProvider::Command(p) => p.simulate_user(model, persona, messages, session),
-            #[cfg(feature = "ureq-transport")]
-            AnyProvider::Api(p) => p.simulate_user(model, persona, messages, session),
             AnyProvider::Split { judge, .. } => {
                 judge.simulate_user(model, persona, messages, session)
             }
@@ -180,8 +122,6 @@ impl Provider for AnyProvider {
         match self {
             AnyProvider::Oneharness(p) => p.judge(model, query, messages),
             AnyProvider::Command(p) => p.judge(model, query, messages),
-            #[cfg(feature = "ureq-transport")]
-            AnyProvider::Api(p) => p.judge(model, query, messages),
             AnyProvider::Split { judge, .. } => judge.judge(model, query, messages),
         }
     }
@@ -190,8 +130,6 @@ impl Provider for AnyProvider {
         match self {
             AnyProvider::Oneharness(p) => p.session_capable(platform),
             AnyProvider::Command(p) => p.session_capable(platform),
-            #[cfg(feature = "ureq-transport")]
-            AnyProvider::Api(p) => p.session_capable(platform),
             // Session continuation is the skill backend's concern, exactly as
             // `SplitProvider` mirrors it.
             AnyProvider::Split { skill, .. } => skill.session_capable(platform),
@@ -242,16 +180,5 @@ mod tests {
         // command judge backend is not — the split mirrors the skill.
         assert!(provider.session_capable("claude-code"));
         assert!(!provider.session_capable("goose"));
-    }
-
-    #[cfg(not(feature = "ureq-transport"))]
-    #[test]
-    fn api_without_transport_is_a_clear_error() {
-        let result = AnyProvider::build(&ProviderSpec::Api {
-            vendor: crate::ApiVendor::Anthropic,
-            base_url: None,
-            max_tokens: None,
-        });
-        assert!(matches!(result, Err(CliError::Config(m)) if m.contains("ureq-transport")));
     }
 }

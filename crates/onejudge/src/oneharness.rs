@@ -210,14 +210,19 @@ struct OneharnessResult {
     stdout: String,
 }
 
-/// oneharness reports more usage signals than onejudge surfaces; the extra fields
-/// (cache tokens, sources) are ignored by serde.
+/// The usage signals onejudge reads from oneharness's report. oneharness reports
+/// a few more (e.g. `usage_source`) that serde ignores; the token/cost fields —
+/// including the prompt-cache reads/writes — map straight through by name.
 #[derive(Debug, Deserialize, Default)]
 struct OneharnessUsage {
     #[serde(default)]
     input_tokens: Option<u64>,
     #[serde(default)]
     output_tokens: Option<u64>,
+    #[serde(default)]
+    cache_read_tokens: Option<u64>,
+    #[serde(default)]
+    cache_write_tokens: Option<u64>,
     #[serde(default)]
     cost_usd: Option<f64>,
 }
@@ -236,6 +241,8 @@ impl OneharnessResult {
         let usage = Usage {
             input_tokens: self.usage.input_tokens,
             output_tokens: self.usage.output_tokens,
+            cache_read_tokens: self.usage.cache_read_tokens,
+            cache_write_tokens: self.usage.cache_write_tokens,
             cost_usd: self.usage.cost_usd,
         };
         (!usage.is_empty()).then_some(usage)
@@ -393,10 +400,14 @@ mod tests {
 
     #[test]
     fn parse_report_reads_text_usage_events() {
-        let json = r#"{"results":[{"status":"ok","text":"hi","usage":{"input_tokens":3,"output_tokens":1},"events":[{"kind":"tool_call","name":"bash","input":{"command":"ls"},"index":0}]}]}"#;
+        let json = r#"{"results":[{"status":"ok","text":"hi","usage":{"input_tokens":3,"output_tokens":1,"cache_read_tokens":9,"cache_write_tokens":4},"events":[{"kind":"tool_call","name":"bash","input":{"command":"ls"},"index":0}]}]}"#;
         let result = parse_report("respond", json).unwrap();
         assert_eq!(result.reply(), "hi");
-        assert_eq!(result.usage().unwrap().input_tokens, Some(3));
+        let usage = result.usage().unwrap();
+        assert_eq!(usage.input_tokens, Some(3));
+        // The prompt-cache reads/writes oneharness reports flow straight through.
+        assert_eq!(usage.cache_read_tokens, Some(9));
+        assert_eq!(usage.cache_write_tokens, Some(4));
         assert_eq!(result.events.unwrap().len(), 1);
     }
 

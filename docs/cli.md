@@ -29,10 +29,6 @@ curl -fsSL https://raw.githubusercontent.com/nickderobertis/onejudge/main/instal
 [releases page](https://github.com/nickderobertis/onejudge/releases) or use
 `cargo install`.
 
-The `api` provider kind additionally needs the bundled HTTP client:
-`cargo install onejudge --features cli,ureq-transport` (the prebuilt archives
-already include it).
-
 ## Commands
 
 ```
@@ -55,7 +51,7 @@ file, which overrides defaults:
 | `--done-when` | the completion condition |
 | `--max-turns` | the assistant-turn cap |
 | `--session` | the caller-owned session name |
-| `--provider` | just the backend kind (`oneharness`/`command`/`api`/`split`) |
+| `--provider` | just the backend kind (`oneharness`/`command`/`split`) |
 | `--format` | `human` (default) or `json` |
 | `--output`, `-o` | write the result to a file instead of stdout |
 
@@ -93,7 +89,7 @@ Top-level keys:
 
 | key | purpose |
 |-----|---------|
-| `provider` | which backend runs the harness: `kind` is `oneharness` (`bin`, `judge_harness`), `command` (`command: [...]`), `api` (`vendor`, `base_url?`, `max_tokens?`; key from the env), or `split` (`skill:` + `judge:` sub-providers) |
+| `provider` | which backend runs the harness: `kind` is `oneharness` (`bin`, `judge_harness`), `command` (`command: [...]`), or `split` (`skill:` + `judge:` sub-providers) |
 | `harness` | the platform the agent runs on (default `claude-code`) |
 | `model` / `judge_model` | the agent's model, and the simulated-user + judge model (empty ⇒ harness default / same as `model`) |
 | `agent` | `name`, `dir`, and the system `instructions` for the harness |
@@ -109,13 +105,11 @@ actionable error — never a silent default.
 
 ## Providers
 
-The CLI can build any of onejudge's four backends from `provider.kind`:
+The CLI can build any of onejudge's backends from `provider.kind`. Every model
+call goes through oneharness:
 
 - **`oneharness`** (default) — shell out to the `oneharness` CLI to drive a real
   harness (Claude Code, Codex, …). See [live-tier.md](live-tier.md).
 - **`command`** — a custom backend speaking the [JSON-lines protocol](protocol.md).
-- **`api`** — a direct Anthropic / OpenAI API, no harness (needs the
-  `ureq-transport` build; the key comes from the environment). See
-  [live-api-tier.md](live-api-tier.md).
 - **`split`** — compose a skill-runner with a separate judge / simulated-user
-  backend (e.g. drive the agent on a real harness, judge with a cheaper API model).
+  backend (e.g. drive the agent on one harness, judge on another).

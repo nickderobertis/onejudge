@@ -39,8 +39,7 @@ jobs:
       - name: Add target
         run: rustup target add ${{ matrix.target }}
       - name: Build the release binary
-        # Same recipe the `cli-binary` PR job runs (bundles `ureq-transport` so the
-        # `api` provider kind works out of the box), just cross-compiled per target.
+        # Same recipe the `cli-binary` PR job runs, just cross-compiled per target.
         run: just build-cli ${{ matrix.target }}
       # The archive is named `onejudge-<target>.(tar.gz|zip)`. install.sh's
       # download URL assumes this exact naming and its os/arch cases mirror this

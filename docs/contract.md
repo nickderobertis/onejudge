@@ -9,7 +9,7 @@ and re-export, so onejudge — not its consumers — owns the shape of a judged 
 
 ```jsonc
 {
-  "schema_version": 1,                 // bump on any wire change
+  "schema_version": 2,                 // bump on any wire change
   "transcript": {
     "messages": [
       { "role": "user", "content": "commit the fix" },
@@ -30,14 +30,19 @@ and re-export, so onejudge — not its consumers — owns the shape of a judged 
       "verdict": { "value": true, "reason": "a git commit ran" }
     }
   ],
-  "usage": { "input_tokens": 12, "output_tokens": 3 },  // omitted when nothing reported
+  "usage": {                            // omitted when nothing reported
+    "input_tokens": 12, "output_tokens": 3,
+    "cache_read_tokens": 9, "cache_write_tokens": 4   // prompt-cache reads/writes, when the harness reports them
+  },
   "stopped_early": false
 }
 ```
 
 `verdict.value` is a bool for a `boolean` verdict and a number for a `numeric`
 one. `usage` fields are each independently optional — absent means "no signal",
-never zero.
+never zero. `cache_read_tokens` / `cache_write_tokens` carry the provider's
+prompt-cache reads/writes as surfaced by the harness (see the caching notes in
+`AGENTS.md`).
 
 ## Building one
 
@@ -53,7 +58,7 @@ assert_eq!(report.schema_version, onejudge::SCHEMA_VERSION);
 ## Versioning and the drift gate
 
 The wire form is pinned by a golden snapshot
-(`crates/onejudge/tests/golden/report.schema-v1.json`) and checked by
+(`crates/onejudge/tests/golden/report.schema-v2.json`) and checked by
 `tests/contract.rs`. Any change to the serialized shape — a renamed field, a new
 key, a changed default — fails that test, so it can only land as a **deliberate**
 edit that also bumps `SCHEMA_VERSION` and updates the golden. Downstream SDKs that

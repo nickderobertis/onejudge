@@ -12,12 +12,12 @@
 //! # The pieces
 //!
 //! - [`Provider`] is the boundary — `onejudge` never talks to a model directly.
-//!   [`OneharnessProvider`] shells out to the `oneharness` CLI;
-//!   [`CommandProvider`] speaks a small JSON-lines protocol (see
-//!   `docs/protocol.md`) for the deterministic test doubles and any custom
-//!   backend; [`ApiJudgeProvider`] talks to Anthropic / OpenAI directly (no
-//!   harness) over a pluggable [`HttpTransport`]; and [`SplitProvider`] composes a
-//!   skill-running provider with a separate judge / simulated-user provider.
+//!   Every model call goes through `oneharness`. [`OneharnessProvider`] shells out
+//!   to the `oneharness` CLI; [`CommandProvider`] speaks a small JSON-lines
+//!   protocol (see `docs/protocol.md`) for the deterministic test doubles and any
+//!   custom backend; and [`SplitProvider`] composes a skill-running provider with a
+//!   separate judge / simulated-user provider (e.g. run the skill on one harness
+//!   and judge on another).
 //! - [`Engine`] runs a [`Conversation`] (a [`Skill`] plus an initial input and an
 //!   optional [`SimulatedUser`]) into a [`Transcript`], bounded by `max_turns` /
 //!   `done_when` / the skill declaring itself done, threading one caller-owned
@@ -48,7 +48,6 @@
 //! # Ok::<(), onejudge::Error>(())
 //! ```
 
-mod api;
 #[cfg(feature = "cli")]
 pub mod cli;
 mod command;
@@ -61,9 +60,6 @@ mod split;
 mod transcript;
 mod usage;
 
-#[cfg(feature = "ureq-transport")]
-pub use api::UreqTransport;
-pub use api::{ApiJudgeProvider, ApiVendor, HttpError, HttpResponse, HttpTransport};
 pub use command::CommandProvider;
 pub use engine::{Conversation, Engine, Outcome, Settings, SimulatedUser, Skill, StreamEvent};
 pub use error::{Error, ProviderErrorKind, Result};
