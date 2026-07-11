@@ -1,10 +1,12 @@
 # release-plz drives releasing: version + changelog from Conventional Commits,
 # then tag + publish to crates.io. Bump policy and the model are recorded in
 # AGENTS.md ("Commits, releases, and merging").
-[workspace]
-# Pre-1.0: a breaking change bumps the minor, not to 1.0, until we consciously go
-# 1.0 by removing this rule (mirrors the bump policy in AGENTS.md).
-version_group = "onejudge"
+#
+# The pre-1.0 bump behavior (breaking → minor, feat/fix → patch) is release-plz's
+# default for a 0.x crate, so no config is needed for it. `version_group` (used to
+# make several crates share a version) is meaningless for this single-crate repo,
+# and is not a valid `[workspace]` key — including it made release-plz reject the
+# whole config, so releases never ran.
 
 [[package]]
 name = "onejudge"
