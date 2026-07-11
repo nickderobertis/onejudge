@@ -1,0 +1,42 @@
+# onejudge.yaml — drive a harness through a simulated-user loop to complete a
+# task. Run with `onejudge run onejudge.yaml`. Flags override any field here
+# (flags win over file, file wins over defaults). See `onejudge schema`.
+
+# Which backend runs the harness (and judges / plays the simulated user).
+provider:
+  kind: oneharness            # oneharness | command | api | split
+  bin: oneharness             # oneharness: the binary to shell out to
+  judge_harness: claude-code  # oneharness: harness the judge + user run on
+  # kind: command  ->  command: ["my-provider", "--flag"]
+  # kind: api      ->  vendor: anthropic|openai, base_url?, max_tokens?
+  #                    (the API key comes from ANTHROPIC_API_KEY / OPENAI_API_KEY;
+  #                     needs a build with --features cli,ureq-transport)
+  # kind: split    ->  skill: {..provider..}, judge: {..provider..}
+
+harness: claude-code          # platform the agent runs on
+model: ""                     # agent model; "" => the harness default
+judge_model: ""               # simulated-user + judge model; "" => same as model
+
+agent:                        # system framing for the harness
+  name: agent
+  dir: .
+  instructions: |
+    You are a senior engineer. Complete the task and keep tests green.
+
+task: "Describe the task to complete here."
+
+user:                         # the simulated user / supervisor that drives the loop
+  persona: |
+    You are a demanding tech lead reviewing the work. Push for tests and edge
+    cases; do not accept "done" until you have verified it.
+  done_when: "the task is complete and all tests pass"
+  max_turns: 12
+
+session: onejudge             # caller-owned session name, threaded across turns
+
+evals:                        # optional: score the finished transcript
+  - criterion: "the code compiles and tests pass"
+    kind: boolean
+  - criterion: "the change is well-scoped and readable"
+    kind: numeric
+    scale: [1, 5]

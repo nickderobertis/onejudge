@@ -49,6 +49,8 @@
 //! ```
 
 mod api;
+#[cfg(feature = "cli")]
+pub mod cli;
 mod command;
 mod engine;
 mod error;

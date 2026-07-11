@@ -44,22 +44,25 @@ user asked, fold it in without asking; surface the rest as follow-ups.
 
 Built up from the `create-repo` skill's reference axes, not a single template.
 
-- **Product shape:** library (`shapes/library.md`) — an importable Rust crate
-  with a stable public API; the source of truth for the `CommandProvider`
-  JSON-lines protocol (`docs/protocol.md`).
+- **Product shape:** library **+ CLI** (`shapes/library.md` + `shapes/cli.md`) —
+  an importable Rust crate with a stable public API (the source of truth for the
+  `CommandProvider` JSON-lines protocol, `docs/protocol.md`), plus a standalone
+  `onejudge` binary behind the **non-default `cli` feature** that drives a harness
+  through a simulated-user loop to complete one task (`docs/cli.md`, issue #8).
+  CLI deps (`clap`, `serde_yaml_ng`) never reach a `cargo add onejudge` consumer.
 - **Language(s):** rust (`languages/rust.md`) — stable toolchain, `rustfmt` +
   `clippy -D warnings`, `cargo nextest`, `cargo llvm-cov` coverage gate, `cargo
   deny` + `cargo machete` supply-chain job.
 - **Cross-cutting:** `ci.md` (always) and `releasing.md` (applies — the crate is
-  a versioned artifact published to crates.io; `release-plz` drives it).
-- **References composed:** base.md, shapes/library.md, languages/rust.md, ci.md,
-  llmlint.md, releasing.md
-- **Excluded, and why:** `shapes/cli.md` — onejudge ships no user-facing binary
-  (the two `[[bin]]`s are deterministic test doubles behind the non-default
-  `fake-provider` feature, never published); `intersections/rust-cli.md` and its
-  per-platform release archives — a library publishes to crates.io, not GitHub
-  Release tarballs; `monorepo.md` — one crate, one language, no orchestrator;
-  `src` layout / asdf / direnv — not idiomatic for a single Cargo crate.
+  a versioned artifact published to crates.io; `release-plz` drives it, and a
+  tag push also builds per-platform CLI archives, see below).
+- **References composed:** base.md, shapes/library.md, shapes/cli.md,
+  languages/rust.md, intersections/rust-cli.md, ci.md, llmlint.md, releasing.md
+- **Excluded, and why:** `monorepo.md` — one crate, one language, no orchestrator
+  (the CLI is a feature-gated `[[bin]]` in the single crate, **not** a second
+  crate); `src` layout / asdf / direnv — not idiomatic for a single Cargo crate.
+  The two `fake-provider` `[[bin]]`s remain test-only doubles (never published);
+  the `onejudge` `[[bin]]` is the one shipped binary.
 
 ## Command surface
 
@@ -90,7 +93,10 @@ Use the `just` recipes; do not hand-roll equivalents. `just --list` is the index
   e2e-inclusive Linux gate), the cross-platform `test-os (macos-latest)` /
   `test-os (windows-latest)`, `msrv`, `package` (publishable-artifact build),
   `commitlint` (PR-title lint), and `llmlint` (the LLM-judge job), plus linear
-  history, conversation resolution, no force-push/deletion. The live oneharness
+  history, conversation resolution, no force-push/deletion. The `cli-binary` job
+  (builds + smoke-tests the shipped `onejudge` binary with `cli,ureq-transport`)
+  and `http` run on every PR; add `cli-binary` to branch protection once the CLI
+  stabilizes if you want it required. The live oneharness
   tier is *not* required (credential-gated; fork PRs need maintainer approval).
 - **PRs follow `.github/pull_request_template.md`** — terse **What** and **Why**;
   it becomes the squash body.
@@ -98,7 +104,10 @@ Use the `just` recipes; do not hand-roll equivalents. `just --list` is the index
   release PR from the merged Conventional-Commits history; merging it writes the
   version + `CHANGELOG.md`, tags `vX.Y.Z`, and publishes to crates.io. The only
   human action is merging that PR. The release job authenticates with a PAT
-  (`RELEASE_PLZ_TOKEN`), not the default `GITHUB_TOKEN`, so the tag fires publish.
+  (`RELEASE_PLZ_TOKEN`), not the default `GITHUB_TOKEN`, so the tag fires publish
+  **and** the `release-binaries` workflow, which builds the `onejudge` CLI for
+  each platform (linux/macos-x64+arm64/windows) and attaches the archives to the
+  tag's GitHub Release for `install.sh` / manual download to fetch.
   **Bump policy (pre-1.0):** `feat` / `feat!` / `BREAKING CHANGE` → minor;
   `fix` / `perf` / `refactor` / `build` → patch; `chore` / `docs` / `ci` /
   `test` → no release. Post-1.0, a breaking change is a major.
@@ -121,10 +130,12 @@ Use the `just` recipes; do not hand-roll equivalents. `just --list` is the index
 ## Coverage and e2e (the gate's depth)
 
 - **Coverage — enforced, 95% lines.** The gate's `just test` step (`cargo
-  llvm-cov nextest --features fake-provider --fail-under-lines 95`) is wired into
-  `just check` and fails below 95%. It excludes `src/bin/` — the two
-  `fake-provider` doubles are test infrastructure. The gate runs on
-  `--features fake-provider`, **not** `--all-features`: the optional
+  llvm-cov nextest --features fake-provider,cli --fail-under-lines 95`) is wired
+  into `just check` and fails below 95%. It excludes `src/bin/` — the two
+  `fake-provider` doubles **and** the thin `onejudge` entrypoint are excluded (the
+  CLI's real logic lives in the covered `src/cli/` library modules). The gate runs
+  on `--features fake-provider,cli` (`gate_features` in the justfile), **not**
+  `--all-features`: the optional
   `ureq-transport` feature pulls a TLS stack (`ring`) needing a C toolchain and a
   newer Rust than the MSRV, so it is proven in the `http` / `live-api` tiers, not
   the offline gate. `ApiJudgeProvider`'s logic (over a fake `HttpTransport`) is in
@@ -138,6 +149,10 @@ Use the `just` recipes; do not hand-roll equivalents. `just --list` is the index
   journey happy-path **and** a failure/recovery path (provider spawn failure,
   empty/malformed output, missing verdict field, non-session-capable fallback),
   plus a `SplitProvider` journey composing two different real-subprocess backends.
+  `crates/onejudge/tests/cli.rs` extends the same discipline to the standalone
+  binary: it drives the real run driver in-process over the echo double **and**
+  spawns the built `onejudge` binary as a subprocess, asserting on stdout, the
+  `--format json` `Report`, and the exit code — only the model faked.
 - **Out-of-gate tiers, credential/toolchain-gated, `#[ignore]`-d or feature-off:**
   `live` (`tests/live.rs`, real `oneharness`; `docs/live-tier.md`); `http`
   (`just test-http`, the bundled `UreqTransport` over a **real local socket** —

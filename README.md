@@ -28,6 +28,26 @@ cargo add onejudge
 
 Minimum supported Rust version: **1.82**.
 
+## The `onejudge` CLI
+
+The same engine that *tests* a skill can *drive real work*. `onejudge run` points a
+harness at a task and lets an LLM-driven **simulated user supervise** it — pushing
+back, asking for verification, re-prompting — until a `done_when` condition holds
+or `max_turns` is hit. Configured by YAML; the library API is unchanged and CLI
+deps (clap, a YAML parser) are opt-in behind the non-default `cli` feature.
+
+```sh
+cargo install onejudge --features cli          # or: install.sh (prebuilt archives)
+onejudge init                                   # write a starter onejudge.yaml
+onejudge run onejudge.yaml                       # drive one task to completion
+onejudge run onejudge.yaml --format json         # emit the versioned Report
+```
+
+Human output is the conversation + tool actions + completion status + eval
+verdicts; `--format json` emits the versioned [`Report`](docs/contract.md). The
+exit code is `0` only when the task completed and every boolean eval passed. Full
+docs: **[docs/cli.md](docs/cli.md)**.
+
 ## Concepts
 
 - **`Provider`** is the boundary — onejudge never talks to a model directly.
