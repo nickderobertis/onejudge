@@ -41,8 +41,7 @@ and re-export, so onejudge — not its consumers — owns the shape of a judged 
 `verdict.value` is a bool for a `boolean` verdict and a number for a `numeric`
 one. `usage` fields are each independently optional — absent means "no signal",
 never zero. `cache_read_tokens` / `cache_write_tokens` carry the provider's
-prompt-cache reads/writes as surfaced by the harness (see the caching notes in
-`AGENTS.md`).
+prompt-cache reads/writes as surfaced by the harness.
 
 ## Building one
 
