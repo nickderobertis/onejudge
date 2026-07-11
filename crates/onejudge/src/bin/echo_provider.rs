@@ -95,7 +95,8 @@ fn respond(request: &Value) -> Value {
 
     let mut response = json!({
         "message": format!("echo: {latest}"),
-        "usage": { "input_tokens": latest.len(), "output_tokens": 1 },
+        "usage": { "input_tokens": latest.len(), "output_tokens": 1,
+                   "cache_read_tokens": 3, "cache_write_tokens": 1 },
     });
     if let Some(cmd) = marker(&scope, "event") {
         response["events"] = json!([{
@@ -117,7 +118,8 @@ fn user(request: &Value) -> Value {
     json!({
         "message": "Thanks — and what about the next step?",
         "stop": stop,
-        "usage": { "input_tokens": persona.len(), "output_tokens": 1 },
+        "usage": { "input_tokens": persona.len(), "output_tokens": 1,
+                   "cache_read_tokens": 3, "cache_write_tokens": 1 },
     })
 }
 
@@ -170,6 +172,7 @@ fn judge(request: &Value) -> Value {
     json!({
         "value": value,
         "reason": if matched { "criterion found in transcript" } else { "criterion not found" },
-        "usage": { "input_tokens": criterion.len(), "output_tokens": 1 },
+        "usage": { "input_tokens": criterion.len(), "output_tokens": 1,
+                   "cache_read_tokens": 3, "cache_write_tokens": 1 },
     })
 }

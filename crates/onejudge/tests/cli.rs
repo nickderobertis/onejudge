@@ -221,6 +221,10 @@ fn oneharness_kind_json_covers_buffered_respond_and_user() {
     let summary = run_plan(plan, Format::Json, &mut sink).unwrap();
     assert_eq!(summary.report.transcript.assistant_turns(), 2);
     assert!(summary.hit_max_turns);
+    // The oneharness double's prompt-cache counts aggregate into the report usage.
+    let usage = summary.report.usage.as_ref().expect("usage aggregated");
+    assert!(usage.cache_read_tokens.unwrap_or(0) >= 7);
+    assert!(usage.cache_write_tokens.unwrap_or(0) >= 2);
 }
 
 #[test]
@@ -281,6 +285,15 @@ user:
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains("=== Conversation ==="));
     assert!(stdout.contains("Status: completed"));
+    // The human `Usage:` line surfaces the aggregated prompt-cache reads/writes.
+    assert!(
+        stdout.contains("cache_read="),
+        "human usage shows cache reads"
+    );
+    assert!(
+        stdout.contains("cache_write="),
+        "human usage shows cache writes"
+    );
     // Live tool events stream to stderr, keeping stdout clean.
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert!(stderr.contains("git commit"), "events stream to stderr");
@@ -314,6 +327,10 @@ evals:
     assert_eq!(report.schema_version, onejudge::SCHEMA_VERSION);
     assert!(!report.verdicts.is_empty());
     assert_eq!(report.transcript.assistant_turns(), 1);
+    // Prompt-cache counts survive the real binary + JSON contract round-trip.
+    let usage = report.usage.expect("usage in the report");
+    assert!(usage.cache_read_tokens.unwrap_or(0) >= 3);
+    assert!(usage.cache_write_tokens.unwrap_or(0) >= 1);
 }
 
 #[test]
