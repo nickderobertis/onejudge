@@ -32,7 +32,7 @@ fn fake_oneharness() -> OneharnessProvider {
 }
 
 fn settings() -> Settings {
-    Settings::new("claude-code", "test-model", "judge-model")
+    Settings::new()
 }
 
 fn skill_with(instructions: &str) -> Skill {
@@ -348,9 +348,9 @@ fn oneharness_judge_decides_over_the_transcript() {
 }
 
 #[test]
-fn oneharness_threads_one_session_name_when_capable() {
-    // On a session-capable platform the engine threads `<base>-skill` across turns
-    // (the uniform --session handle); the fake echoes the received name back.
+fn oneharness_threads_one_session_name() {
+    // The engine always threads `<base>-skill` across turns (the uniform --session
+    // handle); the fake echoes the received name back.
     let capable = fake_oneharness();
     let engine = Engine::new(&capable, settings().with_session_name("run-9"));
     let outcome = engine
@@ -363,17 +363,20 @@ fn oneharness_threads_one_session_name_when_capable() {
 }
 
 #[test]
-fn oneharness_omits_session_on_non_capable_platform() {
+fn oneharness_retries_without_session_when_unsupported() {
+    // The fake rejects the first `--session` call with oneharness's "does not
+    // support --session" text; onejudge must retry the call once without --session
+    // (re-inlining the transcript), so the run still succeeds. On the retry no name
+    // is threaded, so `[[echo-session]]` reports "no-session".
     let provider = fake_oneharness();
-    // goose is not session-capable, so no name is threaded and the fallback path
-    // (inlined transcript, no --session) runs.
-    let engine = Engine::new(&provider, Settings::new("goose", "m", "judge-model"));
+    let engine = Engine::new(&provider, settings().with_session_name("run-x"));
     let outcome = engine
         .run(&Conversation::single_turn(
-            skill_with("[[echo-session]]"),
+            skill_with("[[reject-session]][[echo-session]]"),
             "go",
         ))
         .unwrap();
+    assert_eq!(outcome.transcript.assistant_turns(), 1);
     assert_eq!(outcome.transcript.messages[1].content, "no-session");
 }
 

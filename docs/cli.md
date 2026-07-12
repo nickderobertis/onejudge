@@ -33,19 +33,28 @@ curl -fsSL https://raw.githubusercontent.com/nickderobertis/onejudge/main/instal
 
 ```
 onejudge run [CONFIG.yaml] [overrides]   # drive one task to completion
-onejudge init [PATH]                     # write a starter onejudge.yaml
+onejudge init [PATH]                     # scaffold onejudge.yaml + oneharness configs
 onejudge schema                          # print the annotated config
 onejudge --help
 ```
+
+**Harness/model selection lives in oneharness's config, not onejudge.** The agent
+side runs under oneharness's discovered `oneharness.toml`, and the judge /
+simulated-user side runs under a separately-named config (`provider.judge_config`,
+default `oneharness.judge.toml`, passed as `oneharness run --config <path>`).
+`onejudge init` scaffolds all three by shelling out to `oneharness init` (needs
+oneharness **0.3.20+**): it runs `oneharness init oneharness.toml` and `oneharness
+init oneharness.judge.toml`, then writes the loop-only `onejudge.yaml`. Pass
+`--oneharness-bin <path>` if `oneharness` is not on `PATH`, and `--force` to
+overwrite existing files. To change the harness or model, edit those `.toml`
+files (or use oneharness's own `ONEHARNESS_*` env overrides) — not `onejudge.yaml`.
 
 `run` reads `./onejudge.yaml` when no config path is given. Flags override the
 file, which overrides defaults:
 
 | flag | overrides |
 |------|-----------|
-| `--harness` | the platform the agent runs on |
-| `--model` | the agent's model |
-| `--judge-model` | the simulated user + judge model |
+| `--judge-config` | the judge/simulated-user oneharness `--config` file |
 | `--task` (`-` = stdin) | the task |
 | `--persona` | the simulated user's persona |
 | `--done-when` | the completion condition |
@@ -89,27 +98,31 @@ Top-level keys:
 
 | key | purpose |
 |-----|---------|
-| `provider` | which backend runs the harness: `kind` is `oneharness` (`bin`, `judge_harness`), `command` (`command: [...]`), or `split` (`skill:` + `judge:` sub-providers) |
-| `harness` | the platform the agent runs on (default `claude-code`) |
-| `model` / `judge_model` | the agent's model, and the simulated-user + judge model (empty ⇒ harness default / same as `model`) |
+| `provider` | which backend runs the harness: `kind` is `oneharness` (`bin`, `judge_config`), `command` (`command: [...]`), or `split` (`skill:` + `judge:` sub-providers) |
 | `agent` | `name`, `dir`, and the system `instructions` for the harness |
 | `task` | the task to drive to completion (or supply via `--task`) |
 | `user` | the simulated supervisor: `persona`, `done_when`, `max_turns` (omit for a single-turn run) |
 | `session` | the caller-owned session name threaded across turns |
 | `evals` | optional criteria to score the finished transcript: each has a `criterion`, a `kind` (`boolean` / `numeric`), and — for numeric — a `scale: [min, max]` |
 
+There is no `harness` / `model` / `judge_model` key: harness and model selection
+moved into oneharness's own config files (`oneharness.toml` for the agent,
+`provider.judge_config` — default `oneharness.judge.toml` — for the judge side).
+
 The config is validated strictly at the boundary (`deny_unknown_fields`): a typo'd
 key, a missing task, a provider field that does not belong to the chosen `kind`
-(e.g. `bin` under `kind: command`), or an inverted numeric scale is a loud,
-actionable error — never a silent default.
+(e.g. `bin` or `judge_config` under `kind: command`), or an inverted numeric scale
+is a loud, actionable error — never a silent default.
 
 ## Providers
 
 The CLI can build any of onejudge's backends from `provider.kind`. Every model
 call goes through oneharness:
 
-- **`oneharness`** (default) — shell out to the `oneharness` CLI to drive a real
-  harness (Claude Code, Codex, …). See [live-tier.md](live-tier.md).
+- **`oneharness`** (default) — shell out to the `oneharness` CLI (0.3.20+) to drive
+  a real harness (Claude Code, Codex, …). The agent side uses the discovered
+  `oneharness.toml`; the judge side uses `judge_config` (`--config`). See
+  [live-tier.md](live-tier.md).
 - **`command`** — a custom backend speaking the [JSON-lines protocol](protocol.md).
 - **`split`** — compose a skill-runner with a separate judge / simulated-user
   backend (e.g. drive the agent on one harness, judge on another).

@@ -74,15 +74,10 @@ pub struct RunArgs {
     /// The config file (defaults to `./onejudge.yaml` when present).
     pub config: Option<PathBuf>,
 
-    /// The harness (platform) the agent runs on.
+    /// The judge / simulated-user oneharness config file (`oneharness run --config
+    /// <path>`); default `oneharness.judge.toml`.
     #[arg(long)]
-    pub harness: Option<String>,
-    /// The model the agent runs on.
-    #[arg(long)]
-    pub model: Option<String>,
-    /// The model the simulated user and judge run on.
-    #[arg(long)]
-    pub judge_model: Option<String>,
+    pub judge_config: Option<String>,
     /// The task to drive to completion (`-` reads stdin).
     #[arg(long)]
     pub task: Option<String>,
@@ -116,9 +111,14 @@ pub struct InitArgs {
     /// Where to write the starter config (default `./onejudge.yaml`).
     #[arg(default_value = DEFAULT_CONFIG)]
     pub path: PathBuf,
-    /// Overwrite an existing file.
+    /// Overwrite existing files (the `onejudge.yaml` and both scaffolded
+    /// `oneharness` configs).
     #[arg(long)]
     pub force: bool,
+    /// The `oneharness` binary used to scaffold `oneharness.toml` /
+    /// `oneharness.judge.toml` (default `oneharness`).
+    #[arg(long, default_value = "oneharness")]
+    pub oneharness_bin: String,
 }
 
 /// The `--format` choices.
@@ -149,9 +149,7 @@ pub fn run(cli: Cli) -> Result<i32, CliError> {
 fn run_task(args: RunArgs) -> Result<i32, CliError> {
     let RunArgs {
         config,
-        harness,
-        model,
-        judge_model,
+        judge_config,
         task,
         persona,
         done_when,
@@ -165,9 +163,7 @@ fn run_task(args: RunArgs) -> Result<i32, CliError> {
     let mut cfg = load_config(config.as_ref())?;
     let task = task.map(resolve_task).transpose()?;
     cfg.apply(Overrides {
-        harness,
-        model,
-        judge_model,
+        judge_config,
         task,
         persona,
         done_when,
@@ -240,17 +236,53 @@ fn write_output(output: Option<&PathBuf>, content: &str) -> Result<(), CliError>
     Ok(())
 }
 
-/// Write the starter config to `path`.
+/// Scaffold a run: the two oneharness config files (via `oneharness init`, which
+/// owns harness/model selection) plus the loop-only `onejudge.yaml`.
 fn init(args: InitArgs) -> Result<i32, CliError> {
+    // Check the onejudge.yaml target first so we fail before scaffolding anything.
     if args.path.exists() && !args.force {
         return Err(CliError::Config(format!(
             "{} already exists (use --force to overwrite)",
             args.path.display()
         )));
     }
+
+    // Harness/model selection lives in oneharness's own config files now, so
+    // scaffold them by shelling out to `oneharness init` (oneharness 0.3.20+): the
+    // discovered `oneharness.toml` drives the agent side, and `oneharness.judge.toml`
+    // drives the judge / simulated-user side (`provider.judge_config`).
+    oneharness_init(&args.oneharness_bin, "oneharness.toml", args.force)?;
+    oneharness_init(&args.oneharness_bin, "oneharness.judge.toml", args.force)?;
+
     std::fs::write(&args.path, STARTER_CONFIG)?;
     println!("wrote {}", args.path.display());
     Ok(0)
+}
+
+/// Shell out to `oneharness init <path>` to scaffold one oneharness config,
+/// surfacing a missing binary or a non-zero exit as an actionable error.
+fn oneharness_init(bin: &str, path: &str, force: bool) -> Result<(), CliError> {
+    let mut cmd = std::process::Command::new(bin);
+    cmd.arg("init").arg(path);
+    if force {
+        cmd.arg("--force");
+    }
+    let output = cmd.output().map_err(|e| {
+        CliError::Config(format!(
+            "could not run `{bin} init {path}`: {e}. Is oneharness (0.3.20+) installed and on \
+             PATH? Install it or pass --oneharness-bin <path>."
+        ))
+    })?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(CliError::Config(format!(
+            "`{bin} init {path}` failed: {}",
+            stderr.trim()
+        )));
+    }
+    // Relay oneharness's own confirmation line (e.g. "wrote oneharness.toml").
+    print!("{}", String::from_utf8_lossy(&output.stdout));
+    Ok(())
 }
 
 // --- The run driver (pure of arg parsing / IO, so it is unit-testable) -----

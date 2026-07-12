@@ -111,23 +111,28 @@ pub struct JudgeVerdict {
 }
 
 /// The provider boundary.
+///
+/// A provider owns harness/model *selection* itself (onejudge no longer passes a
+/// platform or model): the [`OneharnessProvider`](crate::OneharnessProvider) relies
+/// on oneharness's discovered config for the agent side and a separately-named
+/// config for the judge side, and a [`CommandProvider`](crate::CommandProvider)
+/// backend chooses however it likes.
 pub trait Provider {
     /// Run one assistant/skill turn given the conversation so far.
     ///
     /// `session`, when `Some`, is a **caller-owned session name** the engine
-    /// threads across the turns of one run: a provider that supports continuation
-    /// (see [`Provider::session_capable`]) maps it to the harness's native session
-    /// so the skill keeps real state instead of being re-prompted with the whole
-    /// transcript; a provider that does not support it ignores the name and reads
-    /// the inlined `messages`.
+    /// threads across the turns of one run. A provider that supports continuation
+    /// maps it to the harness's native session so the skill keeps real state
+    /// instead of being re-prompted with the whole transcript; a provider that
+    /// cannot continue the session degrades gracefully by re-reading the inlined
+    /// `messages` (the engine always threads the name — capability is the
+    /// provider's concern, discovered at call time, not onejudge's up front).
     ///
     /// # Errors
     /// [`Error::Provider`](crate::Error::Provider) if the command fails or returns
     /// malformed output.
     fn respond(
         &self,
-        platform: &str,
-        model: &str,
         skill: &SkillRef<'_>,
         messages: &[Message],
         session: Option<&str>,
@@ -146,14 +151,12 @@ pub trait Provider {
     /// As [`Provider::respond`].
     fn respond_streaming(
         &self,
-        platform: &str,
-        model: &str,
         skill: &SkillRef<'_>,
         messages: &[Message],
         session: Option<&str>,
         on_event: &mut dyn FnMut(&ToolEvent) -> ControlFlow<()>,
     ) -> Result<AssistantTurn> {
-        let turn = self.respond(platform, model, skill, messages, session)?;
+        let turn = self.respond(skill, messages, session)?;
         for event in &turn.events {
             if on_event(event).is_break() {
                 break;
@@ -171,7 +174,6 @@ pub trait Provider {
     /// malformed output.
     fn simulate_user(
         &self,
-        model: &str,
         persona: &str,
         messages: &[Message],
         session: Option<&str>,
@@ -182,20 +184,7 @@ pub trait Provider {
     /// # Errors
     /// [`Error::Provider`](crate::Error::Provider) if the command fails or returns
     /// malformed output.
-    fn judge(
-        &self,
-        model: &str,
-        query: &JudgeQuery<'_>,
-        messages: &[Message],
-    ) -> Result<JudgeVerdict>;
-
-    /// True iff a `session` name passed to [`Provider::respond`] on `platform`
-    /// will faithfully continue a prior session. The default is `false`; a
-    /// provider that maps the caller-owned name to a native session overrides it
-    /// so the engine threads one name instead of re-inlining the transcript.
-    fn session_capable(&self, _platform: &str) -> bool {
-        false
-    }
+    fn judge(&self, query: &JudgeQuery<'_>, messages: &[Message]) -> Result<JudgeVerdict>;
 }
 
 // ---------------------------------------------------------------------------

@@ -2,20 +2,29 @@
 //! real harness through the [`oneharness`](https://github.com/nickderobertis/oneharness)
 //! CLI (`oneharness run`, whose report is JSON by default) and parses its report.
 //!
-//! It targets **oneharness v0.3.13+** for the uniform `--session <name>` handle:
-//! the engine threads one caller-owned name across turns and oneharness maps it to
-//! the harness's native session in its on-disk store, so onejudge never extracts
-//! or re-passes a native id. `--session` is honored only for the harnesses that
-//! expose a session id headlessly (see [`session_capable`]); the rest re-read the
-//! inlined transcript.
+//! **Harness/model selection lives in oneharness's config, not onejudge.** The
+//! agent side passes no `--harness`/`--model`, so it uses oneharness's discovered
+//! default config (`oneharness.toml`). The judge / simulated-user side passes
+//! `--config <judge_config>` (default `oneharness.judge.toml`) so it can run on a
+//! separately-configured harness/model — again without `--harness`/`--model`.
+//! Scaffold both with `onejudge init` (which shells out to `oneharness init`).
 //!
-//! The pure pieces — argument construction, report parsing, the session-capable
-//! table — are separated from the one thin `spawn + wait` shell so they are
+//! It targets **oneharness v0.3.20+**: it always threads the uniform `--session
+//! <name>` handle (the engine's caller-owned name, mapped to the harness's native
+//! session in oneharness's on-disk store), and if a run fails because the harness
+//! does not support `--session`, it retries the same call once **without**
+//! `--session`, re-inlining the transcript — the graceful degradation that
+//! replaces the old up-front capability table. It also depends on `oneharness init`
+//! for scaffolding.
+//!
+//! The pure pieces — argument construction, report parsing, error classification —
+//! are separated from the one thin `spawn + wait` shell so they are
 //! deterministically unit-tested; the whole path is proven end-to-end against a
 //! fake `oneharness` binary in the e2e suite and against a real one in the live
 //! tier (`docs/live-tier.md`).
 
 use std::io::Write as _;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use serde::Deserialize;
@@ -28,23 +37,25 @@ use crate::provider::{
 use crate::transcript::{Message, ToolEvent};
 use crate::usage::Usage;
 
-/// The harnesses whose native session id oneharness can bind a `--session` name
-/// to (their `session_capable` in `oneharness list`). The rest emit no id
-/// headlessly, so `--session` is a usage error there and they fall back to
-/// re-prompting the inlined transcript.
-const SESSION_CAPABLE: &[&str] = &["claude-code", "codex", "opencode", "cursor", "qwen"];
+/// The default judge/simulated-user oneharness config filename.
+const DEFAULT_JUDGE_CONFIG: &str = "oneharness.judge.toml";
 
-/// Whether `oneharness run --session <name>` faithfully continues a session on
-/// `platform`.
-#[must_use]
-pub fn session_capable(platform: &str) -> bool {
-    SESSION_CAPABLE.contains(&platform)
+/// The stable substring in oneharness's error when a harness cannot bind a
+/// `--session` name (its `OneharnessError::SessionUnsupported`). Matching it lets
+/// onejudge retry the call without `--session` instead of failing the run.
+const SESSION_UNSUPPORTED_MARKER: &str = "does not support --session";
+
+/// Whether `err` is oneharness rejecting `--session` because the harness exposes no
+/// session id headlessly — the one failure the provider recovers from (by retrying
+/// without `--session`).
+fn is_session_unsupported(err: &Error) -> bool {
+    err.to_string().contains(SESSION_UNSUPPORTED_MARKER)
 }
 
 /// The default [`Provider`]: shells out to the `oneharness` CLI.
 pub struct OneharnessProvider {
     bin: String,
-    judge_harness: String,
+    judge_config: Option<PathBuf>,
 }
 
 impl Default for OneharnessProvider {
@@ -55,12 +66,12 @@ impl Default for OneharnessProvider {
 
 impl OneharnessProvider {
     /// A provider that invokes `oneharness` on `PATH`, running the judge and
-    /// simulated user on the `claude-code` harness.
+    /// simulated user under `oneharness.judge.toml` (its default config file).
     #[must_use]
     pub fn new() -> Self {
         Self {
             bin: "oneharness".into(),
-            judge_harness: "claude-code".into(),
+            judge_config: Some(PathBuf::from(DEFAULT_JUDGE_CONFIG)),
         }
     }
 
@@ -72,12 +83,69 @@ impl OneharnessProvider {
         self
     }
 
-    /// Override the harness the judge and simulated user run on (default
-    /// `claude-code`), independent of the harness under test.
+    /// Override the oneharness config file the judge and simulated user run under
+    /// (default `oneharness.judge.toml`), passed as `oneharness run --config
+    /// <path>`. This is where the judge-side harness/model selection lives — onejudge
+    /// itself passes no `--harness`/`--model`.
     #[must_use]
-    pub fn with_judge_harness(mut self, harness: impl Into<String>) -> Self {
-        self.judge_harness = harness.into();
+    pub fn with_judge_config(mut self, config: impl Into<PathBuf>) -> Self {
+        self.judge_config = Some(config.into());
         self
+    }
+
+    /// Run a skill turn, threading `session` and — on a `SessionUnsupported`
+    /// failure — retrying once without it, re-inlining the transcript.
+    fn run_respond(
+        &self,
+        instructions: &str,
+        messages: &[Message],
+        session: Option<&str>,
+    ) -> Result<OneharnessResult> {
+        if let Some(name) = session {
+            // A continued session only needs the latest user turn.
+            let args = respond_args(instructions, Some(name));
+            let prompt = latest_or_inline(messages, true);
+            match self.run("respond", &args, &prompt) {
+                Ok(result) => return Ok(result),
+                Err(e) if is_session_unsupported(&e) => {
+                    eprintln!(
+                        "onejudge: warning — the agent harness does not support --session; \
+                         retrying without it (re-inlining the transcript)"
+                    );
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        // Fresh or fallback call: inline the whole conversation, no `--session`.
+        let args = respond_args(instructions, None);
+        let prompt = latest_or_inline(messages, false);
+        self.run("respond", &args, &prompt)
+    }
+
+    /// Run a judge/simulated-user turn under the judge config, threading `session`
+    /// and — on a `SessionUnsupported` failure — retrying once without it. The
+    /// prompt already inlines the whole transcript, so the retry needs no rebuild.
+    fn run_judge_side(
+        &self,
+        op: &str,
+        prompt: &str,
+        session: Option<&str>,
+    ) -> Result<OneharnessResult> {
+        if let Some(name) = session {
+            let args = judge_side_args(self.judge_config.as_deref(), Some(name));
+            match self.run(op, &args, prompt) {
+                Ok(result) => return Ok(result),
+                Err(e) if is_session_unsupported(&e) => {
+                    eprintln!(
+                        "onejudge: warning — the judge harness does not support --session; \
+                         retrying without it"
+                    );
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        let args = judge_side_args(self.judge_config.as_deref(), None);
+        self.run(op, &args, prompt)
     }
 
     /// Spawn `oneharness run` with `args` and `prompt`, and return the parsed
@@ -130,19 +198,15 @@ impl OneharnessProvider {
 
 /// Build the `oneharness run` args (before the trailing `--prompt-file -`) for a
 /// skill turn. Pure and total, so it is unit-tested directly.
+///
+/// No `--harness`/`--model`: the agent side relies on oneharness's own discovered
+/// config (`oneharness.toml`) for harness/model selection.
 #[must_use]
-fn respond_args(
-    platform: &str,
-    model: &str,
-    instructions: &str,
-    session: Option<&str>,
-) -> Vec<String> {
+fn respond_args(instructions: &str, session: Option<&str>) -> Vec<String> {
     // `oneharness run` emits a JSON report by default; `--compact` makes it a
     // single line. There is no `--format` flag on `run`.
     let mut args = vec![
         "run".into(),
-        "--harness".into(),
-        platform.into(),
         "--compact".into(),
         "--events".into(),
         "--system".into(),
@@ -150,36 +214,31 @@ fn respond_args(
         "--prompt-file".into(),
         "-".into(),
     ];
-    // Omit --model when unspecified so the harness uses its own default/env model.
-    if !model.is_empty() {
-        args.push("--model".into());
-        args.push(model.into());
-    }
-    // Thread the caller-owned session name only where oneharness can bind it.
-    if let Some(name) = session.filter(|_| session_capable(platform)) {
+    // Always thread the caller-owned session name; the caller retries without it if
+    // oneharness reports the harness cannot bind a session.
+    if let Some(name) = session {
         args.push("--session".into());
         args.push(name.into());
     }
     args
 }
 
-/// Build the `oneharness run` args for a judge or simulated-user turn on the
-/// judge harness (no `--system`, no `--events`).
+/// Build the `oneharness run` args for a judge or simulated-user turn (no
+/// `--system`, no `--events`). Harness/model selection comes from `--config
+/// <judge_config>`, not from `--harness`/`--model`.
 #[must_use]
-fn judge_side_args(harness: &str, model: &str, session: Option<&str>) -> Vec<String> {
+fn judge_side_args(judge_config: Option<&Path>, session: Option<&str>) -> Vec<String> {
     let mut args = vec![
         "run".into(),
-        "--harness".into(),
-        harness.into(),
         "--compact".into(),
         "--prompt-file".into(),
         "-".into(),
     ];
-    if !model.is_empty() {
-        args.push("--model".into());
-        args.push(model.into());
+    if let Some(config) = judge_config {
+        args.push("--config".into());
+        args.push(config.display().to_string());
     }
-    if let Some(name) = session.filter(|_| session_capable(harness)) {
+    if let Some(name) = session {
         args.push("--session".into());
         args.push(name.into());
     }
@@ -286,17 +345,11 @@ fn parse_report(op: &str, stdout: &str) -> Result<OneharnessResult> {
 impl Provider for OneharnessProvider {
     fn respond(
         &self,
-        platform: &str,
-        model: &str,
         skill: &SkillRef<'_>,
         messages: &[Message],
         session: Option<&str>,
     ) -> Result<AssistantTurn> {
-        let args = respond_args(platform, model, skill.instructions, session);
-        // A continued session only needs the latest user turn; a fresh/fallback
-        // call inlines the whole conversation so the stateless harness sees it.
-        let prompt = latest_or_inline(messages, session_capable(platform) && session.is_some());
-        let result = self.run("respond", &args, &prompt)?;
+        let result = self.run_respond(skill.instructions, messages, session)?;
         Ok(AssistantTurn {
             message: result.reply(),
             done: false,
@@ -307,14 +360,12 @@ impl Provider for OneharnessProvider {
 
     fn simulate_user(
         &self,
-        model: &str,
         persona: &str,
         messages: &[Message],
         session: Option<&str>,
     ) -> Result<UserTurn> {
-        let args = judge_side_args(&self.judge_harness, model, session);
         let prompt = build_user_prompt(persona, messages);
-        let result = self.run("user", &args, &prompt)?;
+        let result = self.run_judge_side("user", &prompt, session)?;
         Ok(UserTurn {
             message: result.reply(),
             stop: false,
@@ -322,22 +373,13 @@ impl Provider for OneharnessProvider {
         })
     }
 
-    fn judge(
-        &self,
-        model: &str,
-        query: &JudgeQuery<'_>,
-        messages: &[Message],
-    ) -> Result<JudgeVerdict> {
-        let args = judge_side_args(&self.judge_harness, model, None);
+    fn judge(&self, query: &JudgeQuery<'_>, messages: &[Message]) -> Result<JudgeVerdict> {
+        // Judging is stateless — no session to continue.
         let prompt = build_judge_prompt(query, messages);
-        let result = self.run("judge", &args, &prompt)?;
+        let result = self.run_judge_side("judge", &prompt, None)?;
         let mut verdict = parse_verdict(query.kind, "oneharness:judge", &result.reply())?;
         verdict.usage = result.usage();
         Ok(verdict)
-    }
-
-    fn session_capable(&self, platform: &str) -> bool {
-        session_capable(platform)
     }
 }
 
@@ -347,55 +389,79 @@ mod tests {
     use crate::provider::JudgeKind;
 
     #[test]
-    fn builders_configure_bin_and_judge_harness() {
+    fn builders_configure_bin_and_judge_config() {
         let provider = OneharnessProvider::default()
             .with_bin("my-oneharness")
-            .with_judge_harness("codex");
+            .with_judge_config("custom.judge.toml");
         assert_eq!(provider.bin, "my-oneharness");
-        assert_eq!(provider.judge_harness, "codex");
-        // The judge/user side uses the configured harness.
-        let args = judge_side_args("codex", "m", Some("s"));
+        assert_eq!(
+            provider.judge_config.as_deref(),
+            Some(Path::new("custom.judge.toml"))
+        );
+        // The judge/user side passes the configured file via --config.
+        let args = judge_side_args(provider.judge_config.as_deref(), Some("s"));
+        assert!(args
+            .windows(2)
+            .any(|w| w == ["--config", "custom.judge.toml"]));
         assert!(args.windows(2).any(|w| w == ["--session", "s"]));
     }
 
     #[test]
-    fn session_capable_table_matches_oneharness() {
-        for yes in ["claude-code", "codex", "opencode", "cursor", "qwen"] {
-            assert!(session_capable(yes), "{yes} should be session-capable");
-        }
-        for no in ["goose", "crush", "copilot", "unknown"] {
-            assert!(!session_capable(no), "{no} should not be session-capable");
-        }
+    fn default_judge_config_is_the_judge_toml() {
+        let provider = OneharnessProvider::new();
+        assert_eq!(
+            provider.judge_config.as_deref(),
+            Some(Path::new(DEFAULT_JUDGE_CONFIG))
+        );
     }
 
     #[test]
-    fn respond_args_thread_session_only_when_capable() {
-        let capable = respond_args("claude-code", "sonnet", "do x", Some("run-1-skill"));
-        assert!(capable
-            .windows(2)
-            .any(|w| w == ["--session", "run-1-skill"]));
-        assert!(capable.windows(2).any(|w| w == ["--model", "sonnet"]));
-        assert!(capable.iter().any(|a| a == "--events"));
-        // `oneharness run` has no `--format` flag; passing it is a live-path bug.
-        assert!(!capable.iter().any(|a| a == "--format"));
-
-        // goose is not session-capable: the name is dropped even if supplied.
-        let incapable = respond_args("goose", "sonnet", "do x", Some("run-1-skill"));
-        assert!(!incapable.iter().any(|a| a == "--session"));
-    }
-
-    #[test]
-    fn respond_args_omit_model_when_empty() {
-        let args = respond_args("claude-code", "", "do x", None);
+    fn respond_args_thread_session_and_carry_no_harness_or_model() {
+        let args = respond_args("do x", Some("run-1-skill"));
+        assert!(args.windows(2).any(|w| w == ["--session", "run-1-skill"]));
+        assert!(args.iter().any(|a| a == "--events"));
+        // Harness/model selection is oneharness's config's job now.
+        assert!(!args.iter().any(|a| a == "--harness"));
         assert!(!args.iter().any(|a| a == "--model"));
+        // `oneharness run` has no `--format` flag; passing it is a live-path bug.
+        assert!(!args.iter().any(|a| a == "--format"));
+
+        // No session supplied: no `--session`.
+        let none = respond_args("do x", None);
+        assert!(!none.iter().any(|a| a == "--session"));
     }
 
     #[test]
-    fn judge_side_args_have_no_system_or_events() {
-        let args = judge_side_args("claude-code", "opus", None);
+    fn judge_side_args_use_config_not_harness_or_model() {
+        let args = judge_side_args(Some(Path::new("oneharness.judge.toml")), None);
         assert!(!args.iter().any(|a| a == "--system"));
         assert!(!args.iter().any(|a| a == "--events"));
-        assert!(args.windows(2).any(|w| w == ["--harness", "claude-code"]));
+        assert!(!args.iter().any(|a| a == "--harness"));
+        assert!(!args.iter().any(|a| a == "--model"));
+        assert!(args
+            .windows(2)
+            .any(|w| w == ["--config", "oneharness.judge.toml"]));
+        // With no judge config, no `--config` is passed (oneharness discovers its
+        // own default).
+        let no_config = judge_side_args(None, None);
+        assert!(!no_config.iter().any(|a| a == "--config"));
+    }
+
+    #[test]
+    fn is_session_unsupported_matches_oneharness_error() {
+        let unsupported = Error::provider_classified(
+            "respond",
+            "oneharness exited with exit status: 1: harness `goose` does not support --session: \
+             it exposes no session id headlessly",
+            ProviderErrorKind::Protocol,
+        );
+        assert!(is_session_unsupported(&unsupported));
+        let other = Error::provider_classified(
+            "respond",
+            "some other failure",
+            ProviderErrorKind::Protocol,
+        );
+        assert!(!is_session_unsupported(&other));
     }
 
     #[test]
@@ -453,7 +519,6 @@ mod tests {
         let provider = OneharnessProvider::new().with_bin("definitely-not-oneharness-xyz");
         let err = provider
             .judge(
-                "opus",
                 &JudgeQuery {
                     kind: JudgeKind::Boolean,
                     criterion: "x",

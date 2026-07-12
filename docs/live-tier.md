@@ -18,17 +18,18 @@ live code can't rot; it just does not execute there.
 ## Running it
 
 ```sh
-# Install oneharness + an authenticated harness first (see scripts/setup-llmlint.sh
-# for the oneharness install; authenticate your harness, e.g. Claude Code).
+# Install oneharness (0.3.20+) + an authenticated harness first (see
+# scripts/setup-llmlint.sh for the oneharness install; authenticate your harness,
+# e.g. Claude Code).
 export CLAUDE_CODE_OAUTH_TOKEN=...      # Claude Code harness credential (or your harness's own)
 just test-live
 ```
 
-Configure the target with env vars:
-
-- `ONEJUDGE_LIVE_HARNESS` — the harness id (default `claude-code`).
-- `ONEJUDGE_LIVE_MODEL` — the model (default: the harness's own default, i.e. no
-  `--model` is passed).
+Harness/model selection lives in oneharness's config, not onejudge: the agent side
+uses the discovered `oneharness.toml` and the judge side uses `oneharness.judge.toml`
+(scaffold both with `onejudge init`). To target a specific harness/model, edit those
+files or use oneharness's own `ONEHARNESS_HARNESS` / `ONEHARNESS_MODEL` env overrides
+(which oneharness reads) — onejudge itself passes no `--harness`/`--model`.
 
 ## In CI
 
