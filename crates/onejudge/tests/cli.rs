@@ -753,6 +753,102 @@ fn binary_run_skill_and_system_prompt_flags_drive_the_run() {
 }
 
 #[test]
+fn binary_env_supplies_skill_and_system_prompt() {
+    // `ONEJUDGE_SKILL` / `ONEJUDGE_SYSTEM_PROMPT` supply the framing through the
+    // real process with nothing in the file. The env system prompt carries the
+    // `[[event]]` that satisfies `done_when`, proving the env-derived system prompt
+    // reaches the provider; the env skill (a plain body) loads alongside it.
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("skill-env");
+    std::fs::create_dir_all(dir.join("worker")).unwrap();
+    std::fs::write(
+        dir.join("worker/SKILL.md"),
+        "---\nname: worker\ndescription: does the work\n---\nDo the work.\n",
+    )
+    .unwrap();
+    let config = write_config(
+        "env-skill.yaml",
+        "task: please commit\nuser:\n  persona: A tester.\n  done_when: git commit\n  max_turns: 5\n",
+    );
+    let output = Command::new(onejudge_bin())
+        .args(["run", config.to_str().unwrap()])
+        .env("ONEJUDGE_SKILL", dir.join("worker"))
+        .env(
+            "ONEJUDGE_SYSTEM_PROMPT",
+            "Commit it. [[event:git commit -m fix]]",
+        )
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "env skill + system prompt drive the run"
+    );
+    assert!(String::from_utf8(output.stdout)
+        .unwrap()
+        .contains("Status: completed"));
+}
+
+#[test]
+fn binary_skill_body_and_system_prompt_both_reach_the_harness() {
+    // With both set, each half reaches the provider: the `system_prompt`'s
+    // `[[event]]` fires (surfacing on stderr) and the skill body's `[[done]]` ends
+    // the multi-turn loop on turn one — so a run that would otherwise hit the cap
+    // completes, proving the skill body was delivered too.
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("skill-both");
+    std::fs::create_dir_all(dir.join("finisher")).unwrap();
+    std::fs::write(
+        dir.join("finisher/SKILL.md"),
+        "---\nname: finisher\ndescription: declares itself done\n---\n[[done]]\n",
+    )
+    .unwrap();
+    let config = dir.join("both.yaml");
+    std::fs::write(
+        &config,
+        config_yaml(
+            "task: go\nskill: finisher\nsystem_prompt: 'Preamble. [[event:git status]]'\n\
+             user:\n  persona: A tester.\n  max_turns: 4\n",
+        ),
+    )
+    .unwrap();
+    let output = Command::new(onejudge_bin())
+        .args(["run", config.to_str().unwrap()])
+        .output()
+        .unwrap();
+    // The skill body's `[[done]]` ended the loop before the 4-turn cap (completed).
+    assert!(
+        output.status.success(),
+        "skill body's [[done]] reached the harness"
+    );
+    assert!(String::from_utf8(output.stdout)
+        .unwrap()
+        .contains("Status: completed"));
+    // The system prompt's `[[event]]` reached the harness (events stream to stderr).
+    assert!(
+        String::from_utf8(output.stderr)
+            .unwrap()
+            .contains("git status"),
+        "system prompt's event reached the harness"
+    );
+}
+
+#[test]
+fn binary_rejects_a_missing_skill_and_exits_two() {
+    // A `skill:` pointing at a directory with no SKILL.md is a loud config error
+    // (exit 2) through the real binary, never a silent empty prompt.
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("skill-missing");
+    std::fs::create_dir_all(&dir).unwrap();
+    let config = dir.join("missing-skill.yaml");
+    std::fs::write(&config, config_yaml("task: go\nskill: does-not-exist\n")).unwrap();
+    let output = Command::new(onejudge_bin())
+        .args(["run", config.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8(output.stderr)
+        .unwrap()
+        .contains("could not load skill"));
+}
+
+#[test]
 fn binary_schema_prints_the_annotated_config() {
     let output = Command::new(onejudge_bin()).arg("schema").output().unwrap();
     assert!(output.status.success());
