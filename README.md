@@ -54,6 +54,38 @@ Flags override the file (flags > file > defaults), so one config serves many tas
 `onejudge run --task - < task.txt`, `--harness codex`, `--max-turns 8`,
 `--format json -o result.json`.
 
+### Config
+
+A run is a YAML file. Three fields make it yours — `task`, `agent.instructions`,
+and the `user` block. Everything else has a default; omit `user` for a single-turn
+run. A minimal config:
+
+```yaml
+harness: claude-code          # platform the agent runs on ("" model => harness default)
+
+agent:
+  dir: .
+  instructions: You are a senior engineer. Complete the task and keep tests green.
+
+task: Add a --version flag to the CLI.
+
+user:                         # the simulated supervisor that drives the loop
+  persona: A demanding tech lead. Do not accept "done" until you have verified it.
+  done_when: the task is complete and all tests pass
+  max_turns: 8
+
+evals:                        # optional: score the finished transcript
+  - criterion: the change is well-scoped and readable
+    kind: numeric
+    scale: [1, 5]
+```
+
+More keys — `provider` (`oneharness` / `command` / `split`), `model` /
+`judge_model`, `session`, boolean evals. `onejudge init` writes a fully-commented
+starter and `onejudge schema` prints the annotated field reference (the single
+source of truth); it is validated strictly (`deny_unknown_fields`) so a typo is a
+loud error.
+
 Human output is the conversation + tool actions + completion status + eval
 verdicts; `--format json` emits the versioned [`Report`](docs/contract.md). The
 exit code is `0` only when the task completed and every boolean eval passed, `1`
