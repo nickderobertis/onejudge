@@ -67,8 +67,8 @@ pub enum Command {
     Schema,
 }
 
-/// Arguments for `onejudge run`. Flags win over the config file, which wins over
-/// defaults.
+/// Arguments for `onejudge run`. Each flag also has a matching `ONEJUDGE_*`
+/// environment override; precedence is flags > env > config file > defaults.
 #[derive(Debug, Parser)]
 pub struct RunArgs {
     /// The config file (defaults to `./onejudge.yaml` when present).
@@ -162,6 +162,10 @@ fn run_task(args: RunArgs) -> Result<i32, CliError> {
 
     let mut cfg = load_config(config.as_ref())?;
     let task = task.map(resolve_task).transpose()?;
+
+    // Precedence: flags > `ONEJUDGE_*` env > config file > defaults. Apply the env
+    // layer first so a flag (applied next) wins over it, and both win over the file.
+    cfg.apply(Overrides::from_env(|key| std::env::var(key).ok())?);
     cfg.apply(Overrides {
         judge_config,
         task,

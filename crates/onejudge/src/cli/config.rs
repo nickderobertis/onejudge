@@ -1,9 +1,10 @@
 //! The YAML config surface for the `onejudge` CLI, and the typed plan it resolves
 //! into. Every external input is validated at this boundary: the file is parsed
-//! into strict serde models (`deny_unknown_fields`), overrides from flags are
-//! merged (flags win over file, file wins over defaults), and the result is
-//! validated into a [`Plan`] the run driver executes. A malformed config is a
-//! loud, actionable error, never a silent default.
+//! into strict serde models (`deny_unknown_fields`), overrides from the
+//! `ONEJUDGE_*` environment and the flags are merged (flags win over env, env
+//! wins over file, file wins over defaults), and the result is validated into a
+//! [`Plan`] the run driver executes. A malformed config — or an invalid env
+//! override — is a loud, actionable error, never a silent default.
 
 use std::path::PathBuf;
 
@@ -150,26 +151,82 @@ pub enum ProviderKind {
     Split,
 }
 
-// --- Overrides (flags win over file) --------------------------------------
+// --- Overrides (flags win over env, env wins over file) --------------------
 
-/// The subset of config a command-line flag can override. Every field is
-/// optional; a `Some` wins over whatever the file (or a default) provided.
+/// The subset of config a command-line flag — or the matching `ONEJUDGE_*`
+/// environment variable — can override. Every field is optional; a `Some` wins
+/// over whatever the lower tier (env, then file, then a default) provided.
+///
+/// The same struct expresses both the flag layer and the env layer: the run
+/// applies the env-derived overrides first, then the flag-derived ones, so a
+/// flag beats the env, and both beat the file (see [`Overrides::from_env`]).
 #[derive(Debug, Clone, Default)]
 pub struct Overrides {
-    /// `--judge-config` (the judge-side oneharness config path).
+    /// `--judge-config` / `ONEJUDGE_JUDGE_CONFIG` (the judge-side oneharness
+    /// config path).
     pub judge_config: Option<String>,
-    /// `--task` (already resolved; `-`/stdin handled by the caller).
+    /// `--task` / `ONEJUDGE_TASK` (the flag's `-`/stdin form is resolved by the
+    /// caller; the env value is always literal).
     pub task: Option<String>,
-    /// `--persona`.
+    /// `--persona` / `ONEJUDGE_PERSONA`.
     pub persona: Option<String>,
-    /// `--done-when`.
+    /// `--done-when` / `ONEJUDGE_DONE_WHEN`.
     pub done_when: Option<String>,
-    /// `--max-turns`.
+    /// `--max-turns` / `ONEJUDGE_MAX_TURNS`.
     pub max_turns: Option<u32>,
-    /// `--session`.
+    /// `--session` / `ONEJUDGE_SESSION`.
     pub session: Option<String>,
-    /// `--provider` (override just the backend kind).
+    /// `--provider` / `ONEJUDGE_PROVIDER` (override just the backend kind).
     pub provider_kind: Option<ProviderKind>,
+}
+
+impl Overrides {
+    /// Read overrides from the `ONEJUDGE_*` environment, looking each variable up
+    /// through `getenv` (real runs pass `std::env::var(..).ok()`). This is the
+    /// middle precedence tier — a set variable wins over the config file, and a
+    /// flag in turn wins over it. An empty value is treated as absent, so an
+    /// exported-but-blank variable never forces an empty override.
+    ///
+    /// The env surface mirrors the flags one-for-one: `ONEJUDGE_<FLAG>` in
+    /// upper-snake-case (`--judge-config` → `ONEJUDGE_JUDGE_CONFIG`, and so on).
+    ///
+    /// # Errors
+    /// [`CliError::Config`] if `ONEJUDGE_MAX_TURNS` is not a non-negative integer
+    /// or `ONEJUDGE_PROVIDER` is not a known backend kind — an invalid override is
+    /// a loud error at the boundary, never silently ignored.
+    pub fn from_env(getenv: impl Fn(&str) -> Option<String>) -> Result<Self, CliError> {
+        let get = |key: &str| getenv(key).filter(|v| !v.is_empty());
+
+        let max_turns = match get("ONEJUDGE_MAX_TURNS") {
+            Some(v) => Some(v.parse::<u32>().map_err(|_| {
+                CliError::Config(format!(
+                    "ONEJUDGE_MAX_TURNS must be a non-negative integer, got `{v}`"
+                ))
+            })?),
+            None => None,
+        };
+
+        let provider_kind = match get("ONEJUDGE_PROVIDER") {
+            Some(v) => Some(
+                <ProviderKind as clap::ValueEnum>::from_str(&v, true).map_err(|_| {
+                    CliError::Config(format!(
+                        "ONEJUDGE_PROVIDER must be `oneharness`, `command`, or `split`, got `{v}`"
+                    ))
+                })?,
+            ),
+            None => None,
+        };
+
+        Ok(Self {
+            judge_config: get("ONEJUDGE_JUDGE_CONFIG"),
+            task: get("ONEJUDGE_TASK"),
+            persona: get("ONEJUDGE_PERSONA"),
+            done_when: get("ONEJUDGE_DONE_WHEN"),
+            max_turns,
+            session: get("ONEJUDGE_SESSION"),
+            provider_kind,
+        })
+    }
 }
 
 impl Config {
@@ -182,7 +239,9 @@ impl Config {
             .map_err(|e| CliError::Config(format!("could not parse config: {e}")))
     }
 
-    /// Apply command-line overrides in place (flags win over file).
+    /// Apply a layer of overrides in place; a `Some` field wins over the current
+    /// value. The run applies the env layer first, then the flag layer, giving
+    /// flags > env > file > defaults.
     pub fn apply(&mut self, overrides: Overrides) {
         let Overrides {
             judge_config,
@@ -539,6 +598,88 @@ user:
         assert_eq!(plan.conversation.input, "from flag");
         assert_eq!(plan.done_when.as_deref(), Some("it is done"));
         assert_eq!(plan.settings.max_turns, 3);
+    }
+
+    #[test]
+    fn env_overrides_use_the_onejudge_prefix_across_the_flag_surface() {
+        let env = std::collections::HashMap::from([
+            ("ONEJUDGE_JUDGE_CONFIG", "env.judge.toml"),
+            ("ONEJUDGE_TASK", "from env"),
+            ("ONEJUDGE_PERSONA", "an env reviewer"),
+            ("ONEJUDGE_DONE_WHEN", "it ships"),
+            ("ONEJUDGE_MAX_TURNS", "4"),
+            ("ONEJUDGE_SESSION", "env-sess"),
+            ("ONEJUDGE_PROVIDER", "command"),
+        ]);
+        let ov = Overrides::from_env(|k| env.get(k).map(|v| (*v).to_string())).unwrap();
+        assert_eq!(ov.judge_config.as_deref(), Some("env.judge.toml"));
+        assert_eq!(ov.task.as_deref(), Some("from env"));
+        assert_eq!(ov.persona.as_deref(), Some("an env reviewer"));
+        assert_eq!(ov.done_when.as_deref(), Some("it ships"));
+        assert_eq!(ov.max_turns, Some(4));
+        assert_eq!(ov.session.as_deref(), Some("env-sess"));
+        assert_eq!(ov.provider_kind, Some(ProviderKind::Command));
+    }
+
+    #[test]
+    fn env_layer_beats_the_file_and_a_flag_beats_the_env() {
+        // File sets the task and turn cap; the env overrides both; a flag then
+        // wins over the env for the task, leaving the env's turn cap in place.
+        let env = std::collections::HashMap::from([
+            ("ONEJUDGE_TASK", "from env"),
+            ("ONEJUDGE_MAX_TURNS", "9"),
+        ]);
+        let mut cfg =
+            Config::from_yaml("task: from file\nuser:\n  persona: p\n  max_turns: 2\n").unwrap();
+        cfg.apply(Overrides::from_env(|k| env.get(k).map(|v| (*v).to_string())).unwrap());
+        cfg.apply(Overrides {
+            task: Some("from flag".into()),
+            ..Overrides::default()
+        });
+        let plan = cfg.into_plan().unwrap();
+        assert_eq!(plan.conversation.input, "from flag");
+        assert_eq!(plan.settings.max_turns, 9);
+    }
+
+    #[test]
+    fn env_persona_implies_a_user_like_the_flag_does() {
+        let env = std::collections::HashMap::from([("ONEJUDGE_PERSONA", "an env reviewer")]);
+        let mut cfg = Config::from_yaml("task: t\n").unwrap();
+        cfg.apply(Overrides::from_env(|k| env.get(k).map(|v| (*v).to_string())).unwrap());
+        let plan = cfg.into_plan().unwrap();
+        assert_eq!(
+            plan.conversation.user.map(|u| u.persona).as_deref(),
+            Some("an env reviewer")
+        );
+    }
+
+    #[test]
+    fn empty_env_values_are_treated_as_absent() {
+        // An exported-but-blank variable must not force an empty override.
+        let ov = Overrides::from_env(|k| (k == "ONEJUDGE_TASK").then(String::new)).unwrap();
+        assert!(ov.task.is_none());
+    }
+
+    #[test]
+    fn no_env_yields_empty_overrides() {
+        let ov = Overrides::from_env(|_| None).unwrap();
+        assert!(ov.task.is_none());
+        assert!(ov.max_turns.is_none());
+        assert!(ov.provider_kind.is_none());
+    }
+
+    #[test]
+    fn invalid_env_max_turns_is_a_loud_error() {
+        let err = Overrides::from_env(|k| (k == "ONEJUDGE_MAX_TURNS").then(|| "lots".to_string()))
+            .unwrap_err();
+        assert!(matches!(err, CliError::Config(m) if m.contains("ONEJUDGE_MAX_TURNS")));
+    }
+
+    #[test]
+    fn invalid_env_provider_is_a_loud_error() {
+        let err = Overrides::from_env(|k| (k == "ONEJUDGE_PROVIDER").then(|| "nope".to_string()))
+            .unwrap_err();
+        assert!(matches!(err, CliError::Config(m) if m.contains("ONEJUDGE_PROVIDER")));
     }
 
     #[test]

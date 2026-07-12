@@ -49,23 +49,31 @@ init oneharness.judge.toml`, then writes the loop-only `onejudge.yaml`. Pass
 overwrite existing files. To change the harness or model, edit those `.toml`
 files (or use oneharness's own `ONEHARNESS_*` env overrides) — not `onejudge.yaml`.
 
-`run` reads `./onejudge.yaml` when no config path is given. Flags override the
-file, which overrides defaults:
+`run` reads `./onejudge.yaml` when no config path is given. Config resolves in
+four tiers — **a flag beats the matching `ONEJUDGE_*` env var, which beats the
+file, which beats the built-in default**:
 
-| flag | overrides |
-|------|-----------|
-| `--judge-config` | the judge/simulated-user oneharness `--config` file |
-| `--task` (`-` = stdin) | the task |
-| `--persona` | the simulated user's persona |
-| `--done-when` | the completion condition |
-| `--max-turns` | the assistant-turn cap |
-| `--session` | the caller-owned session name |
-| `--provider` | just the backend kind (`oneharness`/`command`/`split`) |
-| `--format` | `human` (default) or `json` |
-| `--output`, `-o` | write the result to a file instead of stdout |
+| flag | `ONEJUDGE_*` env | overrides |
+|------|------------------|-----------|
+| `--judge-config` | `ONEJUDGE_JUDGE_CONFIG` | the judge/simulated-user oneharness `--config` file |
+| `--task` (`-` = stdin) | `ONEJUDGE_TASK` | the task (the env value is always literal — no stdin) |
+| `--persona` | `ONEJUDGE_PERSONA` | the simulated user's persona |
+| `--done-when` | `ONEJUDGE_DONE_WHEN` | the completion condition |
+| `--max-turns` | `ONEJUDGE_MAX_TURNS` | the assistant-turn cap |
+| `--session` | `ONEJUDGE_SESSION` | the caller-owned session name |
+| `--provider` | `ONEJUDGE_PROVIDER` | just the backend kind (`oneharness`/`command`/`split`) |
+| `--format` | — | `human` (default) or `json` |
+| `--output`, `-o` | — | write the result to a file instead of stdout |
 
-Supplying `--persona` / `--done-when` / `--max-turns` implies a simulated user
-even if the config had none.
+Each `ONEJUDGE_*` variable is the flag name in upper-snake-case. An empty value
+is treated as unset. Like the flags, they are validated at the boundary: a
+non-integer `ONEJUDGE_MAX_TURNS` or an unknown `ONEJUDGE_PROVIDER` is a loud
+error (exit 2), never a silent fallback. This mirrors oneharness's own
+`ONEHARNESS_*` overrides — note the two prefixes are distinct: `ONEJUDGE_*`
+configures the loop, `ONEHARNESS_*` configures the harness/model underneath it.
+
+Supplying `--persona` / `--done-when` / `--max-turns` (by flag or env) implies a
+simulated user even if the config had none.
 
 ## Output and exit code
 

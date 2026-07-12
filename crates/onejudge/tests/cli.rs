@@ -549,6 +549,65 @@ agent:
 }
 
 #[test]
+fn binary_env_overrides_file_and_flag_overrides_env() {
+    // Precedence through the real binary: ONEJUDGE_TASK beats the file's task, and
+    // a --task flag in turn beats ONEJUDGE_TASK. The echoed task text surfaces in
+    // the human transcript, so we assert on which one won.
+    let config = write_config(
+        "env-prec.yaml",
+        "\
+task: from the file
+agent:
+  instructions: Be warm.
+",
+    );
+
+    // Env wins over the file.
+    let output = Command::new(onejudge_bin())
+        .args(["run", config.to_str().unwrap()])
+        .env("ONEJUDGE_TASK", "from the env")
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("from the env"), "env task drives the run");
+    assert!(!stdout.contains("from the file"), "env beats the file");
+
+    // A --task flag wins over the env var.
+    let output = Command::new(onejudge_bin())
+        .args(["run", config.to_str().unwrap(), "--task", "from the flag"])
+        .env("ONEJUDGE_TASK", "from the env")
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("from the flag"), "flag task drives the run");
+    assert!(!stdout.contains("from the env"), "flag beats the env");
+}
+
+#[test]
+fn binary_rejects_an_invalid_env_override() {
+    // An unparseable ONEJUDGE_* override is a loud config error (exit 2), never a
+    // silent fallback.
+    let config = write_config(
+        "env-bad.yaml",
+        "\
+task: greet me
+agent:
+  instructions: Be warm.
+",
+    );
+    let output = Command::new(onejudge_bin())
+        .args(["run", config.to_str().unwrap()])
+        .env("ONEJUDGE_MAX_TURNS", "lots")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("ONEJUDGE_MAX_TURNS"));
+}
+
+#[test]
 fn binary_run_provider_override_flag() {
     // `--provider command` overrides just the backend kind; the file already
     // supplies the echo argv.
