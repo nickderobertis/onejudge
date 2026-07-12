@@ -58,6 +58,8 @@ mod error;
 mod oneharness;
 mod provider;
 mod report;
+#[cfg(feature = "skill")]
+mod skill;
 mod split;
 mod transcript;
 mod usage;
@@ -72,6 +74,8 @@ pub use provider::{
     JudgeValue, JudgeVerdict, Provider, SkillRef, UserTurn,
 };
 pub use report::{NamedVerdict, Report, SCHEMA_VERSION};
+#[cfg(feature = "skill")]
+pub use skill::{load_skill, Frontmatter, SkillDefinition};
 pub use split::SplitProvider;
 pub use transcript::{Message, Role, ToolEvent, ToolQuery, Transcript};
 pub use usage::Usage;
