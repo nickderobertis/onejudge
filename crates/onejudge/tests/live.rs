@@ -10,22 +10,18 @@
 //! **compiles** in the normal build, so the live code can never rot; it just does
 //! not execute in `just check`. See `docs/live-tier.md`.
 //!
-//! Configure with env vars: `ONEJUDGE_LIVE_HARNESS` (default `claude-code`) and
-//! `ONEJUDGE_LIVE_MODEL` (default: the harness's own default, i.e. no `--model`).
+//! Harness/model selection comes from oneharness's config files, not onejudge: the
+//! agent side uses the discovered `oneharness.toml` (or `ONEHARNESS_HARNESS` /
+//! `ONEHARNESS_MODEL` env overrides that oneharness reads), and the judge side uses
+//! `oneharness.judge.toml`. Scaffold them with `onejudge init` before running.
 
 use onejudge::{Conversation, Engine, OneharnessProvider, Settings, Skill};
-
-fn live_settings() -> Settings {
-    let harness = std::env::var("ONEJUDGE_LIVE_HARNESS").unwrap_or_else(|_| "claude-code".into());
-    let model = std::env::var("ONEJUDGE_LIVE_MODEL").unwrap_or_default();
-    Settings::new(harness, model.clone(), model)
-}
 
 #[test]
 #[ignore = "live: needs a real oneharness + authenticated harness; run via `just test-live`"]
 fn live_single_turn_and_boolean_judge() {
     let provider = OneharnessProvider::new();
-    let settings = live_settings();
+    let settings = Settings::new();
     let engine = Engine::new(&provider, settings);
     let skill = Skill::new(
         "echoer",

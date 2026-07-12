@@ -5,13 +5,15 @@
 //! It reads the prompt from stdin (`--prompt-file -`), classifies it by shape
 //! (skill respond / simulated user / judge), and emits a `oneharness run` JSON
 //! report on stdout. It mirrors the real `run` flag contract (unrecognized flags
-//! exit non-zero), so a live-path arg bug is caught here. Markers in `--system`
-//! steer the
-//! skill turn: `[[reply:TEXT]]` sets the reply, `[[event:CMD]]` adds a `bash`
-//! tool event, `[[fail:KIND]]` returns a classified `failure_kind`. The judge
-//! turn decides `true` iff the criterion appears in the transcript it was given —
-//! tool-event lines included — so an events-backed criterion is really decided by
-//! what the skill did.
+//! exit non-zero) and the `oneharness init [PATH] [--force]` subcommand, so both a
+//! live-path arg bug and `onejudge init` are caught/covered here. Markers in
+//! `--system` steer the skill turn: `[[reply:TEXT]]` sets the reply,
+//! `[[event:CMD]]` adds a `bash` tool event, `[[fail:KIND]]` returns a classified
+//! `failure_kind`, and `[[reject-session]]` makes a `--session` run exit non-zero
+//! with oneharness's `does not support --session` text (the graceful-retry path).
+//! The judge turn decides `true` iff the criterion appears in the transcript it
+//! was given — tool-event lines included — so an events-backed criterion is really
+//! decided by what the skill did.
 //!
 //! Built only under the `fake-provider` feature; never shipped to a consumer.
 #![allow(missing_docs)]
@@ -22,6 +24,14 @@ use std::io::{Read as _, Write as _};
 use serde_json::{json, Value};
 
 fn main() {
+    // `oneharness init [PATH] [--force]` scaffolds a config file, mirroring the
+    // real subcommand so `onejudge init` can be driven end-to-end without a live
+    // oneharness. It is a positional-first verb, so handle it before flag parsing.
+    let argv: Vec<String> = std::env::args().skip(1).collect();
+    if argv.first().map(String::as_str) == Some("init") {
+        run_init(&argv[1..]);
+    }
+
     let flags = parse_flags();
     let mut prompt = String::new();
     if std::io::stdin().read_to_string(&mut prompt).is_err() {
@@ -35,6 +45,16 @@ fn main() {
     // failure (as opposed to a harness failure, which is reported in the JSON).
     if system.contains("[[proc-exit]]") {
         emit_error("deliberate non-zero exit for the e2e error path");
+    }
+
+    // Session-degradation path: mimic oneharness rejecting `--session` on a harness
+    // that exposes no session id headlessly. onejudge must retry without --session.
+    if session.is_some() && system.contains("[[reject-session]]") {
+        eprintln!(
+            "harness `goose` does not support --session: it exposes no session id \
+             headlessly, so a named handle cannot be mapped to it. supported: claude-code"
+        );
+        std::process::exit(1);
     }
 
     let result = if prompt.contains("role-playing the USER") {
@@ -67,6 +87,28 @@ fn emit_error(message: &str) -> ! {
     std::process::exit(2);
 }
 
+/// Scaffold a starter config file, mirroring `oneharness init [PATH] [--force]`:
+/// refuse to clobber an existing file without `--force`, else write a minimal
+/// valid toml and print the confirmation line the real CLI emits.
+fn run_init(args: &[String]) -> ! {
+    let force = args.iter().any(|a| a == "--force");
+    let path = args
+        .iter()
+        .find(|a| !a.starts_with("--"))
+        .cloned()
+        .unwrap_or_else(|| "oneharness.toml".to_string());
+    if std::path::Path::new(&path).exists() && !force {
+        eprintln!("{path} already exists (use --force to overwrite)");
+        std::process::exit(1);
+    }
+    if std::fs::write(&path, "harnesses = [\"claude-code\"]\n").is_err() {
+        eprintln!("could not write {path}");
+        std::process::exit(1);
+    }
+    println!("wrote {path}");
+    std::process::exit(0);
+}
+
 /// Parse argv, mirroring the real `oneharness run` flag contract so an invalid
 /// flag onejudge might pass (e.g. a `--format` that `run` does not accept) is
 /// caught here instead of slipping through a lenient double. Unrecognized `--`
@@ -76,6 +118,7 @@ fn parse_flags() -> HashMap<String, String> {
     const VALUE_FLAGS: &[&str] = &[
         "--harness",
         "--model",
+        "--config",
         "--system",
         "--system-file",
         "--session",

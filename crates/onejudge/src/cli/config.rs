@@ -5,6 +5,8 @@
 //! validated into a [`Plan`] the run driver executes. A malformed config is a
 //! loud, actionable error, never a silent default.
 
+use std::path::PathBuf;
+
 use serde::Deserialize;
 
 use crate::{Conversation, JudgeKind, Settings, SimulatedUser, Skill};
@@ -18,17 +20,13 @@ use super::CliError;
 #[serde(deny_unknown_fields)]
 pub struct Config {
     /// Which backend runs the harness (and judges / plays the user).
+    ///
+    /// Harness/model **selection** is no longer a onejudge concern: the agent side
+    /// uses oneharness's discovered `oneharness.toml`, and the judge side uses the
+    /// `provider.judge_config` file (default `oneharness.judge.toml`). Scaffold both
+    /// with `onejudge init`.
     #[serde(default)]
     pub provider: ProviderConfig,
-    /// The harness (platform) the agent runs on; defaults to `claude-code`.
-    #[serde(default)]
-    pub harness: Option<String>,
-    /// The model the agent runs on; empty / omitted means the harness default.
-    #[serde(default)]
-    pub model: Option<String>,
-    /// The model the simulated user and judge run on; defaults to `model`.
-    #[serde(default)]
-    pub judge_model: Option<String>,
     /// The agent's system framing (name, working dir, instructions).
     #[serde(default)]
     pub agent: AgentConfig,
@@ -120,9 +118,12 @@ pub struct ProviderConfig {
     /// `oneharness`: the `oneharness` binary (default `oneharness`).
     #[serde(default)]
     pub bin: Option<String>,
-    /// `oneharness`: the harness the judge / simulated user run on.
+    /// `oneharness`: the oneharness config file the judge / simulated user run
+    /// under, passed as `oneharness run --config <path>` (default
+    /// `oneharness.judge.toml`). This is where the judge-side harness/model
+    /// selection lives.
     #[serde(default)]
-    pub judge_harness: Option<String>,
+    pub judge_config: Option<String>,
     /// `command`: the provider argv (program + args).
     #[serde(default)]
     pub command: Option<Vec<String>>,
@@ -155,12 +156,8 @@ pub enum ProviderKind {
 /// optional; a `Some` wins over whatever the file (or a default) provided.
 #[derive(Debug, Clone, Default)]
 pub struct Overrides {
-    /// `--harness`.
-    pub harness: Option<String>,
-    /// `--model`.
-    pub model: Option<String>,
-    /// `--judge-model`.
-    pub judge_model: Option<String>,
+    /// `--judge-config` (the judge-side oneharness config path).
+    pub judge_config: Option<String>,
     /// `--task` (already resolved; `-`/stdin handled by the caller).
     pub task: Option<String>,
     /// `--persona`.
@@ -188,9 +185,7 @@ impl Config {
     /// Apply command-line overrides in place (flags win over file).
     pub fn apply(&mut self, overrides: Overrides) {
         let Overrides {
-            harness,
-            model,
-            judge_model,
+            judge_config,
             task,
             persona,
             done_when,
@@ -198,14 +193,8 @@ impl Config {
             session,
             provider_kind,
         } = overrides;
-        if harness.is_some() {
-            self.harness = harness;
-        }
-        if model.is_some() {
-            self.model = model;
-        }
-        if judge_model.is_some() {
-            self.judge_model = judge_model;
+        if judge_config.is_some() {
+            self.provider.judge_config = judge_config;
         }
         if task.is_some() {
             self.task = task;
@@ -247,15 +236,7 @@ impl Config {
 
         let provider = self.provider.resolve()?;
 
-        let platform = self.harness.unwrap_or_else(default_harness);
-        let model = self.model.unwrap_or_default();
-        // The judge / simulated user default to the same model as the agent.
-        let judge_model = self
-            .judge_model
-            .filter(|m| !m.is_empty())
-            .unwrap_or_else(|| model.clone());
-
-        let mut settings = Settings::new(platform, model, judge_model);
+        let mut settings = Settings::new();
         if let Some(session) = self.session.filter(|s| !s.is_empty()) {
             settings = settings.with_session_name(session);
         }
@@ -302,7 +283,7 @@ impl ProviderConfig {
         let ProviderConfig {
             kind,
             bin,
-            judge_harness,
+            judge_config,
             command,
             skill,
             judge,
@@ -327,12 +308,12 @@ impl ProviderConfig {
                 reject(judge.is_some(), "judge")?;
                 Ok(ProviderSpec::Oneharness {
                     bin: bin.unwrap_or_else(|| "oneharness".into()),
-                    judge_harness: judge_harness.unwrap_or_else(|| "claude-code".into()),
+                    judge_config: judge_config.map(PathBuf::from),
                 })
             }
             ProviderKind::Command => {
                 reject(bin.is_some(), "bin")?;
-                reject(judge_harness.is_some(), "judge_harness")?;
+                reject(judge_config.is_some(), "judge_config")?;
                 reject(skill.is_some(), "skill")?;
                 reject(judge.is_some(), "judge")?;
                 let command = command.filter(|c| !c.is_empty()).ok_or_else(|| {
@@ -342,7 +323,7 @@ impl ProviderConfig {
             }
             ProviderKind::Split => {
                 reject(bin.is_some(), "bin")?;
-                reject(judge_harness.is_some(), "judge_harness")?;
+                reject(judge_config.is_some(), "judge_config")?;
                 reject(command.is_some(), "command")?;
                 let skill = skill.ok_or_else(|| {
                     CliError::Config("provider kind `split` needs a `skill` provider".into())
@@ -411,8 +392,9 @@ pub enum ProviderSpec {
     Oneharness {
         /// The `oneharness` binary path.
         bin: String,
-        /// The harness the judge / simulated user run on.
-        judge_harness: String,
+        /// The judge / simulated-user oneharness config file (`--config <path>`);
+        /// `None` leaves the provider's own default (`oneharness.judge.toml`).
+        judge_config: Option<PathBuf>,
     },
     /// A custom command speaking the JSON-lines protocol.
     Command {
@@ -456,7 +438,7 @@ pub struct Eval {
 pub struct Plan {
     /// The provider backend to build.
     pub provider: ProviderSpec,
-    /// Engine settings (platform, models, session, turn cap).
+    /// Engine settings (session name, turn cap).
     pub settings: Settings,
     /// The conversation to drive.
     pub conversation: Conversation,
@@ -467,9 +449,6 @@ pub struct Plan {
     pub done_when: Option<String>,
 }
 
-fn default_harness() -> String {
-    "claude-code".into()
-}
 fn default_agent_name() -> String {
     "agent".into()
 }
@@ -488,10 +467,17 @@ mod tests {
     fn minimal_config_resolves_to_a_single_turn_plan() {
         let cfg = Config::from_yaml("task: do the thing\n").unwrap();
         let plan = cfg.into_plan().unwrap();
-        assert_eq!(plan.settings.platform, "claude-code");
+        assert_eq!(plan.settings.max_turns, 8);
         assert!(plan.done_when.is_none());
         assert!(plan.conversation.user.is_none());
-        assert!(matches!(plan.provider, ProviderSpec::Oneharness { .. }));
+        // An omitted judge_config leaves the provider default in place.
+        assert!(matches!(
+            plan.provider,
+            ProviderSpec::Oneharness {
+                judge_config: None,
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -502,11 +488,25 @@ mod tests {
 
     #[test]
     fn missing_task_is_rejected() {
-        let err = Config::from_yaml("harness: codex\n")
+        let err = Config::from_yaml("session: s\n")
             .unwrap()
             .into_plan()
             .unwrap_err();
         assert!(matches!(err, CliError::Config(m) if m.contains("no task")));
+    }
+
+    #[test]
+    fn judge_config_resolves_onto_the_oneharness_spec() {
+        let plan = Config::from_yaml(
+            "task: x\nprovider:\n  kind: oneharness\n  judge_config: custom.judge.toml\n",
+        )
+        .unwrap()
+        .into_plan()
+        .unwrap();
+        assert!(matches!(
+            plan.provider,
+            ProviderSpec::Oneharness { judge_config: Some(p), .. } if p == std::path::Path::new("custom.judge.toml")
+        ));
     }
 
     #[test]
@@ -528,46 +528,35 @@ user:
 
     #[test]
     fn overrides_win_over_file_and_imply_a_user() {
-        let mut cfg = Config::from_yaml("task: from file\nharness: codex\n").unwrap();
+        let mut cfg = Config::from_yaml("task: from file\n").unwrap();
         cfg.apply(Overrides {
             task: Some("from flag".into()),
-            harness: Some("opencode".into()),
             done_when: Some("it is done".into()),
             max_turns: Some(3),
             ..Overrides::default()
         });
         let plan = cfg.into_plan().unwrap();
-        assert_eq!(plan.settings.platform, "opencode");
         assert_eq!(plan.conversation.input, "from flag");
         assert_eq!(plan.done_when.as_deref(), Some("it is done"));
         assert_eq!(plan.settings.max_turns, 3);
     }
 
     #[test]
-    fn judge_model_defaults_to_model() {
-        let plan = Config::from_yaml("task: x\nmodel: opus-x\n")
-            .unwrap()
-            .into_plan()
-            .unwrap();
-        assert_eq!(plan.settings.model, "opus-x");
-        assert_eq!(plan.settings.judge_model, "opus-x");
-    }
-
-    #[test]
-    fn overrides_apply_model_judge_session_and_persona() {
+    fn overrides_apply_judge_config_session_and_persona() {
         let mut cfg = Config::from_yaml("task: t\n").unwrap();
         cfg.apply(Overrides {
-            model: Some("m1".into()),
-            judge_model: Some("m2".into()),
+            judge_config: Some("j.toml".into()),
             session: Some("sess-9".into()),
             persona: Some("a reviewer".into()),
             ..Overrides::default()
         });
         let plan = cfg.into_plan().unwrap();
-        assert_eq!(plan.settings.model, "m1");
-        assert_eq!(plan.settings.judge_model, "m2");
-        // The session override threads a with_session_name; a multi-turn (persona)
-        // conversation was implied by the persona flag.
+        assert!(matches!(
+            &plan.provider,
+            ProviderSpec::Oneharness { judge_config: Some(p), .. } if p == std::path::Path::new("j.toml")
+        ));
+        assert_eq!(plan.settings.session_name, "sess-9");
+        // The persona flag implies a multi-turn conversation.
         assert!(plan.conversation.user.is_some());
         assert_eq!(plan.conversation.user.unwrap().persona, "a reviewer");
     }
@@ -617,6 +606,23 @@ user:
                 .into_plan()
                 .unwrap_err();
         assert!(matches!(err, CliError::Config(m) if m.contains("bin")));
+
+        // `judge_config` belongs to oneharness, not command or split.
+        let err = Config::from_yaml(
+            "task: x\nprovider:\n  kind: command\n  command: [p]\n  judge_config: j.toml\n",
+        )
+        .unwrap()
+        .into_plan()
+        .unwrap_err();
+        assert!(matches!(err, CliError::Config(m) if m.contains("judge_config")));
+
+        let err = Config::from_yaml(
+            "task: x\nprovider:\n  kind: split\n  judge_config: j.toml\n  skill:\n    kind: oneharness\n  judge:\n    kind: oneharness\n",
+        )
+        .unwrap()
+        .into_plan()
+        .unwrap_err();
+        assert!(matches!(err, CliError::Config(m) if m.contains("judge_config")));
     }
 
     #[test]

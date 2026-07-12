@@ -10,6 +10,12 @@ unparseable/wrong-shaped output is a loud error (a classified
 
 All three operations are distinguished by the request's `op` field.
 
+## Protocol version
+
+**v2** (current) — dropped `platform` and `model` from every request: harness and
+model **selection** is the command's own concern now (onejudge no longer passes
+it). v1 carried `platform`/`model` on `respond` and `model` on `user`/`judge`.
+
 ## `respond` — run one skill turn
 
 Request:
@@ -17,16 +23,15 @@ Request:
 ```json
 {
   "op": "respond",
-  "platform": "claude-code",
-  "model": "sonnet",
   "skill": { "name": "greeter", "path": "/skills/greeter", "instructions": "..." },
   "messages": [ { "role": "user", "content": "hi" } ],
   "session": "run-42-skill"
 }
 ```
 
-- `session` is present only on a session-capable provider (the caller-owned name
-  the engine threads across turns); omit it otherwise.
+- `session` is the caller-owned name the engine threads across turns; the engine
+  always sends it, so omit it from the request only when it is `None` (a stateless
+  provider ignores it and reads the inlined `messages`).
 - `messages` is the transcript so far; each message is `{role, content, events?}`
   where `role` is `user` / `assistant` / `system`.
 
@@ -57,7 +62,7 @@ Response:
 Request:
 
 ```json
-{ "op": "user", "model": "opus", "persona": "A hurried shopper.", "messages": [ ... ], "session": "run-42-user" }
+{ "op": "user", "persona": "A hurried shopper.", "messages": [ ... ], "session": "run-42-user" }
 ```
 
 Response:
@@ -73,7 +78,7 @@ Response:
 Request:
 
 ```json
-{ "op": "judge", "model": "opus", "kind": "boolean", "criterion": "the reply was polite", "messages": [ ... ] }
+{ "op": "judge", "kind": "boolean", "criterion": "the reply was polite", "messages": [ ... ] }
 ```
 
 - `kind` is `boolean` or `numeric`; a numeric query also carries `min` and `max`.

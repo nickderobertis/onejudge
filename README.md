@@ -40,29 +40,29 @@ deps (clap, a YAML parser) are opt-in behind the non-default `cli` feature.
 
 ```sh
 cargo install onejudge --features cli   # or: install.sh (prebuilt archives)
-onejudge init                           # write a starter onejudge.yaml
+onejudge init                           # scaffold onejudge.yaml + oneharness configs
 onejudge run                            # reads ./onejudge.yaml, drives to completion
 ```
 
-`init` writes a fully-commented config; the three fields that make a run yours are
-`task` (what to do), `agent.instructions` (how to frame the harness), and the
-`user` block (`persona` / `done_when` / `max_turns` — omit it for a single-turn
-run). `onejudge schema` prints the annotated config, the single source of truth for
-every field.
+`init` shells out to `oneharness init` (needs oneharness **0.3.20+**) to scaffold
+`oneharness.toml` (the agent side) and `oneharness.judge.toml` (the judge side),
+then writes a fully-commented loop-only `onejudge.yaml`. The three fields that make
+a run yours are `task` (what to do), `agent.instructions` (how to frame the
+harness), and the `user` block (`persona` / `done_when` / `max_turns` — omit it for
+a single-turn run). **Harness and model selection lives in those `oneharness.toml`
+files, not `onejudge.yaml`.** `onejudge schema` prints the annotated config, the
+single source of truth for every field.
 
 Flags override the file (flags > file > defaults), so one config serves many tasks:
-`onejudge run --task - < task.txt`, `--harness codex`, `--max-turns 8`,
-`--format json -o result.json`.
+`onejudge run --task - < task.txt`, `--max-turns 8`, `--format json -o result.json`.
 
 ### Config
 
-A run is a YAML file. Three fields make it yours — `task`, `agent.instructions`,
-and the `user` block. Everything else has a default; omit `user` for a single-turn
-run. A minimal config:
+A run is a YAML file carrying only the loop's own concerns. Three fields make it
+yours — `task`, `agent.instructions`, and the `user` block. Everything else has a
+default; omit `user` for a single-turn run. A minimal config:
 
 ```yaml
-harness: claude-code          # platform the agent runs on ("" model => harness default)
-
 agent:
   dir: .
   instructions: You are a senior engineer. Complete the task and keep tests green.
@@ -80,11 +80,13 @@ evals:                        # optional: score the finished transcript
     scale: [1, 5]
 ```
 
-More keys — `provider` (`oneharness` / `command` / `split`), `model` /
-`judge_model`, `session`, boolean evals. `onejudge init` writes a fully-commented
-starter and `onejudge schema` prints the annotated field reference (the single
-source of truth); it is validated strictly (`deny_unknown_fields`) so a typo is a
-loud error.
+The harness and model come from oneharness's own config (`oneharness.toml` for the
+agent, `oneharness.judge.toml` for the judge side) — `onejudge init` scaffolds
+them. More keys — `provider` (`oneharness` / `command` / `split`, with the
+oneharness `judge_config` path), `session`, boolean evals. `onejudge init` writes a
+fully-commented starter and `onejudge schema` prints the annotated field reference
+(the single source of truth); it is validated strictly (`deny_unknown_fields`) so a
+typo is a loud error.
 
 Human output is the conversation + tool actions + completion status + eval
 verdicts; `--format json` emits the versioned [`Report`](docs/contract.md). The
@@ -95,10 +97,11 @@ if it hit `max_turns` or a boolean eval failed, `2` on a bad config. Full docs:
 ## Concepts
 
 - **`Provider`** is the boundary — onejudge never talks to a model directly. Every
-  model call goes through `oneharness`.
+  model call goes through `oneharness`, and harness/model *selection* lives in
+  oneharness's config files, not onejudge.
   - **`OneharnessProvider`** (default) shells out to the `oneharness` CLI
-    (v0.3.13+), so it drives any harness oneharness supports (Claude Code, Codex,
-    OpenCode, …).
+    (v0.3.20+): the agent side uses the discovered `oneharness.toml`, and the judge
+    side uses a separate `--config` file (default `oneharness.judge.toml`).
   - **`CommandProvider`** speaks a small [JSON-lines protocol](docs/protocol.md),
     for a custom backend or a deterministic test double.
   - **`SplitProvider`** composes two providers — one that runs the skill, one that
@@ -121,10 +124,10 @@ Two things it improves over the in-skilltest engine:
    "the change was committed" can be decided from the `git commit` the skill
    actually ran — not only from what it said. `Transcript` also exposes a
    `ToolQuery` primitive for events-backed assertions with no judge call.
-2. **One caller-owned session name.** On session-capable harnesses (claude-code,
-   codex, opencode, cursor, qwen) the engine threads a single `--session <name>`
-   across turns instead of extracting and re-passing a native id; the rest fall
-   back to re-prompting the inlined transcript.
+2. **One caller-owned session name.** The engine always threads a single
+   `--session <name>` across turns instead of extracting and re-passing a native
+   id; if a harness cannot bind a session, the provider gracefully retries the call
+   without it, re-prompting the inlined transcript.
 
 ## Example
 
@@ -132,8 +135,9 @@ Two things it improves over the in-skilltest engine:
 use onejudge::{Conversation, Engine, OneharnessProvider, Settings, SimulatedUser, Skill};
 
 let provider = OneharnessProvider::new();
-// (platform, model, judge_model). An empty model lets the harness use its default.
-let settings = Settings::new("claude-code", "", "claude-opus-4-8");
+// Harness/model selection lives in oneharness's config files, not here; Settings
+// carries only the loop's own concerns (turn cap, session name).
+let settings = Settings::new();
 let engine = Engine::new(&provider, settings);
 
 let skill = Skill::new("greeter", "./skills/greeter", "Greet the user warmly.");

@@ -3,6 +3,9 @@
 //! out on stdout, per op). It backs the deterministic test doubles the e2e suite
 //! drives and any custom provider a consumer writes. The wire contract is
 //! documented in `docs/protocol.md`.
+//!
+//! Protocol **v2** drops `platform`/`model` from every request: the custom command
+//! owns harness/model selection itself (onejudge no longer passes them).
 
 use std::io::Write as _;
 use std::process::{Command, Stdio};
@@ -29,22 +32,18 @@ struct SkillPayload<'a> {
 #[serde(tag = "op", rename_all = "lowercase")]
 enum Request<'a> {
     Respond {
-        platform: &'a str,
-        model: &'a str,
         skill: SkillPayload<'a>,
         messages: &'a [Message],
         #[serde(skip_serializing_if = "Option::is_none")]
         session: Option<&'a str>,
     },
     User {
-        model: &'a str,
         persona: &'a str,
         messages: &'a [Message],
         #[serde(skip_serializing_if = "Option::is_none")]
         session: Option<&'a str>,
     },
     Judge {
-        model: &'a str,
         kind: &'a str,
         criterion: &'a str,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -178,15 +177,11 @@ impl CommandProvider {
 impl Provider for CommandProvider {
     fn respond(
         &self,
-        platform: &str,
-        model: &str,
         skill: &SkillRef<'_>,
         messages: &[Message],
         session: Option<&str>,
     ) -> Result<AssistantTurn> {
         let request = Request::Respond {
-            platform,
-            model,
             skill: SkillPayload {
                 name: skill.name,
                 path: skill.dir,
@@ -206,13 +201,11 @@ impl Provider for CommandProvider {
 
     fn simulate_user(
         &self,
-        model: &str,
         persona: &str,
         messages: &[Message],
         session: Option<&str>,
     ) -> Result<UserTurn> {
         let request = Request::User {
-            model,
             persona,
             messages,
             session,
@@ -225,18 +218,12 @@ impl Provider for CommandProvider {
         })
     }
 
-    fn judge(
-        &self,
-        model: &str,
-        query: &JudgeQuery<'_>,
-        messages: &[Message],
-    ) -> Result<JudgeVerdict> {
+    fn judge(&self, query: &JudgeQuery<'_>, messages: &[Message]) -> Result<JudgeVerdict> {
         let (min, max) = match query.scale {
             Some((lo, hi)) => (Some(lo), Some(hi)),
             None => (None, None),
         };
         let request = Request::Judge {
-            model,
             kind: query.kind.as_str(),
             criterion: query.criterion,
             min,
@@ -282,9 +269,8 @@ mod tests {
     }
 
     #[test]
-    fn request_serializes_with_op_tag() {
+    fn request_serializes_with_op_tag_and_no_platform_or_model() {
         let req = Request::Judge {
-            model: "m",
             kind: "numeric",
             criterion: "polite",
             min: Some(0.0),
@@ -294,13 +280,14 @@ mod tests {
         let json = serde_json::to_string(&req).unwrap();
         assert!(json.contains("\"op\":\"judge\""));
         assert!(json.contains("\"kind\":\"numeric\""));
+        // Protocol v2: no harness/model selection on the wire.
+        assert!(!json.contains("platform"));
+        assert!(!json.contains("model"));
     }
 
     #[test]
     fn respond_request_omits_absent_session() {
         let req = Request::Respond {
-            platform: "claude-code",
-            model: "m",
             skill: SkillPayload {
                 name: "s",
                 path: "/s",
@@ -311,6 +298,8 @@ mod tests {
         };
         let json = serde_json::to_string(&req).unwrap();
         assert!(!json.contains("session"));
+        assert!(!json.contains("platform"));
+        assert!(!json.contains("model"));
     }
 
     #[test]
@@ -319,7 +308,6 @@ mod tests {
             CommandProvider::new(vec!["definitely-not-a-real-binary-xyz".into()]).unwrap();
         let err = provider
             .judge(
-                "m",
                 &JudgeQuery {
                     kind: JudgeKind::Boolean,
                     criterion: "x",

@@ -39,7 +39,7 @@ fn fake_oneharness_bin() -> String {
 /// (backslashes, a drive-letter colon) stays a valid scalar cross-platform.
 fn config_yaml(body: &str) -> String {
     let echo = serde_json::to_string(&echo_bin()).unwrap();
-    format!("provider:\n  kind: command\n  command: [{echo}]\nharness: claude-code\n{body}")
+    format!("provider:\n  kind: command\n  command: [{echo}]\n{body}")
 }
 
 /// Build a plan from `body` and drive it in-process (no progress sink needed).
@@ -165,7 +165,7 @@ fn oneharness_provider_kind_drives_the_loop() {
     // satisfies `done_when` on turn one.
     let bin = serde_json::to_string(&fake_oneharness_bin()).unwrap();
     let yaml = format!(
-        "provider:\n  kind: oneharness\n  bin: {bin}\nharness: claude-code\n\
+        "provider:\n  kind: oneharness\n  bin: {bin}\n\
          task: go\n\
          agent:\n  instructions: '[[reply:the task is complete]]'\n\
          user:\n  persona: A tester.\n  done_when: complete\n  max_turns: 3\n",
@@ -188,7 +188,6 @@ fn split_provider_kind_composes_two_backends() {
     let yaml = format!(
         "provider:\n  kind: split\n  skill:\n    kind: oneharness\n    bin: {oh}\n  \
          judge:\n    kind: command\n    command: [{echo}]\n\
-         harness: claude-code\n\
          task: start\n\
          agent:\n  instructions: '[[reply:working]]'\n\
          user:\n  persona: A tester.\n  max_turns: 2\n",
@@ -211,7 +210,7 @@ fn oneharness_kind_json_covers_buffered_respond_and_user() {
     // not).
     let bin = serde_json::to_string(&fake_oneharness_bin()).unwrap();
     let yaml = format!(
-        "provider:\n  kind: oneharness\n  bin: {bin}\nharness: claude-code\n\
+        "provider:\n  kind: oneharness\n  bin: {bin}\n\
          task: go\n\
          agent:\n  instructions: '[[reply:working]]'\n\
          user:\n  persona: A tester.\n  max_turns: 2\n",
@@ -236,7 +235,6 @@ fn split_kind_json_covers_buffered_respond_and_judge() {
     let yaml = format!(
         "provider:\n  kind: split\n  skill:\n    kind: oneharness\n    bin: {oh}\n  \
          judge:\n    kind: command\n    command: [{echo}]\n\
-         harness: claude-code\n\
          task: start\n\
          agent:\n  instructions: '[[reply:working]]'\n\
          user:\n  persona: A tester.\n  max_turns: 2\n\
@@ -400,22 +398,34 @@ fn binary_reports_a_bad_config_and_exits_two() {
 }
 
 #[test]
-fn binary_init_writes_a_starter_config() {
-    let dir = Path::new(env!("CARGO_TARGET_TMPDIR"));
-    let path = dir.join("init-out.yaml");
-    let _ = std::fs::remove_file(&path);
+fn binary_init_scaffolds_onejudge_and_oneharness_configs() {
+    // `onejudge init` shells out to `oneharness init` for the two harness/model
+    // config files, then writes the loop-only onejudge.yaml. Point --oneharness-bin
+    // at the fake double (which mirrors `oneharness init`) and run in a fresh cwd so
+    // the scaffolded files land there.
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("init-scaffold");
+    std::fs::create_dir_all(&dir).unwrap();
+    for f in ["onejudge.yaml", "oneharness.toml", "oneharness.judge.toml"] {
+        let _ = std::fs::remove_file(dir.join(f));
+    }
+    let fake = fake_oneharness_bin();
     let status = Command::new(onejudge_bin())
-        .args(["init", path.to_str().unwrap()])
+        .args(["init", "--oneharness-bin", &fake])
+        .current_dir(&dir)
         .status()
         .unwrap();
     assert!(status.success());
-    let written = std::fs::read_to_string(&path).unwrap();
-    // The written starter is itself a valid config.
+    // The loop-only onejudge.yaml is a valid config.
+    let written = std::fs::read_to_string(dir.join("onejudge.yaml")).unwrap();
     assert!(Config::from_yaml(&written).is_ok());
+    // Both oneharness config files were scaffolded by the shelled-out `init`.
+    assert!(dir.join("oneharness.toml").exists());
+    assert!(dir.join("oneharness.judge.toml").exists());
 
-    // A second init without --force refuses to clobber.
+    // A second init without --force refuses to clobber the existing onejudge.yaml.
     let status = Command::new(onejudge_bin())
-        .args(["init", path.to_str().unwrap()])
+        .args(["init", "--oneharness-bin", &fake])
+        .current_dir(&dir)
         .status()
         .unwrap();
     assert_eq!(status.code(), Some(2));
@@ -482,7 +492,7 @@ fn binary_run_without_a_config_falls_back_to_defaults() {
     std::fs::create_dir_all(&dir).unwrap();
     let _ = std::fs::remove_file(dir.join("onejudge.yaml"));
     let output = Command::new(onejudge_bin())
-        .args(["run", "--task", "do a thing", "--harness", "goose"])
+        .args(["run", "--task", "do a thing"])
         .current_dir(&dir)
         .env("PATH", "") // ensure `oneharness` cannot be found
         .output()
@@ -507,10 +517,10 @@ fn binary_run_missing_config_path_errors() {
 }
 
 #[test]
-fn binary_run_applies_model_session_and_persona_overrides() {
-    // Exercises the model / judge-model / session / persona / max-turns override
-    // path through the real binary. The command provider ignores model/session, so
-    // the assertion is on the run completing under the overridden turn cap.
+fn binary_run_applies_session_and_persona_overrides() {
+    // Exercises the session / persona / max-turns override path through the real
+    // binary. The command provider ignores session, so the assertion is on the run
+    // completing under the overridden turn cap.
     let config = write_config(
         "overrides.yaml",
         "\
@@ -523,10 +533,6 @@ agent:
         .args([
             "run",
             config.to_str().unwrap(),
-            "--model",
-            "m1",
-            "--judge-model",
-            "m2",
             "--session",
             "sess-1",
             "--persona",

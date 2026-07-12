@@ -1,18 +1,20 @@
 # onejudge.yaml — drive a harness through a simulated-user loop to complete a
 # task. Run with `onejudge run onejudge.yaml`. Flags override any field here
 # (flags win over file, file wins over defaults). See `onejudge schema`.
+#
+# Harness/model SELECTION lives in oneharness's own config files, not here:
+#   - the agent side uses the discovered `oneharness.toml`;
+#   - the judge / simulated user use `provider.judge_config` (default
+#     `oneharness.judge.toml`).
+# `onejudge init` scaffolds all three (it shells out to `oneharness init`).
 
 # Which backend runs the harness (and judges / plays the simulated user).
 provider:
-  kind: oneharness            # oneharness | command | split
-  bin: oneharness             # oneharness: the binary to shell out to
-  judge_harness: claude-code  # oneharness: harness the judge + user run on
+  kind: oneharness                       # oneharness | command | split
+  bin: oneharness                        # oneharness: the binary to shell out to
+  judge_config: oneharness.judge.toml    # oneharness: judge/user `--config` file
   # kind: command  ->  command: ["my-provider", "--flag"]
   # kind: split    ->  skill: {..provider..}, judge: {..provider..}
-
-harness: claude-code          # platform the agent runs on
-model: ""                     # agent model; "" => the harness default
-judge_model: ""               # simulated-user + judge model; "" => same as model
 
 agent:                        # system framing for the harness
   name: agent

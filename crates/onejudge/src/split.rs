@@ -50,54 +50,35 @@ impl<S: Provider, J: Provider> SplitProvider<S, J> {
 impl<S: Provider, J: Provider> Provider for SplitProvider<S, J> {
     fn respond(
         &self,
-        platform: &str,
-        model: &str,
         skill: &SkillRef<'_>,
         messages: &[Message],
         session: Option<&str>,
     ) -> Result<AssistantTurn> {
-        self.skill
-            .respond(platform, model, skill, messages, session)
+        self.skill.respond(skill, messages, session)
     }
 
     fn respond_streaming(
         &self,
-        platform: &str,
-        model: &str,
         skill: &SkillRef<'_>,
         messages: &[Message],
         session: Option<&str>,
         on_event: &mut dyn FnMut(&ToolEvent) -> ControlFlow<()>,
     ) -> Result<AssistantTurn> {
         self.skill
-            .respond_streaming(platform, model, skill, messages, session, on_event)
+            .respond_streaming(skill, messages, session, on_event)
     }
 
     fn simulate_user(
         &self,
-        model: &str,
         persona: &str,
         messages: &[Message],
         session: Option<&str>,
     ) -> Result<UserTurn> {
-        self.judge.simulate_user(model, persona, messages, session)
+        self.judge.simulate_user(persona, messages, session)
     }
 
-    fn judge(
-        &self,
-        model: &str,
-        query: &JudgeQuery<'_>,
-        messages: &[Message],
-    ) -> Result<JudgeVerdict> {
-        self.judge.judge(model, query, messages)
-    }
-
-    /// Session continuation is the skill's concern (it owns the assistant turns),
-    /// so this mirrors the **skill** provider. The engine threads names only when
-    /// the skill can continue; the judge provider ignores any user-side name it
-    /// cannot use (the [`Provider::simulate_user`] contract).
-    fn session_capable(&self, platform: &str) -> bool {
-        self.skill.session_capable(platform)
+    fn judge(&self, query: &JudgeQuery<'_>, messages: &[Message]) -> Result<JudgeVerdict> {
+        self.judge.judge(query, messages)
     }
 }
 
@@ -114,7 +95,6 @@ mod tests {
     #[derive(Default)]
     struct Tagged {
         tag: &'static str,
-        capable: bool,
         responded: Cell<u32>,
         streamed: Cell<u32>,
         simulated: Cell<u32>,
@@ -122,10 +102,9 @@ mod tests {
     }
 
     impl Tagged {
-        fn new(tag: &'static str, capable: bool) -> Self {
+        fn new(tag: &'static str) -> Self {
             Self {
                 tag,
-                capable,
                 ..Self::default()
             }
         }
@@ -134,8 +113,6 @@ mod tests {
     impl Provider for Tagged {
         fn respond(
             &self,
-            _platform: &str,
-            _model: &str,
             _skill: &SkillRef<'_>,
             _messages: &[Message],
             _session: Option<&str>,
@@ -149,8 +126,6 @@ mod tests {
 
         fn respond_streaming(
             &self,
-            _platform: &str,
-            _model: &str,
             _skill: &SkillRef<'_>,
             _messages: &[Message],
             _session: Option<&str>,
@@ -174,7 +149,6 @@ mod tests {
 
         fn simulate_user(
             &self,
-            _model: &str,
             _persona: &str,
             _messages: &[Message],
             _session: Option<&str>,
@@ -186,22 +160,13 @@ mod tests {
             })
         }
 
-        fn judge(
-            &self,
-            _model: &str,
-            _query: &JudgeQuery<'_>,
-            _messages: &[Message],
-        ) -> Result<JudgeVerdict> {
+        fn judge(&self, _query: &JudgeQuery<'_>, _messages: &[Message]) -> Result<JudgeVerdict> {
             self.judged.set(self.judged.get() + 1);
             Ok(JudgeVerdict {
                 value: JudgeValue::Bool(true),
                 reason: self.tag.into(),
                 usage: Some(Usage::default()),
             })
-        }
-
-        fn session_capable(&self, _platform: &str) -> bool {
-            self.capable
         }
     }
 
@@ -223,10 +188,8 @@ mod tests {
 
     #[test]
     fn respond_routes_to_the_skill_backend() {
-        let split = SplitProvider::new(Tagged::new("skill", false), Tagged::new("judge", false));
-        let turn = split
-            .respond("claude-code", "m", &skill_ref(), &[], None)
-            .unwrap();
+        let split = SplitProvider::new(Tagged::new("skill"), Tagged::new("judge"));
+        let turn = split.respond(&skill_ref(), &[], None).unwrap();
         assert_eq!(turn.message, "skill");
         assert_eq!(split.skill_provider().responded.get(), 1);
         assert_eq!(split.judge_provider().responded.get(), 0);
@@ -234,10 +197,10 @@ mod tests {
 
     #[test]
     fn streaming_routes_to_the_skill_backend() {
-        let split = SplitProvider::new(Tagged::new("skill", false), Tagged::new("judge", false));
+        let split = SplitProvider::new(Tagged::new("skill"), Tagged::new("judge"));
         let mut seen = 0;
         let turn = split
-            .respond_streaming("claude-code", "m", &skill_ref(), &[], None, &mut |_e| {
+            .respond_streaming(&skill_ref(), &[], None, &mut |_e| {
                 seen += 1;
                 ControlFlow::Continue(())
             })
@@ -250,23 +213,15 @@ mod tests {
 
     #[test]
     fn user_and_judge_route_to_the_judge_backend() {
-        let split = SplitProvider::new(Tagged::new("skill", false), Tagged::new("judge", false));
-        let user = split.simulate_user("m", "persona", &[], None).unwrap();
+        let split = SplitProvider::new(Tagged::new("skill"), Tagged::new("judge"));
+        let user = split.simulate_user("persona", &[], None).unwrap();
         assert_eq!(user.message, "judge");
-        let verdict = split.judge("m", &boolean_query(), &[]).unwrap();
+        let verdict = split.judge(&boolean_query(), &[]).unwrap();
         assert_eq!(verdict.reason, "judge");
         assert_eq!(split.judge_provider().simulated.get(), 1);
         assert_eq!(split.judge_provider().judged.get(), 1);
         // The skill backend was never asked to judge or simulate.
         assert_eq!(split.skill_provider().simulated.get(), 0);
         assert_eq!(split.skill_provider().judged.get(), 0);
-    }
-
-    #[test]
-    fn session_capability_mirrors_the_skill_backend() {
-        let capable = SplitProvider::new(Tagged::new("skill", true), Tagged::new("judge", false));
-        assert!(capable.session_capable("claude-code"));
-        let not = SplitProvider::new(Tagged::new("skill", false), Tagged::new("judge", true));
-        assert!(!not.session_capable("claude-code"));
     }
 }

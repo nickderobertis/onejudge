@@ -39,11 +39,13 @@ impl AnyProvider {
     /// [`CliError::Config`] if a backend's argv is empty or otherwise invalid.
     pub fn build(spec: &ProviderSpec) -> Result<Self, CliError> {
         match spec {
-            ProviderSpec::Oneharness { bin, judge_harness } => Ok(AnyProvider::Oneharness(
-                OneharnessProvider::new()
-                    .with_bin(bin)
-                    .with_judge_harness(judge_harness),
-            )),
+            ProviderSpec::Oneharness { bin, judge_config } => {
+                let mut provider = OneharnessProvider::new().with_bin(bin);
+                if let Some(config) = judge_config {
+                    provider = provider.with_judge_config(config.clone());
+                }
+                Ok(AnyProvider::Oneharness(provider))
+            }
             ProviderSpec::Command { command } => {
                 let provider = CommandProvider::new(command.clone())
                     .map_err(|e| CliError::Config(e.to_string()))?;
@@ -60,79 +62,51 @@ impl AnyProvider {
 impl Provider for AnyProvider {
     fn respond(
         &self,
-        platform: &str,
-        model: &str,
         skill: &SkillRef<'_>,
         messages: &[Message],
         session: Option<&str>,
     ) -> crate::Result<AssistantTurn> {
         match self {
-            AnyProvider::Oneharness(p) => p.respond(platform, model, skill, messages, session),
-            AnyProvider::Command(p) => p.respond(platform, model, skill, messages, session),
-            AnyProvider::Split { skill: s, .. } => {
-                s.respond(platform, model, skill, messages, session)
-            }
+            AnyProvider::Oneharness(p) => p.respond(skill, messages, session),
+            AnyProvider::Command(p) => p.respond(skill, messages, session),
+            AnyProvider::Split { skill: s, .. } => s.respond(skill, messages, session),
         }
     }
 
     fn respond_streaming(
         &self,
-        platform: &str,
-        model: &str,
         skill: &SkillRef<'_>,
         messages: &[Message],
         session: Option<&str>,
         on_event: &mut dyn FnMut(&ToolEvent) -> ControlFlow<()>,
     ) -> crate::Result<AssistantTurn> {
         match self {
-            AnyProvider::Oneharness(p) => {
-                p.respond_streaming(platform, model, skill, messages, session, on_event)
-            }
-            AnyProvider::Command(p) => {
-                p.respond_streaming(platform, model, skill, messages, session, on_event)
-            }
+            AnyProvider::Oneharness(p) => p.respond_streaming(skill, messages, session, on_event),
+            AnyProvider::Command(p) => p.respond_streaming(skill, messages, session, on_event),
             AnyProvider::Split { skill: s, .. } => {
-                s.respond_streaming(platform, model, skill, messages, session, on_event)
+                s.respond_streaming(skill, messages, session, on_event)
             }
         }
     }
 
     fn simulate_user(
         &self,
-        model: &str,
         persona: &str,
         messages: &[Message],
         session: Option<&str>,
     ) -> crate::Result<UserTurn> {
         match self {
-            AnyProvider::Oneharness(p) => p.simulate_user(model, persona, messages, session),
-            AnyProvider::Command(p) => p.simulate_user(model, persona, messages, session),
-            AnyProvider::Split { judge, .. } => {
-                judge.simulate_user(model, persona, messages, session)
-            }
+            AnyProvider::Oneharness(p) => p.simulate_user(persona, messages, session),
+            AnyProvider::Command(p) => p.simulate_user(persona, messages, session),
+            AnyProvider::Split { judge, .. } => judge.simulate_user(persona, messages, session),
         }
     }
 
-    fn judge(
-        &self,
-        model: &str,
-        query: &JudgeQuery<'_>,
-        messages: &[Message],
-    ) -> crate::Result<JudgeVerdict> {
+    fn judge(&self, query: &JudgeQuery<'_>, messages: &[Message]) -> crate::Result<JudgeVerdict> {
         match self {
-            AnyProvider::Oneharness(p) => p.judge(model, query, messages),
-            AnyProvider::Command(p) => p.judge(model, query, messages),
-            AnyProvider::Split { judge, .. } => judge.judge(model, query, messages),
-        }
-    }
-
-    fn session_capable(&self, platform: &str) -> bool {
-        match self {
-            AnyProvider::Oneharness(p) => p.session_capable(platform),
-            AnyProvider::Command(p) => p.session_capable(platform),
-            // Session continuation is the skill backend's concern, exactly as
-            // `SplitProvider` mirrors it.
-            AnyProvider::Split { skill, .. } => skill.session_capable(platform),
+            AnyProvider::Oneharness(p) => p.judge(query, messages),
+            AnyProvider::Command(p) => p.judge(query, messages),
+            AnyProvider::Split { judge, .. } => judge.judge(query, messages),
         }
     }
 }
@@ -145,7 +119,7 @@ mod tests {
     fn builds_oneharness_and_command_backends() {
         let oh = AnyProvider::build(&ProviderSpec::Oneharness {
             bin: "oneharness".into(),
-            judge_harness: "claude-code".into(),
+            judge_config: Some("oneharness.judge.toml".into()),
         })
         .unwrap();
         assert!(matches!(oh, AnyProvider::Oneharness(_)));
@@ -164,11 +138,11 @@ mod tests {
     }
 
     #[test]
-    fn build_split_composes_children_and_mirrors_skill_session() {
+    fn build_split_composes_children() {
         let spec = ProviderSpec::Split {
             skill: Box::new(ProviderSpec::Oneharness {
                 bin: "oneharness".into(),
-                judge_harness: "claude-code".into(),
+                judge_config: None,
             }),
             judge: Box::new(ProviderSpec::Command {
                 command: vec!["judge".into()],
@@ -176,9 +150,5 @@ mod tests {
         };
         let provider = AnyProvider::build(&spec).unwrap();
         assert!(matches!(provider, AnyProvider::Split { .. }));
-        // The oneharness skill backend is session-capable on claude-code; the
-        // command judge backend is not — the split mirrors the skill.
-        assert!(provider.session_capable("claude-code"));
-        assert!(!provider.session_capable("goose"));
     }
 }

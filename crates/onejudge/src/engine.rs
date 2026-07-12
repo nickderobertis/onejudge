@@ -118,38 +118,39 @@ impl Conversation {
     }
 }
 
-/// Engine settings: the platform/model under test, the judge's model, the default
-/// turn cap, and the caller-owned session-name base threaded across turns.
+/// Engine settings: the loop's own concerns — the default turn cap and the
+/// caller-owned session-name base threaded across turns.
+///
+/// Harness and model **selection** is no longer onejudge's concern: the agent side
+/// uses oneharness's own discovered config (`oneharness.toml`) and the judge /
+/// simulated-user side uses a separately-named oneharness config (see
+/// [`OneharnessProvider`](crate::OneharnessProvider)), so `Settings` carries no
+/// platform or model.
 #[derive(Debug, Clone)]
 pub struct Settings {
-    /// The harness (platform) the skill runs on.
-    pub platform: String,
-    /// The model the skill runs on.
-    pub model: String,
-    /// The model the judge and simulated user run on (independent of the skill).
-    pub judge_model: String,
     /// Default assistant-turn cap when a [`SimulatedUser`] does not override it.
     pub max_turns: u32,
-    /// The base name for the caller-owned session threaded across turns on
-    /// session-capable providers. Use a distinct value per run to avoid colliding
-    /// in the harness's on-disk session store. The engine derives `<base>-skill`
-    /// and `<base>-user` from it.
+    /// The base name for the caller-owned session threaded across turns. Use a
+    /// distinct value per run to avoid colliding in the harness's on-disk session
+    /// store. The engine derives `<base>-skill` and `<base>-user` from it, always
+    /// threading them to the provider; a provider that cannot continue a session
+    /// (e.g. a harness with no headless session id) degrades gracefully by
+    /// re-inlining the transcript.
     pub session_name: String,
 }
 
+impl Default for Settings {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Settings {
-    /// Settings for a `platform`/`model`, with `judge_model` for the judge and
-    /// simulated user; `max_turns` defaults to 8 and `session_name` to
+    /// Loop settings with `max_turns` defaulting to 8 and `session_name` to
     /// `"onejudge"`. Adjust the fields directly or via the builders.
-    pub fn new(
-        platform: impl Into<String>,
-        model: impl Into<String>,
-        judge_model: impl Into<String>,
-    ) -> Self {
+    #[must_use]
+    pub fn new() -> Self {
         Self {
-            platform: platform.into(),
-            model: model.into(),
-            judge_model: judge_model.into(),
             max_turns: 8,
             session_name: "onejudge".into(),
         }
@@ -243,8 +244,6 @@ impl<'a> Engine<'a> {
         on_event: &mut dyn FnMut(&StreamEvent) -> ControlFlow<()>,
     ) -> Result<Outcome> {
         let skill = conversation.skill.as_ref();
-        let platform = &self.settings.platform;
-        let model = &self.settings.model;
         let max_turns = conversation
             .user
             .as_ref()
@@ -253,13 +252,12 @@ impl<'a> Engine<'a> {
 
         // Thread ONE caller-owned session name across turns (skill and simulated
         // user each get their own), instead of extracting and re-passing a native
-        // id — the uniform `oneharness --session` handle. Only where the provider
-        // can actually continue a session; elsewhere it stays `None` and the
-        // provider re-reads the inlined transcript.
-        let session_capable = self.provider.session_capable(platform);
-        let skill_session =
-            session_capable.then(|| format!("{}-skill", self.settings.session_name));
-        let user_session = session_capable.then(|| format!("{}-user", self.settings.session_name));
+        // id — the uniform `oneharness --session` handle. The engine always threads
+        // them; a provider that cannot continue a session degrades gracefully by
+        // re-inlining the transcript, so onejudge no longer needs to know the
+        // harness's capability up front.
+        let skill_session = format!("{}-skill", self.settings.session_name);
+        let user_session = format!("{}-user", self.settings.session_name);
 
         let mut transcript = Transcript::from_input(&conversation.input);
         let mut totals = Usage::default();
@@ -269,15 +267,11 @@ impl<'a> Engine<'a> {
             let mut broke = false;
             let turn = if streaming {
                 self.provider.respond_streaming(
-                    platform,
-                    model,
                     &skill,
                     &transcript.messages,
-                    skill_session.as_deref(),
+                    Some(skill_session.as_str()),
                     &mut |event| {
                         let flow = on_event(&StreamEvent {
-                            platform,
-                            model,
                             turn: turn_index,
                             event,
                         });
@@ -286,13 +280,8 @@ impl<'a> Engine<'a> {
                     },
                 )?
             } else {
-                self.provider.respond(
-                    platform,
-                    model,
-                    &skill,
-                    &transcript.messages,
-                    skill_session.as_deref(),
-                )?
+                self.provider
+                    .respond(&skill, &transcript.messages, Some(skill_session.as_str()))?
             };
             let AssistantTurn {
                 message,
@@ -331,10 +320,9 @@ impl<'a> Engine<'a> {
                 stop,
                 usage,
             } = self.provider.simulate_user(
-                &self.settings.judge_model,
                 &user.persona,
                 &transcript.messages,
-                user_session.as_deref(),
+                Some(user_session.as_str()),
             )?;
             if let Some(u) = &usage {
                 totals.add(u);
@@ -365,8 +353,7 @@ impl<'a> Engine<'a> {
         // Passing the transcript through the shared judge prompt keeps the
         // events-aware rendering (Improvement 1) on the `done_when` check too.
         let _ = build_judge_prompt(&query, &transcript.messages);
-        self.provider
-            .judge(&self.settings.judge_model, &query, &transcript.messages)
+        self.provider.judge(&query, &transcript.messages)
     }
 
     /// Score a boolean criterion against a finished transcript. The judge sees the
@@ -402,18 +389,13 @@ impl<'a> Engine<'a> {
             criterion,
             scale: Some((min, max)),
         };
-        self.provider
-            .judge(&self.settings.judge_model, &query, &transcript.messages)
+        self.provider.judge(&query, &transcript.messages)
     }
 }
 
 /// One streamed tool event delivered live to an [`Engine::run_streaming`] sink,
 /// tagged with the turn it belongs to.
 pub struct StreamEvent<'a> {
-    /// The platform (harness) under test.
-    pub platform: &'a str,
-    /// The model under test.
-    pub model: &'a str,
     /// 1-based assistant-turn index within this run.
     pub turn: usize,
     /// The normalized tool event.
@@ -432,7 +414,6 @@ mod tests {
         assistant: Vec<AssistantTurn>,
         user: Vec<UserTurn>,
         judge: Vec<JudgeVerdict>,
-        capable: bool,
         seen: RefCell<Seen>,
     }
 
@@ -448,8 +429,6 @@ mod tests {
     impl Provider for Scripted {
         fn respond(
             &self,
-            _platform: &str,
-            _model: &str,
             _skill: &SkillRef<'_>,
             _messages: &[Message],
             session: Option<&str>,
@@ -463,7 +442,6 @@ mod tests {
 
         fn simulate_user(
             &self,
-            _model: &str,
             _persona: &str,
             _messages: &[Message],
             session: Option<&str>,
@@ -475,20 +453,11 @@ mod tests {
             Ok(self.user[i].clone())
         }
 
-        fn judge(
-            &self,
-            _model: &str,
-            _query: &JudgeQuery<'_>,
-            _messages: &[Message],
-        ) -> Result<JudgeVerdict> {
+        fn judge(&self, _query: &JudgeQuery<'_>, _messages: &[Message]) -> Result<JudgeVerdict> {
             let mut seen = self.seen.borrow_mut();
             let i = seen.judge.min(self.judge.len().saturating_sub(1));
             seen.judge += 1;
             Ok(self.judge[i].clone())
-        }
-
-        fn session_capable(&self, _platform: &str) -> bool {
-            self.capable
         }
     }
 
@@ -505,7 +474,7 @@ mod tests {
     }
 
     fn settings() -> Settings {
-        Settings::new("claude-code", "sonnet", "opus")
+        Settings::new()
     }
 
     #[test]
@@ -514,7 +483,6 @@ mod tests {
             assistant: vec![assistant("hi there", false)],
             user: vec![],
             judge: vec![],
-            capable: false,
             seen: RefCell::default(),
         };
         let engine = Engine::new(&provider, settings());
@@ -536,7 +504,6 @@ mod tests {
                 usage: None,
             }],
             judge: vec![],
-            capable: false,
             seen: RefCell::default(),
         };
         let engine = Engine::new(&provider, settings());
@@ -569,7 +536,6 @@ mod tests {
                     usage: None,
                 },
             ],
-            capable: false,
             seen: RefCell::default(),
         };
         let engine = Engine::new(&provider, settings());
@@ -590,7 +556,6 @@ mod tests {
             assistant: vec![assistant("all set", true)],
             user: vec![],
             judge: vec![],
-            capable: false,
             seen: RefCell::default(),
         };
         let engine = Engine::new(&done_provider, settings());
@@ -609,7 +574,6 @@ mod tests {
                 usage: None,
             }],
             judge: vec![],
-            capable: false,
             seen: RefCell::default(),
         };
         let engine = Engine::new(&stop_provider, settings());
@@ -625,7 +589,9 @@ mod tests {
     }
 
     #[test]
-    fn session_name_threads_only_when_capable() {
+    fn session_name_is_always_threaded() {
+        // The engine always threads `<base>-skill` / `<base>-user`; degradation is
+        // the provider's concern, not a capability gate here.
         let provider = Scripted {
             assistant: vec![assistant("a", false)],
             user: vec![UserTurn {
@@ -634,7 +600,6 @@ mod tests {
                 usage: None,
             }],
             judge: vec![],
-            capable: true,
             seen: RefCell::default(),
         };
         let engine = Engine::new(&provider, settings().with_session_name("run-42"));
@@ -657,19 +622,21 @@ mod tests {
     }
 
     #[test]
-    fn session_name_absent_when_not_capable() {
+    fn session_name_threads_on_a_single_turn_too() {
         let provider = Scripted {
             assistant: vec![assistant("a", true)],
             user: vec![],
             judge: vec![],
-            capable: false,
             seen: RefCell::default(),
         };
         let engine = Engine::new(&provider, settings());
         engine
             .run(&Conversation::single_turn(skill(), "go"))
             .unwrap();
-        assert_eq!(provider.seen.borrow().skill_sessions, vec![None]);
+        assert_eq!(
+            provider.seen.borrow().skill_sessions,
+            vec![Some("onejudge-skill".to_string())]
+        );
     }
 
     #[test]
@@ -687,7 +654,6 @@ mod tests {
             }],
             user: vec![],
             judge: vec![],
-            capable: false,
             seen: RefCell::default(),
         };
         let engine = Engine::new(&provider, settings());
@@ -716,7 +682,6 @@ mod tests {
             }],
             user: vec![],
             judge: vec![],
-            capable: false,
             seen: RefCell::default(),
         };
         let engine = Engine::new(&provider, settings());
@@ -742,7 +707,6 @@ mod tests {
             assistant: vec![],
             user: vec![],
             judge: vec![],
-            capable: false,
             seen: RefCell::default(),
         };
         let engine = Engine::new(&provider, settings());

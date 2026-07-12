@@ -21,7 +21,8 @@
 //! - [`Engine`] runs a [`Conversation`] (a [`Skill`] plus an initial input and an
 //!   optional [`SimulatedUser`]) into a [`Transcript`], bounded by `max_turns` /
 //!   `done_when` / the skill declaring itself done, threading one caller-owned
-//!   session name across turns on session-capable providers.
+//!   session name across turns (the provider degrades gracefully where a harness
+//!   cannot continue a session).
 //! - [`Transcript`] carries each turn plus the normalized [`ToolEvent`]s the skill
 //!   took, so the judge — and a [`ToolQuery`] — can reason over *what the skill
 //!   did*, not just what it said.
@@ -35,7 +36,8 @@
 //! use onejudge::{Conversation, Engine, OneharnessProvider, Settings, Skill, SimulatedUser};
 //!
 //! let provider = OneharnessProvider::new();
-//! let settings = Settings::new("claude-code", "", "claude-opus-4-8");
+//! // Harness/model selection lives in oneharness's config files, not here.
+//! let settings = Settings::new();
 //! let engine = Engine::new(&provider, settings);
 //!
 //! let skill = Skill::new("greeter", "./skills/greeter", "Greet the user warmly.");
@@ -63,7 +65,7 @@ mod usage;
 pub use command::CommandProvider;
 pub use engine::{Conversation, Engine, Outcome, Settings, SimulatedUser, Skill, StreamEvent};
 pub use error::{Error, ProviderErrorKind, Result};
-pub use oneharness::{session_capable, OneharnessProvider};
+pub use oneharness::OneharnessProvider;
 pub use provider::{
     build_judge_prompt, build_respond_prompt, build_user_prompt, latest_or_inline,
     latest_user_message, parse_verdict, render_transcript, AssistantTurn, JudgeKind, JudgeQuery,
