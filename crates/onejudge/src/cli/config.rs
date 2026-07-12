@@ -14,8 +14,8 @@ use crate::{Conversation, JudgeKind, Settings, SimulatedUser, Skill};
 use super::CliError;
 
 /// The whole YAML config for one run. Field defaults let a minimal file (just a
-/// `task` and an `agent`) work, while `deny_unknown_fields` makes a typo'd key a
-/// hard error instead of a silently-ignored setting.
+/// `task`) work, while `deny_unknown_fields` makes a typo'd key a hard error
+/// instead of a silently-ignored setting.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
@@ -27,9 +27,16 @@ pub struct Config {
     /// with `onejudge init`.
     #[serde(default)]
     pub provider: ProviderConfig,
-    /// The agent's system framing (name, working dir, instructions).
+    /// Path to a **skill** directory (containing a `SKILL.md`) whose instruction
+    /// body seeds the system prompt. Resolved relative to the config file's
+    /// directory (or the working dir for a flag-only run). Optional — combine it
+    /// with `system_prompt`, use either alone, or neither.
     #[serde(default)]
-    pub agent: AgentConfig,
+    pub skill: Option<PathBuf>,
+    /// Extra system-prompt text for the harness. When a `skill` is also set, this
+    /// comes **first** and the skill's body is appended after it.
+    #[serde(default)]
+    pub system_prompt: Option<String>,
     /// The task to drive to completion. May instead be supplied by `--task`
     /// (`-` reads stdin); required by the time the plan is built.
     #[serde(default)]
@@ -45,31 +52,6 @@ pub struct Config {
     /// Optional criteria to score the finished transcript with.
     #[serde(default)]
     pub evals: Vec<EvalConfig>,
-}
-
-/// The agent under test: how it is framed to the harness.
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct AgentConfig {
-    /// A short name for the agent.
-    #[serde(default = "default_agent_name")]
-    pub name: String,
-    /// The agent's working directory.
-    #[serde(default = "default_agent_dir")]
-    pub dir: String,
-    /// The system prompt delivered to the harness.
-    #[serde(default)]
-    pub instructions: String,
-}
-
-impl Default for AgentConfig {
-    fn default() -> Self {
-        Self {
-            name: default_agent_name(),
-            dir: default_agent_dir(),
-            instructions: String::new(),
-        }
-    }
 }
 
 /// The simulated user that supervises the agent and drives the loop.
@@ -158,6 +140,10 @@ pub enum ProviderKind {
 pub struct Overrides {
     /// `--judge-config` (the judge-side oneharness config path).
     pub judge_config: Option<String>,
+    /// `--skill` (a skill directory; resolved relative to the working dir).
+    pub skill: Option<PathBuf>,
+    /// `--system-prompt` (extra system-prompt text).
+    pub system_prompt: Option<String>,
     /// `--task` (already resolved; `-`/stdin handled by the caller).
     pub task: Option<String>,
     /// `--persona`.
@@ -186,6 +172,8 @@ impl Config {
     pub fn apply(&mut self, overrides: Overrides) {
         let Overrides {
             judge_config,
+            skill,
+            system_prompt,
             task,
             persona,
             done_when,
@@ -195,6 +183,12 @@ impl Config {
         } = overrides;
         if judge_config.is_some() {
             self.provider.judge_config = judge_config;
+        }
+        if skill.is_some() {
+            self.skill = skill;
+        }
+        if system_prompt.is_some() {
+            self.system_prompt = system_prompt;
         }
         if task.is_some() {
             self.task = task;
@@ -241,7 +235,7 @@ impl Config {
             settings = settings.with_session_name(session);
         }
 
-        let skill = Skill::new(self.agent.name, self.agent.dir, self.agent.instructions);
+        let skill = build_skill(self.skill, self.system_prompt.unwrap_or_default())?;
 
         let (conversation, done_when) = match self.user {
             Some(u) => {
@@ -449,19 +443,173 @@ pub struct Plan {
     pub done_when: Option<String>,
 }
 
-fn default_agent_name() -> String {
-    "agent".into()
-}
-fn default_agent_dir() -> String {
-    ".".into()
-}
 fn default_eval_kind() -> JudgeKind {
     JudgeKind::Boolean
+}
+
+/// Build the [`Skill`] under test from an optional skill directory and the
+/// `system_prompt` text. Both are optional and combine: the `system_prompt` comes
+/// first, then the loaded skill's `SKILL.md` body. With neither, the harness runs
+/// under an empty system prompt.
+///
+/// # Errors
+/// [`CliError::Config`] if a `skill` path is given but its `SKILL.md` cannot be
+/// loaded (missing file, malformed frontmatter).
+fn build_skill(skill: Option<PathBuf>, system_prompt: String) -> Result<Skill, CliError> {
+    match skill {
+        Some(dir) => {
+            let def = crate::load_skill(&dir).map_err(|e| {
+                CliError::Config(format!("could not load skill `{}`: {e}", dir.display()))
+            })?;
+            let name = if def.name.trim().is_empty() {
+                skill_dir_name(&dir)
+            } else {
+                def.name
+            };
+            let instructions = merge_instructions(&system_prompt, &def.instructions);
+            Ok(Skill::new(name, def.dir.to_string_lossy(), instructions))
+        }
+        None => Ok(Skill::new(
+            "agent",
+            ".",
+            merge_instructions(&system_prompt, ""),
+        )),
+    }
+}
+
+/// Merge the `system_prompt` and a skill's instruction body into one system
+/// prompt: `system_prompt` first, then the skill body, each trimmed, joined by a
+/// blank line, skipping any empty part.
+fn merge_instructions(system_prompt: &str, skill_body: &str) -> String {
+    [system_prompt.trim(), skill_body.trim()]
+        .into_iter()
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
+/// A fallback name for a skill whose frontmatter carries none: the directory's own
+/// name, or `"skill"` if that cannot be read.
+fn skill_dir_name(dir: &std::path::Path) -> String {
+    dir.file_name()
+        .and_then(|s| s.to_str())
+        .filter(|s| !s.is_empty())
+        .unwrap_or("skill")
+        .to_string()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Make a unique temp skill directory holding a `SKILL.md` of `contents`.
+    fn skill_dir(name: &str, contents: &str) -> PathBuf {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static N: AtomicU64 = AtomicU64::new(0);
+        let root = std::env::temp_dir().join(format!(
+            "onejudge-cfg-skill-{}-{}",
+            std::process::id(),
+            N.fetch_add(1, Ordering::Relaxed)
+        ));
+        let dir = root.join(name);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("SKILL.md"), contents).unwrap();
+        dir
+    }
+
+    #[test]
+    fn system_prompt_only_becomes_the_instructions() {
+        let plan = Config::from_yaml("task: x\nsystem_prompt: Be a careful engineer.\n")
+            .unwrap()
+            .into_plan()
+            .unwrap();
+        let skill = &plan.conversation.skill;
+        assert_eq!(skill.instructions, "Be a careful engineer.");
+        assert_eq!(skill.name, "agent");
+        assert_eq!(skill.dir, ".");
+    }
+
+    #[test]
+    fn neither_skill_nor_system_prompt_leaves_empty_instructions() {
+        let plan = Config::from_yaml("task: x\n").unwrap().into_plan().unwrap();
+        assert_eq!(plan.conversation.skill.instructions, "");
+    }
+
+    #[test]
+    fn skill_body_and_name_come_from_skill_md() {
+        let dir = skill_dir(
+            "greeter",
+            "---\nname: greeter\ndescription: a greeter\n---\nGreet the user warmly.\n",
+        );
+        let yaml = format!(
+            "task: x\nskill: {}\n",
+            serde_json::to_string(&dir.to_string_lossy()).unwrap()
+        );
+        let plan = Config::from_yaml(&yaml).unwrap().into_plan().unwrap();
+        let skill = &plan.conversation.skill;
+        assert_eq!(skill.name, "greeter");
+        assert_eq!(skill.instructions, "Greet the user warmly.");
+        assert_eq!(skill.dir, dir.to_string_lossy());
+    }
+
+    #[test]
+    fn skill_without_frontmatter_name_falls_back_to_the_dir_name() {
+        let dir = skill_dir("fallback-name", "Just a body, no frontmatter.\n");
+        let yaml = format!(
+            "task: x\nskill: {}\n",
+            serde_json::to_string(&dir.to_string_lossy()).unwrap()
+        );
+        let plan = Config::from_yaml(&yaml).unwrap().into_plan().unwrap();
+        assert_eq!(plan.conversation.skill.name, "fallback-name");
+    }
+
+    #[test]
+    fn system_prompt_precedes_the_skill_body_when_both_are_set() {
+        let dir = skill_dir(
+            "merged",
+            "---\nname: merged\ndescription: d\n---\nSkill body text.\n",
+        );
+        let yaml = format!(
+            "task: x\nsystem_prompt: Preamble first.\nskill: {}\n",
+            serde_json::to_string(&dir.to_string_lossy()).unwrap()
+        );
+        let plan = Config::from_yaml(&yaml).unwrap().into_plan().unwrap();
+        assert_eq!(
+            plan.conversation.skill.instructions,
+            "Preamble first.\n\nSkill body text."
+        );
+    }
+
+    #[test]
+    fn a_missing_skill_is_a_loud_config_error() {
+        let missing =
+            std::env::temp_dir().join(format!("onejudge-no-skill-{}", std::process::id()));
+        let yaml = format!(
+            "task: x\nskill: {}\n",
+            serde_json::to_string(&missing.to_string_lossy()).unwrap()
+        );
+        let err = Config::from_yaml(&yaml).unwrap().into_plan().unwrap_err();
+        assert!(matches!(err, CliError::Config(m) if m.contains("could not load skill")));
+    }
+
+    #[test]
+    fn skill_override_and_system_prompt_override_win_over_the_file() {
+        let dir = skill_dir(
+            "flag-skill",
+            "---\nname: flag-skill\ndescription: d\n---\nFlag skill body.\n",
+        );
+        let mut cfg = Config::from_yaml("task: x\nsystem_prompt: from file\n").unwrap();
+        cfg.apply(Overrides {
+            skill: Some(dir.clone()),
+            system_prompt: Some("from flag".into()),
+            ..Overrides::default()
+        });
+        let plan = cfg.into_plan().unwrap();
+        assert_eq!(
+            plan.conversation.skill.instructions,
+            "from flag\n\nFlag skill body."
+        );
+    }
 
     #[test]
     fn minimal_config_resolves_to_a_single_turn_plan() {

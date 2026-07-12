@@ -15,10 +15,11 @@ categories = ["development-tools::testing"]
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
-# Only pulled by the optional `cli` feature — the `onejudge` binary. A library
-# consumer (`cargo add onejudge`) never sees clap or a YAML parser. `serde_yaml`
-# is archived/unmaintained, so the maintained `serde_yaml_ng` fork drives the
-# config. Both are CLI-only, kept off the library's (and the MSRV's) surface.
+# Only pulled by the optional `cli` / `skill` features. A bare library consumer
+# (`cargo add onejudge`) never sees clap or a YAML parser. `serde_yaml` is
+# archived/unmaintained, so the maintained `serde_yaml_ng` fork parses both the
+# CLI config and SKILL.md frontmatter. Both are opt-in, kept off the library's
+# (and the MSRV's) default surface.
 clap = { version = "4", features = ["derive"], optional = true }
 serde_yaml_ng = { version = "0.10", optional = true }
 
@@ -33,12 +34,20 @@ serde_json = { workspace = true }
 # engine — the doubles are test-only. `just check` and coverage enable it.
 fake-provider = []
 
+# Load a skill from disk (a `SKILL.md` directory) into a `SkillDefinition`. This is
+# onejudge's owned skill-execution primitive — a higher-level framework composes
+# over `load_skill` rather than re-implementing the SKILL.md format. Non-default so
+# the YAML parser stays off a bare `cargo add onejudge`; the `cli` feature enables
+# it (the CLI resolves a `skill:` path through it).
+skill = ["dep:serde_yaml_ng"]
+
 # The standalone `onejudge` binary: drive a harness through a simulated-user loop
 # to complete one task, configured by YAML. Non-default so the library stays lean
-# (clap + the YAML parser never reach a `cargo add onejudge` consumer). The
-# deterministic gate (`just check`) enables it alongside `fake-provider` and drives
-# the built binary against the test doubles in `tests/cli.rs`.
-cli = ["dep:clap", "dep:serde_yaml_ng"]
+# (clap + the YAML parser never reach a `cargo add onejudge` consumer). Pulls in
+# `skill` for the `skill:` config key. The deterministic gate (`just check`) enables
+# it alongside `fake-provider` and drives the built binary against the test doubles
+# in `tests/cli.rs`.
+cli = ["dep:clap", "skill"]
 
 # The user-facing standalone binary, behind the `cli` feature. Unlike the two
 # `fake-provider` doubles below, this one IS published and installed

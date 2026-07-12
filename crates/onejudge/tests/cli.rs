@@ -58,8 +58,7 @@ fn completed_run_with_passing_evals_exits_zero() {
     // the transcript, so `done_when` holds and the loop ends after one turn.
     let body = "\
 task: please commit
-agent:
-  instructions: 'Commit it. [[event:git commit -m fix]]'
+system_prompt: 'Commit it. [[event:git commit -m fix]]'
 user:
   persona: A tester.
   done_when: git commit
@@ -106,8 +105,7 @@ fn incomplete_run_hits_max_turns_and_exits_one() {
     // and the end-of-run re-judge reports the task incomplete.
     let body = "\
 task: keep going
-agent:
-  instructions: Be helpful.
+system_prompt: Be helpful.
 user:
   persona: A tester.
   done_when: deploy to production
@@ -127,8 +125,7 @@ fn failing_boolean_eval_fails_an_otherwise_complete_run() {
     // fails — so the run exits non-zero (evals gate the exit code).
     let body = "\
 task: say hi
-agent:
-  instructions: Be helpful.
+system_prompt: Be helpful.
 user:
   persona: A tester.
   done_when: echo
@@ -148,8 +145,7 @@ evals:
 fn single_turn_run_without_a_user_completes() {
     let body = "\
 task: greet me
-agent:
-  instructions: Be warm.
+system_prompt: Be warm.
 ";
     let summary = plan_from(body);
     assert!(summary.completed);
@@ -167,7 +163,7 @@ fn oneharness_provider_kind_drives_the_loop() {
     let yaml = format!(
         "provider:\n  kind: oneharness\n  bin: {bin}\n\
          task: go\n\
-         agent:\n  instructions: '[[reply:the task is complete]]'\n\
+         system_prompt: '[[reply:the task is complete]]'\n\
          user:\n  persona: A tester.\n  done_when: complete\n  max_turns: 3\n",
     );
     let plan = Config::from_yaml(&yaml).unwrap().into_plan().unwrap();
@@ -189,7 +185,7 @@ fn split_provider_kind_composes_two_backends() {
         "provider:\n  kind: split\n  skill:\n    kind: oneharness\n    bin: {oh}\n  \
          judge:\n    kind: command\n    command: [{echo}]\n\
          task: start\n\
-         agent:\n  instructions: '[[reply:working]]'\n\
+         system_prompt: '[[reply:working]]'\n\
          user:\n  persona: A tester.\n  max_turns: 2\n",
     );
     let plan = Config::from_yaml(&yaml).unwrap().into_plan().unwrap();
@@ -212,7 +208,7 @@ fn oneharness_kind_json_covers_buffered_respond_and_user() {
     let yaml = format!(
         "provider:\n  kind: oneharness\n  bin: {bin}\n\
          task: go\n\
-         agent:\n  instructions: '[[reply:working]]'\n\
+         system_prompt: '[[reply:working]]'\n\
          user:\n  persona: A tester.\n  max_turns: 2\n",
     );
     let plan = Config::from_yaml(&yaml).unwrap().into_plan().unwrap();
@@ -236,7 +232,7 @@ fn split_kind_json_covers_buffered_respond_and_judge() {
         "provider:\n  kind: split\n  skill:\n    kind: oneharness\n    bin: {oh}\n  \
          judge:\n    kind: command\n    command: [{echo}]\n\
          task: start\n\
-         agent:\n  instructions: '[[reply:working]]'\n\
+         system_prompt: '[[reply:working]]'\n\
          user:\n  persona: A tester.\n  max_turns: 2\n\
          evals:\n  - criterion: working\n    kind: boolean\n",
     );
@@ -267,8 +263,7 @@ fn binary_run_prints_human_result_and_exits_zero() {
         "human.yaml",
         "\
 task: please commit
-agent:
-  instructions: 'Commit it. [[event:git commit -m fix]]'
+system_prompt: 'Commit it. [[event:git commit -m fix]]'
 user:
   persona: A tester.
   done_when: git commit
@@ -303,8 +298,7 @@ fn binary_run_json_emits_the_versioned_report() {
         "json.yaml",
         "\
 task: please commit
-agent:
-  instructions: 'Commit it. [[event:git commit -m fix]]'
+system_prompt: 'Commit it. [[event:git commit -m fix]]'
 user:
   persona: A tester.
   done_when: git commit
@@ -337,8 +331,7 @@ fn binary_run_exits_one_when_incomplete() {
         "incomplete.yaml",
         "\
 task: keep going
-agent:
-  instructions: Be helpful.
+system_prompt: Be helpful.
 user:
   persona: A tester.
   done_when: deploy to production
@@ -359,8 +352,7 @@ fn binary_run_task_override_and_stdin() {
         "stdin.yaml",
         "\
 task: from the file
-agent:
-  instructions: Be helpful.
+system_prompt: Be helpful.
 ",
     );
     let mut child = Command::new(onejudge_bin())
@@ -437,8 +429,7 @@ fn binary_run_writes_json_to_an_output_file() {
         "out.yaml",
         "\
 task: greet me
-agent:
-  instructions: Be warm.
+system_prompt: Be warm.
 ",
     );
     let out_path = Path::new(env!("CARGO_TARGET_TMPDIR")).join("report.json");
@@ -469,7 +460,7 @@ fn binary_run_discovers_default_config_in_cwd() {
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(
         dir.join("onejudge.yaml"),
-        config_yaml("task: hello\nagent:\n  instructions: Be helpful.\n"),
+        config_yaml("task: hello\nsystem_prompt: Be helpful.\n"),
     )
     .unwrap();
     let output = Command::new(onejudge_bin())
@@ -525,8 +516,7 @@ fn binary_run_applies_session_and_persona_overrides() {
         "overrides.yaml",
         "\
 task: start
-agent:
-  instructions: Be helpful.
+system_prompt: Be helpful.
 ",
     );
     let output = Command::new(onejudge_bin())
@@ -556,8 +546,7 @@ fn binary_run_provider_override_flag() {
         "prov-override.yaml",
         "\
 task: greet me
-agent:
-  instructions: Be warm.
+system_prompt: Be warm.
 ",
     );
     let output = Command::new(onejudge_bin())
@@ -565,6 +554,77 @@ agent:
         .output()
         .unwrap();
     assert!(output.status.success());
+}
+
+#[test]
+fn binary_run_loads_a_skill_from_a_config_relative_path() {
+    // A `skill:` in the config resolves relative to the config file's directory;
+    // the loaded SKILL.md body becomes the system prompt the provider sees (here the
+    // echo double emits the body's `[[event]]`), so `done_when` holds and the run
+    // completes — exercising the rebase + load_skill path through the real binary.
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("skill-cfg");
+    std::fs::create_dir_all(dir.join("skills/committer")).unwrap();
+    std::fs::write(
+        dir.join("skills/committer/SKILL.md"),
+        "---\nname: committer\ndescription: commits the work\n---\n\
+         Commit it. [[event:git commit -m fix]]\n",
+    )
+    .unwrap();
+    let config = dir.join("run.yaml");
+    std::fs::write(
+        &config,
+        config_yaml(
+            "task: please commit\nskill: skills/committer\n\
+             user:\n  persona: A tester.\n  done_when: git commit\n  max_turns: 5\n",
+        ),
+    )
+    .unwrap();
+    let output = Command::new(onejudge_bin())
+        .args(["run", config.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "skill-driven run should complete");
+    assert!(String::from_utf8(output.stdout)
+        .unwrap()
+        .contains("Status: completed"));
+}
+
+#[test]
+fn binary_run_skill_and_system_prompt_flags_drive_the_run() {
+    // `--skill` (relative to the working dir) and `--system-prompt` supply the
+    // framing with no `skill`/`system_prompt` in the file — the flag skill's body
+    // still reaches the provider and drives the loop to completion.
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("skill-flags");
+    std::fs::create_dir_all(dir.join("committer")).unwrap();
+    std::fs::write(
+        dir.join("committer/SKILL.md"),
+        "---\nname: committer\ndescription: commits the work\n---\n[[event:git commit -m fix]]\n",
+    )
+    .unwrap();
+    let config = dir.join("flags.yaml");
+    std::fs::write(
+        &config,
+        config_yaml(
+            "task: commit\nuser:\n  persona: A tester.\n  done_when: git commit\n  max_turns: 5\n",
+        ),
+    )
+    .unwrap();
+    let output = Command::new(onejudge_bin())
+        .args([
+            "run",
+            config.to_str().unwrap(),
+            "--skill",
+            "committer",
+            "--system-prompt",
+            "Be terse.",
+        ])
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert!(String::from_utf8(output.stdout)
+        .unwrap()
+        .contains("Status: completed"));
 }
 
 #[test]

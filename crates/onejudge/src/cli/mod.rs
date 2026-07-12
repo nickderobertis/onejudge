@@ -14,7 +14,7 @@ mod provider;
 
 use std::io::{Read as _, Write as _};
 use std::ops::ControlFlow;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use clap::{Parser, Subcommand, ValueEnum};
 
@@ -78,6 +78,13 @@ pub struct RunArgs {
     /// <path>`); default `oneharness.judge.toml`.
     #[arg(long)]
     pub judge_config: Option<String>,
+    /// A skill directory (containing `SKILL.md`) whose body seeds the system
+    /// prompt. Resolved relative to the working directory.
+    #[arg(long)]
+    pub skill: Option<PathBuf>,
+    /// Extra system-prompt text for the harness (prepended to the skill body).
+    #[arg(long)]
+    pub system_prompt: Option<String>,
     /// The task to drive to completion (`-` reads stdin).
     #[arg(long)]
     pub task: Option<String>,
@@ -150,6 +157,8 @@ fn run_task(args: RunArgs) -> Result<i32, CliError> {
     let RunArgs {
         config,
         judge_config,
+        skill,
+        system_prompt,
         task,
         persona,
         done_when,
@@ -160,10 +169,18 @@ fn run_task(args: RunArgs) -> Result<i32, CliError> {
         output,
     } = args;
 
-    let mut cfg = load_config(config.as_ref())?;
+    let cfg_path = resolve_config_path(config.as_ref());
+    let mut cfg = load_config(cfg_path.as_ref())?;
+    // A `skill:` in the config file is relative to that file's directory; a
+    // `--skill` flag (applied below) stays relative to the working directory.
+    if let Some(base) = cfg_path.as_ref().and_then(|p| p.parent()) {
+        rebase_skill(&mut cfg, base);
+    }
     let task = task.map(resolve_task).transpose()?;
     cfg.apply(Overrides {
         judge_config,
+        skill,
+        system_prompt,
         task,
         persona,
         done_when,
@@ -190,24 +207,46 @@ fn run_task(args: RunArgs) -> Result<i32, CliError> {
     Ok(exit_code(&summary))
 }
 
-/// Read the config from `path`, or `./onejudge.yaml` when it exists, else start
-/// from an empty config (so flags alone can drive a run).
-fn load_config(path: Option<&PathBuf>) -> Result<Config, CliError> {
-    let chosen = match path {
+/// The config file a run reads: the explicit `path`, or `./onejudge.yaml` when it
+/// exists. `None` means no file — flags alone drive the run.
+fn resolve_config_path(path: Option<&PathBuf>) -> Option<PathBuf> {
+    match path {
         Some(p) => Some(p.clone()),
         None => {
             let default = PathBuf::from(DEFAULT_CONFIG);
             default.exists().then_some(default)
         }
-    };
-    match chosen {
+    }
+}
+
+/// Read the config from `path`, or start from an empty config (so flags alone can
+/// drive a run) when there is none.
+fn load_config(path: Option<&PathBuf>) -> Result<Config, CliError> {
+    match path {
         Some(p) => {
-            let text = std::fs::read_to_string(&p).map_err(|e| {
+            let text = std::fs::read_to_string(p).map_err(|e| {
                 CliError::Config(format!("could not read config `{}`: {e}", p.display()))
             })?;
             Config::from_yaml(&text)
         }
         None => Ok(Config::default()),
+    }
+}
+
+/// Resolve a config-file `skill:` path relative to the config's own directory, so
+/// `onejudge run sub/onejudge.yaml` finds `sub/skills/x` from `skill: skills/x`. An
+/// absolute path is left as-is, and an empty `base` (a bare filename config) is a
+/// no-op.
+fn rebase_skill(cfg: &mut Config, base: &Path) {
+    if base.as_os_str().is_empty() {
+        return;
+    }
+    if let Some(rel) = cfg.skill.take() {
+        cfg.skill = Some(if rel.is_relative() {
+            base.join(rel)
+        } else {
+            rel
+        });
     }
 }
 
@@ -670,6 +709,31 @@ mod tests {
         let report = Report::new(Transcript::from_input("hi"), vec![], None, false);
         let json = render_json(&report).unwrap();
         assert!(json.contains("\"schema_version\": 2"));
+    }
+
+    #[test]
+    fn rebase_skill_resolves_relative_against_the_config_dir() {
+        let mut cfg = Config::from_yaml("task: x\nskill: skills/greeter\n").unwrap();
+        rebase_skill(&mut cfg, Path::new("/proj/cases"));
+        assert_eq!(cfg.skill.unwrap(), Path::new("/proj/cases/skills/greeter"));
+    }
+
+    #[test]
+    fn rebase_skill_leaves_absolute_paths_and_no_skill_alone() {
+        // Use a real absolute path so the assertion holds on Windows too (a
+        // leading-slash path is not absolute there).
+        let abs = std::env::temp_dir().join("greeter-abs");
+        let yaml = format!(
+            "task: x\nskill: {}\n",
+            serde_json::to_string(&abs.to_string_lossy()).unwrap()
+        );
+        let mut cfg = Config::from_yaml(&yaml).unwrap();
+        rebase_skill(&mut cfg, Path::new("/proj"));
+        assert_eq!(cfg.skill.unwrap(), abs);
+
+        let mut none = Config::from_yaml("task: x\n").unwrap();
+        rebase_skill(&mut none, Path::new("/proj"));
+        assert!(none.skill.is_none());
     }
 
     #[test]

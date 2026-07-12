@@ -55,6 +55,8 @@ file, which overrides defaults:
 | flag | overrides |
 |------|-----------|
 | `--judge-config` | the judge/simulated-user oneharness `--config` file |
+| `--skill` | a skill directory (with `SKILL.md`) whose body seeds the system prompt |
+| `--system-prompt` | extra system-prompt text (prepended to the skill body) |
 | `--task` (`-` = stdin) | the task |
 | `--persona` | the simulated user's persona |
 | `--done-when` | the completion condition |
@@ -98,8 +100,9 @@ Top-level keys:
 
 | key | purpose |
 |-----|---------|
-| `provider` | which backend runs the harness: `kind` is `oneharness` (`bin`, `judge_config`), `command` (`command: [...]`), or `split` (`skill:` + `judge:` sub-providers) |
-| `agent` | `name`, `dir`, and the system `instructions` for the harness |
+| `provider` | which backend runs the harness: `kind` is `oneharness` (`bin`, `judge_config`), `command` (`command: [...]`), or `split` (a `skill:` + `judge:` **sub-provider** pair — distinct from the top-level `skill:` below) |
+| `skill` | a skill directory (containing `SKILL.md`) whose body seeds the system prompt, resolved relative to the config file; optional |
+| `system_prompt` | extra system-prompt text; used alone, or prepended before a `skill` body when both are set; optional |
 | `task` | the task to drive to completion (or supply via `--task`) |
 | `user` | the simulated supervisor: `persona`, `done_when`, `max_turns` (omit for a single-turn run) |
 | `session` | the caller-owned session name threaded across turns |

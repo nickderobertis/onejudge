@@ -46,10 +46,11 @@ onejudge run                            # reads ./onejudge.yaml, drives to compl
 
 `init` shells out to `oneharness init` (needs oneharness **0.3.20+**) to scaffold
 `oneharness.toml` (the agent side) and `oneharness.judge.toml` (the judge side),
-then writes a fully-commented loop-only `onejudge.yaml`. The three fields that make
-a run yours are `task` (what to do), `agent.instructions` (how to frame the
-harness), and the `user` block (`persona` / `done_when` / `max_turns` — omit it for
-a single-turn run). **Harness and model selection lives in those `oneharness.toml`
+then writes a fully-commented loop-only `onejudge.yaml`. The fields that make a run
+yours are `task` (what to do), the system framing — a `skill` (a `SKILL.md`
+directory) and/or a `system_prompt`, both optional — and the `user` block
+(`persona` / `done_when` / `max_turns` — omit it for a single-turn run). **Harness
+and model selection lives in those `oneharness.toml`
 files, not `onejudge.yaml`.** `onejudge schema` prints the annotated config, the
 single source of truth for every field.
 
@@ -58,14 +59,14 @@ Flags override the file (flags > file > defaults), so one config serves many tas
 
 ### Config
 
-A run is a YAML file carrying only the loop's own concerns. Three fields make it
-yours — `task`, `agent.instructions`, and the `user` block. Everything else has a
-default; omit `user` for a single-turn run. A minimal config:
+A run is a YAML file carrying only the loop's own concerns. The fields that make it
+yours — `task`, the system framing (`skill` and/or `system_prompt`), and the `user`
+block. Everything else has a default; omit `user` for a single-turn run. A minimal
+config:
 
 ```yaml
-agent:
-  dir: .
-  instructions: You are a senior engineer. Complete the task and keep tests green.
+system_prompt: You are a senior engineer. Complete the task and keep tests green.
+# skill: ./skills/my-skill    # optional: a SKILL.md dir; its body is appended
 
 task: Add a --version flag to the CLI.
 

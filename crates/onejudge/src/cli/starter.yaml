@@ -16,11 +16,11 @@ provider:
   # kind: command  ->  command: ["my-provider", "--flag"]
   # kind: split    ->  skill: {..provider..}, judge: {..provider..}
 
-agent:                        # system framing for the harness
-  name: agent
-  dir: .
-  instructions: |
-    You are a senior engineer. Complete the task and keep tests green.
+# System framing for the harness. `skill` and `system_prompt` are both optional
+# and combine: `system_prompt` comes first, then the skill's SKILL.md body.
+# skill: ./skills/my-skill    # a directory containing SKILL.md (its body is used)
+system_prompt: |              # extra system-prompt text (used alone, or with a skill)
+  You are a senior engineer. Complete the task and keep tests green.
 
 task: "Describe the task to complete here."
 
