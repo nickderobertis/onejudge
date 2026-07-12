@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 
 use crate::error::{Error, Result};
+use crate::Skill;
 
 /// The YAML frontmatter at the top of a `SKILL.md`. `name` / `description` are
 /// optional here (validating that they are present is a separate concern); unknown
@@ -41,6 +42,47 @@ pub struct SkillDefinition {
     pub description: String,
     /// The instruction body after the frontmatter — the skill's system prompt.
     pub instructions: String,
+}
+
+impl SkillDefinition {
+    /// Combine this loaded skill with extra `system_prompt` text into the [`Skill`]
+    /// under test: the `system_prompt` comes first, then this skill's body (each
+    /// trimmed, empty parts skipped, joined by a blank line). A skill whose
+    /// frontmatter carries no `name` falls back to its directory name.
+    ///
+    /// This is the bridge from the on-disk [`SkillDefinition`] to the engine's
+    /// [`Skill`], so a caller layering a skill under a preamble does not re-derive
+    /// the merge. Pass `""` for `system_prompt` to run the skill body alone.
+    #[must_use]
+    pub fn into_skill(self, system_prompt: &str) -> Skill {
+        let name = if self.name.trim().is_empty() {
+            dir_name(&self.dir)
+        } else {
+            self.name
+        };
+        let instructions = merge_instructions(system_prompt, &self.instructions);
+        Skill::new(name, self.dir.to_string_lossy(), instructions)
+    }
+}
+
+/// Layer a `system_prompt` before a skill body into one system prompt: each
+/// trimmed, empty parts skipped, joined by a blank line.
+fn merge_instructions(system_prompt: &str, skill_body: &str) -> String {
+    [system_prompt.trim(), skill_body.trim()]
+        .into_iter()
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
+/// A fallback name for a skill whose frontmatter carries none: the directory's own
+/// name, or `"skill"` if that cannot be read.
+fn dir_name(dir: &Path) -> String {
+    dir.file_name()
+        .and_then(|s| s.to_str())
+        .filter(|s| !s.is_empty())
+        .unwrap_or("skill")
+        .to_string()
 }
 
 /// Split a `SKILL.md` into `(frontmatter_yaml, body)`. Returns `None` for the
@@ -175,5 +217,32 @@ mod tests {
         let dir = skill_dir("badyaml", "x", "---\nname: [unterminated\n---\nbody\n");
         let err = load_skill(&dir).unwrap_err();
         assert!(matches!(err, Error::Invalid(m) if m.contains("frontmatter")));
+    }
+
+    #[test]
+    fn into_skill_layers_system_prompt_before_the_body() {
+        let dir = skill_dir(
+            "into",
+            "greeter",
+            "---\nname: greeter\ndescription: d\n---\nGreet warmly.\n",
+        );
+        let skill = load_skill(&dir).unwrap().into_skill("Preamble.");
+        assert_eq!(skill.name, "greeter");
+        assert_eq!(skill.instructions, "Preamble.\n\nGreet warmly.");
+    }
+
+    #[test]
+    fn into_skill_uses_the_body_alone_and_falls_back_to_the_dir_name() {
+        let dir = skill_dir("into-bare", "unnamed", "Body only.\n");
+        let skill = load_skill(&dir).unwrap().into_skill("");
+        assert_eq!(skill.name, "unnamed");
+        assert_eq!(skill.instructions, "Body only.");
+    }
+
+    #[test]
+    fn merge_instructions_skips_empty_parts() {
+        assert_eq!(merge_instructions("", ""), "");
+        assert_eq!(merge_instructions("only sys", ""), "only sys");
+        assert_eq!(merge_instructions("", "only body"), "only body");
     }
 }

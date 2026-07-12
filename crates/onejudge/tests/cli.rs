@@ -539,6 +539,131 @@ system_prompt: Be helpful.
 }
 
 #[test]
+fn binary_env_overrides_file_and_flag_overrides_env() {
+    // Precedence through the real binary: ONEJUDGE_TASK beats the file's task, and
+    // a --task flag in turn beats ONEJUDGE_TASK. The echoed task text surfaces in
+    // the human transcript, so we assert on which one won.
+    let config = write_config(
+        "env-prec.yaml",
+        "\
+task: from the file
+system_prompt: Be warm.
+",
+    );
+
+    // Env wins over the file.
+    let output = Command::new(onejudge_bin())
+        .args(["run", config.to_str().unwrap()])
+        .env("ONEJUDGE_TASK", "from the env")
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("from the env"), "env task drives the run");
+    assert!(!stdout.contains("from the file"), "env beats the file");
+
+    // A --task flag wins over the env var.
+    let output = Command::new(onejudge_bin())
+        .args(["run", config.to_str().unwrap(), "--task", "from the flag"])
+        .env("ONEJUDGE_TASK", "from the env")
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("from the flag"), "flag task drives the run");
+    assert!(!stdout.contains("from the env"), "flag beats the env");
+}
+
+#[test]
+fn binary_env_selects_the_provider_backend() {
+    // ONEJUDGE_PROVIDER flips the resolved provider kind end-to-end. The file
+    // supplies the echo argv but declares `kind: oneharness`, under which a
+    // `command` field is invalid — so without the env var the run is a loud config
+    // error (exit 2), and with `ONEJUDGE_PROVIDER=command` the kind flips and it
+    // runs. This exercises the env → ProviderKind parse through the real process.
+    let echo = serde_json::to_string(&echo_bin()).unwrap();
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR"));
+    let path = dir.join("env-provider.yaml");
+    std::fs::write(
+        &path,
+        format!(
+            "provider:\n  kind: oneharness\n  command: [{echo}]\n\
+             task: greet me\nsystem_prompt: Be warm.\n"
+        ),
+    )
+    .unwrap();
+
+    // Without the env override, `command` under `kind: oneharness` is rejected.
+    let output = Command::new(onejudge_bin())
+        .args(["run", path.to_str().unwrap()])
+        .env_remove("ONEJUDGE_PROVIDER")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8(output.stderr)
+        .unwrap()
+        .contains("command"));
+
+    // ONEJUDGE_PROVIDER=command flips the kind so the echo argv is valid.
+    let output = Command::new(onejudge_bin())
+        .args(["run", path.to_str().unwrap()])
+        .env("ONEJUDGE_PROVIDER", "command")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "env selected the command backend");
+}
+
+#[test]
+fn binary_env_persona_and_done_when_drive_a_multi_turn_loop() {
+    // With no `user` in the file, ONEJUDGE_PERSONA + ONEJUDGE_DONE_WHEN + a turn
+    // cap imply a simulated user through the real binary. The done_when never
+    // matches the echoed transcript, so the loop runs to the cap and exits 1 —
+    // proving the persona/done-when/max-turns env wiring drives a real loop.
+    let config = write_config(
+        "env-user.yaml",
+        "\
+task: keep going
+system_prompt: Be helpful.
+",
+    );
+    let output = Command::new(onejudge_bin())
+        .args(["run", config.to_str().unwrap()])
+        .env("ONEJUDGE_PERSONA", "A demanding reviewer.")
+        .env("ONEJUDGE_DONE_WHEN", "deploy to production")
+        .env("ONEJUDGE_MAX_TURNS", "2")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("hit the turn cap (2)"));
+    assert!(
+        stdout.contains("deploy to production"),
+        "env done_when is used"
+    );
+}
+
+#[test]
+fn binary_rejects_an_invalid_env_override() {
+    // An unparseable ONEJUDGE_* override is a loud config error (exit 2), never a
+    // silent fallback.
+    let config = write_config(
+        "env-bad.yaml",
+        "\
+task: greet me
+system_prompt: Be warm.
+",
+    );
+    let output = Command::new(onejudge_bin())
+        .args(["run", config.to_str().unwrap()])
+        .env("ONEJUDGE_MAX_TURNS", "lots")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("ONEJUDGE_MAX_TURNS"));
+}
+
+#[test]
 fn binary_run_provider_override_flag() {
     // `--provider command` overrides just the backend kind; the file already
     // supplies the echo argv.

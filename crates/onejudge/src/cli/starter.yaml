@@ -1,6 +1,6 @@
 # onejudge.yaml — drive a harness through a simulated-user loop to complete a
-# task. Run with `onejudge run onejudge.yaml`. Flags override any field here
-# (flags win over file, file wins over defaults). See `onejudge schema`.
+# task. Run with `onejudge run onejudge.yaml`. Flags and `ONEJUDGE_*` env vars
+# override any field here (flags > env > file > defaults). See `onejudge schema`.
 #
 # Harness/model SELECTION lives in oneharness's own config files, not here:
 #   - the agent side uses the discovered `oneharness.toml`;
