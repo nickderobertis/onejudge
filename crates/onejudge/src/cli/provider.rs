@@ -9,8 +9,8 @@
 use std::ops::ControlFlow;
 
 use crate::{
-    AssistantTurn, CommandProvider, JudgeQuery, JudgeVerdict, Message, OneharnessProvider,
-    Provider, SkillRef, ToolEvent, UserTurn,
+    Assessment, AssistantTurn, CommandProvider, JudgeQuery, JudgeVerdict, Message,
+    OneharnessProvider, Provider, SkillRef, ToolEvent, UserTurn,
 };
 
 use super::config::ProviderSpec;
@@ -107,6 +107,14 @@ impl Provider for AnyProvider {
             AnyProvider::Oneharness(p) => p.judge(query, messages),
             AnyProvider::Command(p) => p.judge(query, messages),
             AnyProvider::Split { judge, .. } => judge.judge(query, messages),
+        }
+    }
+
+    fn assess(&self, prompt: &str, messages: &[Message]) -> crate::Result<Assessment> {
+        match self {
+            AnyProvider::Oneharness(p) => p.assess(prompt, messages),
+            AnyProvider::Command(p) => p.assess(prompt, messages),
+            AnyProvider::Split { judge, .. } => judge.assess(prompt, messages),
         }
     }
 }

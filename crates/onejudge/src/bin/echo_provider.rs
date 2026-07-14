@@ -41,6 +41,7 @@ fn main() {
         "respond" => respond(&request),
         "user" => user(&request),
         "judge" => judge(&request),
+        "assess" => assess(&request),
         other => fail(&format!("unknown op `{other}`")),
     };
     let mut out = serde_json::to_string(&response).expect("response serializes");
@@ -173,6 +174,31 @@ fn judge(request: &Value) -> Value {
         "value": value,
         "reason": if matched { "criterion found in transcript" } else { "criterion not found" },
         "usage": { "input_tokens": criterion.len(), "output_tokens": 1,
+                   "cache_read_tokens": 3, "cache_write_tokens": 1 },
+    })
+}
+
+fn assess(request: &Value) -> Value {
+    let prompt = request.get("prompt").and_then(Value::as_str).unwrap_or("");
+    // `[[assess-empty]]` returns a well-formed reply whose assessment text is
+    // empty, so the provider's empty-assessment guard is exercised end to end
+    // across the subprocess boundary (a parsed-but-empty reply, not no output).
+    if prompt.contains("[[assess-empty]]") {
+        return json!({
+            "text": "",
+            "usage": { "input_tokens": prompt.len(), "output_tokens": 0,
+                       "cache_read_tokens": 3, "cache_write_tokens": 1 },
+        });
+    }
+    let transcript = render(&messages_of(request));
+    let tool_note = if transcript.contains("\"command\"") {
+        " Tool actions were included."
+    } else {
+        ""
+    };
+    json!({
+        "text": format!("Assessment for `{prompt}`.{tool_note}"),
+        "usage": { "input_tokens": prompt.len(), "output_tokens": 4,
                    "cache_read_tokens": 3, "cache_write_tokens": 1 },
     })
 }

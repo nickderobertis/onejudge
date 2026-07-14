@@ -79,6 +79,7 @@ evals:                        # optional: score the finished transcript
   - criterion: the change is well-scoped and readable
     kind: numeric
     scale: [1, 5]
+assessment: Identify useful follow-up work left out of scope.
 ```
 
 The harness and model come from oneharness's own config (`oneharness.toml` for the
@@ -115,7 +116,8 @@ if it hit `max_turns` or a boolean eval failed, `2` on a bad config. Full docs:
   skill took, so the judge — and a **`ToolQuery`** — can reason over *what the
   skill did*, not just what it said.
 - **`Report`** is onejudge's own versioned contract (`SCHEMA_VERSION`): a
-  serializable bundle of the transcript, the verdicts, and usage that higher-level
+  serializable bundle of the transcript, verdicts, optional free-text
+  `assessment`, and usage that higher-level
   frameworks compose over and re-export. See [docs/contract.md](docs/contract.md).
 
 Two things it improves over the in-skilltest engine:

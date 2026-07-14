@@ -31,8 +31,9 @@ use serde::Deserialize;
 
 use crate::error::{Error, ProviderErrorKind, Result};
 use crate::provider::{
-    build_judge_prompt, build_user_prompt, latest_or_inline, parse_verdict, AssistantTurn,
-    JudgeQuery, JudgeVerdict, Provider, SkillRef, UserTurn,
+    build_assessment_prompt, build_judge_prompt, build_user_prompt, latest_or_inline,
+    parse_verdict, Assessment, AssistantTurn, JudgeQuery, JudgeVerdict, Provider, SkillRef,
+    UserTurn,
 };
 use crate::transcript::{Message, ToolEvent};
 use crate::usage::Usage;
@@ -380,6 +381,22 @@ impl Provider for OneharnessProvider {
         let mut verdict = parse_verdict(query.kind, "oneharness:judge", &result.reply())?;
         verdict.usage = result.usage();
         Ok(verdict)
+    }
+
+    fn assess(&self, prompt: &str, messages: &[Message]) -> Result<Assessment> {
+        let prompt = build_assessment_prompt(prompt, messages);
+        let result = self.run_judge_side("assess", &prompt, None)?;
+        let text = result.reply();
+        if text.trim().is_empty() {
+            return Err(Error::provider(
+                "oneharness:assess",
+                "judge returned an empty assessment",
+            ));
+        }
+        Ok(Assessment {
+            text,
+            usage: result.usage(),
+        })
     }
 }
 

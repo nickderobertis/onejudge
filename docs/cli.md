@@ -115,6 +115,7 @@ Top-level keys:
 | `user` | the simulated supervisor: `persona`, `done_when`, `max_turns` (omit for a single-turn run) |
 | `session` | the caller-owned session name threaded across turns |
 | `evals` | optional criteria to score the finished transcript: each has a `criterion`, a `kind` (`boolean` / `numeric`), and — for numeric — a `scale: [min, max]` |
+| `assessment` | optional prompt for one free-text judgement over the finished transcript and its tool actions |
 
 There is no `harness` / `model` / `judge_model` key: harness and model selection
 moved into oneharness's own config files (`oneharness.toml` for the agent,

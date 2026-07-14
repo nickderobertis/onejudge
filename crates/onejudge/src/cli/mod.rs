@@ -393,6 +393,7 @@ pub fn run_plan(
         conversation,
         evals,
         done_when,
+        assessment,
     } = plan;
 
     let multi_turn = conversation.user.is_some();
@@ -405,7 +406,7 @@ pub fn run_plan(
     let backend = AnyProvider::build(&provider)?;
     let engine = Engine::new(&backend, settings);
 
-    let outcome = match format {
+    let mut outcome = match format {
         Format::Human => engine.run_streaming(&conversation, &mut |ev| {
             progress(&format!("· turn {} — {}", ev.turn, ev.event.summary()));
             ControlFlow::Continue(())
@@ -484,7 +485,17 @@ pub fn run_plan(
         eval_results.push(result);
     }
 
-    let report = outcome.into_report(verdicts);
+    let assessment = match assessment {
+        Some(prompt) => {
+            let result = engine.assess(&prompt, &outcome.transcript)?;
+            if let Some(usage) = result.usage {
+                outcome.usage.get_or_insert_with(Usage::default).add(&usage);
+            }
+            Some(result.text)
+        }
+        None => None,
+    };
+    let report = outcome.into_report_with_assessment(verdicts, assessment);
 
     Ok(RunSummary {
         report,
@@ -558,6 +569,11 @@ pub fn render_human(summary: &RunSummary) -> String {
             out.push_str(&render_eval(r));
             out.push('\n');
         }
+    }
+    if let Some(assessment) = &summary.report.assessment {
+        out.push_str("\n=== Assessment ===\n");
+        out.push_str(assessment);
+        out.push('\n');
     }
     out
 }
@@ -712,7 +728,7 @@ mod tests {
     fn json_render_is_the_versioned_report() {
         let report = Report::new(Transcript::from_input("hi"), vec![], None, false);
         let json = render_json(&report).unwrap();
-        assert!(json.contains("\"schema_version\": 2"));
+        assert!(json.contains("\"schema_version\": 3"));
     }
 
     #[test]

@@ -7,8 +7,8 @@ use std::ops::ControlFlow;
 
 use crate::error::Result;
 use crate::provider::{
-    build_judge_prompt, AssistantTurn, JudgeKind, JudgeQuery, JudgeVerdict, Provider, SkillRef,
-    UserTurn,
+    build_judge_prompt, Assessment, AssistantTurn, JudgeKind, JudgeQuery, JudgeVerdict, Provider,
+    SkillRef, UserTurn,
 };
 use crate::report::{NamedVerdict, Report};
 use crate::transcript::{Message, ToolEvent, Transcript};
@@ -189,7 +189,21 @@ impl Outcome {
     /// SDK persists and composes over.
     #[must_use]
     pub fn into_report(self, verdicts: Vec<NamedVerdict>) -> Report {
-        Report::new(self.transcript, verdicts, self.usage, self.stopped_early)
+        self.into_report_with_assessment(verdicts, None)
+    }
+
+    /// Bundle this outcome with verdicts and an optional free-text assessment.
+    #[must_use]
+    pub fn into_report_with_assessment(
+        self,
+        verdicts: Vec<NamedVerdict>,
+        assessment: Option<String>,
+    ) -> Report {
+        let report = Report::new(self.transcript, verdicts, self.usage, self.stopped_early);
+        match assessment {
+            Some(text) => report.with_assessment(text),
+            None => report,
+        }
     }
 }
 
@@ -391,6 +405,15 @@ impl<'a> Engine<'a> {
         };
         self.provider.judge(&query, &transcript.messages)
     }
+
+    /// Write a free-text assessment of a finished transcript. The judge sees the
+    /// same events-aware transcript as boolean and numeric judgements.
+    ///
+    /// # Errors
+    /// Propagates a provider failure.
+    pub fn assess(&self, prompt: &str, transcript: &Transcript) -> Result<Assessment> {
+        self.provider.assess(prompt, &transcript.messages)
+    }
 }
 
 /// One streamed tool event delivered live to an [`Engine::run_streaming`] sink,
@@ -422,6 +445,7 @@ mod tests {
         assistant: usize,
         user: usize,
         judge: usize,
+        assess: usize,
         skill_sessions: Vec<Option<String>>,
         user_sessions: Vec<Option<String>>,
     }
@@ -459,6 +483,14 @@ mod tests {
             seen.judge += 1;
             Ok(self.judge[i].clone())
         }
+
+        fn assess(&self, prompt: &str, _messages: &[Message]) -> Result<Assessment> {
+            self.seen.borrow_mut().assess += 1;
+            Ok(Assessment {
+                text: format!("assessment: {prompt}"),
+                usage: None,
+            })
+        }
     }
 
     fn assistant(msg: &str, done: bool) -> AssistantTurn {
@@ -475,6 +507,25 @@ mod tests {
 
     fn settings() -> Settings {
         Settings::new()
+    }
+
+    #[test]
+    fn assessment_is_one_distinct_free_text_judge_operation() {
+        let provider = Scripted {
+            assistant: vec![assistant("done", true)],
+            user: vec![],
+            judge: vec![],
+            seen: RefCell::new(Seen::default()),
+        };
+        let engine = Engine::new(&provider, settings());
+        let transcript = engine
+            .run(&Conversation::single_turn(skill(), "do it"))
+            .unwrap()
+            .transcript;
+        let assessment = engine.assess("find follow-up work", &transcript).unwrap();
+        assert_eq!(assessment.text, "assessment: find follow-up work");
+        assert_eq!(provider.seen.borrow().assess, 1);
+        assert_eq!(provider.seen.borrow().judge, 0);
     }
 
     #[test]

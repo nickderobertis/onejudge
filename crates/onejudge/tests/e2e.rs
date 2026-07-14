@@ -220,6 +220,25 @@ fn command_provider_empty_output_is_a_protocol_error() {
 }
 
 #[test]
+fn command_provider_empty_assessment_is_a_protocol_error() {
+    // A parsed-but-empty assessment reply is rejected as a classified protocol
+    // error, exercised across the real subprocess — the empty-output counterpart
+    // for the new `assess` op.
+    let provider = echo();
+    let engine = Engine::new(&provider, settings());
+    let outcome = engine
+        .run(&Conversation::single_turn(skill_with("Be helpful."), "hi"))
+        .unwrap();
+    let err = engine
+        .assess(
+            "summarize follow-up work [[assess-empty]]",
+            &outcome.transcript,
+        )
+        .unwrap_err();
+    assert_eq!(err.kind(), Some(ProviderErrorKind::Protocol));
+}
+
+#[test]
 fn command_provider_non_zero_exit_is_a_protocol_error() {
     let provider = echo();
     let engine = Engine::new(&provider, settings());
@@ -316,6 +335,24 @@ fn oneharness_process_failure_is_a_protocol_error() {
         ))
         .unwrap_err();
     assert_eq!(err.kind(), Some(ProviderErrorKind::Protocol));
+}
+
+#[test]
+fn oneharness_empty_assessment_is_a_provider_error() {
+    // An empty assessment reply from the judge side surfaces as a provider error
+    // rather than a silent empty result, exercised across the real subprocess.
+    let provider = fake_oneharness();
+    let engine = Engine::new(&provider, settings());
+    let outcome = engine
+        .run(&Conversation::single_turn(skill_with("[[reply:ok]]"), "go"))
+        .unwrap();
+    let err = engine
+        .assess(
+            "summarize follow-up work [[assess-empty]]",
+            &outcome.transcript,
+        )
+        .unwrap_err();
+    assert!(err.to_string().contains("empty assessment"));
 }
 
 #[test]
