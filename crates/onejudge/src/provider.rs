@@ -568,6 +568,41 @@ mod tests {
     use crate::transcript::{ToolEvent, Transcript};
     use serde_json::json;
 
+    struct DefaultSupervisor {
+        complete: bool,
+    }
+
+    impl Provider for DefaultSupervisor {
+        fn respond(
+            &self,
+            _: &SkillRef<'_>,
+            _: &[Message],
+            _: Option<&str>,
+        ) -> Result<AssistantTurn> {
+            unreachable!()
+        }
+        fn simulate_user(&self, _: &str, _: &[Message], _: Option<&str>) -> Result<UserTurn> {
+            Ok(UserTurn {
+                message: "next".into(),
+                stop: false,
+                usage: Some(Usage {
+                    output_tokens: Some(2),
+                    ..Usage::default()
+                }),
+            })
+        }
+        fn judge(&self, _: &JudgeQuery<'_>, _: &[Message]) -> Result<JudgeVerdict> {
+            Ok(JudgeVerdict {
+                value: JudgeValue::Bool(self.complete),
+                reason: "because".into(),
+                usage: None,
+            })
+        }
+        fn assess(&self, _: &str, _: &[Message]) -> Result<Assessment> {
+            unreachable!()
+        }
+    }
+
     fn transcript_with_event() -> Transcript {
         let mut t = Transcript::from_input("commit the change");
         t.push(Message::assistant("done").with_events(vec![ToolEvent {
@@ -670,6 +705,8 @@ mod tests {
         ));
         for bad in [
             "no json",
+            "{bad json}",
+            "{}",
             "{\"completion\":true}",
             "{\"completion\":true,\"reason\":\"done\",\"message\":\"x\"}",
             "{\"completion\":false}",
@@ -679,6 +716,30 @@ mod tests {
                 Some(ProviderErrorKind::Protocol)
             );
         }
+    }
+
+    #[test]
+    fn provider_default_supervisor_preserves_legacy_implementors() {
+        let query = SupervisorQuery {
+            task: "task",
+            persona: "persona",
+            done_when: None,
+            worktree: "/repo",
+            history_name: "run",
+        };
+        let completed = DefaultSupervisor { complete: true }
+            .supervise(&query, &[], Some("user"))
+            .unwrap();
+        assert!(
+            matches!(completed.outcome, SupervisorOutcome::Completed { reason } if reason == "because")
+        );
+        let continued = DefaultSupervisor { complete: false }
+            .supervise(&query, &[], Some("user"))
+            .unwrap();
+        assert!(
+            matches!(continued.outcome, SupervisorOutcome::Continue { message, reason } if message == "next" && reason == "because")
+        );
+        assert_eq!(continued.usage.unwrap().output_tokens, Some(2));
     }
 
     #[test]
