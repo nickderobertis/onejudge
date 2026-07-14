@@ -10,8 +10,8 @@ repo-wide contract; this covers only what differs here.
   by a *real subprocess*, not a stub. Add the happy path **and** a failure/recovery
   path for every journey.
 - **The doubles live behind the `fake-provider` feature** (`src/bin/`). The whole
-  `e2e.rs` file is `#![cfg(feature = "fake-provider")]`; the gate always enables
-  the feature (`--all-features`), so e2e always runs — it is never `#[ignore]`-d.
+  `e2e.rs` file is `#![cfg(feature = "fake-provider")]`; the gate enables that
+  feature, so e2e always runs — it is never `#[ignore]`-d.
   Steer a double's behavior with the `[[marker:arg]]` conventions documented in
   each binary's module doc; add a new marker there when a journey needs one.
 - **Coverage excludes `src/bin/`.** The doubles are test infrastructure, not the

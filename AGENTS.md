@@ -73,8 +73,7 @@ Use the `just` recipes; do not hand-roll equivalents. `just --list` is the index
   coverage-enforced tests **including e2e**, and the supply-chain audit. Must
   pass before any commit or PR.
 - `just test` (coverage-enforced) / `just test-fast` / `just test-e2e` /
-  `just lint` / `just format` / `just audit` / `just msrv` — individual steps
-  (all on `--features fake-provider`, the deterministic gate's feature set).
+  `just lint` / `just format` / `just audit` / `just msrv` — individual steps.
 - `just test-live` — the credentialed real `oneharness` tier, out of `check`.
 - `just upgrade` — `cargo update`, then re-run the gate; commit refreshed lockfile.
 - `just lint-llm` / `just lint-llm-diff` — the llmlint LLM-judge tier, separate
@@ -156,7 +155,7 @@ Use the `just` recipes; do not hand-roll equivalents. `just --list` is the index
 `onejudge` never talks to a model directly, and every model call goes through
 `oneharness`; a `Provider` (`provider.rs`) runs the skill, plays the simulated
 user, and judges the transcript. Three backends: `OneharnessProvider` (default;
-shells out to `oneharness run` — JSON report, targeting **v0.3.13+** for the
+shells out to `oneharness run` — JSON report, targeting **v0.3.20+** for the
 uniform `--session` handle); `CommandProvider` (a small JSON-lines subprocess
 protocol — see `docs/protocol.md` — backing the deterministic test doubles and any
 custom provider, which itself shells out to oneharness or an equivalent harness);
@@ -177,8 +176,7 @@ criterion so the framing+transcript prefix is cacheable across criteria.
 
 `Report` (`report.rs`, `SCHEMA_VERSION`) is onejudge's own versioned wire contract
 — transcript + verdicts + usage — that SDKs compose over and re-export. The
-serialized shape is drift-gated against a golden
-(`tests/golden/report.schema-v2.json`, `tests/contract.rs`): a wire change fails
+serialized shape is drift-gated by `tests/contract.rs`: a wire change fails
 the gate until it is a deliberate edit that bumps `SCHEMA_VERSION` and the golden.
 See `docs/contract.md`.
 

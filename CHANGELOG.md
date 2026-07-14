@@ -23,4 +23,4 @@ by the tooling, not by hand.
 - Judge prompts render tool events, so verdicts can reason over what the skill
   did; `Transcript`/`ToolQuery` expose an events-backed assertion primitive.
 - A uniform caller-owned session name threaded across turns on session-capable
-  harnesses (targets `oneharness` v0.3.13+).
+  harnesses (targets `oneharness` v0.3.20+).
