@@ -180,6 +180,16 @@ fn judge(request: &Value) -> Value {
 
 fn assess(request: &Value) -> Value {
     let prompt = request.get("prompt").and_then(Value::as_str).unwrap_or("");
+    // `[[assess-empty]]` returns a well-formed reply whose assessment text is
+    // empty, so the provider's empty-assessment guard is exercised end to end
+    // across the subprocess boundary (a parsed-but-empty reply, not no output).
+    if prompt.contains("[[assess-empty]]") {
+        return json!({
+            "text": "",
+            "usage": { "input_tokens": prompt.len(), "output_tokens": 0,
+                       "cache_read_tokens": 3, "cache_write_tokens": 1 },
+        });
+    }
     let transcript = render(&messages_of(request));
     let tool_note = if transcript.contains("\"command\"") {
         " Tool actions were included."

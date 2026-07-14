@@ -62,7 +62,14 @@ fn main() {
     } else if prompt.contains("Criterion:") && prompt.contains("single-line JSON object") {
         json!({ "status": "ok", "text": judge_text(&prompt), "usage": usage(&prompt) })
     } else if prompt.contains("Assessment request:") {
-        json!({ "status": "ok", "text": "No follow-up work remains.", "usage": usage(&prompt) })
+        // `[[assess-empty]]` yields a well-formed reply with empty text, driving
+        // the provider's empty-assessment guard across the real subprocess.
+        let text = if prompt.contains("[[assess-empty]]") {
+            ""
+        } else {
+            "No follow-up work remains."
+        };
+        json!({ "status": "ok", "text": text, "usage": usage(&prompt) })
     } else {
         respond_result(system, session.as_deref(), &prompt)
     };
