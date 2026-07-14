@@ -10,7 +10,7 @@ use std::ops::ControlFlow;
 
 use crate::{
     Assessment, AssistantTurn, CommandProvider, JudgeQuery, JudgeVerdict, Message,
-    OneharnessProvider, Provider, SkillRef, ToolEvent, UserTurn,
+    OneharnessProvider, Provider, SkillRef, SupervisorQuery, SupervisorTurn, ToolEvent, UserTurn,
 };
 
 use super::config::ProviderSpec;
@@ -99,6 +99,18 @@ impl Provider for AnyProvider {
             AnyProvider::Oneharness(p) => p.simulate_user(persona, messages, session),
             AnyProvider::Command(p) => p.simulate_user(persona, messages, session),
             AnyProvider::Split { judge, .. } => judge.simulate_user(persona, messages, session),
+        }
+    }
+    fn supervise(
+        &self,
+        query: &SupervisorQuery<'_>,
+        messages: &[Message],
+        session: Option<&str>,
+    ) -> crate::Result<SupervisorTurn> {
+        match self {
+            AnyProvider::Oneharness(p) => p.supervise(query, messages, session),
+            AnyProvider::Command(p) => p.supervise(query, messages, session),
+            AnyProvider::Split { judge, .. } => judge.supervise(query, messages, session),
         }
     }
 

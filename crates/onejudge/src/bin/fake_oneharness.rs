@@ -57,7 +57,9 @@ fn main() {
         std::process::exit(1);
     }
 
-    let result = if prompt.contains("role-playing the USER") {
+    let result = if prompt.contains("completion supervisor") {
+        json!({ "status": "ok", "text": supervisor_text(&prompt), "usage": usage(&prompt) })
+    } else if prompt.contains("role-playing the USER") {
         json!({ "status": "ok", "text": "Understood — please continue.", "usage": usage(&prompt) })
     } else if prompt.contains("Criterion:") && prompt.contains("single-line JSON object") {
         json!({ "status": "ok", "text": judge_text(&prompt), "usage": usage(&prompt) })
@@ -135,8 +137,10 @@ fn parse_flags() -> HashMap<String, String> {
         "--prompt",
         "--prompt-file",
         "--output-format",
+        "--cwd",
+        "--history-name",
     ];
-    const TOGGLES: &[&str] = &["--events", "--compact"];
+    const TOGGLES: &[&str] = &["--events", "--compact", "--history"];
 
     let args: Vec<String> = std::env::args().skip(1).collect();
     let mut flags = HashMap::new();
@@ -244,6 +248,26 @@ fn judge_text(prompt: &str) -> String {
         format!("{{\"value\": {value}, \"reason\": \"fake numeric\"}}")
     } else {
         format!("{{\"value\": {matched}, \"reason\": \"fake boolean\"}}")
+    }
+}
+
+fn supervisor_text(prompt: &str) -> String {
+    let criterion = prompt
+        .split("Completion criterion:\n")
+        .nth(1)
+        .and_then(|s| s.split("\n\n").next())
+        .unwrap_or("")
+        .to_lowercase();
+    let transcript = prompt
+        .split("never raw dumps):\n")
+        .nth(1)
+        .and_then(|s| s.split("\n\nJudge-side").next())
+        .unwrap_or("")
+        .to_lowercase();
+    if !criterion.is_empty() && transcript.contains(&criterion) {
+        "{\"completion\":true,\"reason\":\"fake supervisor found criterion\"}".into()
+    } else {
+        "{\"completion\":false,\"message\":\"Understood — please continue.\",\"reason\":\"not complete\"}".into()
     }
 }
 

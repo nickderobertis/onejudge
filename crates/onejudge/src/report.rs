@@ -18,8 +18,8 @@ use crate::usage::Usage;
 /// The version of the [`Report`] wire contract. Bump on any change to the
 /// serialized shape of a report or the types it embeds. `1` was the initial
 /// contract; `2` added prompt-cache token fields to embedded [`Usage`], and `3`
-/// added the optional free-text `assessment`.
-pub const SCHEMA_VERSION: u32 = 3;
+/// added the optional free-text `assessment`; `4` added `completion_reason`.
+pub const SCHEMA_VERSION: u32 = 4;
 
 /// A judge verdict paired with the criterion it scored and the kind of
 /// judgement, so a serialized report is self-describing.
@@ -63,6 +63,9 @@ pub struct Report {
     /// A free-text judgement requested by the caller, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub assessment: Option<String>,
+    /// Why the per-turn supervisor declared the task complete, if it did.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completion_reason: Option<String>,
     /// Aggregated usage across every provider call (`None` if nothing reported).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub usage: Option<Usage>,
@@ -85,6 +88,7 @@ impl Report {
             transcript,
             verdicts,
             assessment: None,
+            completion_reason: None,
             usage,
             stopped_early,
         }
@@ -159,7 +163,7 @@ mod tests {
         assert!(!json.contains("verdicts"));
         assert!(!json.contains("usage"));
         assert!(!json.contains("assessment"));
-        assert!(json.contains("\"schema_version\":3"));
+        assert!(json.contains("\"schema_version\":4"));
     }
 
     #[test]

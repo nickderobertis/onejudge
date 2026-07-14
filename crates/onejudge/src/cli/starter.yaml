@@ -24,7 +24,7 @@ system_prompt: |              # extra system-prompt text (used alone, or with a 
 
 task: "Describe the task to complete here."
 
-user:                         # the simulated user / supervisor that drives the loop
+user:                         # one unified supervisor call decides done or supplies the next message
   persona: |
     You are a demanding tech lead reviewing the work. Push for tests and edge
     cases; do not accept "done" until you have verified it.

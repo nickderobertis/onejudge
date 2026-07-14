@@ -31,9 +31,9 @@ use serde::Deserialize;
 
 use crate::error::{Error, ProviderErrorKind, Result};
 use crate::provider::{
-    build_assessment_prompt, build_judge_prompt, build_user_prompt, latest_or_inline,
-    parse_verdict, Assessment, AssistantTurn, JudgeQuery, JudgeVerdict, Provider, SkillRef,
-    UserTurn,
+    build_assessment_prompt, build_judge_prompt, build_supervisor_prompt, build_user_prompt,
+    latest_or_inline, parse_supervisor, parse_verdict, Assessment, AssistantTurn, JudgeQuery,
+    JudgeVerdict, Provider, SkillRef, SupervisorQuery, SupervisorTurn, UserTurn,
 };
 use crate::transcript::{Message, ToolEvent};
 use crate::usage::Usage;
@@ -99,12 +99,13 @@ impl OneharnessProvider {
     fn run_respond(
         &self,
         instructions: &str,
+        worktree: &str,
         messages: &[Message],
         session: Option<&str>,
     ) -> Result<OneharnessResult> {
         if let Some(name) = session {
             // A continued session only needs the latest user turn.
-            let args = respond_args(instructions, Some(name));
+            let args = respond_args(instructions, worktree, Some(name), Some(name));
             let prompt = latest_or_inline(messages, true);
             match self.run("respond", &args, &prompt) {
                 Ok(result) => return Ok(result),
@@ -118,7 +119,7 @@ impl OneharnessProvider {
             }
         }
         // Fresh or fallback call: inline the whole conversation, no `--session`.
-        let args = respond_args(instructions, None);
+        let args = respond_args(instructions, worktree, None, session);
         let prompt = latest_or_inline(messages, false);
         self.run("respond", &args, &prompt)
     }
@@ -131,9 +132,10 @@ impl OneharnessProvider {
         op: &str,
         prompt: &str,
         session: Option<&str>,
+        cwd: Option<&str>,
     ) -> Result<OneharnessResult> {
         if let Some(name) = session {
-            let args = judge_side_args(self.judge_config.as_deref(), Some(name));
+            let args = judge_side_args(self.judge_config.as_deref(), Some(name), cwd);
             match self.run(op, &args, prompt) {
                 Ok(result) => return Ok(result),
                 Err(e) if is_session_unsupported(&e) => {
@@ -145,7 +147,7 @@ impl OneharnessProvider {
                 Err(e) => return Err(e),
             }
         }
-        let args = judge_side_args(self.judge_config.as_deref(), None);
+        let args = judge_side_args(self.judge_config.as_deref(), None, cwd);
         self.run(op, &args, prompt)
     }
 
@@ -203,20 +205,32 @@ impl OneharnessProvider {
 /// No `--harness`/`--model`: the agent side relies on oneharness's own discovered
 /// config (`oneharness.toml`) for harness/model selection.
 #[must_use]
-fn respond_args(instructions: &str, session: Option<&str>) -> Vec<String> {
+fn respond_args(
+    instructions: &str,
+    worktree: &str,
+    session: Option<&str>,
+    history_name: Option<&str>,
+) -> Vec<String> {
     // `oneharness run` emits a JSON report by default; `--compact` makes it a
     // single line. There is no `--format` flag on `run`.
     let mut args = vec![
         "run".into(),
         "--compact".into(),
         "--events".into(),
+        "--history".into(),
         "--system".into(),
         instructions.into(),
+        "--cwd".into(),
+        worktree.into(),
         "--prompt-file".into(),
         "-".into(),
     ];
     // Always thread the caller-owned session name; the caller retries without it if
     // oneharness reports the harness cannot bind a session.
+    if let Some(name) = history_name {
+        args.push("--history-name".into());
+        args.push(name.into());
+    }
     if let Some(name) = session {
         args.push("--session".into());
         args.push(name.into());
@@ -228,7 +242,11 @@ fn respond_args(instructions: &str, session: Option<&str>) -> Vec<String> {
 /// `--system`, no `--events`). Harness/model selection comes from `--config
 /// <judge_config>`, not from `--harness`/`--model`.
 #[must_use]
-fn judge_side_args(judge_config: Option<&Path>, session: Option<&str>) -> Vec<String> {
+fn judge_side_args(
+    judge_config: Option<&Path>,
+    session: Option<&str>,
+    cwd: Option<&str>,
+) -> Vec<String> {
     let mut args = vec![
         "run".into(),
         "--compact".into(),
@@ -238,6 +256,10 @@ fn judge_side_args(judge_config: Option<&Path>, session: Option<&str>) -> Vec<St
     if let Some(config) = judge_config {
         args.push("--config".into());
         args.push(config.display().to_string());
+    }
+    if let Some(dir) = cwd {
+        args.push("--cwd".into());
+        args.push(dir.into());
     }
     if let Some(name) = session {
         args.push("--session".into());
@@ -350,7 +372,7 @@ impl Provider for OneharnessProvider {
         messages: &[Message],
         session: Option<&str>,
     ) -> Result<AssistantTurn> {
-        let result = self.run_respond(skill.instructions, messages, session)?;
+        let result = self.run_respond(skill.instructions, skill.dir, messages, session)?;
         Ok(AssistantTurn {
             message: result.reply(),
             done: false,
@@ -366,7 +388,7 @@ impl Provider for OneharnessProvider {
         session: Option<&str>,
     ) -> Result<UserTurn> {
         let prompt = build_user_prompt(persona, messages);
-        let result = self.run_judge_side("user", &prompt, session)?;
+        let result = self.run_judge_side("user", &prompt, session, None)?;
         Ok(UserTurn {
             message: result.reply(),
             stop: false,
@@ -374,10 +396,24 @@ impl Provider for OneharnessProvider {
         })
     }
 
+    fn supervise(
+        &self,
+        query: &SupervisorQuery<'_>,
+        messages: &[Message],
+        session: Option<&str>,
+    ) -> Result<SupervisorTurn> {
+        let prompt = build_supervisor_prompt(query, messages);
+        let result = self.run_judge_side("supervisor", &prompt, session, Some(query.worktree))?;
+        Ok(SupervisorTurn {
+            outcome: parse_supervisor("oneharness:supervisor", &result.reply())?,
+            usage: result.usage(),
+        })
+    }
+
     fn judge(&self, query: &JudgeQuery<'_>, messages: &[Message]) -> Result<JudgeVerdict> {
         // Judging is stateless — no session to continue.
         let prompt = build_judge_prompt(query, messages);
-        let result = self.run_judge_side("judge", &prompt, None)?;
+        let result = self.run_judge_side("judge", &prompt, None, None)?;
         let mut verdict = parse_verdict(query.kind, "oneharness:judge", &result.reply())?;
         verdict.usage = result.usage();
         Ok(verdict)
@@ -385,7 +421,7 @@ impl Provider for OneharnessProvider {
 
     fn assess(&self, prompt: &str, messages: &[Message]) -> Result<Assessment> {
         let prompt = build_assessment_prompt(prompt, messages);
-        let result = self.run_judge_side("assess", &prompt, None)?;
+        let result = self.run_judge_side("assess", &prompt, None, None)?;
         let text = result.reply();
         if text.trim().is_empty() {
             return Err(Error::provider(
@@ -416,7 +452,7 @@ mod tests {
             Some(Path::new("custom.judge.toml"))
         );
         // The judge/user side passes the configured file via --config.
-        let args = judge_side_args(provider.judge_config.as_deref(), Some("s"));
+        let args = judge_side_args(provider.judge_config.as_deref(), Some("s"), None);
         assert!(args
             .windows(2)
             .any(|w| w == ["--config", "custom.judge.toml"]));
@@ -434,7 +470,7 @@ mod tests {
 
     #[test]
     fn respond_args_thread_session_and_carry_no_harness_or_model() {
-        let args = respond_args("do x", Some("run-1-skill"));
+        let args = respond_args("do x", "/work", Some("run-1-skill"), Some("run-1-skill"));
         assert!(args.windows(2).any(|w| w == ["--session", "run-1-skill"]));
         assert!(args.iter().any(|a| a == "--events"));
         // Harness/model selection is oneharness's config's job now.
@@ -444,13 +480,13 @@ mod tests {
         assert!(!args.iter().any(|a| a == "--format"));
 
         // No session supplied: no `--session`.
-        let none = respond_args("do x", None);
+        let none = respond_args("do x", "/work", None, None);
         assert!(!none.iter().any(|a| a == "--session"));
     }
 
     #[test]
     fn judge_side_args_use_config_not_harness_or_model() {
-        let args = judge_side_args(Some(Path::new("oneharness.judge.toml")), None);
+        let args = judge_side_args(Some(Path::new("oneharness.judge.toml")), None, None);
         assert!(!args.iter().any(|a| a == "--system"));
         assert!(!args.iter().any(|a| a == "--events"));
         assert!(!args.iter().any(|a| a == "--harness"));
@@ -460,7 +496,7 @@ mod tests {
             .any(|w| w == ["--config", "oneharness.judge.toml"]));
         // With no judge config, no `--config` is passed (oneharness discovers its
         // own default).
-        let no_config = judge_side_args(None, None);
+        let no_config = judge_side_args(None, None, None);
         assert!(!no_config.iter().any(|a| a == "--config"));
     }
 

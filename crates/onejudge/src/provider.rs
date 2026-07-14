@@ -95,6 +95,46 @@ pub struct UserTurn {
     pub usage: Option<Usage>,
 }
 
+/// Inputs for one per-turn supervisor decision.
+pub struct SupervisorQuery<'a> {
+    /// The original task, unchanged from the first user turn.
+    pub task: &'a str,
+    /// The simulated supervisor's persona.
+    pub persona: &'a str,
+    /// The completion criterion, when the caller supplied one.
+    pub done_when: Option<&'a str>,
+    /// Agent worktree used by oneharness and by the history command.
+    pub worktree: &'a str,
+    /// Agent-side oneharness history name.
+    pub history_name: &'a str,
+}
+
+/// A unified supervisor decision after an ordinary, nonterminal agent turn.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SupervisorOutcome {
+    /// The task is complete; the reason is retained on the engine outcome/report.
+    Completed {
+        /// Concise completion justification.
+        reason: String,
+    },
+    /// Continue with this exact next user message.
+    Continue {
+        /// Exact message appended as the next user turn.
+        message: String,
+        /// Optional concise decision justification.
+        reason: String,
+    },
+}
+
+/// A supervisor decision and its provider usage.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SupervisorTurn {
+    /// The discriminated decision.
+    pub outcome: SupervisorOutcome,
+    /// Cost/token usage for this single call.
+    pub usage: Option<Usage>,
+}
+
 /// A judge verdict: the raw value (bool or number) plus the stated reason. Part
 /// of onejudge's versioned [`Report`](crate::Report) contract, so it round-trips
 /// through serde.
@@ -188,6 +228,41 @@ pub trait Provider {
         session: Option<&str>,
     ) -> Result<UserTurn>;
 
+    /// Decide completion and, when continuing, produce the exact next user turn
+    /// in one judge-side invocation.
+    fn supervise(
+        &self,
+        query: &SupervisorQuery<'_>,
+        messages: &[Message],
+        session: Option<&str>,
+    ) -> Result<SupervisorTurn> {
+        let criterion = query.done_when.unwrap_or("the original task is complete");
+        let verdict = self.judge(
+            &JudgeQuery {
+                kind: JudgeKind::Boolean,
+                criterion,
+                scale: None,
+            },
+            messages,
+        )?;
+        if matches!(verdict.value, JudgeValue::Bool(true)) {
+            return Ok(SupervisorTurn {
+                outcome: SupervisorOutcome::Completed {
+                    reason: verdict.reason,
+                },
+                usage: verdict.usage,
+            });
+        }
+        let user = self.simulate_user(query.persona, messages, session)?;
+        Ok(SupervisorTurn {
+            outcome: SupervisorOutcome::Continue {
+                message: user.message,
+                reason: verdict.reason,
+            },
+            usage: user.usage,
+        })
+    }
+
     /// Score a criterion against the conversation.
     ///
     /// # Errors
@@ -258,6 +333,90 @@ pub fn build_user_prompt(persona: &str, messages: &[Message]) -> String {
          else.",
         transcript = render_transcript(messages, false),
     )
+}
+
+/// Build the unified supervisor prompt. Only compact normalized event summaries
+/// are inlined; full events remain available on demand through oneharness history.
+#[must_use]
+pub fn build_supervisor_prompt(query: &SupervisorQuery<'_>, messages: &[Message]) -> String {
+    let criterion = query.done_when.unwrap_or(
+        "No explicit completion criterion was supplied; continue unless the original task is clearly complete.",
+    );
+    format!(
+        "You are the simulated USER and completion supervisor for an AI agent.\n\n\
+         Original task:\n{task}\n\nSupervisor persona:\n{persona}\n\n\
+         Completion criterion:\n{criterion}\n\n\
+         Conversation transcript (tool actions are compact normalized summaries, never raw dumps):\n{transcript}\n\n\
+         Judge-side oneharness runs inherit the agent worktree `{worktree}` and may use harness tools. \
+         If these compact summaries are insufficient, inspect the full recorded agent events from that worktree with exactly:\n\
+         oneharness history show {history} --project {worktree} --format text\n\n\
+         Return ONLY one JSON object. Exactly one of these shapes is valid:\n\
+         {{\"completion\":true,\"reason\":\"<concise reason>\"}}\n\
+         {{\"completion\":false,\"message\":\"<exact next user message>\",\"reason\":\"<optional concise reason>\"}}",
+        task = query.task,
+        persona = query.persona,
+        transcript = render_transcript(messages, true),
+        worktree = query.worktree,
+        history = query.history_name,
+    )
+}
+
+/// Parse and strictly validate the supervisor's discriminated JSON response.
+pub fn parse_supervisor(context: &str, text: &str) -> Result<SupervisorOutcome> {
+    use crate::error::ProviderErrorKind::Protocol;
+    let json = extract_json_object(text).ok_or_else(|| {
+        Error::provider_classified(
+            context,
+            format!("supervisor did not return a JSON object; got: {text}"),
+            Protocol,
+        )
+    })?;
+    let value: serde_json::Value = serde_json::from_str(json).map_err(|e| {
+        Error::provider_classified(
+            context,
+            format!("supervisor response was not valid JSON: {e}; got: {json}"),
+            Protocol,
+        )
+    })?;
+    let completion = value
+        .get("completion")
+        .and_then(serde_json::Value::as_bool)
+        .ok_or_else(|| {
+            Error::provider_classified(
+                context,
+                "supervisor response needs boolean `completion`",
+                Protocol,
+            )
+        })?;
+    let reason = value
+        .get("reason")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let message = value.get("message").and_then(serde_json::Value::as_str);
+    if completion {
+        if reason.is_empty() || message.is_some() {
+            return Err(Error::provider_classified(
+                context,
+                "completed supervisor response requires non-empty `reason` and forbids `message`",
+                Protocol,
+            ));
+        }
+        Ok(SupervisorOutcome::Completed { reason })
+    } else {
+        let message = message.filter(|m| !m.trim().is_empty()).ok_or_else(|| {
+            Error::provider_classified(
+                context,
+                "continue supervisor response requires non-empty `message`",
+                Protocol,
+            )
+        })?;
+        Ok(SupervisorOutcome::Continue {
+            message: message.to_string(),
+            reason,
+        })
+    }
 }
 
 /// The prompt that asks the judge to evaluate `query` against the transcript.
@@ -415,7 +574,7 @@ mod tests {
             kind: "tool_call".into(),
             name: Some("bash".into()),
             input: Some(json!({"command": "git commit -m x"})),
-            output: None,
+            output: Some("SECRET_RAW_TOOL_DUMP".into()),
             index: 0,
         }]));
         t
@@ -472,6 +631,54 @@ mod tests {
         assert!(prompt.contains("[tool]"));
         assert!(prompt.contains("git commit"));
         assert!(prompt.contains("identify follow-up work"));
+    }
+
+    #[test]
+    fn supervisor_prompt_carries_contract_context_and_only_compact_events() {
+        let prompt = build_supervisor_prompt(
+            &SupervisorQuery {
+                task: "ship the fix",
+                persona: "a strict reviewer",
+                done_when: Some("tests pass"),
+                worktree: "/repo",
+                history_name: "run-skill",
+            },
+            &transcript_with_event().messages,
+        );
+        for expected in [
+            "ship the fix",
+            "a strict reviewer",
+            "tests pass",
+            "[tool]",
+            "git commit",
+            "oneharness history show run-skill --project /repo --format text",
+        ] {
+            assert!(prompt.contains(expected), "missing {expected}");
+        }
+        assert!(!prompt.contains("SECRET_RAW_TOOL_DUMP"));
+    }
+
+    #[test]
+    fn supervisor_parser_enforces_discriminated_shapes() {
+        assert!(matches!(
+            parse_supervisor("c", "{\"completion\":true,\"reason\":\"done\"}").unwrap(),
+            SupervisorOutcome::Completed { .. }
+        ));
+        assert!(matches!(
+            parse_supervisor("c", "{\"completion\":false,\"message\":\"retry\"}").unwrap(),
+            SupervisorOutcome::Continue { .. }
+        ));
+        for bad in [
+            "no json",
+            "{\"completion\":true}",
+            "{\"completion\":true,\"reason\":\"done\",\"message\":\"x\"}",
+            "{\"completion\":false}",
+        ] {
+            assert_eq!(
+                parse_supervisor("c", bad).unwrap_err().kind(),
+                Some(ProviderErrorKind::Protocol)
+            );
+        }
     }
 
     #[test]

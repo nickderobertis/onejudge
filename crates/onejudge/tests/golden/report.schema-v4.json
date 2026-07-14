@@ -1,5 +1,5 @@
 {
-  "schema_version": 3,
+  "schema_version": 4,
   "transcript": {
     "messages": [
       {
@@ -33,6 +33,7 @@
     }
   ],
   "assessment": "No follow-up work remains.",
+  "completion_reason": "the commit completed the task",
   "usage": {
     "input_tokens": 12,
     "output_tokens": 3,

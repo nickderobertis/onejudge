@@ -49,7 +49,13 @@ onejudge run                            # reads ./onejudge.yaml, drives to compl
 then writes a fully-commented loop-only `onejudge.yaml`. The fields that make a run
 yours are `task` (what to do), the system framing — a `skill` (a `SKILL.md`
 directory) and/or a `system_prompt`, both optional — and the `user` block
-(`persona` / `done_when` / `max_turns` — omit it for a single-turn run). **Harness
+(`persona` / `done_when` / `max_turns` — omit it for a single-turn run). After
+each nonterminal agent turn, one unified supervisor call either completes with a
+reason or supplies the exact next user message. It sees compact normalized tool
+summaries by default, never raw dumps; when needed it may inspect the agent-side
+recording with `oneharness history show <session>-skill --project <worktree>
+--format text`. Agent and judge harnesses run in that worktree, but only agent
+runs are automatically history-recorded. **Harness
 and model selection lives in those `oneharness.toml`
 files, not `onejudge.yaml`.** `onejudge schema` prints the annotated config, the
 single source of truth for every field.

@@ -8,6 +8,8 @@
 //!   in the skill instructions or the latest user turn emits a `bash` tool event
 //!   running `CMD`; `[[done]]` sets the turn's `done` flag.
 //! * `user` replies with a canned continuation; `[[stop]]` in the persona ends it.
+//! * `supervisor` completes when `done_when` occurs in the normalized transcript,
+//!   otherwise returns one canned next-user message in the same response.
 //! * `judge` returns `true` (or the numeric high) iff the criterion text appears
 //!   in the transcript it is given — **including the rendered tool events** — so an
 //!   events-backed criterion is genuinely decided by what the skill did.
@@ -40,6 +42,7 @@ fn main() {
     let response = match op {
         "respond" => respond(&request),
         "user" => user(&request),
+        "supervisor" => supervisor(&request),
         "judge" => judge(&request),
         "assess" => assess(&request),
         other => fail(&format!("unknown op `{other}`")),
@@ -122,6 +125,35 @@ fn user(request: &Value) -> Value {
         "usage": { "input_tokens": persona.len(), "output_tokens": 1,
                    "cache_read_tokens": 3, "cache_write_tokens": 1 },
     })
+}
+
+fn supervisor(request: &Value) -> Value {
+    let persona = request.get("persona").and_then(Value::as_str).unwrap_or("");
+    if let Some(path) = marker(persona, "count") {
+        use std::io::Write as _;
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .unwrap_or_else(|e| fail(&format!("could not open invocation counter: {e}")));
+        file.write_all(b"supervisor\n")
+            .unwrap_or_else(|e| fail(&format!("could not write invocation counter: {e}")));
+    }
+    if persona.contains("[[malformed-supervisor]]") {
+        return json!({"completion": false});
+    }
+    let criterion = request
+        .get("done_when")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let transcript = render(&messages_of(request)).to_lowercase();
+    let completion = persona.contains("[[stop]]")
+        || (!criterion.is_empty() && transcript.contains(&criterion.to_lowercase()));
+    if completion {
+        json!({"completion": true, "reason": "completion criterion found in transcript", "usage": {"input_tokens": 1, "output_tokens": 1}})
+    } else {
+        json!({"completion": false, "message": "Thanks — and what about the next step?", "reason": "completion criterion not yet met", "usage": {"input_tokens": 1, "output_tokens": 1}})
+    }
 }
 
 /// Render the transcript the judge is given, including tool-event summaries, so a

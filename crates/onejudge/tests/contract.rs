@@ -1,6 +1,6 @@
 //! Drift gate for onejudge's versioned [`Report`] contract. It builds a canonical
 //! report through the public API, serializes it, and diffs the result against a
-//! checked-in golden (`tests/golden/report.schema-v3.json`). Any change to the
+//! checked-in golden (`tests/golden/report.schema-v4.json`). Any change to the
 //! wire form — a renamed field, a new key, a changed default — fails here, so it
 //! must be a deliberate edit that also bumps `SCHEMA_VERSION`, never a silent
 //! break for the SDKs that compose over this contract.
@@ -23,7 +23,7 @@ fn canonical_report() -> Report {
             index: 0,
         }]),
     );
-    Report::new(
+    let mut report = Report::new(
         transcript,
         vec![NamedVerdict::new(
             "the change was committed",
@@ -43,20 +43,22 @@ fn canonical_report() -> Report {
         }),
         false,
     )
-    .with_assessment("No follow-up work remains.")
+    .with_assessment("No follow-up work remains.");
+    report.completion_reason = Some("the commit completed the task".into());
+    report
 }
 
-const GOLDEN: &str = include_str!("golden/report.schema-v3.json");
+const GOLDEN: &str = include_str!("golden/report.schema-v4.json");
 
 #[test]
-fn report_matches_the_golden_schema_v3() {
-    assert_eq!(SCHEMA_VERSION, 3, "golden is for schema v3");
+fn report_matches_the_golden_schema_v4() {
+    assert_eq!(SCHEMA_VERSION, 4, "golden is for schema v4");
     let actual = serde_json::to_string_pretty(&canonical_report()).unwrap();
     assert_eq!(
         actual.trim(),
         GOLDEN.trim(),
         "the Report wire form changed. If this is intentional, bump SCHEMA_VERSION \
-         and update tests/golden/report.schema-v3.json. Actual serialization:\n{actual}"
+         and update tests/golden/report.schema-v4.json. Actual serialization:\n{actual}"
     );
 }
 

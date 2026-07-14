@@ -69,9 +69,10 @@ pub use engine::{Conversation, Engine, Outcome, Settings, SimulatedUser, Skill, 
 pub use error::{Error, ProviderErrorKind, Result};
 pub use oneharness::OneharnessProvider;
 pub use provider::{
-    build_assessment_prompt, build_judge_prompt, build_respond_prompt, build_user_prompt,
-    latest_or_inline, latest_user_message, parse_verdict, render_transcript, Assessment,
-    AssistantTurn, JudgeKind, JudgeQuery, JudgeValue, JudgeVerdict, Provider, SkillRef, UserTurn,
+    build_assessment_prompt, build_judge_prompt, build_respond_prompt, build_supervisor_prompt,
+    build_user_prompt, latest_or_inline, latest_user_message, parse_supervisor, parse_verdict,
+    render_transcript, Assessment, AssistantTurn, JudgeKind, JudgeQuery, JudgeValue, JudgeVerdict,
+    Provider, SkillRef, SupervisorOutcome, SupervisorQuery, SupervisorTurn, UserTurn,
 };
 pub use report::{NamedVerdict, Report, SCHEMA_VERSION};
 #[cfg(feature = "skill")]

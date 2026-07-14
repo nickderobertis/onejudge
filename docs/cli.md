@@ -3,7 +3,13 @@
 The same engine that *tests* a skill can *drive real work*: point it at a harness,
 hand it a task, and let an LLM-driven **simulated user act as a supervisor** that
 keeps the harness going — pushing back, asking for verification, re-prompting —
-until a `done_when` condition holds or `max_turns` is hit. The simulated reviewer
+until a `done_when` condition holds or `max_turns` is hit. One supervisor harness
+invocation after each ordinary nonterminal agent turn decides completion and, if
+needed, returns the exact next user message. Its prompt contains compact
+normalized tool summaries rather than raw dumps. Agent-side calls are recorded;
+the worktree-inheriting judge may inspect full events on demand with `oneharness
+history show <session>-skill --project <worktree> --format text`. Stateless final
+boolean/numeric eval calls remain separate. The simulated reviewer
 catches "I'm done" claims that aren't and steers the agent to finish, which is a
 practical way to complete longer tasks and get higher accuracy on harder ones than
 a single-shot prompt.

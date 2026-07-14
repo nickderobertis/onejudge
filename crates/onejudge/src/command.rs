@@ -4,7 +4,8 @@
 //! drives and any custom provider a consumer writes. The wire contract is
 //! documented in `docs/protocol.md`.
 //!
-//! Protocol **v2** drops `platform`/`model` from every request: the custom command
+//! Protocol **v4** adds the unified supervisor request; v2 dropped
+//! `platform`/`model` from every request: the custom command
 //! owns harness/model selection itself (onejudge no longer passes them).
 
 use std::io::Write as _;
@@ -15,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::{Error, ProviderErrorKind, Result};
 use crate::provider::{
     Assessment, AssistantTurn, JudgeKind, JudgeQuery, JudgeValue, JudgeVerdict, Provider, SkillRef,
-    UserTurn,
+    SupervisorOutcome, SupervisorQuery, SupervisorTurn, UserTurn,
 };
 use crate::transcript::{Message, ToolEvent};
 use crate::usage::Usage;
@@ -40,6 +41,17 @@ enum Request<'a> {
     },
     User {
         persona: &'a str,
+        messages: &'a [Message],
+        #[serde(skip_serializing_if = "Option::is_none")]
+        session: Option<&'a str>,
+    },
+    Supervisor {
+        task: &'a str,
+        persona: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        done_when: Option<&'a str>,
+        worktree: &'a str,
+        history_name: &'a str,
         messages: &'a [Message],
         #[serde(skip_serializing_if = "Option::is_none")]
         session: Option<&'a str>,
@@ -77,6 +89,17 @@ struct UserPayload {
     message: String,
     #[serde(default)]
     stop: bool,
+    #[serde(default)]
+    usage: Option<Usage>,
+}
+
+#[derive(Deserialize)]
+struct SupervisorPayload {
+    completion: bool,
+    #[serde(default)]
+    message: Option<String>,
+    #[serde(default)]
+    reason: String,
     #[serde(default)]
     usage: Option<Usage>,
 }
@@ -226,6 +249,57 @@ impl Provider for CommandProvider {
         Ok(UserTurn {
             message: payload.message,
             stop: payload.stop,
+            usage: payload.usage,
+        })
+    }
+
+    fn supervise(
+        &self,
+        query: &SupervisorQuery<'_>,
+        messages: &[Message],
+        session: Option<&str>,
+    ) -> Result<SupervisorTurn> {
+        let payload: SupervisorPayload = self.call(
+            &Request::Supervisor {
+                task: query.task,
+                persona: query.persona,
+                done_when: query.done_when,
+                worktree: query.worktree,
+                history_name: query.history_name,
+                messages,
+                session,
+            },
+            "supervisor",
+        )?;
+        let outcome = if payload.completion {
+            if payload.reason.trim().is_empty() || payload.message.is_some() {
+                return Err(Error::provider_classified(
+                    "supervisor",
+                    "completed response requires non-empty `reason` and forbids `message`",
+                    ProviderErrorKind::Protocol,
+                ));
+            }
+            SupervisorOutcome::Completed {
+                reason: payload.reason,
+            }
+        } else {
+            let message = payload
+                .message
+                .filter(|m| !m.trim().is_empty())
+                .ok_or_else(|| {
+                    Error::provider_classified(
+                        "supervisor",
+                        "continue response requires non-empty `message`",
+                        ProviderErrorKind::Protocol,
+                    )
+                })?;
+            SupervisorOutcome::Continue {
+                message,
+                reason: payload.reason,
+            }
+        };
+        Ok(SupervisorTurn {
+            outcome,
             usage: payload.usage,
         })
     }

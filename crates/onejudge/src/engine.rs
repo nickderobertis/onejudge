@@ -8,7 +8,7 @@ use std::ops::ControlFlow;
 use crate::error::Result;
 use crate::provider::{
     build_judge_prompt, Assessment, AssistantTurn, JudgeKind, JudgeQuery, JudgeVerdict, Provider,
-    SkillRef, UserTurn,
+    SkillRef, SupervisorOutcome, SupervisorQuery,
 };
 use crate::report::{NamedVerdict, Report};
 use crate::transcript::{Message, ToolEvent, Transcript};
@@ -181,6 +181,8 @@ pub struct Outcome {
     pub usage: Option<Usage>,
     /// Whether a streaming sink asked to short-circuit the run.
     pub stopped_early: bool,
+    /// The unified supervisor's completion reason, when it ended the loop.
+    pub completion_reason: Option<String>,
 }
 
 impl Outcome {
@@ -199,7 +201,8 @@ impl Outcome {
         verdicts: Vec<NamedVerdict>,
         assessment: Option<String>,
     ) -> Report {
-        let report = Report::new(self.transcript, verdicts, self.usage, self.stopped_early);
+        let mut report = Report::new(self.transcript, verdicts, self.usage, self.stopped_early);
+        report.completion_reason = self.completion_reason;
         match assessment {
             Some(text) => report.with_assessment(text),
             None => report,
@@ -275,6 +278,7 @@ impl<'a> Engine<'a> {
 
         let mut transcript = Transcript::from_input(&conversation.input);
         let mut totals = Usage::default();
+        let mut completion_reason = None;
 
         loop {
             let turn_index = transcript.assistant_turns() + 1;
@@ -309,7 +313,7 @@ impl<'a> Engine<'a> {
             transcript.push(Message::assistant(message).with_events(events));
 
             if broke {
-                return Ok(self.finish(transcript, totals, true));
+                return Ok(self.finish(transcript, totals, true, None));
             }
 
             // Single-turn conversations stop after the first assistant turn.
@@ -319,42 +323,47 @@ impl<'a> Engine<'a> {
             if skill_done || transcript.assistant_turns() >= max_turns {
                 break;
             }
-            if let Some(criterion) = &user.done_when {
-                let verdict = self.judge_boolean_raw(criterion, &transcript)?;
-                if let Some(u) = &verdict.usage {
-                    totals.add(u);
-                }
-                if matches!(verdict.value, crate::provider::JudgeValue::Bool(true)) {
-                    break;
-                }
-            }
-
-            let UserTurn {
-                message,
-                stop,
-                usage,
-            } = self.provider.simulate_user(
-                &user.persona,
+            let decision = self.provider.supervise(
+                &SupervisorQuery {
+                    task: &conversation.input,
+                    persona: &user.persona,
+                    done_when: user.done_when.as_deref(),
+                    worktree: &conversation.skill.dir,
+                    history_name: &skill_session,
+                },
                 &transcript.messages,
                 Some(user_session.as_str()),
             )?;
+            let usage = decision.usage;
             if let Some(u) = &usage {
                 totals.add(u);
             }
-            transcript.push(Message::user(message));
-            if stop {
-                break;
+            match decision.outcome {
+                SupervisorOutcome::Completed { reason } => {
+                    completion_reason = Some(reason);
+                    break;
+                }
+                SupervisorOutcome::Continue { message, .. } => {
+                    transcript.push(Message::user(message))
+                }
             }
         }
 
-        Ok(self.finish(transcript, totals, false))
+        Ok(self.finish(transcript, totals, false, completion_reason))
     }
 
-    fn finish(&self, transcript: Transcript, totals: Usage, stopped_early: bool) -> Outcome {
+    fn finish(
+        &self,
+        transcript: Transcript,
+        totals: Usage,
+        stopped_early: bool,
+        completion_reason: Option<String>,
+    ) -> Outcome {
         Outcome {
             transcript,
             usage: (!totals.is_empty()).then_some(totals),
             stopped_early,
+            completion_reason,
         }
     }
 
@@ -428,7 +437,7 @@ pub struct StreamEvent<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::provider::{JudgeValue, SkillRef};
+    use crate::provider::{JudgeValue, SkillRef, SupervisorTurn, UserTurn};
     use std::cell::RefCell;
 
     /// An in-memory provider scripted with canned turns, so the loop's
@@ -446,6 +455,7 @@ mod tests {
         user: usize,
         judge: usize,
         assess: usize,
+        supervisor: usize,
         skill_sessions: Vec<Option<String>>,
         user_sessions: Vec<Option<String>>,
     }
@@ -475,6 +485,47 @@ mod tests {
             let i = seen.user.min(self.user.len() - 1);
             seen.user += 1;
             Ok(self.user[i].clone())
+        }
+
+        fn supervise(
+            &self,
+            query: &SupervisorQuery<'_>,
+            _messages: &[Message],
+            session: Option<&str>,
+        ) -> Result<SupervisorTurn> {
+            let mut seen = self.seen.borrow_mut();
+            seen.supervisor += 1;
+            seen.user_sessions.push(session.map(String::from));
+            if query.done_when.is_some() && !self.judge.is_empty() {
+                let i = seen.judge.min(self.judge.len() - 1);
+                seen.judge += 1;
+                let verdict = self.judge[i].clone();
+                if matches!(verdict.value, JudgeValue::Bool(true)) {
+                    return Ok(SupervisorTurn {
+                        outcome: SupervisorOutcome::Completed {
+                            reason: verdict.reason,
+                        },
+                        usage: verdict.usage,
+                    });
+                }
+            }
+            let i = seen.user.min(self.user.len() - 1);
+            seen.user += 1;
+            if self.user[i].stop {
+                return Ok(SupervisorTurn {
+                    outcome: SupervisorOutcome::Completed {
+                        reason: "simulated user stopped".into(),
+                    },
+                    usage: self.user[i].usage.clone(),
+                });
+            }
+            Ok(SupervisorTurn {
+                outcome: SupervisorOutcome::Continue {
+                    message: self.user[i].message.clone(),
+                    reason: String::new(),
+                },
+                usage: self.user[i].usage.clone(),
+            })
         }
 
         fn judge(&self, _query: &JudgeQuery<'_>, _messages: &[Message]) -> Result<JudgeVerdict> {

@@ -13,7 +13,8 @@ use std::ops::ControlFlow;
 
 use crate::error::Result;
 use crate::provider::{
-    Assessment, AssistantTurn, JudgeQuery, JudgeVerdict, Provider, SkillRef, UserTurn,
+    Assessment, AssistantTurn, JudgeQuery, JudgeVerdict, Provider, SkillRef, SupervisorQuery,
+    SupervisorTurn, UserTurn,
 };
 use crate::transcript::{Message, ToolEvent};
 
@@ -77,6 +78,14 @@ impl<S: Provider, J: Provider> Provider for SplitProvider<S, J> {
         session: Option<&str>,
     ) -> Result<UserTurn> {
         self.judge.simulate_user(persona, messages, session)
+    }
+    fn supervise(
+        &self,
+        query: &SupervisorQuery<'_>,
+        messages: &[Message],
+        session: Option<&str>,
+    ) -> Result<SupervisorTurn> {
+        self.judge.supervise(query, messages, session)
     }
 
     fn judge(&self, query: &JudgeQuery<'_>, messages: &[Message]) -> Result<JudgeVerdict> {

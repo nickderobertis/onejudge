@@ -77,6 +77,50 @@ fn multi_turn_runs_to_max_turns() {
 }
 
 #[test]
+fn unified_supervisor_is_one_subprocess_invocation_per_nonterminal_turn() {
+    let path =
+        std::env::temp_dir().join(format!("onejudge-supervisor-count-{}", std::process::id()));
+    let _ = std::fs::remove_file(&path);
+    let persona = format!("A tester. [[count:{}]]", path.display());
+    let outcome = Engine::new(&echo(), settings())
+        .run(&Conversation::multi_turn(
+            skill_with("Be helpful."),
+            "start",
+            SimulatedUser::new(persona).max_turns(3),
+        ))
+        .unwrap();
+    assert_eq!(outcome.transcript.assistant_turns(), 3);
+    let calls = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(
+        calls.lines().count(),
+        2,
+        "each of the two nonterminal turns gets exactly one supervisor process"
+    );
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn malformed_unified_supervisor_response_is_a_protocol_error() {
+    let err = Engine::new(&echo(), settings())
+        .run(&Conversation::multi_turn(
+            skill_with("Be helpful."),
+            "start",
+            SimulatedUser::new("[[malformed-supervisor]]").max_turns(2),
+        ))
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        onejudge::Error::Provider {
+            kind: Some(ProviderErrorKind::Protocol),
+            ..
+        }
+    ));
+    assert!(err
+        .to_string()
+        .contains("continue response requires non-empty `message`"));
+}
+
+#[test]
 fn done_when_reads_tool_events_and_stops_early() {
     // The skill runs `git commit` on its first turn; the done_when judge sees that
     // event in the transcript and ends the conversation after one turn — proving
@@ -120,8 +164,9 @@ fn simulated_user_stop_ends_the_conversation() {
     assert_eq!(outcome.transcript.assistant_turns(), 1);
     assert_eq!(
         outcome.transcript.messages.last().unwrap().role,
-        onejudge::Role::User
+        onejudge::Role::Assistant
     );
+    assert!(outcome.completion_reason.is_some());
 }
 
 #[test]

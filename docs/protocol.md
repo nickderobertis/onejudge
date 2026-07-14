@@ -8,11 +8,12 @@ request object** and a newline to the child's stdin, closes stdin, and reads
 unparseable/wrong-shaped output is a loud error (a classified
 `ProviderErrorKind::Protocol` / `Spawn`), never a silent empty turn.
 
-All four operations are distinguished by the request's `op` field.
+All five operations are distinguished by the request's `op` field.
 
 ## Protocol version
 
-**v3** (current) — added the `assess` free-text judgement operation. **v2**
+**v4** (current) — added the unified `supervisor` operation. **v3** added the
+`assess` free-text judgement operation. **v2**
 dropped `platform` and `model` from every request: harness and
 model **selection** is the command's own concern now (onejudge no longer passes
 it). v1 carried `platform`/`model` on `respond` and `model` on `user`/`judge`.
@@ -60,6 +61,9 @@ Response:
 
 ## `user` — produce one simulated-user turn
 
+This operation remains for API compatibility and explicit role-play calls. The
+engine's per-turn loop uses `supervisor` below.
+
 Request:
 
 ```json
@@ -73,6 +77,27 @@ Response:
 ```
 
 - `stop` (default `false`) ends the conversation.
+
+## `supervisor` — decide completion or produce the next user turn
+
+The engine sends exactly one request after each ordinary nonterminal agent turn:
+
+```json
+{"op":"supervisor","task":"fix it","persona":"A strict reviewer.","done_when":"tests pass","worktree":"/repo","history_name":"run-42-skill","messages":[...],"session":"run-42-user"}
+```
+
+Return exactly one discriminated shape. Completed requires a non-empty reason and
+forbids `message`; continue requires the exact non-empty next user message:
+
+```json
+{"completion":true,"reason":"all required tests passed","usage":{...}}
+{"completion":false,"message":"Run the integration suite too.","reason":"unit tests alone are insufficient","usage":{...}}
+```
+
+The transcript carries compact normalized event summaries, not raw tool dumps.
+`worktree` and `history_name` let a backend inspect the full oneharness recording
+when needed with `oneharness history show <history_name> --project <worktree>
+--format text`.
 
 ## `assess` — write a free-text judgement
 
