@@ -8,11 +8,12 @@ request object** and a newline to the child's stdin, closes stdin, and reads
 unparseable/wrong-shaped output is a loud error (a classified
 `ProviderErrorKind::Protocol` / `Spawn`), never a silent empty turn.
 
-All three operations are distinguished by the request's `op` field.
+All four operations are distinguished by the request's `op` field.
 
 ## Protocol version
 
-**v2** (current) — dropped `platform` and `model` from every request: harness and
+**v3** (current) — added the `assess` free-text judgement operation. **v2**
+dropped `platform` and `model` from every request: harness and
 model **selection** is the command's own concern now (onejudge no longer passes
 it). v1 carried `platform`/`model` on `respond` and `model` on `user`/`judge`.
 
@@ -72,6 +73,20 @@ Response:
 ```
 
 - `stop` (default `false`) ends the conversation.
+
+## `assess` — write a free-text judgement
+
+Request:
+
+```json
+{"op":"assess","prompt":"Identify useful follow-up work.","messages":[...]}
+```
+
+Response text must be non-empty; usage is optional:
+
+```json
+{"text":"Add a regression test for the discovered edge case.","usage":{"input_tokens":120,"output_tokens":12}}
+```
 
 ## `judge` — score a criterion against the transcript
 

@@ -14,7 +14,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, ProviderErrorKind, Result};
 use crate::provider::{
-    AssistantTurn, JudgeKind, JudgeQuery, JudgeValue, JudgeVerdict, Provider, SkillRef, UserTurn,
+    Assessment, AssistantTurn, JudgeKind, JudgeQuery, JudgeValue, JudgeVerdict, Provider, SkillRef,
+    UserTurn,
 };
 use crate::transcript::{Message, ToolEvent};
 use crate::usage::Usage;
@@ -52,6 +53,10 @@ enum Request<'a> {
         max: Option<f64>,
         messages: &'a [Message],
     },
+    Assess {
+        prompt: &'a str,
+        messages: &'a [Message],
+    },
 }
 
 #[derive(Deserialize)]
@@ -81,6 +86,13 @@ struct JudgePayload {
     value: JudgeValue,
     #[serde(default)]
     reason: String,
+    #[serde(default)]
+    usage: Option<Usage>,
+}
+
+#[derive(Deserialize)]
+struct AssessmentPayload {
+    text: String,
     #[serde(default)]
     usage: Option<Usage>,
 }
@@ -253,6 +265,22 @@ impl Provider for CommandProvider {
         Ok(JudgeVerdict {
             value: payload.value,
             reason: payload.reason,
+            usage: payload.usage,
+        })
+    }
+
+    fn assess(&self, prompt: &str, messages: &[Message]) -> Result<Assessment> {
+        let payload: AssessmentPayload =
+            self.call(&Request::Assess { prompt, messages }, "assess")?;
+        if payload.text.trim().is_empty() {
+            return Err(Error::provider_classified(
+                "assess",
+                "assessment response contained empty text",
+                ProviderErrorKind::Protocol,
+            ));
+        }
+        Ok(Assessment {
+            text: payload.text,
             usage: payload.usage,
         })
     }

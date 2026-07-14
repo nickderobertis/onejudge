@@ -12,7 +12,9 @@
 use std::ops::ControlFlow;
 
 use crate::error::Result;
-use crate::provider::{AssistantTurn, JudgeQuery, JudgeVerdict, Provider, SkillRef, UserTurn};
+use crate::provider::{
+    Assessment, AssistantTurn, JudgeQuery, JudgeVerdict, Provider, SkillRef, UserTurn,
+};
 use crate::transcript::{Message, ToolEvent};
 
 /// A [`Provider`] that dispatches each operation to one of two backends.
@@ -80,6 +82,10 @@ impl<S: Provider, J: Provider> Provider for SplitProvider<S, J> {
     fn judge(&self, query: &JudgeQuery<'_>, messages: &[Message]) -> Result<JudgeVerdict> {
         self.judge.judge(query, messages)
     }
+
+    fn assess(&self, prompt: &str, messages: &[Message]) -> Result<Assessment> {
+        self.judge.assess(prompt, messages)
+    }
 }
 
 #[cfg(test)]
@@ -99,6 +105,7 @@ mod tests {
         streamed: Cell<u32>,
         simulated: Cell<u32>,
         judged: Cell<u32>,
+        assessed: Cell<u32>,
     }
 
     impl Tagged {
@@ -166,6 +173,14 @@ mod tests {
                 value: JudgeValue::Bool(true),
                 reason: self.tag.into(),
                 usage: Some(Usage::default()),
+            })
+        }
+
+        fn assess(&self, _prompt: &str, _messages: &[Message]) -> Result<Assessment> {
+            self.assessed.set(self.assessed.get() + 1);
+            Ok(Assessment {
+                text: self.tag.into(),
+                usage: None,
             })
         }
     }

@@ -1,5 +1,5 @@
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "transcript": {
     "messages": [
       {
@@ -32,6 +32,7 @@
       }
     }
   ],
+  "assessment": "No follow-up work remains.",
   "usage": {
     "input_tokens": 12,
     "output_tokens": 3,

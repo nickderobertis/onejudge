@@ -10,6 +10,8 @@ by the tooling, not by hand.
 
 ### Added
 
+- Optional `assessment` config and report field for one free-text judge pass over
+  the finished, events-aware transcript.
 - Initial engine extracted from `skilltest`: the `Provider` boundary
   (`OneharnessProvider`, `CommandProvider`), the `Engine` conversation loop
   (single-turn and simulated-user multi-turn), the `Transcript` / `ToolEvent`

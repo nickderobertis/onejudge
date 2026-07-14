@@ -110,6 +110,15 @@ pub struct JudgeVerdict {
     pub usage: Option<Usage>,
 }
 
+/// Free-text output from an assessment judge call.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Assessment {
+    /// The judge's natural-language assessment.
+    pub text: String,
+    /// Cost/token usage for the assessment call, if reported.
+    pub usage: Option<Usage>,
+}
+
 /// The provider boundary.
 ///
 /// A provider owns harness/model *selection* itself (onejudge no longer passes a
@@ -185,6 +194,13 @@ pub trait Provider {
     /// [`Error::Provider`](crate::Error::Provider) if the command fails or returns
     /// malformed output.
     fn judge(&self, query: &JudgeQuery<'_>, messages: &[Message]) -> Result<JudgeVerdict>;
+
+    /// Write a free-text assessment of the finished conversation.
+    ///
+    /// # Errors
+    /// [`Error::Provider`](crate::Error::Provider) if the command fails or returns
+    /// malformed output.
+    fn assess(&self, prompt: &str, messages: &[Message]) -> Result<Assessment>;
 }
 
 // ---------------------------------------------------------------------------
@@ -280,6 +296,19 @@ pub fn build_judge_prompt(query: &JudgeQuery<'_>, messages: &[Message]) -> Strin
             )
         }
     }
+}
+
+/// Build a free-text assessment prompt over the events-aware transcript.
+#[must_use]
+pub fn build_assessment_prompt(prompt: &str, messages: &[Message]) -> String {
+    let transcript = render_transcript(messages, true);
+    format!(
+        "You are a careful evaluator of an AI assistant's behavior.\n\n\
+         Transcript (assistant tool actions are shown as `[tool]` lines):\n{transcript}\n\n\
+         Assessment request: {prompt}\n\n\
+         Answer the assessment request concisely in free-running text. Return only \
+         the assessment text."
+    )
 }
 
 /// The most recent user message — the next-turn prompt when continuing a session.
@@ -434,6 +463,15 @@ mod tests {
             &[],
         );
         assert!(prompt.contains("scale from 1 to 5"));
+    }
+
+    #[test]
+    fn assessment_prompt_includes_tool_events_and_request() {
+        let prompt =
+            build_assessment_prompt("identify follow-up work", &transcript_with_event().messages);
+        assert!(prompt.contains("[tool]"));
+        assert!(prompt.contains("git commit"));
+        assert!(prompt.contains("identify follow-up work"));
     }
 
     #[test]

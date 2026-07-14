@@ -1,6 +1,7 @@
 //! onejudge's own versioned result contract: the [`Report`] that bundles a
-//! [`Transcript`], the [`NamedVerdict`]s scored against it, and aggregated
-//! [`Usage`] into one serializable object with an explicit [`SCHEMA_VERSION`].
+//! [`Transcript`], the [`NamedVerdict`]s scored against it, an optional free-text
+//! assessment, and aggregated [`Usage`] into one serializable object with an
+//! explicit [`SCHEMA_VERSION`].
 //!
 //! This is the wire form higher-level frameworks (e.g. `skilltest`) compose over
 //! and re-export, so onejudge — not its consumers — owns the shape of a judged
@@ -16,9 +17,9 @@ use crate::usage::Usage;
 
 /// The version of the [`Report`] wire contract. Bump on any change to the
 /// serialized shape of a report or the types it embeds. `1` was the initial
-/// contract; `2` added the prompt-cache token fields to embedded [`Usage`]
-/// (`cache_read_tokens` / `cache_write_tokens`).
-pub const SCHEMA_VERSION: u32 = 2;
+/// contract; `2` added prompt-cache token fields to embedded [`Usage`], and `3`
+/// added the optional free-text `assessment`.
+pub const SCHEMA_VERSION: u32 = 3;
 
 /// A judge verdict paired with the criterion it scored and the kind of
 /// judgement, so a serialized report is self-describing.
@@ -59,6 +60,9 @@ pub struct Report {
     /// The verdicts scored against the transcript, in the order they were added.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub verdicts: Vec<NamedVerdict>,
+    /// A free-text judgement requested by the caller, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assessment: Option<String>,
     /// Aggregated usage across every provider call (`None` if nothing reported).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub usage: Option<Usage>,
@@ -80,9 +84,17 @@ impl Report {
             schema_version: SCHEMA_VERSION,
             transcript,
             verdicts,
+            assessment: None,
             usage,
             stopped_early,
         }
+    }
+
+    /// Attach a caller-requested free-text assessment.
+    #[must_use]
+    pub fn with_assessment(mut self, assessment: impl Into<String>) -> Self {
+        self.assessment = Some(assessment.into());
+        self
     }
 }
 
@@ -124,6 +136,7 @@ mod tests {
             }),
             false,
         )
+        .with_assessment("No follow-up work remains.")
     }
 
     #[test]
@@ -145,6 +158,16 @@ mod tests {
         let json = serde_json::to_string(&report).unwrap();
         assert!(!json.contains("verdicts"));
         assert!(!json.contains("usage"));
-        assert!(json.contains("\"schema_version\":2"));
+        assert!(!json.contains("assessment"));
+        assert!(json.contains("\"schema_version\":3"));
+    }
+
+    #[test]
+    fn assessment_round_trips_when_present() {
+        let report = Report::new(Transcript::from_input("hi"), vec![], None, false)
+            .with_assessment("Follow up on docs.");
+        let json = serde_json::to_string(&report).unwrap();
+        assert!(json.contains("Follow up on docs."));
+        assert_eq!(serde_json::from_str::<Report>(&json).unwrap(), report);
     }
 }

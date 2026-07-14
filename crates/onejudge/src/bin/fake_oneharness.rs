@@ -61,6 +61,8 @@ fn main() {
         json!({ "status": "ok", "text": "Understood — please continue.", "usage": usage(&prompt) })
     } else if prompt.contains("Criterion:") && prompt.contains("single-line JSON object") {
         json!({ "status": "ok", "text": judge_text(&prompt), "usage": usage(&prompt) })
+    } else if prompt.contains("Assessment request:") {
+        json!({ "status": "ok", "text": "No follow-up work remains.", "usage": usage(&prompt) })
     } else {
         respond_result(system, session.as_deref(), &prompt)
     };

@@ -53,6 +53,9 @@ pub struct Config {
     /// Optional criteria to score the finished transcript with.
     #[serde(default)]
     pub evals: Vec<EvalConfig>,
+    /// Optional prompt for a free-text judgement of the finished transcript.
+    #[serde(default)]
+    pub assessment: Option<String>,
 }
 
 /// The simulated user that supervises the agent and drives the loop.
@@ -322,12 +325,15 @@ impl Config {
             .map(EvalConfig::resolve)
             .collect::<Result<Vec<_>, _>>()?;
 
+        let assessment = self.assessment.filter(|prompt| !prompt.trim().is_empty());
+
         Ok(Plan {
             provider,
             settings,
             conversation,
             evals,
             done_when,
+            assessment,
         })
     }
 }
@@ -503,6 +509,8 @@ pub struct Plan {
     /// The completion condition, if any — re-judged at the end to decide whether
     /// the task actually completed (which drives the exit code).
     pub done_when: Option<String>,
+    /// Prompt for the optional free-text assessment.
+    pub assessment: Option<String>,
 }
 
 fn default_eval_kind() -> JudgeKind {
@@ -969,5 +977,20 @@ provider:
             .into_plan()
             .unwrap();
         assert_eq!(plan.evals[0].kind, EvalKind::Boolean);
+    }
+
+    #[test]
+    fn assessment_prompt_resolves_and_empty_value_is_ignored() {
+        let plan = Config::from_yaml("task: x\nassessment: Identify follow-up work.\n")
+            .unwrap()
+            .into_plan()
+            .unwrap();
+        assert_eq!(plan.assessment.as_deref(), Some("Identify follow-up work."));
+
+        let empty = Config::from_yaml("task: x\nassessment: '   '\n")
+            .unwrap()
+            .into_plan()
+            .unwrap();
+        assert_eq!(empty.assessment, None);
     }
 }

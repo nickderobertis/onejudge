@@ -39,3 +39,6 @@ evals:                        # optional: score the finished transcript
   - criterion: "the change is well-scoped and readable"
     kind: numeric
     scale: [1, 5]
+
+assessment: null              # optional: free-text judgement of the finished transcript
+# assessment: "Identify useful follow-up work that was left out of scope."

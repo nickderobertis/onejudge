@@ -306,6 +306,7 @@ user:
 evals:
   - criterion: echo
     kind: boolean
+assessment: Identify follow-up work and mention tool actions.
 ",
     );
     let output = Command::new(onejudge_bin())
@@ -318,6 +319,10 @@ evals:
     let report: onejudge::Report = serde_json::from_str(&stdout).unwrap();
     assert_eq!(report.schema_version, onejudge::SCHEMA_VERSION);
     assert!(!report.verdicts.is_empty());
+    assert_eq!(
+        report.assessment.as_deref(),
+        Some("Assessment for `Identify follow-up work and mention tool actions.`. Tool actions were included.")
+    );
     assert_eq!(report.transcript.assistant_turns(), 1);
     // Prompt-cache counts survive the real binary + JSON contract round-trip.
     let usage = report.usage.expect("usage in the report");
