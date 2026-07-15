@@ -10,22 +10,37 @@
 //! **compiles** in the normal build, so the live code can never rot; it just does
 //! not execute in `just check`. See `docs/live-tier.md`.
 //!
-//! Harness/model selection comes from oneharness's config files, not onejudge: the
-//! agent side uses the discovered `oneharness.toml` (or `ONEHARNESS_HARNESS` /
-//! `ONEHARNESS_MODEL` env overrides that oneharness reads), and the judge side uses
-//! `oneharness.judge.toml`. Scaffold them with `onejudge init` before running.
+//! Harness/model selection comes from oneharness's config, not onejudge. This test
+//! resolves the committed workspace-root `oneharness.toml` to an absolute path for
+//! both the agent and judge sides; `ONEHARNESS_HARNESSES` / `ONEHARNESS_MODEL` can
+//! override its selection.
+
+use std::path::Path;
 
 use onejudge::{Conversation, Engine, OneharnessProvider, Settings, Skill};
+
+fn workspace_root() -> &'static Path {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .expect("onejudge package should be nested under the workspace root")
+}
 
 #[test]
 #[ignore = "live: needs a real oneharness + authenticated harness; run via `just test-live`"]
 fn live_single_turn_and_boolean_judge() {
-    let provider = OneharnessProvider::new();
+    let workspace_root = workspace_root();
+    let oneharness_config = workspace_root.join("oneharness.toml");
+    assert!(workspace_root.is_absolute());
+    assert!(oneharness_config.is_absolute());
+    assert!(oneharness_config.is_file());
+
+    let provider = OneharnessProvider::new().with_judge_config(oneharness_config);
     let settings = Settings::new();
     let engine = Engine::new(&provider, settings);
     let skill = Skill::new(
         "echoer",
-        ".",
+        workspace_root.to_string_lossy(),
         "You are a terse assistant. Reply with exactly the word: pong.",
     );
     let outcome = engine

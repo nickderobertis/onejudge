@@ -38,7 +38,7 @@ jobs:
       - name: Run the live tier
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          ONEJUDGE_LIVE_HARNESS: claude-code
+          ONEHARNESS_HARNESSES: claude-code
         run: |
           if [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
             echo "::error::the live tier needs a real harness credential (CLAUDE_CODE_OAUTH_TOKEN)." \
