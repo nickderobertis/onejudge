@@ -31,6 +31,10 @@ jobs:
           npm install -g @anthropic-ai/claude-code   # the harness binary oneharness shells out to (`claude`)
           ./scripts/setup-llmlint.sh                 # installs oneharness (and llmlint) via uv
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          # GITHUB_PATH is available only to later steps, so assert via the
+          # explicit path here and print the installed version for diagnosis.
+          test -x "$HOME/.local/bin/oneharness"
+          "$HOME/.local/bin/oneharness" --version
       - name: Run the live tier
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}

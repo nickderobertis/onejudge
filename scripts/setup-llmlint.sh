@@ -12,11 +12,11 @@
 #      the prebuilt binary and depends on `oneharness-cli`, so one dependency
 #      resolution fetches both wheels — no Rust toolchain and no github.com
 #      reachability (works in restricted-egress sessions where PyPI is reachable).
-#      `uv tool` links only the *requested* package's executable onto PATH, but
-#      llmlint >= 0.3.7 finds `oneharness` beside its own binary in the tool venv —
-#      so this one install is a complete setup; no separate oneharness install /
-#      PATH entry. `--upgrade` bumps an older cached tool, honouring the floor below
-#      (`lint-llm-diff.sh` needs llmlint's `--diff`/`--diff-base` and `check-ignores`).
+#      `--with-executables-from oneharness-cli` links both `llmlint` and
+#      `oneharness` into the tool bin directory while retaining one shared tool
+#      environment. `--upgrade` bumps an older cached tool, honouring the floor
+#      below (`lint-llm-diff.sh` needs llmlint's `--diff`/`--diff-base` and
+#      `check-ignores`).
 #   2. In a Claude Code session, persists PATH (so the freshly installed binary
 #      resolves) and — TODO — any `ONEHARNESS_*` overrides that select the harness
 #      authenticated in this environment, into CLAUDE_ENV_FILE so later Bash calls
@@ -30,10 +30,10 @@ set -uo pipefail
 
 # Version floor, as a PyPI constraint (the `llmlint-cli` package version tracks the
 # wrapped binary version). `uv tool install --upgrade` installs the newest release
-# satisfying it; oneharness comes along transitively at a compatible version.
-# llmlint >= 0.3.7 finds `oneharness` beside its own executable (so a lone
-# `uv tool install llmlint-cli` works) and gives the whole-tree default the composed
-# llmlint.yml relies on (it omits `files.include`).
+# satisfying it; oneharness comes along transitively at a compatible version and
+# its executable is explicitly linked from that shared environment. llmlint >=
+# 0.3.7 gives the whole-tree default the composed llmlint.yml relies on (it omits
+# `files.include`).
 readonly LLMLINT_MIN="0.3.7"
 readonly BIN_DIR="$HOME/.local/bin"
 
@@ -47,10 +47,11 @@ ensure_toolchain() {
     log "uv not found; cannot install llmlint (install uv: https://docs.astral.sh/uv/)"
     return 0
   fi
-  # llmlint-cli pulls oneharness-cli as a dependency into the same tool venv, where
-  # llmlint discovers the `oneharness` binary beside its own — no separate install.
-  log "installing llmlint-cli >= $LLMLINT_MIN via uv tool"
-  uv tool install --upgrade "llmlint-cli>=$LLMLINT_MIN" >&2 \
+  # Keep both executables in llmlint-cli's tool environment and link them into the
+  # tool bin directory; do not install a second, independently resolved tool.
+  log "installing llmlint-cli >= $LLMLINT_MIN with oneharness via uv tool"
+  uv tool install --upgrade --with-executables-from oneharness-cli \
+    "llmlint-cli>=$LLMLINT_MIN" >&2 \
     || log "llmlint-cli install failed (continuing)"
 }
 
@@ -72,8 +73,8 @@ persist_session_env() {
 export PATH="${BIN_DIR}:${PATH}"
 ensure_toolchain
 persist_session_env
-# `llmlint doctor` confirms the sibling `oneharness` is reachable (it is not on
-# PATH — llmlint resolves it beside its own binary), so report via doctor.
+# Both executables are linked onto PATH; doctor additionally verifies llmlint's
+# complete runtime setup.
 if command -v llmlint >/dev/null 2>&1; then
   log "ready (llmlint: $(llmlint --version 2>/dev/null || echo unknown))"
   llmlint doctor >&2 2>&1 || log "llmlint doctor reported an issue (see above)"
