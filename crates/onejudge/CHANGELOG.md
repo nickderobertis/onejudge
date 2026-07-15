@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0](https://github.com/nickderobertis/onejudge/compare/v0.2.0...v0.3.0) - 2026-07-15
+
+### Added
+
+- [**breaking**] unify per-turn supervisor decisions
+- add free-text assessment judge output ([#18](https://github.com/nickderobertis/onejudge/pull/18))
+- [**breaking**] drive the CLI with optional skill + system_prompt, dropping `agent` ([#17](https://github.com/nickderobertis/onejudge/pull/17))
+- *(cli)* add ONEJUDGE_* env override tier (flags > env > file > defaults) ([#15](https://github.com/nickderobertis/onejudge/pull/15))
+
+### Fixed
+
+- select the live oneharness configuration ([#21](https://github.com/nickderobertis/onejudge/pull/21))
+
+### Other
+
+- align supervisor contract references
+- cover supervisor compatibility fallback
+
 ## [0.2.0](https://github.com/nickderobertis/onejudge/compare/v0.1.0...v0.2.0) - 2026-07-12
 
 ### Added
