@@ -25,11 +25,12 @@ export CLAUDE_CODE_OAUTH_TOKEN=...      # Claude Code harness credential (or you
 just test-live
 ```
 
-Harness/model selection lives in oneharness's config, not onejudge: the agent side
-uses the discovered `oneharness.toml` and the judge side uses `oneharness.judge.toml`
-(scaffold both with `onejudge init`). To target a specific harness/model, edit those
-files or use oneharness's own `ONEHARNESS_HARNESS` / `ONEHARNESS_MODEL` env overrides
-(which oneharness reads) — onejudge itself passes no `--harness`/`--model`.
+Harness/model selection lives in oneharness's config, not onejudge. The live test
+uses the committed workspace-root `oneharness.toml` for both the agent and judge
+sides, resolving it independently of Cargo's process CWD. To target a specific
+harness/model, edit that file or use oneharness's own `ONEHARNESS_HARNESSES` /
+`ONEHARNESS_MODEL` env overrides (which oneharness reads) — onejudge itself passes
+no `--harness`/`--model`.
 
 ## In CI
 
