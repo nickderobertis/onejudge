@@ -14,34 +14,6 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[3]
 OUTPUT = ROOT / "python" / "onejudge-sdk" / "src" / "onejudge_sdk" / "_generated"
 INPUT_ROOTS = ("run_config",)
-PYPROJECT = ROOT / "python" / "onejudge-sdk" / "pyproject.toml"
-
-
-def cargo_version() -> str:
-    """Read the workspace-owned release version without a TOML dependency."""
-    in_workspace_package = False
-    for line in (ROOT / "Cargo.toml").read_text(encoding="utf-8").splitlines():
-        if line.startswith("["):
-            in_workspace_package = line == "[workspace.package]"
-        elif in_workspace_package and line.startswith("version = "):
-            return line.split('"')[1]
-    raise RuntimeError("Cargo.toml has no [workspace.package] version")
-
-
-def pyproject_content(version: str) -> bytes:
-    """Stamp both SDK metadata fields from Cargo's release version."""
-    source = PYPROJECT.read_text(encoding="utf-8")
-    source, project_count = re.subn(
-        r'(?m)^version = "[^"]+"$', f'version = "{version}"', source, count=1
-    )
-    source, dependency_count = re.subn(
-        r'"onejudge-cli==[^"]+"', f'"onejudge-cli=={version}"', source, count=1
-    )
-    if project_count != 1 or dependency_count != 1:
-        raise RuntimeError("SDK pyproject version fields changed; update the generator")
-    return source.encode()
-
-
 def snake_case(value: str) -> str:
     """Convert camel-case properties to Python snake case."""
     return re.sub(r"(?<!^)(?=[A-Z])", "_", value).lower()
@@ -145,15 +117,14 @@ def generated_files() -> dict[str, bytes]:
         property_map(bundle[root], keys)
         input_keys[root] = dict(sorted(keys.items()))
         schemas[root] = pythonize(bundle[root])
-    version = cargo_version()
     return {
         "__init__.py": b'"""Rust-generated Python SDK assets."""\n',
         "schemas.json": (json.dumps(schemas, indent=2, sort_keys=True) + "\n").encode(),
         "input-keys.json": (json.dumps(input_keys, indent=2, sort_keys=True) + "\n").encode(),
         "../_generated_types.py": types_module(bundle).encode(),
         "../_version.py": (
-            '"""Package version, generated from Cargo.toml. Do not edit."""\n\n'
-            f'__version__ = "{version}"\n'
+            '"""Package version, stamped from Cargo.toml when packaged. Do not edit."""\n\n'
+            '__version__ = "0.0.0.dev0"\n'
         ).encode(),
     }
 
@@ -180,12 +151,6 @@ def main() -> int:
     parser.add_argument("--check", action="store_true")
     args = parser.parse_args()
     stale = []
-    expected_pyproject = pyproject_content(cargo_version())
-    if args.check:
-        if PYPROJECT.read_bytes() != expected_pyproject:
-            stale.append(drift(PYPROJECT, expected_pyproject))
-    else:
-        PYPROJECT.write_bytes(expected_pyproject)
     for relative, content in generated_files().items():
         path = OUTPUT / relative
         if args.check:

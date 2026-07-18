@@ -12,6 +12,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
 SDK = ROOT / "python" / "onejudge-sdk"
+PACKER = SDK / "scripts" / "pack.py"
 
 
 def cargo_version() -> str:
@@ -28,7 +29,11 @@ def cargo_version() -> str:
 def main() -> None:
     """Inspect, install, and execute the built SDK wheel."""
     wheel_dir = Path(tempfile.mkdtemp(prefix="onejudge-sdk-wheelhouse-"))
-    subprocess.run(["uv", "build", "--wheel", "--out-dir", str(wheel_dir), str(SDK)], check=True)
+    result = subprocess.run(
+        [sys.executable, str(PACKER)], cwd=ROOT, check=True, capture_output=True, text=True
+    )
+    package = result.stdout.strip()
+    subprocess.run(["uv", "build", "--wheel", "--out-dir", str(wheel_dir), package], check=True)
     wheels = list(wheel_dir.glob("onejudge_sdk-*.whl"))
     if len(wheels) != 1:
         raise AssertionError(f"expected one SDK wheel, found {wheels}")
