@@ -1,0 +1,83 @@
+# Build the platform wheels on release tags and publish them through PyPI
+# Trusted Publishing. release-plz owns the Cargo version and creates the tag;
+# maturin reads that same version for onejudge-cli. The SDK hook becomes active
+# automatically when its independently packageable `python-sdk/` tree exists.
+
+name: release-pypi
+
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: read
+
+jobs:
+  build-cli-wheels:
+    name: build-cli-wheel (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-24.04-arm
+          - target: x86_64-apple-darwin
+            os: macos-latest
+          - target: aarch64-apple-darwin
+            os: macos-latest
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build onejudge-cli wheel
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.target }}
+          args: --release --locked --out dist
+          manylinux: auto
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pypi-cli-${{ matrix.target }}
+          path: dist/*
+
+  # Reserved for the generated pure-Python SDK. Keeping this in the release
+  # pipeline now means adding python-sdk/pyproject.toml is sufficient to include
+  # onejudge-sdk in the same Trusted Publishing transaction.
+  build-sdk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Build onejudge-sdk when present
+        shell: bash
+        run: |
+          if [ -f python-sdk/pyproject.toml ]; then
+            uv build --out-dir sdk-dist python-sdk
+          else
+            echo "onejudge-sdk does not exist yet; skipping its distributions."
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pypi-sdk
+          path: sdk-dist/*
+          if-no-files-found: ignore
+
+  publish:
+    needs: [build-cli-wheels, build-sdk]
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: pypi-*
+          path: dist
+          merge-multiple: true
+      - name: Publish onejudge-cli and onejudge-sdk distributions
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist
+          skip-existing: true

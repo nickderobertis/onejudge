@@ -96,6 +96,25 @@ jobs:
       - name: Smoke-test the binary
         run: ./target/release/onejudge schema >/dev/null
 
+  # Build the actual PyPI artifact and invoke its installed console command.
+  # This catches missing CLI features or wheel entry-point drift before release.
+  pypi-wheel:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned toolchain (from rust-toolchain.toml)
+        run: rustup show
+      - uses: astral-sh/setup-uv@v6
+      - name: Build and install the wheel
+        run: |
+          uvx maturin build --release --locked --out dist
+          uv venv wheel-smoke
+          uv pip install --python wheel-smoke/bin/python dist/*.whl
+      - name: Smoke-test the packaged console command
+        run: |
+          wheel-smoke/bin/onejudge --version
+          wheel-smoke/bin/onejudge schema >/dev/null
+
   # LLM-judge tier (llmlint) — a blocking PR check, SEPARATE from `check`. It is
   # non-deterministic and needs an authenticated harness, so it never runs inside
   # `just check`. Scoped to the merge-base diff so a PR pays for its own changes.
