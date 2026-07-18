@@ -41,6 +41,11 @@ failure) and unexpected nonzero exits raise `OneJudgeProcessError` without
 discarding the exit code or stderr. A caller timeout raises
 `OneJudgeTimeoutError`.
 
+The Rust JSON Schemas generate the SDK's complete public type surface. Besides
+`RunConfig` and `RunReport`, nested contracts such as `ProviderConfig`,
+`EvalConfig`, `Transcript`, `Usage`, and `JudgeVerdict` are importable from
+`onejudge_sdk`; `StreamEvent` describes the Rust streaming envelope.
+
 There is no `run_stream` method. `onejudge run` currently emits one final JSON
 report; the JSONL interface in `docs/protocol.md` is the internal provider
 protocol, not a CLI result stream.

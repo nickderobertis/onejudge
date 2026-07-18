@@ -14,6 +14,13 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[3]
 OUTPUT = ROOT / "python" / "onejudge-sdk" / "src" / "onejudge_sdk" / "_generated"
 INPUT_ROOTS = ("run_config",)
+TYPE_ROOTS = {
+    "run_config": "RunConfig",
+    "report": "RunReport",
+    "stream_event": "StreamEvent",
+}
+
+
 def snake_case(value: str) -> str:
     """Convert camel-case properties to Python snake case."""
     return re.sub(r"(?<!^)(?=[A-Z])", "_", value).lower()
@@ -53,9 +60,41 @@ def property_map(node: Any, result: dict[str, str]) -> None:
         property_map(value, result)
 
 
+def literal_expression(values: list[Any]) -> str:
+    """Render JSON constants as a Python Literal expression."""
+    return f"Literal[{', '.join(json.dumps(value) for value in values)}]"
+
+
 def type_expression(schema: dict[str, Any]) -> str:
-    """Render the useful subset needed by the public config TypedDict."""
+    """Render a JSON Schema node as a precise Python type expression."""
+    if "$ref" in schema:
+        reference = schema["$ref"]
+        if not isinstance(reference, str):
+            raise RuntimeError("schema $ref must be a string")
+        return reference.rsplit("/", 1)[-1]
+    variants = schema.get("anyOf") or schema.get("oneOf")
+    if variants:
+        non_null = [item for item in variants if item.get("type") != "null"]
+        nullable = len(non_null) != len(variants)
+        constants = [item["const"] for item in non_null if "const" in item]
+        if len(constants) == len(non_null):
+            expression = literal_expression(constants)
+        else:
+            expressions = list(dict.fromkeys(type_expression(item) for item in non_null))
+            expression = (
+                expressions[0] if len(expressions) == 1 else f"Union[{', '.join(expressions)}]"
+            )
+        return f"Optional[{expression}]" if nullable else expression
     kind = schema.get("type")
+    if isinstance(kind, list):
+        non_null = [item for item in kind if item != "null"]
+        expressions = [type_expression({**schema, "type": item}) for item in non_null]
+        expression = expressions[0] if len(expressions) == 1 else f"Union[{', '.join(expressions)}]"
+        return f"Optional[{expression}]" if len(non_null) != len(kind) else expression
+    if "const" in schema:
+        return literal_expression([schema["const"]])
+    if "enum" in schema:
+        return literal_expression(schema["enum"])
     if kind == "string":
         return "str"
     if kind == "boolean":
@@ -65,29 +104,69 @@ def type_expression(schema: dict[str, Any]) -> str:
     if kind == "number":
         return "float"
     if kind == "array":
-        return f"Sequence[{type_expression(schema['items'])}]"
-    if kind == "object" or "$ref" in schema:
+        return f"Sequence[{type_expression(schema.get('items', {}))}]"
+    if kind == "object":
+        additional = schema.get("additionalProperties")
+        if isinstance(additional, dict):
+            return f"dict[str, {type_expression(additional)}]"
         return "dict[str, Any]"
+    if kind == "null":
+        return "None"
     return "Any"
 
 
+def typed_dict(name: str, schema: dict[str, Any]) -> str:
+    """Render one object schema, retaining its required/optional split."""
+    properties = pythonize(schema).get("properties", {})
+    required = set(pythonize(schema).get("required", []))
+    required_fields = [(key, value) for key, value in properties.items() if key in required]
+    optional_fields = [(key, value) for key, value in properties.items() if key not in required]
+    blocks = []
+    if required_fields and optional_fields:
+        base = f"_{name}Required"
+        fields = "\n".join(f"    {key}: {type_expression(value)}" for key, value in required_fields)
+        blocks.append(f"class {base}(TypedDict):\n{fields}\n")
+        heading = f"class {name}({base}, total=False):"
+        fields_to_render = optional_fields
+    else:
+        total = "" if required_fields else ", total=False"
+        heading = f"class {name}(TypedDict{total}):"
+        fields_to_render = required_fields or optional_fields
+    fields = "\n".join(f"    {key}: {type_expression(value)}" for key, value in fields_to_render)
+    blocks.append(f"{heading}\n{fields or '    pass'}\n")
+    return "\n\n".join(blocks).rstrip()
+
+
 def types_module(bundle: dict[str, Any]) -> str:
-    """Render a strict top-level config TypedDict and report alias."""
-    properties = pythonize(bundle["run_config"]).get("properties", {})
-    fields = "\n".join(f"    {key}: {type_expression(value)}" for key, value in properties.items())
+    """Render all named definitions and root contracts."""
+    definitions: dict[str, dict[str, Any]] = {}
+    for root in TYPE_ROOTS:
+        for name, schema in bundle[root].get("$defs", {}).items():
+            previous = definitions.setdefault(name, schema)
+            if previous != schema:
+                raise RuntimeError(f"incompatible duplicate schema definition {name!r}")
+
+    aliases = []
+    objects = []
+    for name, schema in definitions.items():
+        if schema.get("type") == "object":
+            objects.append(typed_dict(name, schema))
+        else:
+            aliases.append(f"{name} = {type_expression(schema)}")
+    objects.extend(typed_dict(name, bundle[root]) for root, name in TYPE_ROOTS.items())
+    body = "\n".join(aliases)
+    if aliases and objects:
+        body += "\n\n\n"
+    body += "\n\n\n".join(objects)
     return f'''"""Generated from onejudge. Do not edit."""
 
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Any, TypedDict
+from typing import Any, Literal, Optional, TypedDict, Union
 
 
-class RunConfig(TypedDict, total=False):
-{fields}
-
-
-RunReport = dict[str, Any]
+{body}
 '''
 
 
@@ -123,9 +202,9 @@ def generated_files() -> dict[str, bytes]:
         "input-keys.json": (json.dumps(input_keys, indent=2, sort_keys=True) + "\n").encode(),
         "../_generated_types.py": types_module(bundle).encode(),
         "../_version.py": (
-            '"""Package version, stamped from Cargo.toml when packaged. Do not edit."""\n\n'
-            '__version__ = "0.0.0.dev0"\n'
-        ).encode(),
+            b'"""Package version, stamped from Cargo.toml when packaged. Do not edit."""\n\n'
+            b'__version__ = "0.0.0.dev0"\n'
+        ),
     }
 
 

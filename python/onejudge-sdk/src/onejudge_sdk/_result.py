@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any
 
-from ._generated_types import RunReport
+from ._generated_types import NamedVerdict, RunReport, Usage
 
 
 @dataclass(frozen=True)
@@ -22,12 +22,12 @@ class RunResult:
         return self.exit_code == 0
 
     @property
-    def verdicts(self) -> list[dict[str, Any]]:
+    def verdicts(self) -> Sequence[NamedVerdict]:
         """Return the report's ordered verdicts."""
         return self.raw.get("verdicts", [])
 
     @property
-    def usage(self) -> dict[str, Any]:
+    def usage(self) -> Usage:
         """Return aggregate usage, or an empty mapping when unavailable."""
         return self.raw.get("usage") or {}
 
