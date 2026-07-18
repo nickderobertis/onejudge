@@ -74,7 +74,7 @@ jobs:
       - uses: extractions/setup-just@v3
       - uses: astral-sh/setup-uv@v6
       - run: just python-sdk-check
-      - name: Build version-synchronized onejudge-sdk
+      - name: Build version-synchronized onejudge
         id: sdk
         shell: bash
         run: |
@@ -84,7 +84,7 @@ jobs:
             uv build --out-dir sdk-dist "$pkgdir"
           else
             echo "exists=false" >> "$GITHUB_OUTPUT"
-            echo "onejudge-sdk does not exist yet; skipping its distributions."
+            echo "onejudge does not exist yet; skipping its distributions."
           fi
       - uses: actions/upload-artifact@v4
         if: steps.sdk.outputs.exists == 'true'
@@ -126,7 +126,7 @@ jobs:
         with:
           name: pypi-sdk
           path: dist
-      - name: Publish onejudge-sdk
+      - name: Publish onejudge
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: dist
@@ -145,16 +145,16 @@ jobs:
         shell: bash
         run: |
           ver="${GITHUB_REF_NAME#v}"
-          url="https://pypi.org/pypi/onejudge-sdk/${ver}/json"
+          url="https://pypi.org/pypi/onejudge/${ver}/json"
           for i in $(seq 1 30); do
             curl -fsSL -o /dev/null "$url" 2>/dev/null && break
             if [ "$i" = 30 ]; then
-              echo "::error::onejudge-sdk $ver did not appear on PyPI within ~5 minutes"
+              echo "::error::onejudge $ver did not appear on PyPI within ~5 minutes"
               exit 1
             fi
             sleep 10
           done
-          pip install "onejudge-sdk==${ver}"
+          pip install "onejudge==${ver}"
           python - "$ver" <<'PY'
           import sys
           from importlib.metadata import version
@@ -162,7 +162,7 @@ jobs:
 
           expected = sys.argv[1]
           assert __version__ == expected
-          assert version("onejudge-sdk") == expected
+          assert version("onejudge") == expected
           assert version("onejudge-cli") == expected
           PY
           onejudge --version | grep -F "$ver"

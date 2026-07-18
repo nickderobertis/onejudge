@@ -34,7 +34,7 @@ def main() -> None:
     )
     package = result.stdout.strip()
     subprocess.run(["uv", "build", "--wheel", "--out-dir", str(wheel_dir), package], check=True)
-    wheels = list(wheel_dir.glob("onejudge_sdk-*.whl"))
+    wheels = list(wheel_dir.glob("onejudge-*.whl"))
     if len(wheels) != 1:
         raise AssertionError(f"expected one SDK wheel, found {wheels}")
     with zipfile.ZipFile(wheels[0]) as archive:
