@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 /// signal", never "zero" — so a total stays `None` until something reports a real
 /// number, then accumulates.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "sdk-schema", derive(schemars::JsonSchema))]
 pub struct Usage {
     /// Prompt/input tokens billed, when reported.
     #[serde(default, skip_serializing_if = "Option::is_none")]

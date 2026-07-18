@@ -427,6 +427,8 @@ impl<'a> Engine<'a> {
 
 /// One streamed tool event delivered live to an [`Engine::run_streaming`] sink,
 /// tagged with the turn it belongs to.
+#[derive(serde::Serialize)]
+#[cfg_attr(feature = "sdk-schema", derive(schemars::JsonSchema))]
 pub struct StreamEvent<'a> {
     /// 1-based assistant-turn index within this run.
     pub turn: usize,

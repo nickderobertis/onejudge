@@ -58,9 +58,28 @@ assert_eq!(report.schema_version, onejudge::SCHEMA_VERSION);
 
 ## Versioning and the drift gate
 
-The wire form is pinned by a golden snapshot
-(`crates/onejudge/tests/golden/report.schema-v4.json`) and checked by
+The wire form is pinned by a canonical serialized example
+(`crates/onejudge/tests/golden/report.example-v4.json`) and its generated JSON
+Schema (`crates/onejudge/tests/golden/report.schema-v4.json`), both checked by
 `tests/contract.rs`. Any change to the serialized shape — a renamed field, a new
 key, a changed default — fails that test, so it can only land as a **deliberate**
-edit that also bumps `SCHEMA_VERSION` and updates the golden. Downstream SDKs that
-re-export these types therefore never drift silently.
+edit that also bumps `SCHEMA_VERSION` and updates both goldens. Downstream SDKs
+that re-export these types therefore never drift silently.
+
+## SDK schema bundle
+
+With the opt-in `sdk-schema` feature, onejudge exposes a deterministic bundle of
+named JSON Schema roots:
+
+- `run_config`: the YAML config object accepted by `onejudge run`;
+- `report`: the versioned JSON output emitted by `--format json`;
+- `stream_event`: the `{ turn, event }` envelope delivered by streaming runs.
+
+Generate it from the Rust contracts with:
+
+```console
+cargo run -q -p onejudge --features sdk-schema --example generate_sdk_schema
+```
+
+The feature includes the CLI config types but remains non-default, so neither a
+bare library consumer nor a `cli`-only build compiles `schemars`.

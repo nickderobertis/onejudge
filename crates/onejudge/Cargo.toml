@@ -22,6 +22,7 @@ thiserror = { workspace = true }
 # (and the MSRV's) default surface.
 clap = { version = "4", features = ["derive"], optional = true }
 serde_yaml_ng = { version = "0.10", optional = true }
+schemars = { workspace = true, optional = true }
 
 [dev-dependencies]
 # The contract drift gate (`tests/contract.rs`) serializes the public `Report`
@@ -48,6 +49,15 @@ skill = ["dep:serde_yaml_ng"]
 # it alongside `fake-provider` and drives the built binary against the test doubles
 # in `tests/cli.rs`.
 cli = ["dep:clap", "skill"]
+
+# Rust-owned JSON Schema metadata for SDK generators. Config is the CLI's YAML
+# input contract, so this opt-in feature includes `cli`; bare library and CLI
+# consumers do not compile schemars unless they explicitly request this surface.
+sdk-schema = ["dep:schemars", "cli"]
+
+[[example]]
+name = "generate_sdk_schema"
+required-features = ["sdk-schema"]
 
 # The user-facing standalone binary, behind the `cli` feature. Unlike the two
 # `fake-provider` doubles below, this one IS published and installed

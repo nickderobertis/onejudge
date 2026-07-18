@@ -24,15 +24,13 @@ bootstrap:
 # release-target drift gate.
 check: format-check lint doc test audit check-release-targets
 
-# The deterministic gate runs on `--features fake-provider,cli` (the e2e test
-# doubles plus the standalone binary), never `--all-features`. Every model call
-# goes through oneharness; the deterministic gate fakes only the model, via the
-# real subprocess doubles. Coverage excludes the src/bin/ doubles.
+# The deterministic gate enables the test doubles, CLI, and SDK schema export,
+# never `--all-features`. Every model call goes through oneharness; the gate
+# fakes only the model via real subprocess doubles. Coverage excludes src/bin/.
 
 # The offline gate's feature set: the e2e test doubles PLUS the standalone `cli`
-# binary, so the real CLI e2e (`tests/cli.rs`, driving the built `onejudge` against
-# the doubles) is in the gate.
-gate_features := "fake-provider,cli"
+# binary and schema generator, so both public export surfaces remain gated.
+gate_features := "fake-provider,cli,sdk-schema"
 
 # Gate test step: whole suite (unit + integration + e2e + cli), coverage enforced.
 test:

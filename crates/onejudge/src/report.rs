@@ -24,6 +24,7 @@ pub const SCHEMA_VERSION: u32 = 4;
 /// A judge verdict paired with the criterion it scored and the kind of
 /// judgement, so a serialized report is self-describing.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "sdk-schema", derive(schemars::JsonSchema))]
 pub struct NamedVerdict {
     /// The plain-English criterion that was scored.
     pub criterion: String,
@@ -52,6 +53,7 @@ impl NamedVerdict {
 /// [`Outcome::into_report`](crate::Outcome::into_report), or directly with
 /// [`Report::new`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "sdk-schema", derive(schemars::JsonSchema))]
 pub struct Report {
     /// The contract version this report was serialized under.
     pub schema_version: u32,

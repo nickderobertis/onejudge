@@ -18,6 +18,7 @@ use super::CliError;
 /// `task`) work, while `deny_unknown_fields` makes a typo'd key a hard error
 /// instead of a silently-ignored setting.
 #[derive(Debug, Clone, Default, Deserialize)]
+#[cfg_attr(feature = "sdk-schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct Config {
     /// Which backend runs the harness (and judges / plays the user).
@@ -60,6 +61,7 @@ pub struct Config {
 
 /// The simulated user that supervises the agent and drives the loop.
 #[derive(Debug, Clone, Default, Deserialize)]
+#[cfg_attr(feature = "sdk-schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct UserConfig {
     /// How the simulated user behaves (their instructions).
@@ -77,6 +79,7 @@ pub struct UserConfig {
 
 /// One eval scored against the finished transcript.
 #[derive(Debug, Clone, Deserialize)]
+#[cfg_attr(feature = "sdk-schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct EvalConfig {
     /// The plain-English criterion.
@@ -96,6 +99,7 @@ pub struct EvalConfig {
 /// and turns it into a validated [`ProviderSpec`], so a misplaced-but-spelled-right
 /// key (e.g. `bin` under `kind: command`) is still a loud error.
 #[derive(Debug, Clone, Default, Deserialize)]
+#[cfg_attr(feature = "sdk-schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct ProviderConfig {
     /// `oneharness` (default) | `command` | `split`.
@@ -125,6 +129,7 @@ pub struct ProviderConfig {
 /// both the YAML `kind:` (via `Deserialize`) and the `--provider` flag (via
 /// clap's `ValueEnum`), so the two surfaces cannot drift.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, clap::ValueEnum)]
+#[cfg_attr(feature = "sdk-schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "lowercase")]
 pub enum ProviderKind {
     /// Shell out to the `oneharness` CLI (the default).
