@@ -4,7 +4,7 @@ build-backend = "uv_build"
 
 [project]
 name = "onejudge-sdk"
-version = "0.3.0"
+version = "0.0.0.dev0"
 description = "Typed async Python SDK for onejudge"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -25,7 +25,7 @@ classifiers = [
     "Programming Language :: Python :: 3.14",
     "Typing :: Typed",
 ]
-dependencies = ["jsonschema>=4.18,<5", "onejudge-cli==0.3.0"]
+dependencies = ["jsonschema>=4.18,<5", "onejudge-cli==0.0.0.dev0"]
 
 [project.urls]
 Homepage = "https://github.com/nickderobertis/onejudge"

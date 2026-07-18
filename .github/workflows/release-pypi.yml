@@ -1,7 +1,7 @@
 # Build platform wheels for a published GitHub Release and, when explicitly
 # enabled, publish them through PyPI Trusted Publishing. release-plz owns the
 # Cargo version and Release; maturin reads that same version for onejudge-cli.
-# The SDK hook becomes active when its `python-sdk/` package exists.
+# The SDK is stamped from that Cargo version when its distributions are built.
 
 name: release-pypi
 
@@ -63,9 +63,7 @@ jobs:
           name: pypi-cli-${{ matrix.target }}
           path: dist/*
 
-  # Reserved for the generated pure-Python SDK. Keeping this in the release
-  # pipeline now means adding python-sdk/pyproject.toml is sufficient to include
-  # onejudge-sdk in the same Trusted Publishing transaction.
+  # Build the generated SDK at the Cargo release version with an exact CLI pin.
   build-sdk:
     needs: test
     runs-on: ubuntu-latest
@@ -73,14 +71,17 @@ jobs:
       exists: ${{ steps.sdk.outputs.exists }}
     steps:
       - uses: actions/checkout@v4
+      - uses: extractions/setup-just@v3
       - uses: astral-sh/setup-uv@v6
-      - name: Build onejudge-sdk when present
+      - run: just python-sdk-check
+      - name: Build version-synchronized onejudge-sdk
         id: sdk
         shell: bash
         run: |
-          if [ -f python-sdk/pyproject.toml ]; then
+          if [ -f python/onejudge-sdk/pyproject.toml ]; then
             echo "exists=true" >> "$GITHUB_OUTPUT"
-            uv build --out-dir sdk-dist python-sdk
+            pkgdir="$(python python/onejudge-sdk/scripts/pack.py)"
+            uv build --out-dir sdk-dist "$pkgdir"
           else
             echo "exists=false" >> "$GITHUB_OUTPUT"
             echo "onejudge-sdk does not exist yet; skipping its distributions."
@@ -130,3 +131,38 @@ jobs:
         with:
           packages-dir: dist
           skip-existing: true
+
+  # Prove both synchronized distributions are resolvable after registry propagation.
+  verify-pypi:
+    needs: publish-sdk
+    if: ${{ vars.PYPI_PUBLISH == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install and verify the published CLI and SDK
+        shell: bash
+        run: |
+          ver="${GITHUB_REF_NAME#v}"
+          url="https://pypi.org/pypi/onejudge-sdk/${ver}/json"
+          for i in $(seq 1 30); do
+            curl -fsSL -o /dev/null "$url" 2>/dev/null && break
+            if [ "$i" = 30 ]; then
+              echo "::error::onejudge-sdk $ver did not appear on PyPI within ~5 minutes"
+              exit 1
+            fi
+            sleep 10
+          done
+          pip install "onejudge-sdk==${ver}"
+          python - "$ver" <<'PY'
+          import sys
+          from importlib.metadata import version
+          from onejudge_sdk import __version__
+
+          expected = sys.argv[1]
+          assert __version__ == expected
+          assert version("onejudge-sdk") == expected
+          assert version("onejudge-cli") == expected
+          PY
+          onejudge --version | grep -F "$ver"
