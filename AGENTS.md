@@ -107,7 +107,13 @@ Use the `just` recipes; do not hand-roll equivalents. `just --list` is the index
   tag's GitHub Release for `install.sh` / manual download to fetch.
   **Bump policy (pre-1.0):** `feat` / `feat!` / `BREAKING CHANGE` → minor;
   `fix` / `perf` / `refactor` / `build` → patch; `chore` / `docs` / `ci` /
-  `test` → no release. Post-1.0, a breaking change is a major.
+  `test` → no release. Post-1.0, a breaking change is a major. Because
+  release-plz only detects files under the Rust package, the
+  `python-sdk-release-trigger` workflow turns a release-worthy
+  `python/onejudge-sdk/**`-only push into a matching conventional commit of the
+  crate-owned trigger file; the next normal release-plz run then bumps and
+  publishes the crate, CLI, and stamped SDK together. `just check` proves the
+  attribution rules.
 
 ## Invariants (non-negotiable)
 
