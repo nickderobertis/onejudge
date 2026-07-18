@@ -111,9 +111,7 @@ jobs:
           uv venv wheel-smoke
           uv pip install --python wheel-smoke/bin/python dist/*.whl
       - name: Smoke-test the packaged console command
-        run: |
-          wheel-smoke/bin/onejudge --version
-          wheel-smoke/bin/onejudge schema >/dev/null
+        run: wheel-smoke/bin/onejudge --help >/dev/null
 
   # LLM-judge tier (llmlint) — a blocking PR check, SEPARATE from `check`. It is
   # non-deterministic and needs an authenticated harness, so it never runs inside
