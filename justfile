@@ -22,7 +22,7 @@ bootstrap:
 
 # Full quality gate: format, lint, doc, coverage-enforced tests, audit, and the
 # release-target drift gate.
-check: format-check lint doc test audit check-release-targets
+check: format-check lint doc python-sdk-check test audit check-release-targets
 
 # The deterministic gate enables the test doubles, CLI, and SDK schema export,
 # never `--all-features`. Every model call goes through oneharness; the gate
@@ -106,3 +106,33 @@ lint-llm-diff base="origin/main":
 # Deterministic llmlint config/ignore/version-bump validation.
 lint-llm-validate *args:
     PATH="$HOME/.local/bin:$PATH" llmlint validate {{args}}
+
+# Regenerate Python declarations and runtime schemas from Rust wire types.
+python-sdk-generate:
+    uv run --no-project --python 3.9 --with-requirements python/onejudge-sdk/requirements-dev.txt python python/onejudge-sdk/scripts/generate.py
+
+# Strict Python SDK gate: generated-contract drift, lint, types, coverage, and
+# an installed-wheel smoke test through the real onejudge subprocess.
+python-sdk-check:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    log=$(mktemp)
+    trap 'rm -f "$log"' EXIT
+    if ! (
+        set -euo pipefail
+        command -v uv >/dev/null 2>&1 || { echo "uv not installed: https://docs.astral.sh/uv/getting-started/installation/" >&2; exit 1; }
+        cargo build --locked --features {{gate_features}} --bins
+        run=(uv run --no-project --python 3.9 --with-requirements python/onejudge-sdk/requirements-dev.txt)
+        "${run[@]}" python python/onejudge-sdk/scripts/generate.py --check
+        "${run[@]}" ruff format --check python/onejudge-sdk
+        "${run[@]}" ruff check python/onejudge-sdk
+        "${run[@]}" mypy --config-file python/onejudge-sdk/pyproject.toml python/onejudge-sdk/src python/onejudge-sdk/scripts python/onejudge-sdk/test
+        rm -f target/python-sdk.coverage
+        COVERAGE_FILE=target/python-sdk.coverage PYTHONPATH=python/onejudge-sdk/src "${run[@]}" coverage run --rcfile=python/onejudge-sdk/pyproject.toml -m unittest discover -s python/onejudge-sdk/test -p 'test_*.py'
+        COVERAGE_FILE=target/python-sdk.coverage "${run[@]}" coverage report --rcfile=python/onejudge-sdk/pyproject.toml
+        "${run[@]}" python python/onejudge-sdk/test/package_e2e.py
+    ) >"$log" 2>&1; then
+        cat "$log" >&2
+        exit 1
+    fi
+    echo "python-sdk-check: ok"

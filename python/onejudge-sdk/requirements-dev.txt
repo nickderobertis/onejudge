@@ -1,0 +1,5 @@
+coverage==7.10.7
+jsonschema==4.25.1
+mypy==1.18.2
+ruff==0.13.2
+uv-build==0.11.1
