@@ -22,7 +22,7 @@ bootstrap:
 
 # Full quality gate: format, lint, doc, coverage-enforced tests, audit, and the
 # release-target drift gate.
-check: format-check lint doc test audit check-release-targets
+check: format-check lint doc test audit check-release-targets check-python-sdk-release-trigger
 
 # The deterministic gate enables the test doubles, CLI, and SDK schema export,
 # never `--all-features`. Every model call goes through oneharness; the gate
@@ -80,6 +80,10 @@ audit:
 # (deterministic, offline). Keeps the shipped-archive naming in one enforced place.
 check-release-targets:
     ./scripts/check-release-targets.sh
+
+# Prove SDK-only conventional commits are attributed to the release-plz package.
+check-python-sdk-release-trigger:
+    ./scripts/check-python-sdk-release-trigger.sh
 
 # Check the crate still builds on the declared MSRV (needs 1.82.0 installed).
 msrv:

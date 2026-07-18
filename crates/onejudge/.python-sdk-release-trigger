@@ -1,0 +1,2 @@
+# Updated automatically with the triggering main-branch commit SHA. This file
+# exists solely so release-plz attributes Python SDK-only releases to this crate.

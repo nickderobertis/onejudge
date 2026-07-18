@@ -1,0 +1,34 @@
+name: python-sdk-release-trigger
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - python/onejudge-sdk/**
+
+permissions:
+  contents: write
+
+jobs:
+  attribute-sdk-change-to-crate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.RELEASE_PLZ_TOKEN }}
+      - name: Attribute a release-worthy SDK-only change to onejudge
+        env:
+          BASE: ${{ github.event.before }}
+          HEAD: ${{ github.sha }}
+        run: |
+          prefix=$(./scripts/python-sdk-release-trigger.sh "$BASE" "$HEAD")
+          if [[ -z "$prefix" ]]; then
+            exit 0
+          fi
+          printf '%s\n' "$HEAD" > crates/onejudge/.python-sdk-release-trigger
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add crates/onejudge/.python-sdk-release-trigger
+          git commit -m "$prefix(onejudge): release Python SDK changes"
+          git push origin HEAD:main
