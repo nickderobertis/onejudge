@@ -28,6 +28,7 @@ pub struct SkillRef<'a> {
 
 /// The kind of judgement requested.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "sdk-schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "lowercase")]
 pub enum JudgeKind {
     /// A yes/no verdict.
@@ -60,6 +61,7 @@ pub struct JudgeQuery<'a> {
 /// The raw value a judge returns: a boolean or a number, matching the query kind.
 /// Deserialized untagged from the provider's `value` field.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "sdk-schema", derive(schemars::JsonSchema))]
 #[serde(untagged)]
 pub enum JudgeValue {
     /// A boolean verdict.
@@ -139,6 +141,7 @@ pub struct SupervisorTurn {
 /// of onejudge's versioned [`Report`](crate::Report) contract, so it round-trips
 /// through serde.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "sdk-schema", derive(schemars::JsonSchema))]
 pub struct JudgeVerdict {
     /// The parsed verdict value.
     pub value: JudgeValue,

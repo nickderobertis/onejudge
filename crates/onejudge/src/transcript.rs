@@ -7,6 +7,7 @@ use serde_json::Value;
 
 /// Who produced a message.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "sdk-schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "lowercase")]
 pub enum Role {
     /// The (real or simulated) user driving the skill.
@@ -38,6 +39,7 @@ impl Role {
 /// `input` is free-form JSON, so `Message`/`Transcript` are `PartialEq` but not
 /// `Eq`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "sdk-schema", derive(schemars::JsonSchema))]
 pub struct ToolEvent {
     /// `tool_call` (the skill invoked a tool) or `tool_result` (the observation).
     pub kind: String,
@@ -77,6 +79,7 @@ impl ToolEvent {
 
 /// A single turn in the conversation.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "sdk-schema", derive(schemars::JsonSchema))]
 pub struct Message {
     /// Who produced the turn.
     pub role: Role,
@@ -119,6 +122,7 @@ impl Message {
 
 /// An ordered list of messages.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "sdk-schema", derive(schemars::JsonSchema))]
 pub struct Transcript {
     /// The turns in order, oldest first.
     pub messages: Vec<Message>,

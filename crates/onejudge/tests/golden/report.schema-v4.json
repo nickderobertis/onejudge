@@ -1,44 +1,293 @@
 {
-  "schema_version": 4,
-  "transcript": {
-    "messages": [
-      {
-        "role": "user",
-        "content": "commit the fix"
-      },
-      {
-        "role": "assistant",
-        "content": "Committed.",
-        "events": [
-          {
-            "kind": "tool_call",
-            "name": "bash",
-            "input": {
-              "command": "git commit -m fix"
-            },
-            "index": 0
-          }
-        ]
-      }
-    ]
-  },
-  "verdicts": [
-    {
-      "criterion": "the change was committed",
-      "kind": "boolean",
-      "verdict": {
-        "value": true,
-        "reason": "a git commit ran"
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Report",
+  "description": "A judged run: the transcript, the verdicts scored against it, aggregated\nusage, and whether a streaming sink short-circuited the run — stamped with the\n[`SCHEMA_VERSION`] of the contract that produced it.\n\nBuild one from an [`Outcome`](crate::Outcome) with\n[`Outcome::into_report`](crate::Outcome::into_report), or directly with\n[`Report::new`].",
+  "type": "object",
+  "properties": {
+    "assessment": {
+      "description": "A free-text judgement requested by the caller, if any.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "completion_reason": {
+      "description": "Why the per-turn supervisor declared the task complete, if it did.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "schema_version": {
+      "description": "The contract version this report was serialized under.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "stopped_early": {
+      "description": "Whether a streaming sink asked to short-circuit the run.",
+      "type": "boolean",
+      "default": false
+    },
+    "transcript": {
+      "description": "The full conversation transcript, with tool events on assistant turns.",
+      "$ref": "#/$defs/Transcript"
+    },
+    "usage": {
+      "description": "Aggregated usage across every provider call (`None` if nothing reported).",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Usage"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "verdicts": {
+      "description": "The verdicts scored against the transcript, in the order they were added.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/NamedVerdict"
       }
     }
-  ],
-  "assessment": "No follow-up work remains.",
-  "completion_reason": "the commit completed the task",
-  "usage": {
-    "input_tokens": 12,
-    "output_tokens": 3,
-    "cache_read_tokens": 9,
-    "cache_write_tokens": 4
   },
-  "stopped_early": false
+  "required": [
+    "schema_version",
+    "transcript",
+    "stopped_early"
+  ],
+  "$defs": {
+    "JudgeKind": {
+      "description": "The kind of judgement requested.",
+      "oneOf": [
+        {
+          "description": "A yes/no verdict.",
+          "type": "string",
+          "const": "boolean"
+        },
+        {
+          "description": "A score on a `[min, max]` scale.",
+          "type": "string",
+          "const": "numeric"
+        }
+      ]
+    },
+    "JudgeValue": {
+      "description": "The raw value a judge returns: a boolean or a number, matching the query kind.\nDeserialized untagged from the provider's `value` field.",
+      "anyOf": [
+        {
+          "description": "A boolean verdict.",
+          "type": "boolean"
+        },
+        {
+          "description": "A numeric score.",
+          "type": "number",
+          "format": "double"
+        }
+      ]
+    },
+    "JudgeVerdict": {
+      "description": "A judge verdict: the raw value (bool or number) plus the stated reason. Part\nof onejudge's versioned [`Report`](crate::Report) contract, so it round-trips\nthrough serde.",
+      "type": "object",
+      "properties": {
+        "reason": {
+          "description": "The judge's one-sentence justification.",
+          "type": "string",
+          "default": ""
+        },
+        "usage": {
+          "description": "Cost/token usage for the judge call, if reported.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Usage"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "value": {
+          "description": "The parsed verdict value.",
+          "$ref": "#/$defs/JudgeValue"
+        }
+      },
+      "required": [
+        "value",
+        "reason"
+      ]
+    },
+    "Message": {
+      "description": "A single turn in the conversation.",
+      "type": "object",
+      "properties": {
+        "content": {
+          "description": "The turn's text.",
+          "type": "string"
+        },
+        "events": {
+          "description": "The normalized tool events the skill took producing this turn (assistant\nturns only, and only when the harness exposed a tool transcript). Empty\notherwise. Surfaced for post-hoc analysis, streamed live, and rendered\ninto the transcript the judge sees.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ToolEvent"
+          }
+        },
+        "role": {
+          "description": "Who produced the turn.",
+          "$ref": "#/$defs/Role"
+        }
+      },
+      "required": [
+        "role",
+        "content"
+      ]
+    },
+    "NamedVerdict": {
+      "description": "A judge verdict paired with the criterion it scored and the kind of\njudgement, so a serialized report is self-describing.",
+      "type": "object",
+      "properties": {
+        "criterion": {
+          "description": "The plain-English criterion that was scored.",
+          "type": "string"
+        },
+        "kind": {
+          "description": "Whether it was a boolean or numeric judgement.",
+          "$ref": "#/$defs/JudgeKind"
+        },
+        "verdict": {
+          "description": "The verdict itself (value, reason, and per-call usage).",
+          "$ref": "#/$defs/JudgeVerdict"
+        }
+      },
+      "required": [
+        "criterion",
+        "kind",
+        "verdict"
+      ]
+    },
+    "Role": {
+      "description": "Who produced a message.",
+      "oneOf": [
+        {
+          "description": "The (real or simulated) user driving the skill.",
+          "type": "string",
+          "const": "user"
+        },
+        {
+          "description": "The skill / assistant under test.",
+          "type": "string",
+          "const": "assistant"
+        },
+        {
+          "description": "System-level framing, if a provider surfaces it.",
+          "type": "string",
+          "const": "system"
+        }
+      ]
+    },
+    "ToolEvent": {
+      "description": "One normalized tool-call / action event the skill took during a turn, lifted\nfrom `oneharness`'s `events` array (its `--events` output). Harness-agnostic,\nso a consumer can inspect shell commands, file edits, and tool uses across any\nharness, not just the final text. `input` is the structured, tool-shaped args\nso a consumer can match on the command string or file path without re-parsing.\n\n`input` is free-form JSON, so `Message`/`Transcript` are `PartialEq` but not\n`Eq`.",
+      "type": "object",
+      "properties": {
+        "index": {
+          "description": "Position within the run, so ordering (\"did X before Y\") is expressible.",
+          "type": "integer",
+          "format": "uint",
+          "default": 0,
+          "minimum": 0
+        },
+        "input": {
+          "description": "Structured tool arguments (the command, the file path); `None` when none."
+        },
+        "kind": {
+          "description": "`tool_call` (the skill invoked a tool) or `tool_result` (the observation).",
+          "type": "string"
+        },
+        "name": {
+          "description": "Normalized tool name where knowable (e.g. `bash`, `edit_file`); `None` for\na `tool_result` or when the harness did not name it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "output": {
+          "description": "The result/observation text, when the transcript exposed it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "index"
+      ]
+    },
+    "Transcript": {
+      "description": "An ordered list of messages.",
+      "type": "object",
+      "properties": {
+        "messages": {
+          "description": "The turns in order, oldest first.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Message"
+          }
+        }
+      },
+      "required": [
+        "messages"
+      ]
+    },
+    "Usage": {
+      "description": "Token / cost usage for one provider call, or a running total.\n\nEach field is independently optional because not every harness reports every\nsignal (cost is commonly absent on subscription auth, and cache counts only\nwhen the harness surfaces prompt-cache reads/writes). `None` means \"no\nsignal\", never \"zero\" — so a total stays `None` until something reports a real\nnumber, then accumulates.",
+      "type": "object",
+      "properties": {
+        "cache_read_tokens": {
+          "description": "Prompt tokens served from the provider's prompt cache — a cheap read of a\npreviously-written prefix — when the harness reports them. `None` when the\nharness does not surface cache counts, never `0` as a guess.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "cache_write_tokens": {
+          "description": "Prompt tokens written to the provider's prompt cache (a.k.a. cache\ncreation), when the harness reports them. `None` when not surfaced.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "cost_usd": {
+          "description": "Total cost in USD, when reported.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "input_tokens": {
+          "description": "Prompt/input tokens billed, when reported.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "output_tokens": {
+          "description": "Completion/output tokens billed, when reported.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        }
+      }
+    }
+  }
 }

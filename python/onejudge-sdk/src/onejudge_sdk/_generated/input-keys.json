@@ -1,0 +1,22 @@
+{
+  "run_config": {
+    "assessment": "assessment",
+    "bin": "bin",
+    "command": "command",
+    "criterion": "criterion",
+    "done_when": "done_when",
+    "evals": "evals",
+    "judge": "judge",
+    "judge_config": "judge_config",
+    "kind": "kind",
+    "max_turns": "max_turns",
+    "persona": "persona",
+    "provider": "provider",
+    "scale": "scale",
+    "session": "session",
+    "skill": "skill",
+    "system_prompt": "system_prompt",
+    "task": "task",
+    "user": "user"
+  }
+}

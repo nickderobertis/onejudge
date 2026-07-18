@@ -15,6 +15,7 @@ description = "A simulated interaction and evaluation loop over oneharness: driv
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
+schemars = "1"
 
 [profile.dev]
 # Faster incremental e2e: the suite spawns the test-double binaries many times,

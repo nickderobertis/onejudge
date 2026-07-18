@@ -1,0 +1,41 @@
+# PyPI packaging for the onejudge CLI.
+#
+# maturin's `bin` bindings wrap the compiled Rust binary in a per-platform
+# wheel. The distribution is `onejudge-cli`; the installed console command is
+# `onejudge`, supplied by the crate's `[[bin]]` target.
+#
+# The version is intentionally dynamic: maturin reads it from Cargo.toml, so
+# release-plz remains the single version driver.
+
+[build-system]
+requires = ["maturin>=1.7,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "onejudge-cli"
+description = "Drive a harness through a simulated conversation and score the transcript."
+readme = "README.md"
+requires-python = ">=3.8"
+license = { text = "MIT" }
+authors = [{ name = "Nick DeRobertis" }]
+keywords = ["cli", "agent", "evaluation", "judge", "harness"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Rust",
+    "Topic :: Software Development :: Testing",
+]
+dynamic = ["version"]
+
+[project.urls]
+Homepage = "https://github.com/nickderobertis/onejudge"
+Repository = "https://github.com/nickderobertis/onejudge"
+
+[tool.maturin]
+bindings = "bin"
+manifest-path = "crates/onejudge/Cargo.toml"
+features = ["cli"]
+strip = true

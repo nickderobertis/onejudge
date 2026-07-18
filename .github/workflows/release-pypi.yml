@@ -1,0 +1,132 @@
+# Build platform wheels for a published GitHub Release and, when explicitly
+# enabled, publish them through PyPI Trusted Publishing. release-plz owns the
+# Cargo version and Release; maturin reads that same version for onejudge-cli.
+# The SDK hook becomes active when its `python-sdk/` package exists.
+
+name: release-pypi
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-pypi-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # A manually published Release takes the same gate as a release-plz Release:
+  # no wheel can build or publish from a revision that fails `just check`.
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned toolchain (from rust-toolchain.toml)
+        run: rustup show
+      - uses: extractions/setup-just@v3
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest,cargo-llvm-cov,cargo-deny,cargo-machete
+      - run: just bootstrap
+      - run: just check
+
+  build-cli-wheels:
+    name: build-cli-wheel (${{ matrix.target }})
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-24.04-arm
+          - target: x86_64-apple-darwin
+            os: macos-latest
+          - target: aarch64-apple-darwin
+            os: macos-latest
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build onejudge-cli wheel
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.target }}
+          args: --release --locked --out dist
+          manylinux: auto
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pypi-cli-${{ matrix.target }}
+          path: dist/*
+
+  # Reserved for the generated pure-Python SDK. Keeping this in the release
+  # pipeline now means adding python-sdk/pyproject.toml is sufficient to include
+  # onejudge-sdk in the same Trusted Publishing transaction.
+  build-sdk:
+    needs: test
+    runs-on: ubuntu-latest
+    outputs:
+      exists: ${{ steps.sdk.outputs.exists }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Build onejudge-sdk when present
+        id: sdk
+        shell: bash
+        run: |
+          if [ -f python-sdk/pyproject.toml ]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            uv build --out-dir sdk-dist python-sdk
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "onejudge-sdk does not exist yet; skipping its distributions."
+          fi
+      - uses: actions/upload-artifact@v4
+        if: steps.sdk.outputs.exists == 'true'
+        with:
+          name: pypi-sdk
+          path: sdk-dist/*
+          if-no-files-found: ignore
+
+  # Publishing is intentionally dormant until the repository owner registers
+  # the Trusted Publisher and explicitly enables the repository variable.
+  publish-cli:
+    needs: build-cli-wheels
+    if: ${{ vars.PYPI_PUBLISH == 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: pypi-cli-*
+          path: dist
+          merge-multiple: true
+      - name: Publish onejudge-cli
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist
+          skip-existing: true
+
+  # The SDK's exact CLI dependency must already be publishable before the SDK
+  # itself lands, so this job is explicitly ordered after publish-cli.
+  publish-sdk:
+    needs: [publish-cli, build-sdk]
+    if: ${{ vars.PYPI_PUBLISH == 'true' && needs.build-sdk.outputs.exists == 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: pypi-sdk
+          path: dist
+      - name: Publish onejudge-sdk
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist
+          skip-existing: true

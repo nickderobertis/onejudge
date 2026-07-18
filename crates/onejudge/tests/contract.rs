@@ -1,6 +1,6 @@
 //! Drift gate for onejudge's versioned [`Report`] contract. It builds a canonical
 //! report through the public API, serializes it, and diffs the result against a
-//! checked-in golden (`tests/golden/report.schema-v4.json`). Any change to the
+//! checked-in example and generated JSON Schema goldens. Any change to the
 //! wire form — a renamed field, a new key, a changed default — fails here, so it
 //! must be a deliberate edit that also bumps `SCHEMA_VERSION`, never a silent
 //! break for the SDKs that compose over this contract.
@@ -48,22 +48,36 @@ fn canonical_report() -> Report {
     report
 }
 
-const GOLDEN: &str = include_str!("golden/report.schema-v4.json");
+const EXAMPLE_GOLDEN: &str = include_str!("golden/report.example-v4.json");
+#[cfg(feature = "sdk-schema")]
+const SCHEMA_GOLDEN: &str = include_str!("golden/report.schema-v4.json");
 
 #[test]
-fn report_matches_the_golden_schema_v4() {
+fn report_matches_the_golden_example_v4() {
     assert_eq!(SCHEMA_VERSION, 4, "golden is for schema v4");
     let actual = serde_json::to_string_pretty(&canonical_report()).unwrap();
     assert_eq!(
         actual.trim(),
-        GOLDEN.trim(),
+        EXAMPLE_GOLDEN.trim(),
         "the Report wire form changed. If this is intentional, bump SCHEMA_VERSION \
-         and update tests/golden/report.schema-v4.json. Actual serialization:\n{actual}"
+         and update the v4 contract goldens. Actual serialization:\n{actual}"
     );
 }
 
 #[test]
 fn golden_deserializes_back_to_the_canonical_report() {
-    let back: Report = serde_json::from_str(GOLDEN).unwrap();
+    let back: Report = serde_json::from_str(EXAMPLE_GOLDEN).unwrap();
     assert_eq!(back, canonical_report());
+}
+
+#[cfg(feature = "sdk-schema")]
+#[test]
+fn generated_report_schema_matches_the_schema_v4_golden() {
+    let actual = serde_json::to_value(onejudge::sdk_schema::bundle().report).unwrap();
+    let golden: serde_json::Value = serde_json::from_str(SCHEMA_GOLDEN).unwrap();
+    assert_eq!(
+        actual, golden,
+        "the generated Report schema changed. If the wire contract changed, bump \
+         SCHEMA_VERSION and update the versioned schema golden"
+    );
 }

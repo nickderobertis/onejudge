@@ -1,0 +1,588 @@
+{
+  "report": {
+    "$defs": {
+      "JudgeKind": {
+        "description": "The kind of judgement requested.",
+        "oneOf": [
+          {
+            "const": "boolean",
+            "description": "A yes/no verdict.",
+            "type": "string"
+          },
+          {
+            "const": "numeric",
+            "description": "A score on a `[min, max]` scale.",
+            "type": "string"
+          }
+        ]
+      },
+      "JudgeValue": {
+        "anyOf": [
+          {
+            "description": "A boolean verdict.",
+            "type": "boolean"
+          },
+          {
+            "description": "A numeric score.",
+            "format": "double",
+            "type": "number"
+          }
+        ],
+        "description": "The raw value a judge returns: a boolean or a number, matching the query kind.\nDeserialized untagged from the provider's `value` field."
+      },
+      "JudgeVerdict": {
+        "description": "A judge verdict: the raw value (bool or number) plus the stated reason. Part\nof onejudge's versioned [`Report`](crate::Report) contract, so it round-trips\nthrough serde.",
+        "properties": {
+          "reason": {
+            "default": "",
+            "description": "The judge's one-sentence justification.",
+            "type": "string"
+          },
+          "usage": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Usage"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Cost/token usage for the judge call, if reported."
+          },
+          "value": {
+            "$ref": "#/$defs/JudgeValue",
+            "description": "The parsed verdict value."
+          }
+        },
+        "required": [
+          "value",
+          "reason"
+        ],
+        "type": "object"
+      },
+      "Message": {
+        "description": "A single turn in the conversation.",
+        "properties": {
+          "content": {
+            "description": "The turn's text.",
+            "type": "string"
+          },
+          "events": {
+            "description": "The normalized tool events the skill took producing this turn (assistant\nturns only, and only when the harness exposed a tool transcript). Empty\notherwise. Surfaced for post-hoc analysis, streamed live, and rendered\ninto the transcript the judge sees.",
+            "items": {
+              "$ref": "#/$defs/ToolEvent"
+            },
+            "type": "array"
+          },
+          "role": {
+            "$ref": "#/$defs/Role",
+            "description": "Who produced the turn."
+          }
+        },
+        "required": [
+          "role",
+          "content"
+        ],
+        "type": "object"
+      },
+      "NamedVerdict": {
+        "description": "A judge verdict paired with the criterion it scored and the kind of\njudgement, so a serialized report is self-describing.",
+        "properties": {
+          "criterion": {
+            "description": "The plain-English criterion that was scored.",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/$defs/JudgeKind",
+            "description": "Whether it was a boolean or numeric judgement."
+          },
+          "verdict": {
+            "$ref": "#/$defs/JudgeVerdict",
+            "description": "The verdict itself (value, reason, and per-call usage)."
+          }
+        },
+        "required": [
+          "criterion",
+          "kind",
+          "verdict"
+        ],
+        "type": "object"
+      },
+      "Role": {
+        "description": "Who produced a message.",
+        "oneOf": [
+          {
+            "const": "user",
+            "description": "The (real or simulated) user driving the skill.",
+            "type": "string"
+          },
+          {
+            "const": "assistant",
+            "description": "The skill / assistant under test.",
+            "type": "string"
+          },
+          {
+            "const": "system",
+            "description": "System-level framing, if a provider surfaces it.",
+            "type": "string"
+          }
+        ]
+      },
+      "ToolEvent": {
+        "description": "One normalized tool-call / action event the skill took during a turn, lifted\nfrom `oneharness`'s `events` array (its `--events` output). Harness-agnostic,\nso a consumer can inspect shell commands, file edits, and tool uses across any\nharness, not just the final text. `input` is the structured, tool-shaped args\nso a consumer can match on the command string or file path without re-parsing.\n\n`input` is free-form JSON, so `Message`/`Transcript` are `PartialEq` but not\n`Eq`.",
+        "properties": {
+          "index": {
+            "default": 0,
+            "description": "Position within the run, so ordering (\"did X before Y\") is expressible.",
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "input": {
+            "description": "Structured tool arguments (the command, the file path); `None` when none."
+          },
+          "kind": {
+            "description": "`tool_call` (the skill invoked a tool) or `tool_result` (the observation).",
+            "type": "string"
+          },
+          "name": {
+            "description": "Normalized tool name where knowable (e.g. `bash`, `edit_file`); `None` for\na `tool_result` or when the harness did not name it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "output": {
+            "description": "The result/observation text, when the transcript exposed it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "kind",
+          "index"
+        ],
+        "type": "object"
+      },
+      "Transcript": {
+        "description": "An ordered list of messages.",
+        "properties": {
+          "messages": {
+            "description": "The turns in order, oldest first.",
+            "items": {
+              "$ref": "#/$defs/Message"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "messages"
+        ],
+        "type": "object"
+      },
+      "Usage": {
+        "description": "Token / cost usage for one provider call, or a running total.\n\nEach field is independently optional because not every harness reports every\nsignal (cost is commonly absent on subscription auth, and cache counts only\nwhen the harness surfaces prompt-cache reads/writes). `None` means \"no\nsignal\", never \"zero\" \u2014 so a total stays `None` until something reports a real\nnumber, then accumulates.",
+        "properties": {
+          "cache_read_tokens": {
+            "description": "Prompt tokens served from the provider's prompt cache \u2014 a cheap read of a\npreviously-written prefix \u2014 when the harness reports them. `None` when the\nharness does not surface cache counts, never `0` as a guess.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "cache_write_tokens": {
+            "description": "Prompt tokens written to the provider's prompt cache (a.k.a. cache\ncreation), when the harness reports them. `None` when not surfaced.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "cost_usd": {
+            "description": "Total cost in USD, when reported.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "input_tokens": {
+            "description": "Prompt/input tokens billed, when reported.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "output_tokens": {
+            "description": "Completion/output tokens billed, when reported.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "A judged run: the transcript, the verdicts scored against it, aggregated\nusage, and whether a streaming sink short-circuited the run \u2014 stamped with the\n[`SCHEMA_VERSION`] of the contract that produced it.\n\nBuild one from an [`Outcome`](crate::Outcome) with\n[`Outcome::into_report`](crate::Outcome::into_report), or directly with\n[`Report::new`].",
+    "properties": {
+      "assessment": {
+        "description": "A free-text judgement requested by the caller, if any.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "completion_reason": {
+        "description": "Why the per-turn supervisor declared the task complete, if it did.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "schema_version": {
+        "description": "The contract version this report was serialized under.",
+        "format": "uint32",
+        "minimum": 0,
+        "type": "integer"
+      },
+      "stopped_early": {
+        "default": false,
+        "description": "Whether a streaming sink asked to short-circuit the run.",
+        "type": "boolean"
+      },
+      "transcript": {
+        "$ref": "#/$defs/Transcript",
+        "description": "The full conversation transcript, with tool events on assistant turns."
+      },
+      "usage": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/Usage"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "Aggregated usage across every provider call (`None` if nothing reported)."
+      },
+      "verdicts": {
+        "description": "The verdicts scored against the transcript, in the order they were added.",
+        "items": {
+          "$ref": "#/$defs/NamedVerdict"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "schema_version",
+      "transcript",
+      "stopped_early"
+    ],
+    "title": "Report",
+    "type": "object"
+  },
+  "run_config": {
+    "$defs": {
+      "EvalConfig": {
+        "additionalProperties": false,
+        "description": "One eval scored against the finished transcript.",
+        "properties": {
+          "criterion": {
+            "description": "The plain-English criterion.",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/$defs/JudgeKind",
+            "default": "boolean",
+            "description": "Boolean (a pass/fail verdict) or numeric (a score on a scale)."
+          },
+          "scale": {
+            "default": null,
+            "description": "The inclusive `[min, max]` scale for a numeric eval; ignored (and rejected)\nfor a boolean one. Defaults to `[0, 10]`.",
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "maxItems": 2,
+            "minItems": 2,
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "criterion"
+        ],
+        "type": "object"
+      },
+      "JudgeKind": {
+        "description": "The kind of judgement requested.",
+        "oneOf": [
+          {
+            "const": "boolean",
+            "description": "A yes/no verdict.",
+            "type": "string"
+          },
+          {
+            "const": "numeric",
+            "description": "A score on a `[min, max]` scale.",
+            "type": "string"
+          }
+        ]
+      },
+      "ProviderConfig": {
+        "additionalProperties": false,
+        "description": "Which backend runs the harness. A flat, strict struct (rather than an\ninternally-tagged enum, which serde cannot pair with `deny_unknown_fields`):\n[`ProviderConfig::resolve`] checks that only the chosen `kind`'s fields are set\nand turns it into a validated [`ProviderSpec`], so a misplaced-but-spelled-right\nkey (e.g. `bin` under `kind: command`) is still a loud error.",
+        "properties": {
+          "bin": {
+            "default": null,
+            "description": "`oneharness`: the `oneharness` binary (default `oneharness`).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "command": {
+            "default": null,
+            "description": "`command`: the provider argv (program + args).",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "judge": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ProviderConfig"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "`split`: the backend that judges and plays the simulated user."
+          },
+          "judge_config": {
+            "default": null,
+            "description": "`oneharness`: the oneharness config file the judge / simulated user run\nunder, passed as `oneharness run --config <path>` (default\n`oneharness.judge.toml`). This is where the judge-side harness/model\nselection lives.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kind": {
+            "$ref": "#/$defs/ProviderKind",
+            "description": "`oneharness` (default) | `command` | `split`."
+          },
+          "skill": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ProviderConfig"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "`split`: the backend that runs the agent's turns."
+          }
+        },
+        "type": "object"
+      },
+      "ProviderKind": {
+        "description": "The provider backends the CLI can build. One enum is the single source for\nboth the YAML `kind:` (via `Deserialize`) and the `--provider` flag (via\nclap's `ValueEnum`), so the two surfaces cannot drift.",
+        "oneOf": [
+          {
+            "const": "oneharness",
+            "description": "Shell out to the `oneharness` CLI (the default).",
+            "type": "string"
+          },
+          {
+            "const": "command",
+            "description": "A custom command speaking the JSON-lines protocol.",
+            "type": "string"
+          },
+          {
+            "const": "split",
+            "description": "Compose a skill-runner with a separate judge / simulated-user backend.",
+            "type": "string"
+          }
+        ]
+      },
+      "UserConfig": {
+        "additionalProperties": false,
+        "description": "The simulated user that supervises the agent and drives the loop.",
+        "properties": {
+          "done_when": {
+            "default": null,
+            "description": "A plain-English completion condition; when the judge decides it holds, the\nloop ends. Without it the loop ends at `max_turns` or when the agent\ndeclares itself done.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "max_turns": {
+            "default": null,
+            "description": "The assistant-turn cap for this run.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "persona": {
+            "default": "",
+            "description": "How the simulated user behaves (their instructions).",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "description": "The whole YAML config for one run. Field defaults let a minimal file (just a\n`task`) work, while `deny_unknown_fields` makes a typo'd key a hard error\ninstead of a silently-ignored setting.",
+    "properties": {
+      "assessment": {
+        "default": null,
+        "description": "Optional prompt for a free-text judgement of the finished transcript.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "evals": {
+        "description": "Optional criteria to score the finished transcript with.",
+        "items": {
+          "$ref": "#/$defs/EvalConfig"
+        },
+        "type": "array"
+      },
+      "provider": {
+        "$ref": "#/$defs/ProviderConfig",
+        "description": "Which backend runs the harness (and judges / plays the user).\n\nHarness/model **selection** is no longer a onejudge concern: the agent side\nuses oneharness's discovered `oneharness.toml`, and the judge side uses the\n`provider.judge_config` file (default `oneharness.judge.toml`). Scaffold both\nwith `onejudge init`."
+      },
+      "session": {
+        "default": null,
+        "description": "The caller-owned session name threaded across turns; defaults to\n`onejudge`.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "skill": {
+        "default": null,
+        "description": "Path to a **skill** directory (containing a `SKILL.md`) whose instruction\nbody seeds the system prompt. Resolved relative to the config file's\ndirectory (or the working dir for a flag-only run). Optional \u2014 combine it\nwith `system_prompt`, use either alone, or neither.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "system_prompt": {
+        "default": null,
+        "description": "Extra system-prompt text for the harness. When a `skill` is also set, this\ncomes **first** and the skill's body is appended after it.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "task": {
+        "default": null,
+        "description": "The task to drive to completion. May instead be supplied by `--task`\n(`-` reads stdin); required by the time the plan is built.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "user": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/UserConfig"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "The simulated user / supervisor that drives the loop. Omit for a\nsingle-turn run (the agent answers once)."
+      }
+    },
+    "title": "Config",
+    "type": "object"
+  },
+  "stream_event": {
+    "$defs": {
+      "ToolEvent": {
+        "description": "One normalized tool-call / action event the skill took during a turn, lifted\nfrom `oneharness`'s `events` array (its `--events` output). Harness-agnostic,\nso a consumer can inspect shell commands, file edits, and tool uses across any\nharness, not just the final text. `input` is the structured, tool-shaped args\nso a consumer can match on the command string or file path without re-parsing.\n\n`input` is free-form JSON, so `Message`/`Transcript` are `PartialEq` but not\n`Eq`.",
+        "properties": {
+          "index": {
+            "default": 0,
+            "description": "Position within the run, so ordering (\"did X before Y\") is expressible.",
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "input": {
+            "description": "Structured tool arguments (the command, the file path); `None` when none."
+          },
+          "kind": {
+            "description": "`tool_call` (the skill invoked a tool) or `tool_result` (the observation).",
+            "type": "string"
+          },
+          "name": {
+            "description": "Normalized tool name where knowable (e.g. `bash`, `edit_file`); `None` for\na `tool_result` or when the harness did not name it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "output": {
+            "description": "The result/observation text, when the transcript exposed it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "kind",
+          "index"
+        ],
+        "type": "object"
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "One streamed tool event delivered live to an [`Engine::run_streaming`] sink,\ntagged with the turn it belongs to.",
+    "properties": {
+      "event": {
+        "$ref": "#/$defs/ToolEvent",
+        "description": "The normalized tool event."
+      },
+      "turn": {
+        "description": "1-based assistant-turn index within this run.",
+        "format": "uint",
+        "minimum": 0,
+        "type": "integer"
+      }
+    },
+    "required": [
+      "turn",
+      "event"
+    ],
+    "title": "StreamEvent",
+    "type": "object"
+  }
+}

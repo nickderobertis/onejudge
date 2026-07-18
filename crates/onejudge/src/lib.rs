@@ -75,6 +75,8 @@ pub use provider::{
     Provider, SkillRef, SupervisorOutcome, SupervisorQuery, SupervisorTurn, UserTurn,
 };
 pub use report::{NamedVerdict, Report, SCHEMA_VERSION};
+#[cfg(feature = "sdk-schema")]
+pub mod sdk_schema;
 #[cfg(feature = "skill")]
 pub use skill::{load_skill, Frontmatter, SkillDefinition};
 pub use split::SplitProvider;

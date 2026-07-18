@@ -1,0 +1,61 @@
+[build-system]
+requires = ["uv_build>=0.11,<0.12"]
+build-backend = "uv_build"
+
+[project]
+name = "onejudge-sdk"
+version = "0.3.0"
+description = "Typed async Python SDK for onejudge"
+readme = "README.md"
+requires-python = ">=3.9"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Nick DeRobertis" }]
+keywords = ["agent", "evaluation", "judge", "harness"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Typing :: Typed",
+]
+dependencies = ["jsonschema>=4.18,<5", "onejudge-cli==0.3.0"]
+
+[project.urls]
+Homepage = "https://github.com/nickderobertis/onejudge"
+Repository = "https://github.com/nickderobertis/onejudge"
+
+[tool.uv.build-backend]
+module-name = "onejudge_sdk"
+module-root = "src"
+
+[tool.ruff]
+target-version = "py39"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I", "UP", "B", "ASYNC", "S", "RUF"]
+ignore = ["UP045"]
+
+[tool.ruff.lint.per-file-ignores]
+"scripts/**" = ["S404", "S603", "S607"]
+"test/**" = ["S101", "S404", "S603", "S607"]
+
+[tool.mypy]
+python_version = "3.9"
+strict = true
+warn_unreachable = true
+
+[tool.coverage.run]
+branch = true
+source = ["onejudge_sdk"]
+
+[tool.coverage.report]
+fail_under = 95
+show_missing = true

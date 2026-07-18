@@ -1,0 +1,44 @@
+{
+  "schema_version": 4,
+  "transcript": {
+    "messages": [
+      {
+        "role": "user",
+        "content": "commit the fix"
+      },
+      {
+        "role": "assistant",
+        "content": "Committed.",
+        "events": [
+          {
+            "kind": "tool_call",
+            "name": "bash",
+            "input": {
+              "command": "git commit -m fix"
+            },
+            "index": 0
+          }
+        ]
+      }
+    ]
+  },
+  "verdicts": [
+    {
+      "criterion": "the change was committed",
+      "kind": "boolean",
+      "verdict": {
+        "value": true,
+        "reason": "a git commit ran"
+      }
+    }
+  ],
+  "assessment": "No follow-up work remains.",
+  "completion_reason": "the commit completed the task",
+  "usage": {
+    "input_tokens": 12,
+    "output_tokens": 3,
+    "cache_read_tokens": 9,
+    "cache_write_tokens": 4
+  },
+  "stopped_early": false
+}
