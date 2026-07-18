@@ -35,6 +35,19 @@ jobs:
       - name: Check
         run: just check
 
+  # Keep the Python SDK's full gate separate from the deterministic Rust gate so
+  # its uv-managed toolchain is explicit and matches local `python-sdk-check`.
+  python-sdk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned toolchain (from rust-toolchain.toml)
+        run: rustup show
+      - uses: extractions/setup-just@v3
+      - uses: astral-sh/setup-uv@v6
+      - name: Check Python SDK
+        run: just python-sdk-check
+
   # Portability: run the test suite (no coverage/audit) on macOS and Windows so
   # the engine and its real-subprocess e2e are proven cross-platform.
   test-os:

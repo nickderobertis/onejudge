@@ -22,7 +22,7 @@ bootstrap:
 
 # Full quality gate: format, lint, doc, coverage-enforced tests, audit, and the
 # release-target drift gate.
-check: format-check lint doc python-sdk-check test audit check-release-targets
+check: format-check lint doc test audit check-release-targets
 
 # The deterministic gate enables the test doubles, CLI, and SDK schema export,
 # never `--all-features`. Every model call goes through oneharness; the gate

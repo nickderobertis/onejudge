@@ -83,7 +83,7 @@ class OneJudgeTests(unittest.IsolatedAsyncioTestCase):
             ({}, "task", {"env": {"GOOD": "bad\0value"}}),
         ):
             with self.subTest(config=config, kwargs=kwargs), self.assertRaises(ContractError):
-                await client.run(config, task, **kwargs)  # type: ignore[arg-type]
+                await client.run(config, task, **kwargs)  # type: ignore[arg-type] - intentionally invalid inputs test runtime validation
 
     async def test_invalid_json_and_timeout_are_typed(self) -> None:
         """Malformed stdout and caller cancellation fail loudly."""
