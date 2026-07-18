@@ -150,7 +150,5 @@ class OneJudge:
             value = json.loads(stdout_bytes)
         except (UnicodeDecodeError, json.JSONDecodeError) as error:
             raise ContractError(f"onejudge returned invalid JSON: {error}") from error
-        report = cast(
-            "RunReport", _validate("report", value, "invalid onejudge report contract")
-        )
+        report = cast("RunReport", _validate("report", value, "invalid onejudge report contract"))
         return RunResult(exit_code=returncode, stderr=stderr, raw=report)

@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Optional
-
 
 class ContractError(ValueError):
     """A value did not match its Rust-owned SDK contract."""

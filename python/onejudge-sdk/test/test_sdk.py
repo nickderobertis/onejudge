@@ -13,6 +13,7 @@ from onejudge_sdk import (
     OneJudge,
     OneJudgeProcessError,
     OneJudgeTimeoutError,
+    RunConfig,
 )
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -22,9 +23,9 @@ ECHO = ROOT / "target" / "debug" / f"onejudge-echo-provider{SUFFIX}"
 FIXTURE = Path(__file__).with_name("fixture_cli.py")
 
 
-def command_config(*, incomplete: bool = False) -> dict[str, object]:
+def command_config(*, incomplete: bool = False) -> RunConfig:
     """Build a config that drives the real command-provider boundary."""
-    config: dict[str, object] = {
+    config: RunConfig = {
         "provider": {"kind": "command", "command": [str(ECHO)]},
         "system_prompt": "work carefully [[event:git status]]",
         "evals": [{"criterion": "git status", "kind": "boolean"}],
@@ -54,7 +55,9 @@ class OneJudgeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(complete.assistant_turns, 1)
         self.assertEqual(complete.agent_turns, 1)
         self.assertEqual(complete.verdicts[0]["verdict"]["value"], True)
-        self.assertGreater(complete.usage["input_tokens"], 0)
+        input_tokens = complete.usage["input_tokens"]
+        self.assertIsNotNone(input_tokens)
+        self.assertGreater(input_tokens or 0, 0)
         self.assertEqual(complete.raw["schema_version"], 4)
 
         incomplete = await client.run(command_config(incomplete=True), "keep working")
@@ -64,7 +67,9 @@ class OneJudgeTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_real_cli_runtime_error_keeps_exit_and_stderr(self) -> None:
         """Exit 2 remains distinguishable from an incomplete report."""
-        config = {"provider": {"kind": "command", "command": ["missing-onejudge-provider"]}}
+        config: RunConfig = {
+            "provider": {"kind": "command", "command": ["missing-onejudge-provider"]}
+        }
         with self.assertRaises(OneJudgeProcessError) as raised:
             await OneJudge(executable=str(BINARY)).run(config, "fail loudly")
         self.assertEqual(raised.exception.returncode, 2)
@@ -83,7 +88,8 @@ class OneJudgeTests(unittest.IsolatedAsyncioTestCase):
             ({}, "task", {"env": {"GOOD": "bad\0value"}}),
         ):
             with self.subTest(config=config, kwargs=kwargs), self.assertRaises(ContractError):
-                await client.run(config, task, **kwargs)  # type: ignore[arg-type] - intentionally invalid inputs test runtime validation
+                # These deliberately invalid inputs exercise runtime validation.
+                await client.run(config, task, **kwargs)  # type: ignore[arg-type]
 
     async def test_invalid_json_and_timeout_are_typed(self) -> None:
         """Malformed stdout and caller cancellation fail loudly."""

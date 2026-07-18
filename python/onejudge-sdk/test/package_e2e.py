@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import os
 import email
+import os
 import subprocess
 import sys
 import tempfile
@@ -50,7 +50,9 @@ def main() -> None:
             raise AssertionError("SDK wheel CLI dependency differs from Cargo")
 
     environment = wheel_dir / "venv"
-    subprocess.run(["uv", "venv", "--offline", "--python", sys.executable, str(environment)], check=True)
+    subprocess.run(
+        ["uv", "venv", "--offline", "--python", sys.executable, str(environment)], check=True
+    )
     scripts = environment / ("Scripts" if os.name == "nt" else "bin")
     python = scripts / ("python.exe" if os.name == "nt" else "python")
     subprocess.run(
