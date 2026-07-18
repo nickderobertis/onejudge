@@ -1,11 +1,11 @@
-# onejudge-sdk
+# onejudge
 
 Typed async Python access to the `onejudge` CLI. The distribution is
-`onejudge-sdk`, the import is `onejudge_sdk`, and each release depends on the
+`onejudge`, the import is `onejudge_sdk`, and each release depends on the
 exact same `onejudge-cli` version.
 
 ```console
-pip install onejudge-sdk
+pip install onejudge
 ```
 
 ```python

@@ -1,4 +1,4 @@
-"""Assemble onejudge-sdk with the workspace release version."""
+"""Assemble onejudge with the workspace release version."""
 
 from __future__ import annotations
 

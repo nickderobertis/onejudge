@@ -3,7 +3,7 @@ requires = ["uv_build>=0.11,<0.12"]
 build-backend = "uv_build"
 
 [project]
-name = "onejudge-sdk"
+name = "onejudge"
 version = "0.0.0.dev0"
 description = "Typed async Python SDK for onejudge"
 readme = "README.md"
