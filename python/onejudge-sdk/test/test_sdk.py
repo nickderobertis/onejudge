@@ -58,12 +58,50 @@ class OneJudgeTests(unittest.IsolatedAsyncioTestCase):
         input_tokens = complete.usage["input_tokens"]
         self.assertIsNotNone(input_tokens)
         self.assertGreater(input_tokens or 0, 0)
-        self.assertEqual(complete.raw["schema_version"], 4)
+        self.assertEqual(complete.raw["schema_version"], 5)
+        self.assertIsNone(complete.telemetry)
 
         incomplete = await client.run(command_config(incomplete=True), "keep working")
         self.assertEqual(incomplete.exit_code, 1)
         self.assertFalse(incomplete.completed)
         self.assertEqual(incomplete.assistant_turns, 1)
+
+    async def test_oneharness_run_exposes_typed_two_party_telemetry(self) -> None:
+        """Carry timing, strict usage, and native linkage through the real CLI."""
+        fake = ROOT / "target" / "debug" / f"onejudge-fake-oneharness{SUFFIX}"
+        config: RunConfig = {
+            "provider": {"kind": "oneharness", "bin": str(fake)},
+            "system_prompt": "[[reply:telemetry ready]]",
+            "evals": [{"criterion": "telemetry ready", "kind": "boolean"}],
+        }
+        result = await OneJudge(executable=str(BINARY)).run(config, "measure this")
+        telemetry = result.telemetry
+        self.assertIsNotNone(telemetry)
+        assert telemetry is not None
+        self.assertEqual(telemetry["agent"]["model_ms"], 10)
+        self.assertEqual(telemetry["agent"]["tool_ms"], 3)
+        self.assertEqual(telemetry["agent"]["time_to_first_token_ms"], 2)
+        self.assertEqual(telemetry["agent"]["usage"]["cache_read_tokens"], 7)
+        self.assertEqual(telemetry["judge"]["model_ms"], 5)
+        self.assertEqual(telemetry["judge"]["tool_ms"], 1)
+        self.assertEqual(telemetry["judge"]["usage"]["output_tokens"], 1)
+        self.assertEqual(telemetry["agent"]["session_ids"], ["native-onejudge-skill"])
+        self.assertEqual(telemetry["judge"]["session_ids"], ["native-judge"])
+        self.assertEqual(
+            [link["role"] for link in telemetry["sessions"]], ["agent", "judge"]
+        )
+        self.assertTrue(all(link.get("history_id") for link in telemetry["sessions"]))
+
+    async def test_version_four_report_without_telemetry_remains_compatible(self) -> None:
+        """An upgraded SDK accepts and exposes no telemetry for a v4 report."""
+        client = OneJudge(
+            executable=sys.executable,
+            executable_args=(str(FIXTURE),),
+            env={"ONEJUDGE_SDK_FIXTURE_MODE": "v4-report"},
+        )
+        result = await client.run({}, "legacy")
+        self.assertEqual(result.raw["schema_version"], 4)
+        self.assertIsNone(result.telemetry)
 
     async def test_real_cli_runtime_error_keeps_exit_and_stderr(self) -> None:
         """Exit 2 remains distinguishable from an incomplete report."""

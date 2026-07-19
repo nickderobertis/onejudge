@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import Optional
 
-from ._generated_types import NamedVerdict, RunReport, Usage
+from ._generated_types import NamedVerdict, RunReport, Telemetry, Usage
 
 
 @dataclass(frozen=True)
@@ -30,6 +31,11 @@ class RunResult:
     def usage(self) -> Usage:
         """Return aggregate usage, or an empty mapping when unavailable."""
         return self.raw.get("usage") or {}
+
+    @property
+    def telemetry(self) -> Optional[Telemetry]:
+        """Return two-party timing/usage and native linkage when available."""
+        return self.raw.get("telemetry")
 
     @property
     def assistant_turns(self) -> int:

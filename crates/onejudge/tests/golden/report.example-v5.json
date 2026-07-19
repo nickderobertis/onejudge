@@ -1,5 +1,5 @@
 {
-  "schema_version": 4,
+  "schema_version": 5,
   "transcript": {
     "messages": [
       {
@@ -39,6 +39,39 @@
     "output_tokens": 3,
     "cache_read_tokens": 9,
     "cache_write_tokens": 4
+  },
+  "telemetry": {
+    "wall_ms": 40,
+    "agent": {
+      "model_ms": 20,
+      "tool_ms": 5,
+      "time_to_first_token_ms": 3,
+      "usage": {
+        "input_tokens": 8,
+        "output_tokens": 2,
+        "cache_read_tokens": 4,
+        "cache_write_tokens": 1,
+        "cost_usd": 0.01
+      },
+      "session_ids": [
+        "native-agent-1"
+      ]
+    },
+    "judge": {
+      "model_ms": 10,
+      "tool_ms": 0
+    },
+    "orchestration_ms": 5,
+    "sessions": [
+      {
+        "session_id": "native-agent-1",
+        "role": "agent",
+        "turn_index": 1,
+        "started_at": "2026-01-01T00:00:00Z",
+        "finished_at": "2026-01-01T00:00:00.025Z",
+        "history_id": "019b76e0-history"
+      }
+    ]
   },
   "stopped_early": false
 }

@@ -3,7 +3,9 @@
 //! simulated-interaction loop — single-turn for a bare input, or a simulated-user
 //! loop bounded by `max_turns` / `done_when` / the skill declaring itself done.
 
+use std::cell::RefCell;
 use std::ops::ControlFlow;
+use std::time::Instant;
 
 use crate::error::Result;
 use crate::provider::{
@@ -11,6 +13,7 @@ use crate::provider::{
     SkillRef, SupervisorOutcome, SupervisorQuery,
 };
 use crate::report::{NamedVerdict, Report};
+use crate::telemetry::{aggregate, Telemetry};
 use crate::transcript::{Message, ToolEvent, Transcript};
 use crate::usage::Usage;
 
@@ -183,6 +186,8 @@ pub struct Outcome {
     pub stopped_early: bool,
     /// The unified supervisor's completion reason, when it ended the loop.
     pub completion_reason: Option<String>,
+    /// Timing, per-party usage, and native session linkage, when provided.
+    pub telemetry: Option<Telemetry>,
 }
 
 impl Outcome {
@@ -203,6 +208,7 @@ impl Outcome {
     ) -> Report {
         let mut report = Report::new(self.transcript, verdicts, self.usage, self.stopped_early);
         report.completion_reason = self.completion_reason;
+        report.telemetry = self.telemetry;
         match assessment {
             Some(text) => report.with_assessment(text),
             None => report,
@@ -214,13 +220,18 @@ impl Outcome {
 pub struct Engine<'a> {
     provider: &'a dyn Provider,
     settings: Settings,
+    started: RefCell<Option<Instant>>,
 }
 
 impl<'a> Engine<'a> {
     /// Build an engine over `provider` with `settings`.
     #[must_use]
     pub fn new(provider: &'a dyn Provider, settings: Settings) -> Self {
-        Self { provider, settings }
+        Self {
+            provider,
+            settings,
+            started: RefCell::new(None),
+        }
     }
 
     /// The engine's settings.
@@ -260,6 +271,8 @@ impl<'a> Engine<'a> {
         streaming: bool,
         on_event: &mut dyn FnMut(&StreamEvent) -> ControlFlow<()>,
     ) -> Result<Outcome> {
+        self.provider.reset_telemetry();
+        *self.started.borrow_mut() = Some(Instant::now());
         let skill = conversation.skill.as_ref();
         let max_turns = conversation
             .user
@@ -364,7 +377,17 @@ impl<'a> Engine<'a> {
             usage: (!totals.is_empty()).then_some(totals),
             stopped_early,
             completion_reason,
+            telemetry: self.telemetry(),
         }
+    }
+
+    /// Snapshot telemetry from task-loop entry through the current instant.
+    #[must_use]
+    pub fn telemetry(&self) -> Option<Telemetry> {
+        let wall_ms = self.started.borrow().as_ref().map_or(0, |started| {
+            u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
+        });
+        aggregate(wall_ms, &self.provider.invocation_telemetry())
     }
 
     fn judge_boolean_raw(&self, criterion: &str, transcript: &Transcript) -> Result<JudgeVerdict> {

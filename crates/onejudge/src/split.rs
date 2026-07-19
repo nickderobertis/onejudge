@@ -51,6 +51,17 @@ impl<S: Provider, J: Provider> SplitProvider<S, J> {
 }
 
 impl<S: Provider, J: Provider> Provider for SplitProvider<S, J> {
+    fn reset_telemetry(&self) {
+        self.skill.reset_telemetry();
+        self.judge.reset_telemetry();
+    }
+
+    fn invocation_telemetry(&self) -> Vec<crate::telemetry::InvocationTelemetry> {
+        let mut records = self.skill.invocation_telemetry();
+        records.extend(self.judge.invocation_telemetry());
+        records
+    }
+
     fn respond(
         &self,
         skill: &SkillRef<'_>,

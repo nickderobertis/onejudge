@@ -108,6 +108,57 @@
         ],
         "type": "object"
       },
+      "PartyTelemetry": {
+        "description": "Aggregated measurements for one side of a run.",
+        "properties": {
+          "model_ms": {
+            "description": "Model/provider elapsed time, when every contributing invocation reported it.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "session_ids": {
+            "description": "Native oneharness session IDs in first-seen order, without duplicates.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "time_to_first_token_ms": {
+            "description": "Time to first token from the first invocation that reported it.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "tool_ms": {
+            "description": "Tool elapsed time, when every contributing invocation reported it.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "usage": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Usage"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Strictly aggregated usage; each field is present only when every invocation knew it."
+          }
+        },
+        "type": "object"
+      },
       "Role": {
         "description": "Who produced a message.",
         "oneOf": [
@@ -124,6 +175,107 @@
           {
             "const": "system",
             "description": "System-level framing, if a provider surfaces it.",
+            "type": "string"
+          }
+        ]
+      },
+      "SessionLink": {
+        "description": "Authoritative linkage from a onejudge role/turn to a native oneharness run.",
+        "properties": {
+          "finished_at": {
+            "description": "Upstream UTC invocation-finish timestamp, or `null` when not observed.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "history_id": {
+            "description": "Native oneharness history record identity, when history was available.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "role": {
+            "$ref": "#/$defs/TelemetryRole",
+            "description": "Which side of the conversation owns the invocation."
+          },
+          "session_id": {
+            "description": "Native harness continuation identifier.",
+            "type": "string"
+          },
+          "started_at": {
+            "description": "Upstream UTC invocation-start timestamp.",
+            "type": "string"
+          },
+          "turn_index": {
+            "description": "One-based invocation index within the role.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "session_id",
+          "role",
+          "turn_index",
+          "started_at",
+          "finished_at"
+        ],
+        "type": "object"
+      },
+      "Telemetry": {
+        "description": "Timing, usage, and native linkage for the complete agent+judge run.",
+        "properties": {
+          "agent": {
+            "$ref": "#/$defs/PartyTelemetry",
+            "description": "Agent-side measurements."
+          },
+          "judge": {
+            "$ref": "#/$defs/PartyTelemetry",
+            "description": "Simulated-user, supervisor, and evaluator measurements."
+          },
+          "orchestration_ms": {
+            "description": "Non-negative wall-time remainder after measured model and tool work.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "sessions": {
+            "default": [],
+            "description": "Native session linkage records in invocation order.",
+            "items": {
+              "$ref": "#/$defs/SessionLink"
+            },
+            "type": "array"
+          },
+          "wall_ms": {
+            "description": "Monotonic duration from task-loop entry through final result assembly.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "wall_ms",
+          "agent",
+          "judge",
+          "orchestration_ms",
+          "sessions"
+        ],
+        "type": "object"
+      },
+      "TelemetryRole": {
+        "description": "The side of the evaluated conversation that owns an invocation.",
+        "oneOf": [
+          {
+            "const": "agent",
+            "description": "The skill/agent under evaluation.",
+            "type": "string"
+          },
+          {
+            "const": "judge",
+            "description": "The simulated user, supervisor, or final evaluator.",
             "type": "string"
           }
         ]
@@ -260,6 +412,17 @@
         "default": false,
         "description": "Whether a streaming sink asked to short-circuit the run.",
         "type": "boolean"
+      },
+      "telemetry": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/Telemetry"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "Timing, per-party usage, and native oneharness session linkage."
       },
       "transcript": {
         "$ref": "#/$defs/Transcript",
