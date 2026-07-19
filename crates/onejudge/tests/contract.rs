@@ -6,8 +6,8 @@
 //! break for the SDKs that compose over this contract.
 
 use onejudge::{
-    JudgeKind, JudgeValue, JudgeVerdict, Message, NamedVerdict, Report, ToolEvent, Transcript,
-    Usage, SCHEMA_VERSION,
+    JudgeKind, JudgeValue, JudgeVerdict, Message, NamedVerdict, PartyTelemetry, Report,
+    SessionLink, Telemetry, TelemetryRole, ToolEvent, Transcript, Usage, SCHEMA_VERSION,
 };
 
 /// The canonical report the golden is generated from: one tool-using assistant
@@ -45,22 +45,54 @@ fn canonical_report() -> Report {
     )
     .with_assessment("No follow-up work remains.");
     report.completion_reason = Some("the commit completed the task".into());
+    report.telemetry = Some(Telemetry {
+        wall_ms: 40,
+        agent: PartyTelemetry {
+            model_ms: Some(20),
+            tool_ms: Some(5),
+            time_to_first_token_ms: Some(3),
+            usage: Some(Usage {
+                input_tokens: Some(8),
+                output_tokens: Some(2),
+                cache_read_tokens: Some(4),
+                cache_write_tokens: Some(1),
+                cost_usd: Some(0.01),
+            }),
+            session_ids: vec!["native-agent-1".into()],
+        },
+        judge: PartyTelemetry {
+            model_ms: Some(10),
+            tool_ms: Some(0),
+            time_to_first_token_ms: None,
+            usage: None,
+            session_ids: vec![],
+        },
+        orchestration_ms: 5,
+        sessions: vec![SessionLink {
+            session_id: "native-agent-1".into(),
+            role: TelemetryRole::Agent,
+            turn_index: 1,
+            started_at: "2026-01-01T00:00:00Z".into(),
+            finished_at: Some("2026-01-01T00:00:00.025Z".into()),
+            history_id: Some("019b76e0-history".into()),
+        }],
+    });
     report
 }
 
-const EXAMPLE_GOLDEN: &str = include_str!("golden/report.example-v4.json");
+const EXAMPLE_GOLDEN: &str = include_str!("golden/report.example-v5.json");
 #[cfg(feature = "sdk-schema")]
-const SCHEMA_GOLDEN: &str = include_str!("golden/report.schema-v4.json");
+const SCHEMA_GOLDEN: &str = include_str!("golden/report.schema-v5.json");
 
 #[test]
-fn report_matches_the_golden_example_v4() {
-    assert_eq!(SCHEMA_VERSION, 4, "golden is for schema v4");
+fn report_matches_the_golden_example_v5() {
+    assert_eq!(SCHEMA_VERSION, 5, "golden is for schema v5");
     let actual = serde_json::to_string_pretty(&canonical_report()).unwrap();
     assert_eq!(
         actual.trim(),
         EXAMPLE_GOLDEN.trim(),
         "the Report wire form changed. If this is intentional, bump SCHEMA_VERSION \
-         and update the v4 contract goldens. Actual serialization:\n{actual}"
+         and update the v5 contract goldens. Actual serialization:\n{actual}"
     );
 }
 
@@ -72,7 +104,7 @@ fn golden_deserializes_back_to_the_canonical_report() {
 
 #[cfg(feature = "sdk-schema")]
 #[test]
-fn generated_report_schema_matches_the_schema_v4_golden() {
+fn generated_report_schema_matches_the_schema_v5_golden() {
     let actual = serde_json::to_value(onejudge::sdk_schema::bundle().report).unwrap();
     let golden: serde_json::Value = serde_json::from_str(SCHEMA_GOLDEN).unwrap();
     assert_eq!(

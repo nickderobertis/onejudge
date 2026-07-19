@@ -13,6 +13,7 @@ use std::ops::ControlFlow;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
+use crate::telemetry::InvocationTelemetry;
 use crate::transcript::{Message, ToolEvent};
 use crate::usage::Usage;
 
@@ -170,6 +171,14 @@ pub struct Assessment {
 /// config for the judge side, and a [`CommandProvider`](crate::CommandProvider)
 /// backend chooses however it likes.
 pub trait Provider {
+    /// Discard telemetry retained from an earlier run.
+    fn reset_telemetry(&self) {}
+
+    /// Return invocation telemetry collected since the last reset.
+    fn invocation_telemetry(&self) -> Vec<InvocationTelemetry> {
+        Vec::new()
+    }
+
     /// Run one assistant/skill turn given the conversation so far.
     ///
     /// `session`, when `Some`, is a **caller-owned session name** the engine

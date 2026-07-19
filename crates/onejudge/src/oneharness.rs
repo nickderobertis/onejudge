@@ -23,6 +23,7 @@
 //! fake `oneharness` binary in the e2e suite and against a real one in the live
 //! tier (`docs/live-tier.md`).
 
+use std::cell::RefCell;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -35,6 +36,7 @@ use crate::provider::{
     latest_or_inline, parse_supervisor, parse_verdict, Assessment, AssistantTurn, JudgeQuery,
     JudgeVerdict, Provider, SkillRef, SupervisorQuery, SupervisorTurn, UserTurn,
 };
+use crate::telemetry::{InvocationTelemetry, TelemetryRole};
 use crate::transcript::{Message, ToolEvent};
 use crate::usage::Usage;
 
@@ -57,6 +59,7 @@ fn is_session_unsupported(err: &Error) -> bool {
 pub struct OneharnessProvider {
     bin: String,
     judge_config: Option<PathBuf>,
+    telemetry: RefCell<Vec<InvocationTelemetry>>,
 }
 
 impl Default for OneharnessProvider {
@@ -73,6 +76,7 @@ impl OneharnessProvider {
         Self {
             bin: "oneharness".into(),
             judge_config: Some(PathBuf::from(DEFAULT_JUDGE_CONFIG)),
+            telemetry: RefCell::new(Vec::new()),
         }
     }
 
@@ -195,7 +199,15 @@ impl OneharnessProvider {
             ));
         }
         let stdout = String::from_utf8_lossy(&output.stdout);
-        parse_report(op, &stdout)
+        let result = parse_report(op, &stdout)?;
+        self.telemetry
+            .borrow_mut()
+            .push(result.telemetry(if op == "respond" {
+                TelemetryRole::Agent
+            } else {
+                TelemetryRole::Judge
+            }));
+        Ok(result)
     }
 }
 
@@ -250,6 +262,7 @@ fn judge_side_args(
     let mut args = vec![
         "run".into(),
         "--compact".into(),
+        "--history".into(),
         "--prompt-file".into(),
         "-".into(),
     ];
@@ -290,6 +303,20 @@ struct OneharnessResult {
     error: Option<String>,
     #[serde(default)]
     stdout: String,
+    #[serde(default)]
+    model_ms: Option<u64>,
+    #[serde(default)]
+    tool_ms: Option<u64>,
+    #[serde(default)]
+    time_to_first_token_ms: Option<u64>,
+    #[serde(default)]
+    session_id: Option<String>,
+    #[serde(default)]
+    started_at: Option<String>,
+    #[serde(default)]
+    finished_at: Option<String>,
+    #[serde(default)]
+    history_id: Option<String>,
 }
 
 /// The usage signals onejudge reads from oneharness's report. oneharness reports
@@ -329,6 +356,20 @@ impl OneharnessResult {
         };
         (!usage.is_empty()).then_some(usage)
     }
+
+    fn telemetry(&self, role: TelemetryRole) -> InvocationTelemetry {
+        InvocationTelemetry {
+            role: Some(role),
+            model_ms: self.model_ms,
+            tool_ms: self.tool_ms,
+            time_to_first_token_ms: self.time_to_first_token_ms,
+            usage: self.usage().unwrap_or_default(),
+            session_id: self.session_id.clone(),
+            started_at: self.started_at.clone(),
+            finished_at: self.finished_at.clone(),
+            history_id: self.history_id.clone(),
+        }
+    }
 }
 
 /// Parse a oneharness JSON report into its single result, turning a normalized
@@ -366,6 +407,14 @@ fn parse_report(op: &str, stdout: &str) -> Result<OneharnessResult> {
 }
 
 impl Provider for OneharnessProvider {
+    fn reset_telemetry(&self) {
+        self.telemetry.borrow_mut().clear();
+    }
+
+    fn invocation_telemetry(&self) -> Vec<InvocationTelemetry> {
+        self.telemetry.borrow().clone()
+    }
+
     fn respond(
         &self,
         skill: &SkillRef<'_>,

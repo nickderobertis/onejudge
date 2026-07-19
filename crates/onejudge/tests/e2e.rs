@@ -442,6 +442,20 @@ fn oneharness_threads_one_session_name() {
         ))
         .unwrap();
     assert_eq!(outcome.transcript.messages[1].content, "run-9-skill");
+    let telemetry = outcome.telemetry.expect("oneharness telemetry");
+    assert_eq!(telemetry.agent.model_ms, Some(10));
+    assert_eq!(telemetry.agent.tool_ms, Some(3));
+    assert_eq!(telemetry.agent.time_to_first_token_ms, Some(2));
+    assert_eq!(
+        telemetry.agent.usage.as_ref().unwrap().output_tokens,
+        Some(1)
+    );
+    assert_eq!(telemetry.agent.session_ids, ["native-run-9-skill"]);
+    assert!(telemetry.judge.session_ids.is_empty());
+    assert_eq!(telemetry.sessions.len(), 1);
+    assert_eq!(telemetry.sessions[0].role, onejudge::TelemetryRole::Agent);
+    assert_eq!(telemetry.sessions[0].turn_index, 1);
+    assert!(telemetry.sessions[0].history_id.is_some());
 }
 
 #[test]

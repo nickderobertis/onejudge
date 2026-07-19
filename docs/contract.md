@@ -9,7 +9,7 @@ and re-export, so onejudge — not its consumers — owns the shape of a judged 
 
 ```jsonc
 {
-  "schema_version": 4,                 // bump on any wire change
+  "schema_version": 5,                 // bump on any wire change
   "transcript": {
     "messages": [
       { "role": "user", "content": "commit the fix" },
@@ -59,8 +59,8 @@ assert_eq!(report.schema_version, onejudge::SCHEMA_VERSION);
 ## Versioning and the drift gate
 
 The wire form is pinned by a canonical serialized example
-(`crates/onejudge/tests/golden/report.example-v4.json`) and its generated JSON
-Schema (`crates/onejudge/tests/golden/report.schema-v4.json`), both checked by
+(`crates/onejudge/tests/golden/report.example-v5.json`) and its generated JSON
+Schema (`crates/onejudge/tests/golden/report.schema-v5.json`), both checked by
 `tests/contract.rs`. Any change to the serialized shape — a renamed field, a new
 key, a changed default — fails that test, so it can only land as a **deliberate**
 edit that also bumps `SCHEMA_VERSION` and updates both goldens. Downstream SDKs

@@ -57,7 +57,11 @@ fn main() {
         std::process::exit(1);
     }
 
-    let result = if prompt.contains("completion supervisor") {
+    let is_agent = !(prompt.contains("completion supervisor")
+        || prompt.contains("role-playing the USER")
+        || prompt.contains("Assessment request:")
+        || prompt.contains("Criterion:") && prompt.contains("single-line JSON object"));
+    let mut result = if prompt.contains("completion supervisor") {
         json!({ "status": "ok", "text": supervisor_text(&prompt), "usage": usage(&prompt) })
     } else if prompt.contains("role-playing the USER") {
         json!({ "status": "ok", "text": "Understood — please continue.", "usage": usage(&prompt) })
@@ -75,6 +79,25 @@ fn main() {
     } else {
         respond_result(system, session.as_deref(), &prompt)
     };
+    if result.get("failure_kind").is_none() {
+        let role = if is_agent { "agent" } else { "judge" };
+        let native_session = format!("native-{}", session.as_deref().unwrap_or(role));
+        result["model_ms"] = json!(if is_agent { 10 } else { 5 });
+        result["tool_ms"] = json!(if is_agent { 3 } else { 1 });
+        result["time_to_first_token_ms"] = json!(if is_agent { 2 } else { 1 });
+        result["session_id"] = json!(native_session);
+        result["started_at"] = json!(if is_agent {
+            "2026-01-01T00:00:00Z"
+        } else {
+            "2026-01-01T00:00:01Z"
+        });
+        result["finished_at"] = json!(if is_agent {
+            "2026-01-01T00:00:00.013Z"
+        } else {
+            "2026-01-01T00:00:01.006Z"
+        });
+        result["history_id"] = json!(format!("history-{role}-{}", prompt.len()));
+    }
 
     let mut report = json!({
         "schema_version": "fake",

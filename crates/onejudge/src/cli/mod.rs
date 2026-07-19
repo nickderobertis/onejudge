@@ -495,6 +495,7 @@ pub fn run_plan(
         }
         None => None,
     };
+    outcome.telemetry = engine.telemetry();
     let report = outcome.into_report_with_assessment(verdicts, assessment);
 
     Ok(RunSummary {
@@ -728,7 +729,7 @@ mod tests {
     fn json_render_is_the_versioned_report() {
         let report = Report::new(Transcript::from_input("hi"), vec![], None, false);
         let json = render_json(&report).unwrap();
-        assert!(json.contains("\"schema_version\": 4"));
+        assert!(json.contains("\"schema_version\": 5"));
     }
 
     #[test]

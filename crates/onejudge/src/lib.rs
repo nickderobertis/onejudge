@@ -61,6 +61,7 @@ mod report;
 #[cfg(feature = "skill")]
 mod skill;
 mod split;
+mod telemetry;
 mod transcript;
 mod usage;
 
@@ -80,5 +81,8 @@ pub mod sdk_schema;
 #[cfg(feature = "skill")]
 pub use skill::{load_skill, Frontmatter, SkillDefinition};
 pub use split::SplitProvider;
+#[doc(hidden)]
+pub use telemetry::InvocationTelemetry;
+pub use telemetry::{PartyTelemetry, SessionLink, Telemetry, TelemetryRole};
 pub use transcript::{Message, Role, ToolEvent, ToolQuery, Transcript};
 pub use usage::Usage;
