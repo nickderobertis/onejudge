@@ -787,6 +787,59 @@ fn cancelling_a_streamed_turn_terminates_the_harness_oneharness_spawned() {
     let _ = std::fs::remove_file(&handle);
 }
 
+#[cfg(unix)]
+#[test]
+fn cancelling_a_turn_terminates_a_harness_that_produces_no_output() {
+    // The case a broken pipe cannot reach, and the one that used to orphan a live
+    // harness. oneharness observes a closed stdout only on its *next* write, so a
+    // harness that has gone silent never produces one: the run sat there, outlived
+    // the teardown grace, and took the backstop SIGKILL — which, being uncatchable,
+    // denied it the teardown of the tree it owns. The harness kept running and kept
+    // billing after every cancel.
+    //
+    // What makes it terminable is signalling oneharness instead: since v0.6.9 its
+    // `run` verb answers SIGTERM by cancelling, which its runner polls for on its
+    // own slice — independent of whether the harness ever writes — and then reaps
+    // the tree. The double models exactly that and nothing more: it emits one event
+    // to cancel on, then never touches stdout again, and tears its stand-in down
+    // only on SIGTERM.
+    let handle = scratch_path("streamed-silent-descendant.handle");
+    let provider = streaming_oneharness();
+    let engine = Engine::new(&provider, settings());
+    let skill = skill_with(&format!(
+        "[[reply:unreachable]][[stream-silent-descendant:{}]]",
+        handle.display()
+    ));
+    let mut live = None;
+    let outcome = engine
+        .run_streaming(&Conversation::single_turn(skill, "go"), &mut |_event| {
+            // Asserted live mid-turn, so the check below cannot pass against a
+            // stand-in that never started.
+            let (pid, port) = descendant_handle(&handle);
+            assert!(
+                descendant_is_running(port),
+                "the harness stand-in (pid {pid}) was not running during the turn"
+            );
+            live = Some((pid, port));
+            ControlFlow::Break(())
+        })
+        .unwrap();
+    assert!(outcome.stopped_early);
+
+    let (pid, port) = live.expect("the sink saw an event");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while descendant_is_running(port) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the harness stand-in (pid {pid}) outlived the cancelled turn: a silent \
+             harness never observes a closed pipe, so onejudge must signal oneharness \
+             to make it tear down the process tree it owns"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    let _ = std::fs::remove_file(&handle);
+}
+
 // --- SplitProvider journeys (two DIFFERENT real-subprocess backends) --------
 
 #[test]

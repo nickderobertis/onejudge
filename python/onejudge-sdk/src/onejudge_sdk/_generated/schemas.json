@@ -287,6 +287,11 @@
             "type": "string"
           },
           {
+            "const": "cancelled",
+            "description": "The run was torn down before it finished because it was **cancelled** \u2014\nthe caller stopped the turn, or the host was signalled. Distinct from\n[`ProviderErrorKind::Timeout`], which was given its full deadline and\nexceeded it: a cancelled call says nothing about whether the harness was\nhealthy, so it is not a reason to give up on the environment.",
+            "type": "string"
+          },
+          {
             "const": "spawn",
             "description": "The provider process could not be started (binary missing, not runnable).",
             "type": "string"

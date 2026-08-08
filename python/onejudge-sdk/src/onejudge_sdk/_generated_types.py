@@ -17,6 +17,7 @@ ProviderErrorKind = Literal[
     "quota",
     "overloaded",
     "timeout",
+    "cancelled",
     "spawn",
     "protocol",
     "other",

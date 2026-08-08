@@ -192,8 +192,16 @@ was skipped carries no `failure_kind` — its `Status` is the signal, and ignori
 banks a vacuously empty turn. `docs/oneharness-library.md` records what is a typed
 call, what is still a subprocess, and the three upstream changes that would let
 the invocation move in-process too. The measurements onejudge's `telemetry`
-reports come from oneharness's **history record**, not its run report, which
-carries none of them.
+reports come from `RunResult::telemetry` on the **run report** (oneharness report
+schema `0.5`); the history file is still read, but only for `history_id`.
+
+**Cancelling a turn escalates: close oneharness's stdout, then SIGTERM it, then
+kill.** Each rung reaches a case the one before cannot — a silent harness never
+observes a broken pipe, and an uncatchable kill denies oneharness the teardown of
+the tree it owns, orphaning a harness that keeps billing. This is why the crate
+floors at oneharness **0.6.9**, the first release whose `run` answers a signal by
+tearing that tree down. Two e2e tests gate the pair, one per rung; see
+`docs/oneharness-library.md` before touching the order.
 
 Prompt caching is oneharness's concern (the agent CLI it wraps caches by default,
 and oneharness has an explicit same-prefix batch/fork reuse path); onejudge stays

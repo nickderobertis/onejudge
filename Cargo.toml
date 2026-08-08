@@ -19,6 +19,14 @@ description = "A simulated interaction and evaluation loop over oneharness: driv
 # `RunStreamEnvelope` — instead of re-declaring shadow serde structs that drift.
 # A published registry version, never a git rev.
 oneharness-core = "0.6.9"
+# Unix only, and for exactly one call: `kill(pid, SIGTERM)` to ask a cancelled
+# `oneharness run` to tear down the harness tree it owns (`oneharness/mod.rs`).
+# A safe wrapper, because this crate forbids `unsafe_code`; already in the tree
+# via `oneharness-core`, so this costs a feature and no new dependency.
+rustix = { version = "1", features = ["process"] }
+# Safe signal registration for the `fake-provider` double that models oneharness's
+# cancellation contract. Test-only: never enabled for a library consumer.
+signal-hook = "0.3"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"

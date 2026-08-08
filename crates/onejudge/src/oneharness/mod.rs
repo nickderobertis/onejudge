@@ -9,8 +9,10 @@
 //! separately-configured harness/model — again without `--harness`/`--model`.
 //! Scaffold both with `onejudge init` (which shells out to `oneharness init`).
 //!
-//! It targets **oneharness v0.6.8+** — the version whose report contract it
-//! compiles against (`oneharness-core`). It always threads the uniform `--session
+//! It targets **oneharness v0.6.9+** — the version whose report contract it
+//! compiles against (`oneharness-core`), and the first whose `run` verb answers a
+//! cancellation signal by tearing its harness tree down instead of dying and
+//! orphaning it. It always threads the uniform `--session
 //! <name>` handle (the engine's caller-owned name, mapped to the harness's native
 //! session in oneharness's on-disk store), and if a run fails because the harness
 //! does not support `--session`, it retries the same call once **without**
@@ -48,11 +50,13 @@
 //! owns them — and keeps that process in *onejudge's* process group, where a
 //! terminal Ctrl-C or a parent's group signal still reaches it.
 //!
-//! **Cancelling a turn therefore closes the stream before it kills anything.** A
-//! harness is its own process-group leader, so onejudge can never signal it; what
-//! it can do is close oneharness's stdout, which is oneharness's own short-circuit
-//! signal to terminate the tree it owns. Only if it does not exit within
-//! [`TEARDOWN_GRACE`] is it killed outright. See `docs/oneharness-library.md`.
+//! **Cancelling a turn tears oneharness down by escalation, never by kill alone.**
+//! A harness is its own process-group leader, so onejudge can never signal it; every
+//! rung is addressed to oneharness, which owns the tree. Closing its stdout reaches a
+//! producer that is still writing; SIGTERM reaches one whose harness has gone
+//! *silent*, which since v0.6.9 is a cancellation its runner polls for and turns into
+//! a `Finish::Terminate`; the kill is only the backstop. See [`terminate`] for why
+//! all three rungs earn their place, and `docs/oneharness-library.md`.
 
 #[cfg(test)]
 pub(crate) mod fixture;
@@ -101,17 +105,89 @@ fn is_session_unsupported(err: &Error) -> bool {
     err.to_string().contains(SESSION_UNSUPPORTED_MARKER)
 }
 
-/// How long a cancelled `oneharness run` is given to notice its closed stdout and
-/// tear down the harness tree it owns before onejudge kills it outright.
+/// How long a cancelled `oneharness run` is given to notice its closed stdout
+/// before onejudge escalates to a signal.
 ///
-/// oneharness observes the broken pipe on its *next* write, so this only has to
-/// cover the gap to the next streamed event — while staying short enough that
-/// cancelling a turn is still responsive. A harness that stays silent past it is
-/// the residual case the backstop kill covers, and the one that orphans it.
+/// A producer that is still writing observes the broken pipe on its very next
+/// write, so this only has to cover the gap to that write. It is deliberately short:
+/// a *silent* producer will never use it, and waits it out before being signalled.
+const PIPE_CLOSE_GRACE: Duration = Duration::from_millis(250);
+
+/// How long a signalled `oneharness run` is then given to tear down the harness
+/// tree it owns before onejudge kills it outright.
+///
+/// oneharness's runner polls for cancellation on a short slice of its own, so this
+/// only has to cover that slice plus the reaping of the tree — while staying short
+/// enough that cancelling a turn is still responsive.
 const TEARDOWN_GRACE: Duration = Duration::from_secs(2);
 
 /// How often the grace period above re-checks the child.
 const TEARDOWN_POLL: Duration = Duration::from_millis(10);
+
+/// Tear down a `oneharness run` whose turn was abandoned, and through it the
+/// harness tree it owns.
+///
+/// onejudge can never signal the *harness*: oneharness makes every harness its own
+/// process-group leader precisely so a signal aimed at the runner does not race it.
+/// Everything here is therefore addressed to **oneharness**, which owns the tree
+/// and is the only party that can reap it.
+///
+/// Teardown escalates, cheapest and most cooperative first, because each rung
+/// reaches a case the one before it cannot:
+///
+/// 1. **The closed stdout** (already dropped by the caller). A producer that is
+///    still writing sees the broken pipe on its next write and short-circuits into
+///    its own teardown. This rung alone is what onejudge used to rely on.
+/// 2. **SIGTERM.** A producer whose *harness* has gone silent never writes again,
+///    so it never observes rung 1 — it would sit there until the backstop killed
+///    it, and an uncatchable kill denies it the teardown, orphaning a live harness
+///    that keeps burning tokens. Since v0.6.9 `oneharness run` installs
+///    SIGINT/SIGTERM handlers, and its runner polls for the resulting cancellation
+///    on its own time slice rather than only when the harness writes, so this
+///    reaches the silent case and still ends in `Finish::Terminate`.
+/// 3. **SIGKILL**, for a child that answers neither.
+///
+/// Rung 1 is kept, and kept first, precisely because rung 2 is not free: SIGTERM's
+/// *default* disposition is to terminate, so signalling a producer that would have
+/// torn down on the broken pipe — an older oneharness, or the window before it
+/// installs its handlers — would cut it off mid-teardown. Waiting out
+/// [`PIPE_CLOSE_GRACE`] first costs a silent harness a quarter second against a
+/// turn measured in hundreds of seconds.
+///
+/// On Windows there is no rung 2 and none is needed: oneharness puts each harness
+/// tree in a Job Object with `KILL_ON_JOB_CLOSE`, so rung 3 already ends the
+/// descendants.
+fn terminate(child: &mut std::process::Child) {
+    if exited_within(child, PIPE_CLOSE_GRACE) {
+        return;
+    }
+    request_stop(child);
+    if !exited_within(child, TEARDOWN_GRACE) {
+        let _ = child.kill();
+    }
+}
+
+/// Ask `child` to cancel, the way an operator's Ctrl-C would.
+///
+/// Best-effort by nature: a child that has already exited is an `ESRCH` this
+/// deliberately ignores, because the next thing the caller does is wait for it.
+#[cfg(unix)]
+fn request_stop(child: &std::process::Child) {
+    // The child has been spawned and not yet reaped, so its id still names it (a
+    // zombie at worst) and can never have been recycled onto an unrelated process.
+    let Some(pid) = i32::try_from(child.id())
+        .ok()
+        .and_then(rustix::process::Pid::from_raw)
+    else {
+        return;
+    };
+    let _ = rustix::process::kill_process(pid, rustix::process::Signal::TERM);
+}
+
+/// Windows has no SIGTERM, and needs none: the Job Object teardown described on
+/// [`terminate`] makes the backstop kill sufficient there.
+#[cfg(not(unix))]
+fn request_stop(_child: &std::process::Child) {}
 
 /// Wait up to `grace` for `child` to exit on its own, returning whether it did.
 ///
@@ -364,20 +440,11 @@ impl OneharnessProvider {
         // otherwise block once it filled.
         drop(reading);
         if !matches!(outcome, Ok(StreamOutcome::Report(_))) {
-            // Aborted or malformed: the turn is over either way, so stop a child
-            // that is still producing rather than wait out its full run.
-            //
-            // The close above is also what terminates the *harness*, which is why
-            // it comes first. onejudge cannot signal the harness itself —
-            // oneharness makes every harness its own process-group leader — but a
-            // broken stdout pipe is oneharness's own documented short-circuit: its
-            // next event write fails, and it terminates the process tree it owns
-            // before exiting. Killing it outright would deny it that teardown and
-            // leave the harness orphaned, still burning tokens. So the kill is
-            // only a backstop, for a child that does not take the hint in time.
-            if !exited_within(&mut child, TEARDOWN_GRACE) {
-                let _ = child.kill();
-            }
+            // Aborted or malformed: the turn is over either way, so stop the child —
+            // and, through it, the harness tree it owns — rather than wait out its
+            // full run. See [`terminate`] for why that is a signal and not the
+            // closed pipe above.
+            terminate(&mut child);
         }
         let status = child.wait().map_err(|e| {
             Error::provider(op.to_string(), format!("oneharness did not complete: {e}"))

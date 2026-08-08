@@ -16,7 +16,8 @@ revisitable when oneharness's library surface changes, rather than rediscovered.
 | The streamed NDJSON grammar | `oneharness_core::domain::report::RunStreamEnvelope` decides every tagged line |
 | Normalized tool events | `oneharness_core::domain::events::ActionEvent` |
 | Token / cost accounting | `oneharness_core::domain::signals::Usage` |
-| The per-candidate history record | `oneharness_core::io::history::read_session` — a real file read through oneharness's own reader |
+| The measured trace | `oneharness_core::domain::report::ExecutionTelemetry`, read off `RunResult::telemetry` — the invocation bounds and the model/tool/TTFT split, on the report itself since schema `0.5` |
+| The per-candidate history record | `oneharness_core::io::history::read_session` — a real file read through oneharness's own reader, now only for `history_id` |
 | The `--session` capability marker | drift-gated against `oneharness_core::errors::OneharnessError::SessionUnsupported`'s own rendering |
 
 The e2e double (`onejudge-fake-oneharness`) **builds its report and its history
@@ -31,7 +32,7 @@ have to change upstream before the hop could collapse:
 1. **There is no library entrypoint that returns a report.** The `oneharness`
    crate's only run surface is
    `oneharness::commands::run::run(&RunArgs) -> Result<i32, OneharnessError>`
-   (0.6.8). It writes the report to the **process's** stdout via `print_json` and
+   (0.6.9). It writes the report to the **process's** stdout via `print_json` and
    returns an exit code; `build_report` and every other per-verb function is
    private. An in-process caller cannot get the `RunReport` back without capturing
    global stdout — which onejudge cannot do, because its *own* stdout is a
@@ -70,35 +71,58 @@ Any one of these, upstream in `oneharness`, would make the hop collapsible:
 Until then this is the smallest hop that preserves the behaviours the split
 exists to protect.
 
-## Cancellation: close the stream, then kill
+## Cancellation: close the stream, then signal, then kill
 
 A cancelled or malformed streamed turn must terminate the **harness**, not just
-the `oneharness` process onejudge spawned. onejudge cannot do that by signalling:
-every harness is its own process-group leader (below), so nothing onejudge sends
-reaches it. What onejudge can do is hand oneharness its own cancellation signal.
+the `oneharness` process onejudge spawned. onejudge cannot signal the harness
+directly: every harness is its own process-group leader (below), so nothing
+onejudge sends reaches it. Every rung below is therefore addressed to oneharness,
+which owns the tree and is the only party that can reap it. `terminate`
+(`crates/onejudge/src/oneharness/mod.rs`) escalates through three, because each
+reaches a case the one before it cannot.
 
-`oneharness run --stream` writes each event to stdout, and a failed write is its
-documented short-circuit: `stream_one_harness` returns `StreamStep::Stop`,
-`run_job_streaming` ends the run as `StreamEnd::Stopped`, and that maps to
-`Finish::Terminate` → `Tree::terminate`, which SIGTERMs then SIGKILLs the
-harness's *own* process group. So `run_streamed`
-(`crates/onejudge/src/oneharness/mod.rs`) drops the stdout reader **first**, waits
-up to `TEARDOWN_GRACE` for oneharness to take the hint and exit, and only kills it
-outright as a backstop. Killing first — which is what it used to do — denied
-oneharness that teardown and orphaned the harness, still burning tokens.
+**1 — close stdout.** `oneharness run --stream` writes each event to stdout, and a
+failed write is its documented short-circuit: `stream_one_harness` returns
+`StreamStep::Stop`, `run_job_streaming` ends the run as `StreamEnd::Stopped`, and
+that maps to `Finish::Terminate` → `Tree::terminate`, which SIGTERMs then SIGKILLs
+the harness's *own* process group. `run_streamed` drops the stdout reader first and
+waits `PIPE_CLOSE_GRACE` for oneharness to take the hint. Killing instead — which
+is what onejudge used to do — denied oneharness that teardown and orphaned the
+harness, still burning tokens.
 
-`cancelling_a_streamed_turn_terminates_the_harness_oneharness_spawned` in
-`tests/e2e.rs` is the gate on this. The double spawns a harness stand-in in its
-own process group, publishes that process's pid and a liveness port, and (like
-oneharness) tears it down only when its own stdout breaks; the test then proves
-from outside the tree that the stand-in stopped answering. Reverting the teardown
-to an outright kill fails it in ~10s, naming the surviving pid.
+**2 — SIGTERM.** A broken pipe is only observable on the *next* write, so a
+producer whose harness has gone **silent** never observes rung 1 at all. This was
+a real, reported gap: such a run sat out the grace and took the backstop kill,
+which being uncatchable denied it the teardown and orphaned a live harness after
+every cancel. oneharness **v0.6.9** closed it — `commands::run` calls
+`io::cancel::install_signal_cancel`, and `run_job_streaming_cancellable` polls
+`cancellation_requested` on its own `CANCEL_POLL_SLICE` rather than only on
+`PipeEvent::Data`, so the cancellation is noticed while the harness says nothing
+and still ends in `Finish::Terminate`. That is why onejudge floors at 0.6.9.
 
-The residual is bounded and worth knowing: oneharness only notices the broken pipe
-on its *next* write, so a harness that emits nothing for longer than
-`TEARDOWN_GRACE` still reaches the backstop kill and is orphaned. Closing that gap
-needs a `SIGINT`/`SIGTERM` handler upstream in oneharness that runs the same
-`Finish::Terminate` teardown; it does not need any new library API.
+Rung 1 is kept, and kept first, precisely because rung 2 is not free: SIGTERM's
+*default* disposition is to terminate, so signalling a producer that would have
+torn down on the broken pipe — an older oneharness, or the window before it
+installs its handlers — cuts it off mid-teardown. (That is not hypothetical: it is
+what the rung-1 e2e test caught when the signal was tried first.) Waiting out
+`PIPE_CLOSE_GRACE` costs a silent harness a quarter second against a turn measured
+in hundreds of seconds.
+
+**3 — SIGKILL**, for a child that answers neither. It is also all Windows needs:
+there, each harness tree is a Job Object with `KILL_ON_JOB_CLOSE`, so ending the
+child already ends its descendants — which is why rung 2 is Unix-only.
+
+Two e2e tests gate this pair, and each fails without its own rung. Both spawn a
+harness stand-in in its own process group, publish that process's pid and a
+liveness port, and prove from outside the tree that it stopped answering:
+
+- `cancelling_a_streamed_turn_terminates_the_harness_oneharness_spawned` — the
+  double tears the stand-in down only when its own stdout breaks. Reverting rung 1
+  (killing outright) fails it in ~10s, naming the surviving pid.
+- `cancelling_a_turn_terminates_a_harness_that_produces_no_output` — the double
+  emits one event, then **never touches stdout again**, and tears the stand-in down
+  only on SIGTERM, exactly as a real silent harness leaves oneharness. Dropping
+  rung 2 fails it the same way.
 
 ## Why onejudge does not own the `oneharness` process as a group
 
@@ -123,14 +147,30 @@ facts:
   a live `oneharness` — and its harness — behind on the most common cancel path.
 
 Neither would it have bought the descendant termination above, which comes from
-closing the stream rather than from the shape of the kill.
+closing the stream and signalling, not from the shape of the kill.
 
-## Known gap worth reporting upstream
+## The measurements: on the report, not re-read from history
 
-`oneharness run`'s report does **not** carry the invocation's measurements —
-`model_ms`, `tool_ms`, `time_to_first_token_ms`, the UTC invocation bounds, or the
-record id. `RunResult::telemetry` is `#[serde(skip)]` and the values live only on
-the history record. onejudge therefore reads the history session file back after
-each invocation (`crates/onejudge/src/oneharness/history.rs`) to populate its own
-`telemetry`. That works and is tested, but it is a second read of state the run
-already had in hand; surfacing `ExecutionTelemetry` on `RunResult` would remove it.
+`oneharness run`'s report used to omit the invocation's measurements —
+`RunResult::telemetry` was `#[serde(skip)]`, so `model_ms`, `tool_ms`,
+`time_to_first_token_ms` and the invocation bounds lived only on the history
+record, and onejudge re-opened the session file the run had just written to
+populate its own `telemetry`.
+
+Report schema **`0.5`** (oneharness v0.6.9) serializes `ExecutionTelemetry` on the
+result, so onejudge reads them off the run it just made
+(`crates/onejudge/src/oneharness/report.rs::measured`). The variant is read for
+exactly what it claims: `PartialInvocation` contributes its start bound and no
+split, and `StdoutObserved` is deliberately **not** read as `tool_ms` — upstream
+keeps observed and provider-measured tool time in separate history fields because
+they are different quantities, and flattening them would report a guess as a
+measurement.
+
+What still needs the history file is `history_id` alone: it names a record in
+oneharness's own store, so it is only knowable by reading that store. The e2e
+double writes deliberately *different* measurements into its history record, so
+`the_per_candidate_history_record_is_read_back_through_oneharnesss_own_reader`
+fails loudly if a build ever re-reads the file for numbers the report already has.
+Those sentinels still have to be a coherent record — oneharness validates its own
+run lines on read (`model_ms + tool_ms <= duration_ms`) and silently drops one that
+is not, taking the `history_id` with it.

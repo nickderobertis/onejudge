@@ -61,6 +61,12 @@
 //! `StreamStep::Stop` and a `Finish::Terminate` of the tree it owns. A consumer
 //! that kills this process instead never gets there, and the stand-in survives.
 //!
+//! `[[stream-silent-descendant:HANDLE]]` (Unix) models the same contract for a
+//! harness that produces **no output**, which is the case a broken pipe cannot
+//! reach: it writes one event and then goes silent forever, tearing the stand-in
+//! down only on SIGTERM — exactly as real oneharness does, by polling for
+//! cancellation on its own slice rather than only when the harness writes.
+//!
 //! Built only under the `fake-provider` feature; never shipped to a consumer.
 #![allow(missing_docs)]
 
@@ -511,6 +517,10 @@ fn emit_stream(system: &str, report: &Value) {
     if let Some(handle) = marker(system, "stream-descendant") {
         stream_until_the_consumer_leaves(handle);
     }
+    #[cfg(unix)]
+    if let Some(handle) = marker(system, "stream-silent-descendant") {
+        idle_until_signalled(handle);
+    }
     if let Some(path) = marker(system, "stream-wait") {
         wait_for(path);
     }
@@ -567,6 +577,39 @@ fn stream_until_the_consumer_leaves(handle: &str) -> ! {
         .is_ok()
     {
         index += 1;
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let _ = harness.kill();
+    let _ = harness.wait();
+    std::process::exit(0);
+}
+
+/// Model oneharness's cancellation contract for the case a broken pipe cannot
+/// reach: a harness that produces **no output at all**.
+///
+/// Real `oneharness run` (v0.6.9+) installs SIGINT/SIGTERM handlers and polls for
+/// cancellation on its own time slice, so it notices even while the harness it is
+/// reading from says nothing — and then reaps the tree through `Finish::Terminate`.
+/// This models exactly that, and deliberately models nothing else: after the single
+/// event above it **never touches stdout again**, so the closed-pipe short-circuit
+/// [`stream_until_the_consumer_leaves`] relies on is unobservable here, just as it
+/// is for a real silent harness. A consumer that kills this process instead of
+/// signalling it never runs the teardown, and the stand-in outlives the turn.
+#[cfg(unix)]
+fn idle_until_signalled(handle: &str) -> ! {
+    let cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    if let Err(e) = signal_hook::flag::register(signal_hook::consts::SIGTERM, cancelled.clone()) {
+        emit_error(&format!("could not install the cancellation handler: {e}"));
+    }
+    let mut harness = spawn_harness(handle);
+    // One event, published only once the stand-in is live, so the consumer's sink
+    // has something to cancel on *and* a running descendant to assert against.
+    // After this line stdout is never touched again.
+    write_line(&json!({ "type": "event", "event": tool_event(0, "sleep 600") }));
+    // Bounded so a *failing* test cannot leak an immortal process onto a runner.
+    // Far longer than any assertion window, so it can never make a failure pass.
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !cancelled.load(std::sync::atomic::Ordering::SeqCst) && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(10));
     }
     let _ = harness.kill();
