@@ -35,7 +35,10 @@
 //! it as `history_file`, so the suite drives onejudge's read of it through
 //! oneharness's own reader. That record is the only source of a `history_id`, and
 //! its *measurements* are deliberately different sentinels: onejudge must read the
-//! result, so a build that re-read the file reports 999 and fails loudly. Without
+//! result, so a build that re-read the file reports those instead and fails
+//! loudly. They still have to be a coherent record — oneharness validates its own
+//! run lines on read (`model_ms + tool_ms <= duration_ms`) and drops one that is
+//! not, which would take the `history_id` with it. Without
 //! the marker there is no record to name, so the id alone is inlined on the result
 //! (the "producer that supplies its own id" case onejudge also accepts), which
 //! keeps the rest of the suite independent of a shared on-disk store.
@@ -220,7 +223,7 @@ fn main() {
 
     let report = RunReport {
         schema_version: oneharness_core::domain::report::SCHEMA_VERSION.into(),
-        oneharness_version: "0.6.8-fake".into(),
+        oneharness_version: "0.6.9-fake".into(),
         prompt: prompt.clone(),
         model: None,
         models: None,

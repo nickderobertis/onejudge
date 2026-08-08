@@ -97,7 +97,7 @@ pub(crate) fn event(index: usize, name: &str, command: &str) -> ActionEvent {
 pub(crate) fn report(results: Vec<RunResult>) -> RunReport {
     RunReport {
         schema_version: oneharness_core::domain::report::SCHEMA_VERSION.into(),
-        oneharness_version: "0.6.8".into(),
+        oneharness_version: "0.6.9".into(),
         prompt: "p".into(),
         model: None,
         models: None,

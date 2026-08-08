@@ -31,6 +31,14 @@ const DEFAULT_CONFIG: &str = "onejudge.yaml";
 /// It doubles as the documentation of the config surface.
 pub const STARTER_CONFIG: &str = include_str!("starter.yaml");
 
+/// The oldest `oneharness` this build works against, as told to an operator.
+///
+/// One source for every message the CLI prints, and drift-gated in this module's
+/// tests against the `oneharness-core` requirement in the workspace manifest and
+/// against the prose that repeats it — so bumping the pin without bumping what an
+/// operator is told to install fails the gate instead of shipping a wrong number.
+const MIN_ONEHARNESS: &str = "0.6.9";
+
 /// Errors surfaced by the CLI. Config/validation problems are separated from IO
 /// and engine failures so the entrypoint can exit with a fitting code.
 #[derive(Debug, thiserror::Error)]
@@ -396,9 +404,10 @@ fn init(args: InitArgs) -> Result<i32, CliError> {
     }
 
     // Harness/model selection lives in oneharness's own config files now, so
-    // scaffold them by shelling out to `oneharness init` (oneharness 0.6.8+): the
-    // discovered `oneharness.toml` drives the agent side, and `oneharness.judge.toml`
-    // drives the judge / simulated-user side (`provider.judge_config`).
+    // scaffold them by shelling out to `oneharness init` (see [`MIN_ONEHARNESS`]):
+    // the discovered `oneharness.toml` drives the agent side, and
+    // `oneharness.judge.toml` drives the judge / simulated-user side
+    // (`provider.judge_config`).
     oneharness_init(&args.oneharness_bin, "oneharness.toml", args.force)?;
     oneharness_init(&args.oneharness_bin, "oneharness.judge.toml", args.force)?;
 
@@ -417,8 +426,8 @@ fn oneharness_init(bin: &str, path: &str, force: bool) -> Result<(), CliError> {
     }
     let output = cmd.output().map_err(|e| {
         CliError::Config(format!(
-            "could not run `{bin} init {path}`: {e}. Is oneharness (0.6.8+) installed and on \
-             PATH? Install it or pass --oneharness-bin <path>."
+            "could not run `{bin} init {path}`: {e}. Is oneharness ({MIN_ONEHARNESS}+) installed \
+             and on PATH? Install it or pass --oneharness-bin <path>."
         ))
     })?;
     if !output.status.success() {
@@ -900,6 +909,42 @@ fn render_json(report: &Report) -> Result<String, CliError> {
 mod tests {
     use super::*;
     use crate::Transcript;
+
+    #[test]
+    fn the_advertised_oneharness_minimum_tracks_the_pin_and_the_prose() {
+        // The version an operator is told to install is restated in a manifest
+        // requirement, in CLI messages, and in prose. Only the manifest actually
+        // constrains the build, so it is the source; this is the gate that keeps
+        // the other two from drifting off it — which they had.
+        let manifest = include_str!("../../../../Cargo.toml");
+        let pinned = manifest
+            .lines()
+            .find_map(|line| line.strip_prefix("oneharness-core = "))
+            .expect("the workspace pins oneharness-core")
+            .trim()
+            .trim_matches('"')
+            .to_string();
+        assert_eq!(
+            pinned, MIN_ONEHARNESS,
+            "the advertised minimum drifted from the oneharness-core requirement"
+        );
+
+        // The prose that repeats it, so a bump cannot land in the code alone.
+        for (name, text) in [
+            ("README.md", include_str!("../../../../README.md")),
+            ("AGENTS.md", include_str!("../../../../AGENTS.md")),
+            ("docs/cli.md", include_str!("../../../../docs/cli.md")),
+            (
+                "docs/live-tier.md",
+                include_str!("../../../../docs/live-tier.md"),
+            ),
+        ] {
+            assert!(
+                text.contains(MIN_ONEHARNESS),
+                "{name} does not mention the advertised oneharness minimum {MIN_ONEHARNESS}"
+            );
+        }
+    }
 
     fn summary(completed: bool, hit_max: bool, evals: Vec<EvalResult>) -> RunSummary {
         RunSummary {
