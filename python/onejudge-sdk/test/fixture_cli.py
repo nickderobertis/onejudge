@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import os
 import json
+import os
 import sys
 import time
 
@@ -19,6 +19,23 @@ def main() -> int:
         return 0
     if mode == "timeout":
         time.sleep(30)
+        return 0
+    if mode == "garbage-stream":
+        sys.stdout.write("not json at all\n")
+        return 0
+    if mode == "scalar-stream":
+        sys.stdout.write("[1, 2, 3]\n")
+        return 0
+    if mode == "bad-stream":
+        # A streamed run whose lines this SDK must reject rather than half-accept.
+        sys.stdout.write(json.dumps({"type": "progress", "pct": 10}) + "\n")
+        return 0
+    if mode == "truncated-stream":
+        # Events, then no terminal `result` line: not a finished run.
+        sys.stdout.write(
+            json.dumps({"type": "event", "turn": 1, "event": {"kind": "tool_call", "index": 0}})
+            + "\n"
+        )
         return 0
     if mode == "v4-report":
         sys.stdout.write(

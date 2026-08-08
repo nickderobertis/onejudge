@@ -17,6 +17,13 @@
 //! replaces the old up-front capability table. It also depends on `oneharness init`
 //! for scaffolding.
 //!
+//! It can also drive a **streamed** provider (`with_streaming`): the agent-side
+//! call adds `--stream`, and the child's stdout is read as the NDJSON protocol in
+//! `stream.rs` (`docs/streaming.md`) so each tool event reaches the caller the
+//! instant it is observed instead of only when the turn ends. The terminal line's
+//! report is parsed exactly as a bare report is, so a streamed run and a buffered
+//! one produce the same turn.
+//!
 //! The pure pieces — argument construction, report parsing, error classification —
 //! are separated from the one thin `spawn + wait` shell so they are
 //! deterministically unit-tested; the whole path is proven end-to-end against a
@@ -24,11 +31,13 @@
 //! tier (`docs/live-tier.md`).
 
 use std::cell::RefCell;
-use std::io::Write as _;
+use std::io::{Read as _, Write};
+use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Command, ExitStatus, Stdio};
 
 use serde::Deserialize;
+use serde_json::Value;
 
 use crate::error::{Error, ProviderErrorKind, Result};
 use crate::provider::{
@@ -36,6 +45,7 @@ use crate::provider::{
     latest_or_inline, parse_supervisor, parse_verdict, Assessment, AssistantTurn, JudgeQuery,
     JudgeVerdict, Provider, SkillRef, SupervisorQuery, SupervisorTurn, UserTurn,
 };
+use crate::stream::{read_stream, StreamOutcome};
 use crate::telemetry::{InvocationTelemetry, TelemetryRole};
 use crate::transcript::{Message, ToolEvent};
 use crate::usage::Usage;
@@ -59,6 +69,7 @@ fn is_session_unsupported(err: &Error) -> bool {
 pub struct OneharnessProvider {
     bin: String,
     judge_config: Option<PathBuf>,
+    stream: bool,
     telemetry: RefCell<Vec<InvocationTelemetry>>,
 }
 
@@ -76,6 +87,7 @@ impl OneharnessProvider {
         Self {
             bin: "oneharness".into(),
             judge_config: Some(PathBuf::from(DEFAULT_JUDGE_CONFIG)),
+            stream: false,
             telemetry: RefCell::new(Vec::new()),
         }
     }
@@ -98,21 +110,41 @@ impl OneharnessProvider {
         self
     }
 
+    /// Declare that the agent side speaks the **streamed provider protocol**
+    /// (`docs/streaming.md`): the call adds `oneharness run --stream`, and its
+    /// stdout is read as NDJSON — an `{"type":"event",…}` line per tool event as it
+    /// happens, then a terminal `{"type":"result","report":{…}}` line whose report
+    /// is parsed exactly as a bare report is.
+    ///
+    /// Off by default. Turn it on only for a binary that really streams: a
+    /// declared-streaming provider that writes a line the protocol does not model
+    /// is a loud [`ProviderErrorKind::Protocol`] error, not a silent empty turn.
+    /// (A provider that streams *sometimes* is still safe — a bare report document
+    /// remains accepted, so a degraded run is not a failed one.)
+    #[must_use]
+    pub fn with_streaming(mut self, stream: bool) -> Self {
+        self.stream = stream;
+        self
+    }
+
     /// Run a skill turn, threading `session` and — on a `SessionUnsupported`
-    /// failure — retrying once without it, re-inlining the transcript.
+    /// failure — retrying once without it, re-inlining the transcript. Tool events
+    /// reach `on_event` live when the provider streams, and are replayed from the
+    /// finished turn when it does not.
     fn run_respond(
         &self,
         instructions: &str,
         worktree: &str,
         messages: &[Message],
         session: Option<&str>,
-    ) -> Result<OneharnessResult> {
+        on_event: &mut dyn FnMut(&ToolEvent) -> ControlFlow<()>,
+    ) -> Result<AssistantTurn> {
         if let Some(name) = session {
             // A continued session only needs the latest user turn.
-            let args = respond_args(instructions, worktree, Some(name), Some(name));
+            let args = respond_args(instructions, worktree, Some(name), Some(name), self.stream);
             let prompt = latest_or_inline(messages, true);
-            match self.run("respond", &args, &prompt) {
-                Ok(result) => return Ok(result),
+            match self.respond_once(&args, &prompt, on_event) {
+                Ok(turn) => return Ok(turn),
                 Err(e) if is_session_unsupported(&e) => {
                     eprintln!(
                         "onejudge: warning — the agent harness does not support --session; \
@@ -123,9 +155,29 @@ impl OneharnessProvider {
             }
         }
         // Fresh or fallback call: inline the whole conversation, no `--session`.
-        let args = respond_args(instructions, worktree, None, session);
+        let args = respond_args(instructions, worktree, None, session, self.stream);
         let prompt = latest_or_inline(messages, false);
-        self.run("respond", &args, &prompt)
+        self.respond_once(&args, &prompt, on_event)
+    }
+
+    /// One agent-side invocation: streamed when the provider declared streaming,
+    /// otherwise the buffered call with the finished turn's events replayed.
+    fn respond_once(
+        &self,
+        args: &[String],
+        prompt: &str,
+        on_event: &mut dyn FnMut(&ToolEvent) -> ControlFlow<()>,
+    ) -> Result<AssistantTurn> {
+        if self.stream {
+            return self.run_streamed("respond", args, prompt, on_event);
+        }
+        let turn = assistant_turn(&self.run("respond", args, prompt)?);
+        for event in &turn.events {
+            if on_event(event).is_break() {
+                break;
+            }
+        }
+        Ok(turn)
     }
 
     /// Run a judge/simulated-user turn under the judge config, threading `session`
@@ -159,7 +211,98 @@ impl OneharnessProvider {
     /// single-result report. The prompt is passed via stdin (`--prompt-file -`)
     /// so an arbitrarily long transcript never trips the OS argv limit.
     fn run(&self, op: &str, args: &[String], prompt: &str) -> Result<OneharnessResult> {
-        let mut child = Command::new(&self.bin)
+        let mut child = self.spawn(op, args)?;
+        write_prompt(op, child.stdin.as_mut(), prompt)?;
+        let output = child.wait_with_output().map_err(|e| {
+            Error::provider(op.to_string(), format!("oneharness did not complete: {e}"))
+        })?;
+        if !output.status.success() {
+            return Err(exit_error(
+                op,
+                &output.status,
+                &String::from_utf8_lossy(&output.stderr),
+            ));
+        }
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let result = parse_report(op, &stdout)?;
+        self.record(op, &result);
+        Ok(result)
+    }
+
+    /// Spawn `oneharness run --stream` and consume its NDJSON stdout, delivering
+    /// each tool event to `on_event` the instant the child writes it.
+    ///
+    /// The child's stderr is drained on its own thread: this reader holds stdout
+    /// open for the whole turn, and a chatty child that filled the stderr pipe
+    /// meanwhile would deadlock both.
+    fn run_streamed(
+        &self,
+        op: &str,
+        args: &[String],
+        prompt: &str,
+        on_event: &mut dyn FnMut(&ToolEvent) -> ControlFlow<()>,
+    ) -> Result<AssistantTurn> {
+        let mut child = self.spawn(op, args)?;
+        // Take stdin rather than borrow it: closing it here is what lets a child
+        // reading `--prompt-file -` see EOF and start work.
+        write_prompt(op, child.stdin.take().as_mut(), prompt)?;
+        let mut errors = child
+            .stderr
+            .take()
+            .ok_or_else(|| Error::provider(op.to_string(), "could not open oneharness stderr"))?;
+        let draining = std::thread::spawn(move || {
+            let mut buffer = Vec::new();
+            let _ = errors.read_to_end(&mut buffer);
+            buffer
+        });
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| Error::provider(op.to_string(), "could not open oneharness stdout"))?;
+
+        let mut events = Vec::new();
+        let outcome = read_stream(
+            op,
+            &mut std::io::BufReader::new(stdout),
+            &mut events,
+            on_event,
+        );
+        if !matches!(outcome, Ok(StreamOutcome::Report(_))) {
+            // Aborted or malformed: the turn is over either way, so stop a child
+            // that is still producing rather than wait out its full run.
+            let _ = child.kill();
+        }
+        let status = child.wait().map_err(|e| {
+            Error::provider(op.to_string(), format!("oneharness did not complete: {e}"))
+        })?;
+        let stderr = draining.join().unwrap_or_default();
+        let stderr = String::from_utf8_lossy(&stderr);
+
+        match outcome {
+            // The sink asked to stop mid-turn: return what the stream produced.
+            Ok(StreamOutcome::Aborted) => Ok(AssistantTurn {
+                events,
+                ..AssistantTurn::default()
+            }),
+            Ok(StreamOutcome::Report(report)) => {
+                if !status.success() {
+                    return Err(exit_error(op, &status, &stderr));
+                }
+                let result = parse_report_value(op, report)?;
+                self.record(op, &result);
+                Ok(assistant_turn(&result))
+            }
+            // The stream violation is the finding; the child's exit status is not,
+            // because the kill above may be what produced it. Its stderr still is —
+            // it carries oneharness's own diagnosis (a rejected `--session`, an
+            // unusable config), so it rides along on the one error.
+            Err(e) => Err(with_stderr(e, &stderr)),
+        }
+    }
+
+    /// Spawn the configured `oneharness` binary with `args`, all three pipes open.
+    fn spawn(&self, op: &str, args: &[String]) -> Result<std::process::Child> {
+        Command::new(&self.bin)
             .args(args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -174,32 +317,11 @@ impl OneharnessProvider {
                     ),
                     ProviderErrorKind::Spawn,
                 )
-            })?;
-        {
-            let stdin = child.stdin.as_mut().ok_or_else(|| {
-                Error::provider(op.to_string(), "could not open oneharness stdin")
-            })?;
-            stdin.write_all(prompt.as_bytes()).map_err(|e| {
-                Error::provider(op.to_string(), format!("could not write prompt: {e}"))
-            })?;
-        }
-        let output = child.wait_with_output().map_err(|e| {
-            Error::provider(op.to_string(), format!("oneharness did not complete: {e}"))
-        })?;
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(Error::provider_classified(
-                op.to_string(),
-                format!(
-                    "oneharness exited with {}: {}",
-                    output.status,
-                    stderr.trim()
-                ),
-                ProviderErrorKind::Protocol,
-            ));
-        }
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let result = parse_report(op, &stdout)?;
+            })
+    }
+
+    /// Record one invocation's telemetry against the party that made the call.
+    fn record(&self, op: &str, result: &OneharnessResult) {
         self.telemetry
             .borrow_mut()
             .push(result.telemetry(if op == "respond" {
@@ -207,7 +329,52 @@ impl OneharnessProvider {
             } else {
                 TelemetryRole::Judge
             }));
-        Ok(result)
+    }
+}
+
+/// Write the prompt to the child's stdin (`--prompt-file -`).
+fn write_prompt(op: &str, stdin: Option<&mut impl Write>, prompt: &str) -> Result<()> {
+    let stdin =
+        stdin.ok_or_else(|| Error::provider(op.to_string(), "could not open oneharness stdin"))?;
+    stdin
+        .write_all(prompt.as_bytes())
+        .map_err(|e| Error::provider(op.to_string(), format!("could not write prompt: {e}")))
+}
+
+/// The classified error for a `oneharness` process that exited non-zero.
+fn exit_error(op: &str, status: &ExitStatus, stderr: &str) -> Error {
+    Error::provider_classified(
+        op.to_string(),
+        format!("oneharness exited with {status}: {}", stderr.trim()),
+        ProviderErrorKind::Protocol,
+    )
+}
+
+/// Attach a streamed child's stderr to `err`, when it wrote any. The stream
+/// violation stays the headline; oneharness's own words follow it.
+fn with_stderr(err: Error, stderr: &str) -> Error {
+    let stderr = stderr.trim();
+    match err {
+        Error::Provider {
+            context,
+            message,
+            kind,
+        } if !stderr.is_empty() => Error::Provider {
+            context,
+            message: format!("{message}; oneharness stderr: {stderr}"),
+            kind,
+        },
+        other => other,
+    }
+}
+
+/// Lift one parsed oneharness result into the engine's assistant turn.
+fn assistant_turn(result: &OneharnessResult) -> AssistantTurn {
+    AssistantTurn {
+        message: result.reply(),
+        done: false,
+        usage: result.usage(),
+        events: result.events.clone().unwrap_or_default(),
     }
 }
 
@@ -222,6 +389,7 @@ fn respond_args(
     worktree: &str,
     session: Option<&str>,
     history_name: Option<&str>,
+    stream: bool,
 ) -> Vec<String> {
     // `oneharness run` emits a JSON report by default; `--compact` makes it a
     // single line. There is no `--format` flag on `run`.
@@ -237,6 +405,11 @@ fn respond_args(
         "--prompt-file".into(),
         "-".into(),
     ];
+    // `--stream` republishes the same normalized events as they occur and ends with
+    // a terminal result line; it implies `--events`' format selection upstream.
+    if stream {
+        args.push("--stream".into());
+    }
     // Always thread the caller-owned session name; the caller retries without it if
     // oneharness reports the harness cannot bind a session.
     if let Some(name) = history_name {
@@ -375,13 +548,27 @@ impl OneharnessResult {
 /// Parse a oneharness JSON report into its single result, turning a normalized
 /// `failure_kind` into a classified [`Error::Provider`].
 fn parse_report(op: &str, stdout: &str) -> Result<OneharnessResult> {
-    let report: OneharnessReport = serde_json::from_str(stdout.trim()).map_err(|e| {
+    let value: Value = serde_json::from_str(stdout.trim()).map_err(|e| {
         Error::provider_classified(
             op.to_string(),
             format!(
                 "oneharness report was not valid JSON: {e}; got: {}",
                 stdout.trim()
             ),
+            ProviderErrorKind::Protocol,
+        )
+    })?;
+    parse_report_value(op, value)
+}
+
+/// Parse an already-decoded oneharness report document. The streamed protocol's
+/// terminal `result` line carries the report as JSON, so both paths land here and
+/// a streamed report is read exactly as a bare one is.
+fn parse_report_value(op: &str, value: Value) -> Result<OneharnessResult> {
+    let report: OneharnessReport = serde_json::from_value(value.clone()).map_err(|e| {
+        Error::provider_classified(
+            op.to_string(),
+            format!("oneharness report had an unreadable shape: {e}; got: {value}"),
             ProviderErrorKind::Protocol,
         )
     })?;
@@ -421,13 +608,23 @@ impl Provider for OneharnessProvider {
         messages: &[Message],
         session: Option<&str>,
     ) -> Result<AssistantTurn> {
-        let result = self.run_respond(skill.instructions, skill.dir, messages, session)?;
-        Ok(AssistantTurn {
-            message: result.reply(),
-            done: false,
-            usage: result.usage(),
-            events: result.events.clone().unwrap_or_default(),
-        })
+        self.run_respond(
+            skill.instructions,
+            skill.dir,
+            messages,
+            session,
+            &mut |_| ControlFlow::Continue(()),
+        )
+    }
+
+    fn respond_streaming(
+        &self,
+        skill: &SkillRef<'_>,
+        messages: &[Message],
+        session: Option<&str>,
+        on_event: &mut dyn FnMut(&ToolEvent) -> ControlFlow<()>,
+    ) -> Result<AssistantTurn> {
+        self.run_respond(skill.instructions, skill.dir, messages, session, on_event)
     }
 
     fn simulate_user(
@@ -519,7 +716,13 @@ mod tests {
 
     #[test]
     fn respond_args_thread_session_and_carry_no_harness_or_model() {
-        let args = respond_args("do x", "/work", Some("run-1-skill"), Some("run-1-skill"));
+        let args = respond_args(
+            "do x",
+            "/work",
+            Some("run-1-skill"),
+            Some("run-1-skill"),
+            false,
+        );
         assert!(args.windows(2).any(|w| w == ["--session", "run-1-skill"]));
         assert!(args.iter().any(|a| a == "--events"));
         // Harness/model selection is oneharness's config's job now.
@@ -527,10 +730,25 @@ mod tests {
         assert!(!args.iter().any(|a| a == "--model"));
         // `oneharness run` has no `--format` flag; passing it is a live-path bug.
         assert!(!args.iter().any(|a| a == "--format"));
+        // A buffered provider never asks for the stream.
+        assert!(!args.iter().any(|a| a == "--stream"));
 
         // No session supplied: no `--session`.
-        let none = respond_args("do x", "/work", None, None);
+        let none = respond_args("do x", "/work", None, None, false);
         assert!(!none.iter().any(|a| a == "--session"));
+    }
+
+    #[test]
+    fn streaming_adds_the_stream_flag_to_the_agent_side_only() {
+        let provider = OneharnessProvider::new().with_streaming(true);
+        assert!(provider.stream);
+        let args = respond_args("do x", "/work", Some("s"), Some("s"), provider.stream);
+        assert!(args.iter().any(|a| a == "--stream"));
+        // The judge / simulated-user side stays buffered: streaming is about the
+        // long agent turn, not the short judgement calls.
+        assert!(!judge_side_args(None, Some("s"), None)
+            .iter()
+            .any(|a| a == "--stream"));
     }
 
     #[test]

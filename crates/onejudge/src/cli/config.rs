@@ -114,6 +114,11 @@ pub struct ProviderConfig {
     /// selection lives.
     #[serde(default)]
     pub judge_config: Option<String>,
+    /// `oneharness`: the agent-side binary speaks the **streamed provider
+    /// protocol** (`docs/streaming.md`) — NDJSON tool events as they occur, then a
+    /// terminal report line. Default `false` (one buffered report document).
+    #[serde(default)]
+    pub stream: Option<bool>,
     /// `command`: the provider argv (program + args).
     #[serde(default)]
     pub command: Option<Vec<String>>,
@@ -351,6 +356,7 @@ impl ProviderConfig {
             kind,
             bin,
             judge_config,
+            stream,
             command,
             skill,
             judge,
@@ -376,11 +382,13 @@ impl ProviderConfig {
                 Ok(ProviderSpec::Oneharness {
                     bin: bin.unwrap_or_else(|| "oneharness".into()),
                     judge_config: judge_config.map(PathBuf::from),
+                    stream: stream.unwrap_or(false),
                 })
             }
             ProviderKind::Command => {
                 reject(bin.is_some(), "bin")?;
                 reject(judge_config.is_some(), "judge_config")?;
+                reject(stream.is_some(), "stream")?;
                 reject(skill.is_some(), "skill")?;
                 reject(judge.is_some(), "judge")?;
                 let command = command.filter(|c| !c.is_empty()).ok_or_else(|| {
@@ -391,6 +399,7 @@ impl ProviderConfig {
             ProviderKind::Split => {
                 reject(bin.is_some(), "bin")?;
                 reject(judge_config.is_some(), "judge_config")?;
+                reject(stream.is_some(), "stream")?;
                 reject(command.is_some(), "command")?;
                 let skill = skill.ok_or_else(|| {
                     CliError::Config("provider kind `split` needs a `skill` provider".into())
@@ -462,6 +471,8 @@ pub enum ProviderSpec {
         /// The judge / simulated-user oneharness config file (`--config <path>`);
         /// `None` leaves the provider's own default (`oneharness.judge.toml`).
         judge_config: Option<PathBuf>,
+        /// The agent-side binary speaks the streamed provider protocol.
+        stream: bool,
     },
     /// A custom command speaking the JSON-lines protocol.
     Command {
@@ -700,6 +711,55 @@ mod tests {
             plan.provider,
             ProviderSpec::Oneharness { judge_config: Some(p), .. } if p == std::path::Path::new("custom.judge.toml")
         ));
+    }
+
+    #[test]
+    fn stream_resolves_onto_the_oneharness_spec_and_defaults_off() {
+        let streamed =
+            Config::from_yaml("task: x\nprovider:\n  kind: oneharness\n  stream: true\n")
+                .unwrap()
+                .into_plan()
+                .unwrap();
+        assert!(matches!(
+            streamed.provider,
+            ProviderSpec::Oneharness { stream: true, .. }
+        ));
+
+        // Omitted: a provider writes one buffered report document, as before.
+        let buffered = Config::from_yaml("task: x\n").unwrap().into_plan().unwrap();
+        assert!(matches!(
+            buffered.provider,
+            ProviderSpec::Oneharness { stream: false, .. }
+        ));
+    }
+
+    #[test]
+    fn stream_is_rejected_under_a_kind_that_cannot_honor_it() {
+        // `stream` describes the oneharness agent-side call. A `command` backend
+        // speaks the request/response protocol, and a `split` declares it on the
+        // child that actually runs the agent.
+        for yaml in [
+            "task: x\nprovider:\n  kind: command\n  command: [p]\n  stream: true\n",
+            "task: x\nprovider:\n  kind: split\n  stream: true\n  skill:\n    kind: oneharness\n  judge:\n    kind: oneharness\n",
+        ] {
+            let err = Config::from_yaml(yaml).unwrap().into_plan().unwrap_err();
+            assert!(matches!(err, CliError::Config(m) if m.contains("stream")), "{yaml}");
+        }
+
+        // Under a split's own oneharness child it is valid, and reaches that child.
+        let plan = Config::from_yaml(
+            "task: x\nprovider:\n  kind: split\n  skill:\n    kind: oneharness\n    stream: true\n  judge:\n    kind: command\n    command: [j]\n",
+        )
+        .unwrap()
+        .into_plan()
+        .unwrap();
+        match plan.provider {
+            ProviderSpec::Split { skill, .. } => assert!(matches!(
+                *skill,
+                ProviderSpec::Oneharness { stream: true, .. }
+            )),
+            other => panic!("expected split, got {other:?}"),
+        }
     }
 
     #[test]

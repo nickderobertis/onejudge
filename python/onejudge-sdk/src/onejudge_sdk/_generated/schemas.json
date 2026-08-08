@@ -561,6 +561,14 @@
               }
             ],
             "description": "`split`: the backend that runs the agent's turns."
+          },
+          "stream": {
+            "default": null,
+            "description": "`oneharness`: the agent-side binary speaks the **streamed provider\nprotocol** (`docs/streaming.md`) \u2014 NDJSON tool events as they occur, then a\nterminal report line. Default `false` (one buffered report document).",
+            "type": [
+              "boolean",
+              "null"
+            ]
           }
         },
         "type": "object"
@@ -728,7 +736,7 @@
       }
     },
     "$schema": "https://json-schema.org/draft/2020-12/schema",
-    "description": "One streamed tool event delivered live to an [`Engine::run_streaming`] sink,\ntagged with the turn it belongs to.",
+    "description": "One streamed tool event delivered live to an [`Engine::run_streaming`] sink,\ntagged with the turn it belongs to.\n\nIt is also the payload of an `event` line in the **streamed protocol**\n(`docs/streaming.md`) that `onejudge run --stream` publishes \u2014 the line adds\nthe `\"type\": \"event\"` discriminator around exactly these fields, so an SDK\nhands this type straight to its own event callback.",
     "properties": {
       "event": {
         "$ref": "#/$defs/ToolEvent",

@@ -1,6 +1,6 @@
 """Async Python SDK for the onejudge CLI."""
 
-from ._client import OneJudge
+from ._client import EventHandler, OneJudge
 from ._errors import ContractError, OneJudgeProcessError, OneJudgeTimeoutError
 from ._generated_types import (
     EvalConfig,
@@ -25,6 +25,7 @@ from ._version import __version__
 __all__ = [
     "ContractError",
     "EvalConfig",
+    "EventHandler",
     "JudgeKind",
     "JudgeVerdict",
     "Message",

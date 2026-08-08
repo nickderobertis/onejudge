@@ -12,13 +12,13 @@
 mod config;
 mod provider;
 
-use std::io::{Read as _, Write as _};
+use std::io::{Read as _, Write};
 use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 
 use clap::{Parser, Subcommand, ValueEnum};
 
-use crate::{Engine, JudgeKind, JudgeValue, NamedVerdict, Report, Usage};
+use crate::{Engine, JudgeKind, JudgeValue, NamedVerdict, Report, StreamEvent, Usage};
 
 pub use config::{Config, Eval, EvalKind, Overrides, Plan, ProviderKind, ProviderSpec};
 pub use provider::AnyProvider;
@@ -107,6 +107,12 @@ pub struct RunArgs {
     /// The output format.
     #[arg(long, value_enum, default_value_t = Format::Human)]
     pub format: Format,
+    /// Publish the run on stdout as the streamed protocol (`docs/streaming.md`):
+    /// one `{"type":"event",…}` line per tool event as it happens, then a terminal
+    /// `{"type":"result","report":{…}}` line. Requires `--format json`, and is
+    /// incompatible with `--output` (the stream *is* stdout).
+    #[arg(long)]
+    pub stream: bool,
     /// Write the result here instead of stdout.
     #[arg(long, short)]
     pub output: Option<PathBuf>,
@@ -166,8 +172,25 @@ fn run_task(args: RunArgs) -> Result<i32, CliError> {
         session,
         provider,
         format,
+        stream,
         output,
     } = args;
+
+    // Validate the output surface before doing any work: `--stream` publishes the
+    // NDJSON protocol on stdout, so a human rendering or a file destination would
+    // silently discard the very thing that was asked for.
+    if stream {
+        if format != Format::Json {
+            return Err(CliError::Config(
+                "--stream publishes the JSON streamed protocol; pass --format json".into(),
+            ));
+        }
+        if output.is_some() {
+            return Err(CliError::Config(
+                "--stream writes the event stream to stdout; drop --output".into(),
+            ));
+        }
+    }
 
     let cfg_path = resolve_config_path(config.as_ref());
     let mut cfg = load_config(cfg_path.as_ref())?;
@@ -195,6 +218,10 @@ fn run_task(args: RunArgs) -> Result<i32, CliError> {
 
     let plan = cfg.into_plan()?;
 
+    if stream {
+        return run_streamed(plan);
+    }
+
     // Live tool events go to stderr so a `--format json` (or redirected) run keeps
     // a clean stdout; the rendered result goes to stdout / `--output`.
     let mut progress = |line: &str| {
@@ -209,6 +236,59 @@ fn run_task(args: RunArgs) -> Result<i32, CliError> {
     write_output(output.as_ref(), &rendered)?;
 
     Ok(exit_code(&summary))
+}
+
+/// Drive `plan` while republishing it on stdout as the streamed protocol: one
+/// NDJSON `event` line per tool event the instant it is observed, then the
+/// terminal `result` line carrying the versioned [`Report`].
+///
+/// Each line is flushed as it is written — a consumer reading this pipe to watch a
+/// long turn learns nothing from a line still sitting in our buffer.
+fn run_streamed(plan: Plan) -> Result<i32, CliError> {
+    let mut stdout = std::io::stdout();
+    let mut failure = None;
+    let summary = run_plan_streaming(plan, &mut |event| {
+        if let Err(e) = write_line(&mut stdout, &StreamLine::Event(event)) {
+            // Stop the run rather than keep burning harness calls into a pipe that
+            // no longer accepts them (a consumer that hung up mid-turn).
+            failure = Some(e);
+            return ControlFlow::Break(());
+        }
+        ControlFlow::Continue(())
+    })?;
+    if let Some(e) = failure {
+        return Err(e);
+    }
+    write_line(
+        &mut stdout,
+        &StreamLine::Result {
+            report: &summary.report,
+        },
+    )?;
+    Ok(exit_code(&summary))
+}
+
+/// One line of the outbound stream — the same two `type`-tagged envelopes onejudge
+/// accepts *from* a streamed provider, so a consumer speaks one protocol in both
+/// directions. An `Event` line is the `"type"` tag wrapped around exactly
+/// [`StreamEvent`]'s fields; the terminal `Result` line's `report` is byte-for-byte
+/// the versioned [`Report`] a buffered `--format json` run prints.
+#[derive(serde::Serialize)]
+#[serde(tag = "type", rename_all = "lowercase")]
+enum StreamLine<'a> {
+    Event(&'a StreamEvent<'a>),
+    Result { report: &'a Report },
+}
+
+/// Serialize one NDJSON line and flush it — a consumer watching a long turn learns
+/// nothing from a line still sitting in this process's buffer.
+fn write_line(out: &mut impl Write, line: &StreamLine<'_>) -> Result<(), CliError> {
+    let json = serde_json::to_string(line)
+        .map_err(|e| CliError::Config(format!("could not serialize a stream line: {e}")))?;
+    out.write_all(json.as_bytes())?;
+    out.write_all(b"\n")?;
+    out.flush()?;
+    Ok(())
 }
 
 /// The config file a run reads: the explicit `path`, or `./onejudge.yaml` when it
@@ -387,6 +467,40 @@ pub fn run_plan(
     format: Format,
     progress: &mut dyn FnMut(&str),
 ) -> Result<RunSummary, CliError> {
+    match format {
+        Format::Human => execute(
+            plan,
+            Some(&mut |ev: &StreamEvent<'_>| {
+                progress(&format!("· turn {} — {}", ev.turn, ev.event.summary()));
+                ControlFlow::Continue(())
+            }),
+        ),
+        Format::Json => execute(plan, None),
+    }
+}
+
+/// The sink a streaming run delivers each live [`StreamEvent`] to. Returning
+/// [`ControlFlow::Break`] short-circuits the run.
+pub type EventSink<'a> = dyn FnMut(&StreamEvent<'_>) -> ControlFlow<()> + 'a;
+
+/// Drive `plan` exactly as [`run_plan`] does, delivering each live tool event to
+/// `on_event` as a typed [`StreamEvent`] instead of a rendered line. Returning
+/// [`ControlFlow::Break`] short-circuits the run (the summary then reflects a
+/// stopped-early outcome). This is what `onejudge run --stream` publishes and what
+/// an SDK reads to watch a long turn while it is still running.
+///
+/// # Errors
+/// As [`run_plan`].
+pub fn run_plan_streaming(
+    plan: Plan,
+    on_event: &mut EventSink<'_>,
+) -> Result<RunSummary, CliError> {
+    execute(plan, Some(on_event))
+}
+
+/// The one run driver both entry points share: `None` runs the buffered engine
+/// loop, `Some(sink)` the streaming one.
+fn execute(plan: Plan, on_event: Option<&mut EventSink<'_>>) -> Result<RunSummary, CliError> {
     let Plan {
         provider,
         settings,
@@ -406,12 +520,9 @@ pub fn run_plan(
     let backend = AnyProvider::build(&provider)?;
     let engine = Engine::new(&backend, settings);
 
-    let mut outcome = match format {
-        Format::Human => engine.run_streaming(&conversation, &mut |ev| {
-            progress(&format!("· turn {} — {}", ev.turn, ev.event.summary()));
-            ControlFlow::Continue(())
-        })?,
-        Format::Json => engine.run(&conversation)?,
+    let mut outcome = match on_event {
+        Some(sink) => engine.run_streaming(&conversation, sink)?,
+        None => engine.run(&conversation)?,
     };
 
     let mut verdicts: Vec<NamedVerdict> = Vec::new();

@@ -853,6 +853,187 @@ fn binary_rejects_a_missing_skill_and_exits_two() {
         .contains("could not load skill"));
 }
 
+// --- The streamed protocol, in and out (docs/streaming.md) -----------------
+
+/// A config whose `oneharness` provider is the fake double **in streaming mode**,
+/// with `body` appended.
+fn streaming_config_yaml(body: &str) -> String {
+    let bin = serde_json::to_string(&fake_oneharness_bin()).unwrap();
+    format!("provider:\n  kind: oneharness\n  bin: {bin}\n  stream: true\n{body}")
+}
+
+#[test]
+fn binary_stream_publishes_events_then_the_terminal_report() {
+    // End to end through the real binary, both halves of the protocol at once: the
+    // double streams its provider-side event lines, and onejudge republishes them
+    // on stdout as `event` lines before the terminal `result` line. The double
+    // blocks until this test's reader has consumed an event line, so a build that
+    // buffered the run could not finish (it fails on the double's own timeout).
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR"));
+    let release = dir.join("cli-stream-release.marker");
+    let _ = std::fs::remove_file(&release);
+    let config = dir.join("stream.yaml");
+    std::fs::write(
+        &config,
+        streaming_config_yaml(&format!(
+            "task: please commit\n\
+             system_prompt: '[[reply:committed]][[event:git commit -m fix]][[stream-wait:{}]]'\n\
+             evals:\n  - criterion: committed\n    kind: boolean\n",
+            release.display()
+        )),
+    )
+    .unwrap();
+
+    let mut child = Command::new(onejudge_bin())
+        .args([
+            "run",
+            config.to_str().unwrap(),
+            "--format",
+            "json",
+            "--stream",
+        ])
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    // Read the stream line by line, releasing the double the moment the first
+    // `event` line arrives — the proof that it arrived mid-run.
+    use std::io::BufRead as _;
+    let stdout = std::io::BufReader::new(child.stdout.take().unwrap());
+    let mut events = Vec::new();
+    let mut report: Option<onejudge::Report> = None;
+    for line in stdout.lines() {
+        let value: serde_json::Value = serde_json::from_str(&line.unwrap()).unwrap();
+        match value["type"].as_str() {
+            Some("event") => {
+                std::fs::write(&release, b"go").unwrap();
+                events.push(value);
+            }
+            Some("result") => {
+                report = Some(serde_json::from_value(value["report"].clone()).unwrap());
+            }
+            other => panic!("unexpected stream line type {other:?}"),
+        }
+    }
+    let status = child.wait().unwrap();
+    let _ = std::fs::remove_file(&release);
+
+    assert_eq!(status.code(), Some(0));
+    assert_eq!(events.len(), 1, "one event line arrived");
+    assert_eq!(events[0]["turn"], 1);
+    assert_eq!(events[0]["event"]["name"], "bash");
+    let report = report.expect("the terminal result line carried the report");
+    assert_eq!(report.schema_version, onejudge::SCHEMA_VERSION);
+    assert_eq!(report.transcript.messages[1].content, "committed");
+    assert_eq!(report.verdicts.len(), 1);
+}
+
+#[test]
+fn binary_run_json_carries_the_backend_telemetry() {
+    // The CLI's runtime-dispatched provider has to forward telemetry from whichever
+    // backend made the call; without that the report silently drops it.
+    let config = Path::new(env!("CARGO_TARGET_TMPDIR")).join("telemetry.yaml");
+    let bin = serde_json::to_string(&fake_oneharness_bin()).unwrap();
+    std::fs::write(
+        &config,
+        format!(
+            "provider:\n  kind: oneharness\n  bin: {bin}\n\
+             task: measure this\nsystem_prompt: '[[reply:telemetry ready]]'\n\
+             evals:\n  - criterion: telemetry ready\n    kind: boolean\n"
+        ),
+    )
+    .unwrap();
+    let output = Command::new(onejudge_bin())
+        .args(["run", config.to_str().unwrap(), "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let report: onejudge::Report =
+        serde_json::from_str(&String::from_utf8(output.stdout).unwrap()).unwrap();
+    let telemetry = report.telemetry.expect("telemetry reaches the report");
+    assert_eq!(telemetry.agent.model_ms, Some(10));
+    assert_eq!(telemetry.judge.model_ms, Some(5));
+    assert_eq!(telemetry.agent.session_ids, ["native-onejudge-skill"]);
+}
+
+#[test]
+fn binary_stream_exits_one_when_the_run_is_incomplete() {
+    // The stream is an output format, not a status: the exit code still reports
+    // whether the task completed.
+    let config = Path::new(env!("CARGO_TARGET_TMPDIR")).join("stream-incomplete.yaml");
+    std::fs::write(
+        &config,
+        streaming_config_yaml(
+            "task: keep going\n\
+             system_prompt: '[[reply:still working]]'\n\
+             user:\n  persona: A tester.\n  done_when: deploy to production\n  max_turns: 1\n",
+        ),
+    )
+    .unwrap();
+    let output = Command::new(onejudge_bin())
+        .args([
+            "run",
+            config.to_str().unwrap(),
+            "--format",
+            "json",
+            "--stream",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let last = stdout.lines().next_back().expect("a terminal line");
+    let value: serde_json::Value = serde_json::from_str(last).unwrap();
+    assert_eq!(value["type"], "result");
+}
+
+#[test]
+fn binary_stream_rejects_an_output_surface_it_cannot_honor() {
+    let config = write_config("stream-misuse.yaml", "task: go\nsystem_prompt: Be warm.\n");
+    for (args, needle) in [
+        (vec!["--stream"], "--format json"),
+        (
+            vec!["--stream", "--format", "json", "--output", "report.json"],
+            "drop --output",
+        ),
+    ] {
+        let output = Command::new(onejudge_bin())
+            .arg("run")
+            .arg(config.to_str().unwrap())
+            .args(&args)
+            .current_dir(Path::new(env!("CARGO_TARGET_TMPDIR")))
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(2), "{args:?}");
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert!(stderr.contains(needle), "{args:?}: {stderr}");
+    }
+}
+
+#[test]
+fn binary_reports_a_malformed_provider_stream_and_exits_two() {
+    // A provider that declared streaming and then wrote a line the protocol does
+    // not model fails the run loudly, naming the violation.
+    let config = Path::new(env!("CARGO_TARGET_TMPDIR")).join("stream-bad.yaml");
+    std::fs::write(
+        &config,
+        streaming_config_yaml(
+            "task: go\nsystem_prompt: '[[reply:ok]][[event:ls]][[stream-unknown]]'\n",
+        ),
+    )
+    .unwrap();
+    let output = Command::new(onejudge_bin())
+        .args(["run", config.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains("unrecognized streamed provider line type `progress`"),
+        "{stderr}"
+    );
+}
+
 #[test]
 fn binary_schema_prints_the_annotated_config() {
     let output = Command::new(onejudge_bin()).arg("schema").output().unwrap();

@@ -15,11 +15,25 @@
 //! was given — tool-event lines included — so an events-backed criterion is really
 //! decided by what the skill did.
 //!
+//! Under `--stream` it speaks the **streamed provider protocol**
+//! (`docs/streaming.md`) instead: one `{"type":"event","event":{…}}` line per tool
+//! event, flushed as it is written, then the terminal
+//! `{"type":"result","report":{…}}` line. Further markers steer that stream:
+//! `[[stream-wait:PATH]]` blocks before the terminal line until `PATH` exists (so
+//! a test can prove its events really arrived *during* the turn, and a build that
+//! buffered them deadlocks into a loud timeout instead of passing),
+//! `[[stream-bare]]` writes the bare report a degraded run writes,
+//! `[[stream-garbage]]` a non-JSON line, `[[stream-unknown]]` an envelope type the
+//! protocol does not model, `[[stream-truncate]]` ends after the events with no
+//! terminal line, and `[[stream-then-fail]]` writes a complete stream and *then*
+//! exits non-zero.
+//!
 //! Built only under the `fake-provider` feature; never shipped to a consumer.
 #![allow(missing_docs)]
 
 use std::collections::HashMap;
 use std::io::{Read as _, Write as _};
+use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
@@ -106,11 +120,72 @@ fn main() {
     if let Some(name) = session {
         report["session"] = json!({ "name": name, "phase": "create" });
     }
-    let mut out = serde_json::to_string(&report).expect("report serializes");
+    if flags.contains_key("--stream") {
+        emit_stream(system, &report);
+        return;
+    }
+    write_line(&report);
+}
+
+/// Write one JSON document as a line on stdout, flushed immediately.
+fn write_line(value: &Value) {
+    let mut out = serde_json::to_string(value).expect("value serializes");
     out.push('\n');
-    std::io::stdout()
-        .write_all(out.as_bytes())
-        .expect("write report");
+    let mut stdout = std::io::stdout();
+    stdout.write_all(out.as_bytes()).expect("write line");
+    stdout.flush().expect("flush line");
+}
+
+/// Publish `report` as the streamed protocol: one `event` envelope per tool event
+/// the result carries, then the terminal `result` envelope — or whichever
+/// deliberate protocol violation the `[[stream-*]]` markers asked for.
+fn emit_stream(system: &str, report: &Value) {
+    if system.contains("[[stream-bare]]") {
+        // A run that declared streaming but degraded to the one buffered document.
+        write_line(report);
+        return;
+    }
+    if system.contains("[[stream-garbage]]") {
+        let mut stdout = std::io::stdout();
+        stdout.write_all(b"not json at all\n").expect("write line");
+        stdout.flush().expect("flush line");
+        return;
+    }
+    for event in report["results"][0]["events"].as_array().unwrap_or(&vec![]) {
+        write_line(&json!({ "type": "event", "event": event }));
+    }
+    if system.contains("[[stream-unknown]]") {
+        write_line(&json!({ "type": "progress", "pct": 50 }));
+        return;
+    }
+    if system.contains("[[stream-truncate]]") {
+        // Every event, then silence: the stream never reaches its terminal line.
+        return;
+    }
+    if let Some(path) = marker(system, "stream-wait") {
+        wait_for(path);
+    }
+    write_line(&json!({ "type": "result", "report": report }));
+    if system.contains("[[stream-then-fail]]") {
+        // A well-formed stream from a process that then died on teardown.
+        emit_error("deliberate non-zero exit after a complete stream");
+    }
+}
+
+/// Block until `path` exists, so a test's own event handler is what releases the
+/// terminal line. A build that buffered the events instead of publishing them
+/// never creates it — the bounded wait then fails the run loudly rather than
+/// hanging the suite forever.
+fn wait_for(path: &str) {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !std::path::Path::new(path).exists() {
+        if Instant::now() >= deadline {
+            emit_error(&format!(
+                "timed out waiting for {path}: the streamed events never reached a live consumer"
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
 }
 
 /// A real oneharness never exits non-zero on a *harness* failure — it reports it
@@ -163,7 +238,7 @@ fn parse_flags() -> HashMap<String, String> {
         "--cwd",
         "--history-name",
     ];
-    const TOGGLES: &[&str] = &["--events", "--compact", "--history"];
+    const TOGGLES: &[&str] = &["--events", "--compact", "--history", "--stream"];
 
     let args: Vec<String> = std::env::args().skip(1).collect();
     let mut flags = HashMap::new();

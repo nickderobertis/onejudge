@@ -5,7 +5,6 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any, Literal, Optional, TypedDict, Union
 
-
 JudgeKind = Literal["boolean", "numeric"]
 ProviderKind = Literal["oneharness", "command", "split"]
 JudgeValue = Union[bool, float]
@@ -29,6 +28,7 @@ class ProviderConfig(TypedDict, total=False):
     judge_config: Optional[str]
     kind: ProviderKind
     skill: Optional[ProviderConfig]
+    stream: Optional[bool]
 
 
 class UserConfig(TypedDict, total=False):

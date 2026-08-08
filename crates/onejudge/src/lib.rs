@@ -61,6 +61,7 @@ mod report;
 #[cfg(feature = "skill")]
 mod skill;
 mod split;
+mod stream;
 mod telemetry;
 mod transcript;
 mod usage;

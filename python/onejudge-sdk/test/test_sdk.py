@@ -14,6 +14,7 @@ from onejudge_sdk import (
     OneJudgeProcessError,
     OneJudgeTimeoutError,
     RunConfig,
+    StreamEvent,
 )
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -81,15 +82,16 @@ class OneJudgeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(telemetry["agent"]["model_ms"], 10)
         self.assertEqual(telemetry["agent"]["tool_ms"], 3)
         self.assertEqual(telemetry["agent"]["time_to_first_token_ms"], 2)
-        self.assertEqual(telemetry["agent"]["usage"]["cache_read_tokens"], 7)
+        agent_usage = telemetry["agent"]["usage"]
+        judge_usage = telemetry["judge"]["usage"]
+        assert agent_usage is not None and judge_usage is not None
+        self.assertEqual(agent_usage["cache_read_tokens"], 7)
         self.assertEqual(telemetry["judge"]["model_ms"], 5)
         self.assertEqual(telemetry["judge"]["tool_ms"], 1)
-        self.assertEqual(telemetry["judge"]["usage"]["output_tokens"], 1)
+        self.assertEqual(judge_usage["output_tokens"], 1)
         self.assertEqual(telemetry["agent"]["session_ids"], ["native-onejudge-skill"])
         self.assertEqual(telemetry["judge"]["session_ids"], ["native-judge"])
-        self.assertEqual(
-            [link["role"] for link in telemetry["sessions"]], ["agent", "judge"]
-        )
+        self.assertEqual([link["role"] for link in telemetry["sessions"]], ["agent", "judge"])
         self.assertTrue(all(link.get("history_id") for link in telemetry["sessions"]))
 
     async def test_version_four_report_without_telemetry_remains_compatible(self) -> None:
@@ -102,6 +104,72 @@ class OneJudgeTests(unittest.IsolatedAsyncioTestCase):
         result = await client.run({}, "legacy")
         self.assertEqual(result.raw["schema_version"], 4)
         self.assertIsNone(result.telemetry)
+
+    async def test_streamed_run_observes_events_as_they_arrive(self) -> None:
+        """Deliver each tool event during the run, then the same final result."""
+        fake = ROOT / "target" / "debug" / f"onejudge-fake-oneharness{SUFFIX}"
+        release = Path(tempfile.mkdtemp(prefix="onejudge-sdk-stream-")) / "release.marker"
+        config: RunConfig = {
+            "provider": {"kind": "oneharness", "bin": str(fake), "stream": True},
+            "system_prompt": (
+                f"[[reply:streamed]][[event:git commit -m fix]][[stream-wait:{release}]]"
+            ),
+            "evals": [{"criterion": "git commit", "kind": "boolean"}],
+        }
+        seen: list[StreamEvent] = []
+
+        def watch(event: StreamEvent) -> None:
+            # The fake harness blocks until this file exists, so the run can only
+            # finish if this handler really ran mid-turn.
+            seen.append(event)
+            release.write_text("go", encoding="utf-8")
+
+        result = await OneJudge(executable=str(BINARY)).run(
+            config, "please commit", on_event=watch, timeout=60
+        )
+        self.assertEqual(len(seen), 1)
+        self.assertEqual(seen[0]["turn"], 1)
+        self.assertEqual(seen[0]["event"]["name"], "bash")
+        self.assertEqual(seen[0]["event"]["input"], {"command": "git commit -m fix"})
+        # The terminal line carries the ordinary, validated result.
+        self.assertEqual(result.exit_code, 0)
+        self.assertTrue(result.completed)
+        self.assertEqual(result.raw["schema_version"], 5)
+        self.assertEqual(result.assistant_turns, 1)
+        self.assertEqual(result.verdicts[0]["verdict"]["value"], True)
+
+    async def test_streamed_run_over_a_buffered_provider_still_yields_the_report(self) -> None:
+        """Watch a provider that does not stream: events replay, result is intact."""
+        seen: list[StreamEvent] = []
+        result = await OneJudge(executable=str(BINARY)).run(
+            command_config(), "python stream boundary", on_event=seen.append
+        )
+        self.assertEqual([event["event"]["input"] for event in seen], [{"command": "git status"}])
+        self.assertTrue(result.completed)
+
+    async def test_malformed_stream_lines_are_typed_contract_errors(self) -> None:
+        """Reject an unmodelled envelope and a stream with no terminal line."""
+        for mode, needle in (
+            ("garbage-stream", "stream line was not valid JSON"),
+            ("scalar-stream", "stream line was not a JSON object"),
+            ("bad-stream", "unrecognized onejudge stream line type"),
+            ("truncated-stream", "without a terminal result line"),
+        ):
+            client = OneJudge(
+                executable=sys.executable,
+                executable_args=(str(FIXTURE),),
+                env={"ONEJUDGE_SDK_FIXTURE_MODE": mode},
+            )
+            with self.subTest(mode=mode), self.assertRaises(ContractError) as raised:
+                await client.run({}, "fixture task", on_event=lambda _event: None)
+            self.assertIn(needle, str(raised.exception))
+
+    async def test_on_event_is_validated_before_spawn(self) -> None:
+        """A non-callable handler fails at the Python boundary, not mid-run."""
+        client = OneJudge(executable="definitely-not-started")
+        with self.assertRaises(ContractError):
+            # Deliberately invalid: exercises the boundary check.
+            await client.run({}, "task", on_event="not callable")  # type: ignore[arg-type]
 
     async def test_real_cli_runtime_error_keeps_exit_and_stderr(self) -> None:
         """Exit 2 remains distinguishable from an incomplete report."""

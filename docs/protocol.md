@@ -10,6 +10,11 @@ unparseable/wrong-shaped output is a loud error (a classified
 
 All five operations are distinguished by the request's `op` field.
 
+This is not the only provider protocol: an `oneharness`-kind provider can instead
+publish its agent turn incrementally, as NDJSON tool events followed by a terminal
+report line. See [streaming.md](streaming.md). The two are independent — a
+`CommandProvider` exchange is unchanged by it.
+
 ## Protocol version
 
 **v4** (current) — added the unified `supervisor` operation. **v3** added the
