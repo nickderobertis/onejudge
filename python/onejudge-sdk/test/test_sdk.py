@@ -154,6 +154,10 @@ class OneJudgeTests(unittest.IsolatedAsyncioTestCase):
             ("scalar-stream", "stream line was not a JSON object"),
             ("bad-stream", "unrecognized onejudge stream line type"),
             ("truncated-stream", "without a terminal result line"),
+            # `event* result EOF`: nothing may follow the terminal line.
+            ("trailing-unknown", "after its terminal result line"),
+            ("trailing-event", "after its terminal result line"),
+            ("trailing-result", "after its terminal result line"),
         ):
             client = OneJudge(
                 executable=sys.executable,

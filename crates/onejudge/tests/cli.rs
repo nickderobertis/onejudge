@@ -1035,6 +1035,31 @@ fn binary_reports_a_malformed_provider_stream_and_exits_two() {
 }
 
 #[test]
+fn binary_rejects_a_provider_that_writes_past_its_terminal_line() {
+    // Through the real binary: a streamed provider whose report is complete but
+    // which then keeps writing is a loud failure, not a run that quietly succeeds
+    // on the report it did produce.
+    let config = Path::new(env!("CARGO_TARGET_TMPDIR")).join("stream-trailing.yaml");
+    std::fs::write(
+        &config,
+        streaming_config_yaml(
+            "task: go\nsystem_prompt: '[[reply:ok]][[stream-trailing:unknown]]'\n",
+        ),
+    )
+    .unwrap();
+    let output = Command::new(onejudge_bin())
+        .args(["run", config.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains("wrote a line after its terminal `result` line"),
+        "{stderr}"
+    );
+}
+
+#[test]
 fn binary_schema_prints_the_annotated_config() {
     let output = Command::new(onejudge_bin()).arg("schema").output().unwrap();
     assert!(output.status.success());

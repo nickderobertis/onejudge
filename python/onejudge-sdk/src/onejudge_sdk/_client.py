@@ -75,11 +75,13 @@ async def _stream_exchange(
 ) -> tuple[Optional[RunReport], bytes]:
     """Read `onejudge run --stream`'s NDJSON, calling back per event as it arrives.
 
-    Every line is validated against the same generated contract the buffered path
-    uses, so an unreadable line, an envelope this SDK does not model, or a stream
-    that stops before its terminal `result` line is loud rather than a partial run
-    that looks finished. stderr is drained concurrently: this reader holds stdout
-    open for the whole run, and a filled stderr pipe would deadlock both.
+    The grammar is `event* result EOF`, and every line is validated against the
+    same generated contract the buffered path uses — so an unreadable line, an
+    envelope this SDK does not model, a stream that stops before its terminal
+    `result` line, or anything written after that line is loud rather than a
+    partial run that looks finished. stderr is drained concurrently: this reader
+    holds stdout open for the whole run, and a filled stderr pipe would deadlock
+    both.
     """
     stdin, stdout, stderr = process.stdin, process.stdout, process.stderr
     if stdin is None or stdout is None or stderr is None:  # pragma: no cover - all are PIPE
@@ -92,15 +94,33 @@ async def _stream_exchange(
         pass
     stdin.close()
 
+    try:
+        report = await _read_lines(stdout, on_event)
+    except BaseException:
+        draining.cancel()
+        raise
+    errors = await draining
+    await process.wait()
+    return report, errors
+
+
+async def _read_lines(
+    stdout: asyncio.StreamReader,
+    on_event: EventHandler,
+) -> Optional[RunReport]:
+    """Read the whole stream, enforcing its `event* result EOF` grammar."""
     report: Optional[RunReport] = None
     async for raw in stdout:
         line = raw.decode("utf-8", errors="replace").strip()
         if not line:
             continue
-        report = _stream_line(line, on_event) or report
-    errors = await draining
-    await process.wait()
-    return report, errors
+        if report is not None:
+            # The terminal line ended the exchange, so a further event, a second
+            # result, and an unmodelled envelope are the same violation. Ignoring
+            # them would let a run that overran its own protocol look clean.
+            raise ContractError(f"onejudge wrote a line after its terminal result line: {line}")
+        report = _stream_line(line, on_event)
+    return report
 
 
 def _stream_line(line: str, on_event: EventHandler) -> Optional[RunReport]:

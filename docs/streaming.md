@@ -14,9 +14,16 @@ Both directions speak the same two NDJSON envelopes, one JSON object per line:
 {"type":"result", "report":{…}}
 ```
 
+The grammar is exactly:
+
+```
+event* result EOF
+```
+
 `event` lines carry live activity; the single `result` line ends the exchange and
-carries the same document a buffered run produces. Nothing is positional — every
-line names its own type — so a consumer never has to guess from ordering.
+carries the same document a buffered run produces. Every line names its own type,
+so a consumer never has to guess a line's meaning from its position — but the
+`result` line really is terminal, and **anything after it is a violation**.
 
 ## Inbound: a streamed provider
 
@@ -51,13 +58,18 @@ vacuously empty turn:
 - a `type` other than `event` / `result`, or a non-string `type`;
 - an `event` line with no `event` object, or one that is not a tool event;
 - a `result` line with no `report` object;
-- a stream that ends before its `result` line.
+- a stream that ends before its `result` line;
+- **any content after the `result` line** — a further event, a second result, or an
+  envelope type this build does not model. onejudge reads on to EOF rather than
+  stopping at the terminal line, so the trailing bytes are checked, not swallowed;
+  a run that overran its own protocol must not look clean. (Trailing blank lines
+  are fine — that is just how a writer ends its output.)
 
 **One deliberate tolerance:** a line with *no* `type` at all is taken as the bare
 report a run writes when it did not stream. That is what makes `stream: true` safe
 for a wrapper that streams only when the underlying harness can — a degraded run
-answers with one buffered document and is not a failed run. Everything after the
-terminal line is drained and ignored, so a child that keeps writing can still exit.
+answers with one buffered document and is not a failed run. It is terminal on the
+same terms: nothing may follow it either.
 
 A provider that never streams needs no changes at all: leave `stream` unset and
 onejudge parses one report document, exactly as before. Streaming is only ever
@@ -124,9 +136,10 @@ def watch(event: StreamEvent) -> None:
 result = await OneJudge().run(config, "do the work", on_event=watch)
 ```
 
-A line the SDK cannot model — bad JSON, an unknown `type`, a report that fails the
-contract, or a stream with no terminal line — raises `ContractError`, the same
-loudness the Rust side applies inbound.
+The SDK enforces the same grammar outbound that onejudge enforces inbound: a line
+it cannot model — bad JSON, an unknown `type`, a report that fails the contract, a
+stream with no terminal line, or anything written after that line — raises
+`ContractError`.
 
 ## Related
 

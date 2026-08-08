@@ -25,8 +25,9 @@
 //! `[[stream-bare]]` writes the bare report a degraded run writes,
 //! `[[stream-garbage]]` a non-JSON line, `[[stream-unknown]]` an envelope type the
 //! protocol does not model, `[[stream-truncate]]` ends after the events with no
-//! terminal line, and `[[stream-then-fail]]` writes a complete stream and *then*
-//! exits non-zero.
+//! terminal line, `[[stream-trailing:unknown|event|result]]` writes one more line
+//! *after* the terminal one, and `[[stream-then-fail]]` writes a complete stream
+//! and then exits non-zero.
 //!
 //! Built only under the `fake-provider` feature; never shipped to a consumer.
 #![allow(missing_docs)]
@@ -166,6 +167,16 @@ fn emit_stream(system: &str, report: &Value) {
         wait_for(path);
     }
     write_line(&json!({ "type": "result", "report": report }));
+    // Content after the terminal line, which the grammar `event* result EOF`
+    // forbids however well-formed the line itself is.
+    match marker(system, "stream-trailing") {
+        Some("unknown") => write_line(&json!({ "type": "progress", "pct": 100 })),
+        Some("event") => {
+            write_line(&json!({ "type": "event", "event": { "kind": "tool_call", "index": 9 } }));
+        }
+        Some("result") => write_line(&json!({ "type": "result", "report": report })),
+        _ => {}
+    }
     if system.contains("[[stream-then-fail]]") {
         // A well-formed stream from a process that then died on teardown.
         emit_error("deliberate non-zero exit after a complete stream");

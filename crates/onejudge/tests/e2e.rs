@@ -590,6 +590,29 @@ fn a_malformed_stream_fails_loudly_with_a_named_protocol_error() {
 }
 
 #[test]
+fn content_after_the_terminal_result_fails_across_the_real_boundary() {
+    // The grammar is `event* result EOF`. A real subprocess that keeps writing
+    // after its terminal line is rejected whatever it writes — the report is not
+    // banked and the trailing line is not swallowed.
+    for kind in ["unknown", "event", "result"] {
+        let provider = streaming_oneharness();
+        let engine = Engine::new(&provider, settings());
+        let err = engine
+            .run(&Conversation::single_turn(
+                skill_with(&format!("[[reply:ok]][[stream-trailing:{kind}]]")),
+                "go",
+            ))
+            .unwrap_err();
+        assert_eq!(err.kind(), Some(ProviderErrorKind::Protocol), "{kind}");
+        assert!(
+            err.to_string()
+                .contains("wrote a line after its terminal `result` line"),
+            "{kind}: {err}"
+        );
+    }
+}
+
+#[test]
 fn a_complete_stream_from_a_process_that_then_died_is_still_a_failure() {
     // The report arrived, but the harness process did not survive writing it. The
     // run fails on the exit status rather than quietly banking a turn from a

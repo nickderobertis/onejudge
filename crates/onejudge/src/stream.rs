@@ -9,10 +9,11 @@
 //! from the `spawn + wait` shell in [`oneharness`](crate::OneharnessProvider), so
 //! every protocol decision below is unit-tested directly.
 //!
-//! Loudness is the point: a provider that declared streaming and then wrote a line
-//! this protocol does not model (bad JSON, a `type` it has no rule for, a stream
-//! that stops before its terminal line) fails with a classified
-//! [`ProviderErrorKind::Protocol`] error naming the line — never a silently
+//! The grammar is exactly `event* result EOF`. Loudness is the point: a provider
+//! that declared streaming and then departs from it — bad JSON, a `type` this
+//! build has no rule for, a stream that stops before its terminal line, or *any*
+//! content after that line — fails with a classified
+//! [`ProviderErrorKind::Protocol`] error naming the line, never a silently
 //! swallowed event or a vacuously empty turn. The single deliberate tolerance is a
 //! line with **no** `type` at all: that is the bare report a provider writes when
 //! it did not (or could not) stream, and accepting it is what keeps declaring
@@ -90,12 +91,42 @@ pub(crate) fn read_stream(
                 }
             }
             StreamLine::Report(report) => {
-                // The terminal line ends the protocol. Drain whatever follows it so
-                // a child that keeps writing can still exit instead of blocking on a
-                // full pipe — nothing past this line can change the report.
-                let _ = std::io::copy(reader, &mut std::io::sink());
+                // The grammar is `event* result EOF`. Keep reading so EOF is
+                // actually checked — that both proves nothing followed the terminal
+                // line and drains the pipe, so a child that keeps writing can still
+                // exit rather than block on a full one.
+                read_eof(op, reader)?;
                 return Ok(StreamOutcome::Report(report));
             }
+        }
+    }
+}
+
+/// Consume the rest of `reader`, requiring it to hold nothing but whitespace.
+///
+/// The terminal `result` line ends the protocol, so anything after it — a further
+/// event, a second result, an envelope type this build does not model — is a
+/// provider that is not speaking it. Ignoring the trailing bytes would make
+/// exactly the malformed output this protocol promises to reject look like a
+/// clean run.
+fn read_eof(op: &str, reader: &mut dyn BufRead) -> Result<()> {
+    let mut line = String::new();
+    loop {
+        line.clear();
+        let read = reader
+            .read_line(&mut line)
+            .map_err(|e| protocol(op, format!("could not read the provider stream: {e}")))?;
+        if read == 0 {
+            return Ok(());
+        }
+        let trimmed = line.trim();
+        if !trimmed.is_empty() {
+            return Err(protocol(
+                op,
+                format!(
+                    "streamed provider wrote a line after its terminal `result` line; got: {trimmed}"
+                ),
+            ));
         }
     }
 }
@@ -197,6 +228,43 @@ mod tests {
             }
             StreamOutcome::Aborted => panic!("expected the terminal report"),
         }
+    }
+
+    /// The terminal line every trailing-content case below is followed by.
+    const RESULT: &str = "{\"type\":\"result\",\"report\":{\"results\":[{\"text\":\"done\"}]}}";
+
+    #[test]
+    fn anything_after_the_terminal_result_is_rejected() {
+        // `event* result EOF`: once the result has landed the exchange is over, so
+        // a further event, a second result, and an unmodelled envelope are all the
+        // same violation — a provider that is not speaking this protocol.
+        for trailing in [
+            "{\"type\":\"unknown\"}",
+            "{\"type\":\"event\",\"event\":{\"kind\":\"tool_call\",\"index\":9}}",
+            RESULT,
+            "trailing garbage",
+        ] {
+            let (outcome, events, seen) = read(&format!("{RESULT}\n{trailing}\n"));
+            let err = outcome
+                .err()
+                .unwrap_or_else(|| panic!("{trailing} must fail"));
+            assert_eq!(err.kind(), Some(ProviderErrorKind::Protocol));
+            assert!(
+                err.to_string()
+                    .contains("wrote a line after its terminal `result` line"),
+                "{trailing}: {err}"
+            );
+            // A trailing event is refused outright, never delivered to the sink.
+            assert_eq!((seen, events.len()), (0, 0), "{trailing}");
+        }
+    }
+
+    #[test]
+    fn trailing_blank_lines_after_the_terminal_result_are_fine() {
+        // Only *content* after the terminal line is a violation; a trailing newline
+        // is how a well-behaved writer ends its output.
+        let (outcome, _, _) = read(&format!("{RESULT}\n\n   \n"));
+        assert!(matches!(outcome.unwrap(), StreamOutcome::Report(_)));
     }
 
     #[test]

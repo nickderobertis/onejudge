@@ -20,6 +20,27 @@ def main() -> int:
     if mode == "timeout":
         time.sleep(30)
         return 0
+    if mode.startswith("trailing-"):
+        # A complete stream, then one more line the grammar forbids.
+        result = {
+            "type": "result",
+            "report": {
+                "schema_version": 5,
+                "transcript": {"messages": [{"role": "user", "content": task}]},
+                "stopped_early": False,
+            },
+        }
+        trailing = {
+            "trailing-unknown": {"type": "progress", "pct": 100},
+            "trailing-event": {
+                "type": "event",
+                "turn": 1,
+                "event": {"kind": "tool_call", "index": 9},
+            },
+            "trailing-result": result,
+        }[mode]
+        sys.stdout.write(json.dumps(result) + "\n" + json.dumps(trailing) + "\n")
+        return 0
     if mode == "garbage-stream":
         sys.stdout.write("not json at all\n")
         return 0
