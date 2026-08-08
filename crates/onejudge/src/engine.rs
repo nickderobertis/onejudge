@@ -450,6 +450,11 @@ impl<'a> Engine<'a> {
 
 /// One streamed tool event delivered live to an [`Engine::run_streaming`] sink,
 /// tagged with the turn it belongs to.
+///
+/// It is also the payload of an `event` line in the **streamed protocol**
+/// (`docs/streaming.md`) that `onejudge run --stream` publishes — the line adds
+/// the `"type": "event"` discriminator around exactly these fields, so an SDK
+/// hands this type straight to its own event callback.
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "sdk-schema", derive(schemars::JsonSchema))]
 pub struct StreamEvent<'a> {

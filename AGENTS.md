@@ -172,6 +172,14 @@ backends feed tool `events` into the transcript the judge sees, and thread a
 (claude-code, codex, opencode, cursor, qwen) rather than extracting and re-passing
 a native id; the rest fall back to re-prompting the inlined transcript.
 
+An `oneharness` provider can also **stream** (`provider.stream: true` → `oneharness
+run --stream`): NDJSON tool events as they occur, then a terminal report line, so a
+600–2000s turn is visible while it runs. `onejudge run --stream` republishes the
+same two envelopes outward for the SDKs. `docs/streaming.md` is the contract; the
+rule that keeps it safe is that a *declared*-streaming provider's unmodelled line is
+a loud `Protocol` error, while a typeless bare report stays accepted (a degraded run
+is not a failed one).
+
 Prompt caching is oneharness's concern (the agent CLI it wraps caches by default,
 and oneharness has an explicit same-prefix batch/fork reuse path); onejudge stays
 out of enabling it but **surfaces** it — `Usage` carries `cache_read_tokens` /

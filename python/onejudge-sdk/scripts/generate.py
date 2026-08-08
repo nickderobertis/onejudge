@@ -158,15 +158,16 @@ def types_module(bundle: dict[str, Any]) -> str:
     if aliases and objects:
         body += "\n\n\n"
     body += "\n\n\n".join(objects)
+    # isort's blank-line rule after an import block depends on what follows it: one
+    # before a plain assignment (the aliases), two before a `class`.
+    lead = "\n" if aliases else "\n\n"
     return f'''"""Generated from onejudge. Do not edit."""
 
 from __future__ import annotations
 
 from collections.abc import Sequence
 from typing import Any, Literal, Optional, TypedDict, Union
-
-
-{body}
+{lead}{body}
 '''
 
 

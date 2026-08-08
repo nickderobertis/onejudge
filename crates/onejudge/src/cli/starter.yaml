@@ -13,6 +13,9 @@ provider:
   kind: oneharness                       # oneharness | command | split
   bin: oneharness                        # oneharness: the binary to shell out to
   judge_config: oneharness.judge.toml    # oneharness: judge/user `--config` file
+  # stream: true                         # oneharness: the agent binary publishes
+  #                                      # NDJSON tool events as they happen, then a
+  #                                      # terminal report (see docs/streaming.md)
   # kind: command  ->  command: ["my-provider", "--flag"]
   # kind: split    ->  skill: {..provider..}, judge: {..provider..}
 

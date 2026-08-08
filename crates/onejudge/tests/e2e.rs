@@ -476,6 +476,231 @@ fn oneharness_retries_without_session_when_unsupported() {
     assert_eq!(outcome.transcript.messages[1].content, "no-session");
 }
 
+// --- The streamed provider protocol (docs/streaming.md) --------------------
+
+/// A streamed [`OneharnessProvider`]: the same double, driven with `--stream`, so
+/// its stdout is the NDJSON protocol rather than one buffered report document.
+fn streaming_oneharness() -> OneharnessProvider {
+    fake_oneharness().with_streaming(true)
+}
+
+/// A unique path under the integration-test tmp dir, removed if it survived an
+/// earlier run.
+fn scratch_path(name: &str) -> std::path::PathBuf {
+    let path = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(name);
+    let _ = std::fs::remove_file(&path);
+    path
+}
+
+#[test]
+fn streamed_events_reach_the_sink_before_the_turn_ends() {
+    // The double publishes its event line, then blocks until the file this sink
+    // creates exists — so the run can only finish if the event really arrived
+    // *during* the turn. A build that buffered events instead would never release
+    // the double, which fails loudly on its own timeout rather than hanging.
+    let release = scratch_path("streamed-release.marker");
+    let provider = streaming_oneharness();
+    let engine = Engine::new(&provider, settings());
+    let skill = skill_with(&format!(
+        "[[reply:streamed reply]][[event:git commit -m fix]][[stream-wait:{}]]",
+        release.display()
+    ));
+    let mut seen = Vec::new();
+    let outcome = engine
+        .run_streaming(
+            &Conversation::single_turn(skill, "commit it"),
+            &mut |event| {
+                seen.push(event.event.summary());
+                std::fs::write(&release, b"go").unwrap();
+                ControlFlow::Continue(())
+            },
+        )
+        .unwrap();
+
+    assert_eq!(seen.len(), 1, "the event was delivered live");
+    assert!(seen[0].contains("git commit -m fix"));
+    // The terminal `result` line's report is parsed exactly as a bare one is: the
+    // turn carries the same reply, events, and prompt-cache usage.
+    assert_eq!(outcome.transcript.messages[1].content, "streamed reply");
+    assert_eq!(
+        outcome
+            .transcript
+            .count_tool_events(&ToolQuery::tool("bash")),
+        1
+    );
+    assert_eq!(outcome.usage.unwrap().cache_read_tokens, Some(7));
+    assert!(!outcome.stopped_early);
+    let _ = std::fs::remove_file(&release);
+}
+
+#[test]
+fn a_streamed_provider_still_threads_the_session_and_multi_turn_loop() {
+    // Streaming does not change the loop's own contract: the caller-owned session
+    // name is threaded across turns, and the buffered judge side still drives the
+    // simulated user.
+    let provider = streaming_oneharness();
+    let engine = Engine::new(&provider, settings().with_session_name("streamed"));
+    let outcome = engine
+        .run(&Conversation::multi_turn(
+            skill_with("[[echo-session]]"),
+            "start",
+            SimulatedUser::new("A patient tester.").max_turns(2),
+        ))
+        .unwrap();
+    assert_eq!(outcome.transcript.assistant_turns(), 2);
+    assert_eq!(outcome.transcript.messages[1].content, "streamed-skill");
+}
+
+#[test]
+fn a_declared_streaming_provider_that_degrades_to_a_bare_report_still_runs() {
+    // The one deliberate tolerance: a provider that declared streaming but wrote
+    // the single document a non-streaming run writes is not a failure.
+    let provider = streaming_oneharness();
+    let engine = Engine::new(&provider, settings());
+    let outcome = engine
+        .run(&Conversation::single_turn(
+            skill_with("[[reply:degraded but fine]][[stream-bare]]"),
+            "go",
+        ))
+        .unwrap();
+    assert_eq!(outcome.transcript.messages[1].content, "degraded but fine");
+}
+
+#[test]
+fn a_malformed_stream_fails_loudly_with_a_named_protocol_error() {
+    for (marker, needle) in [
+        ("[[stream-garbage]]", "was not valid JSON"),
+        (
+            "[[stream-unknown]]",
+            "unrecognized streamed provider line type",
+        ),
+        ("[[stream-truncate]]", "ended without a terminal"),
+    ] {
+        let provider = streaming_oneharness();
+        let engine = Engine::new(&provider, settings());
+        let err = engine
+            .run(&Conversation::single_turn(
+                skill_with(&format!("[[reply:ok]][[event:ls]]{marker}")),
+                "go",
+            ))
+            .unwrap_err();
+        assert_eq!(err.kind(), Some(ProviderErrorKind::Protocol), "{marker}");
+        assert!(err.to_string().contains(needle), "{marker}: {err}");
+    }
+}
+
+#[test]
+fn content_after_the_terminal_result_fails_across_the_real_boundary() {
+    // The grammar is `event* result EOF`. A real subprocess that keeps writing
+    // after its terminal line is rejected whatever it writes — the report is not
+    // banked and the trailing line is not swallowed.
+    for kind in ["unknown", "event", "result"] {
+        let provider = streaming_oneharness();
+        let engine = Engine::new(&provider, settings());
+        let err = engine
+            .run(&Conversation::single_turn(
+                skill_with(&format!("[[reply:ok]][[stream-trailing:{kind}]]")),
+                "go",
+            ))
+            .unwrap_err();
+        assert_eq!(err.kind(), Some(ProviderErrorKind::Protocol), "{kind}");
+        assert!(
+            err.to_string()
+                .contains("wrote a line after its terminal `result` line"),
+            "{kind}: {err}"
+        );
+    }
+}
+
+#[test]
+fn a_complete_stream_from_a_process_that_then_died_is_still_a_failure() {
+    // The report arrived, but the harness process did not survive writing it. The
+    // run fails on the exit status rather than quietly banking a turn from a
+    // process that crashed.
+    let provider = streaming_oneharness();
+    let engine = Engine::new(&provider, settings());
+    let err = engine
+        .run(&Conversation::single_turn(
+            skill_with("[[reply:ok]][[stream-then-fail]]"),
+            "go",
+        ))
+        .unwrap_err();
+    assert_eq!(err.kind(), Some(ProviderErrorKind::Protocol));
+    assert!(err.to_string().contains("oneharness exited with"), "{err}");
+}
+
+#[test]
+fn a_buffered_provider_replays_events_and_honors_a_breaking_sink() {
+    // Not every provider streams. A buffered one still satisfies the streaming
+    // contract by replaying the finished turn's events, and a sink that breaks on
+    // the first stops the replay and the run.
+    let provider = fake_oneharness();
+    let engine = Engine::new(&provider, settings());
+    let skill = skill_with("[[reply:done]][[event:git status]]");
+    let mut seen = 0;
+    let outcome = engine
+        .run_streaming(
+            &Conversation::multi_turn(skill, "go", SimulatedUser::new("A tester.").max_turns(5)),
+            &mut |_event| {
+                seen += 1;
+                ControlFlow::Break(())
+            },
+        )
+        .unwrap();
+    assert_eq!(seen, 1);
+    assert!(outcome.stopped_early);
+    assert_eq!(outcome.transcript.assistant_turns(), 1);
+}
+
+#[test]
+fn a_streamed_run_still_recovers_from_a_rejected_session() {
+    // The child exits before writing a terminal line, so the stream violation is
+    // what onejudge sees first — but the child's stderr rides along on that error,
+    // which is how the graceful `--session` retry still recognizes the failure.
+    let provider = streaming_oneharness();
+    let engine = Engine::new(&provider, settings().with_session_name("streamed-x"));
+    let outcome = engine
+        .run(&Conversation::single_turn(
+            skill_with("[[reject-session]][[echo-session]]"),
+            "go",
+        ))
+        .unwrap();
+    assert_eq!(outcome.transcript.messages[1].content, "no-session");
+}
+
+#[test]
+fn a_breaking_sink_tears_down_a_streamed_turn() {
+    // The sink stops on the first event; the provider kills the child mid-turn (it
+    // would otherwise block on `[[stream-wait]]` forever) and the run reports it
+    // stopped early with the events it did see.
+    let provider = streaming_oneharness();
+    let engine = Engine::new(&provider, settings());
+    let never = scratch_path("streamed-never.marker");
+    let skill = skill_with(&format!(
+        "[[reply:unreachable]][[event:git status]][[stream-wait:{}]]",
+        never.display()
+    ));
+    let mut seen = 0;
+    let outcome = engine
+        .run_streaming(
+            &Conversation::multi_turn(skill, "go", SimulatedUser::new("A tester.").max_turns(5)),
+            &mut |_event| {
+                seen += 1;
+                ControlFlow::Break(())
+            },
+        )
+        .unwrap();
+    assert_eq!(seen, 1);
+    assert!(outcome.stopped_early);
+    assert_eq!(
+        outcome
+            .transcript
+            .count_tool_events(&ToolQuery::tool("bash")),
+        1,
+        "the delivered event is kept on the abandoned turn"
+    );
+}
+
 // --- SplitProvider journeys (two DIFFERENT real-subprocess backends) --------
 
 #[test]

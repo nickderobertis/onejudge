@@ -99,8 +99,9 @@ typo is a loud error.
 Human output is the conversation + tool actions + completion status + eval
 verdicts; `--format json` emits the versioned [`Report`](docs/contract.md). The
 exit code is `0` only when the task completed and every boolean eval passed, `1`
-if it hit `max_turns` or a boolean eval failed, `2` on a bad config. Full docs:
-**[docs/cli.md](docs/cli.md)**.
+if it hit `max_turns` or a boolean eval failed, `2` on a bad config. Add `--stream`
+to publish tool events on stdout as they occur, ahead of that same report
+([docs/streaming.md](docs/streaming.md)). Full docs: **[docs/cli.md](docs/cli.md)**.
 
 ## Concepts
 
@@ -109,7 +110,10 @@ if it hit `max_turns` or a boolean eval failed, `2` on a bad config. Full docs:
   oneharness's config files, not onejudge.
   - **`OneharnessProvider`** (default) shells out to the `oneharness` CLI
     (v0.3.20+): the agent side uses the discovered `oneharness.toml`, and the judge
-    side uses a separate `--config` file (default `oneharness.judge.toml`).
+    side uses a separate `--config` file (default `oneharness.judge.toml`). With
+    `stream: true` it consumes the agent turn as it happens — NDJSON tool events,
+    then a terminal report — instead of only when it ends
+    ([docs/streaming.md](docs/streaming.md)).
   - **`CommandProvider`** speaks a small [JSON-lines protocol](docs/protocol.md),
     for a custom backend or a deterministic test double.
   - **`SplitProvider`** composes two providers — one that runs the skill, one that

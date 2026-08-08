@@ -2,19 +2,28 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
 from onejudge_sdk import (
     ContractError,
+    EventHandler,
     OneJudge,
     OneJudgeProcessError,
     OneJudgeTimeoutError,
     RunConfig,
+    StreamEvent,
 )
+
+
+class _HandlerFailure(Exception):
+    """Raised by an `on_event` handler, to prove it reaches the caller intact."""
+
 
 ROOT = Path(__file__).resolve().parents[3]
 SUFFIX = ".exe" if os.name == "nt" else ""
@@ -81,15 +90,16 @@ class OneJudgeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(telemetry["agent"]["model_ms"], 10)
         self.assertEqual(telemetry["agent"]["tool_ms"], 3)
         self.assertEqual(telemetry["agent"]["time_to_first_token_ms"], 2)
-        self.assertEqual(telemetry["agent"]["usage"]["cache_read_tokens"], 7)
+        agent_usage = telemetry["agent"]["usage"]
+        judge_usage = telemetry["judge"]["usage"]
+        assert agent_usage is not None and judge_usage is not None
+        self.assertEqual(agent_usage["cache_read_tokens"], 7)
         self.assertEqual(telemetry["judge"]["model_ms"], 5)
         self.assertEqual(telemetry["judge"]["tool_ms"], 1)
-        self.assertEqual(telemetry["judge"]["usage"]["output_tokens"], 1)
+        self.assertEqual(judge_usage["output_tokens"], 1)
         self.assertEqual(telemetry["agent"]["session_ids"], ["native-onejudge-skill"])
         self.assertEqual(telemetry["judge"]["session_ids"], ["native-judge"])
-        self.assertEqual(
-            [link["role"] for link in telemetry["sessions"]], ["agent", "judge"]
-        )
+        self.assertEqual([link["role"] for link in telemetry["sessions"]], ["agent", "judge"])
         self.assertTrue(all(link.get("history_id") for link in telemetry["sessions"]))
 
     async def test_version_four_report_without_telemetry_remains_compatible(self) -> None:
@@ -102,6 +112,119 @@ class OneJudgeTests(unittest.IsolatedAsyncioTestCase):
         result = await client.run({}, "legacy")
         self.assertEqual(result.raw["schema_version"], 4)
         self.assertIsNone(result.telemetry)
+
+    async def test_streamed_run_observes_events_as_they_arrive(self) -> None:
+        """Deliver each tool event during the run, then the same final result."""
+        fake = ROOT / "target" / "debug" / f"onejudge-fake-oneharness{SUFFIX}"
+        release = Path(tempfile.mkdtemp(prefix="onejudge-sdk-stream-")) / "release.marker"
+        config: RunConfig = {
+            "provider": {"kind": "oneharness", "bin": str(fake), "stream": True},
+            "system_prompt": (
+                f"[[reply:streamed]][[event:git commit -m fix]][[stream-wait:{release}]]"
+            ),
+            "evals": [{"criterion": "git commit", "kind": "boolean"}],
+        }
+        seen: list[StreamEvent] = []
+
+        def watch(event: StreamEvent) -> None:
+            # The fake harness blocks until this file exists, so the run can only
+            # finish if this handler really ran mid-turn.
+            seen.append(event)
+            release.write_text("go", encoding="utf-8")
+
+        result = await OneJudge(executable=str(BINARY)).run(
+            config, "please commit", on_event=watch, timeout=60
+        )
+        self.assertEqual(len(seen), 1)
+        self.assertEqual(seen[0]["turn"], 1)
+        self.assertEqual(seen[0]["event"]["name"], "bash")
+        self.assertEqual(seen[0]["event"]["input"], {"command": "git commit -m fix"})
+        # The terminal line carries the ordinary, validated result.
+        self.assertEqual(result.exit_code, 0)
+        self.assertTrue(result.completed)
+        self.assertEqual(result.raw["schema_version"], 5)
+        self.assertEqual(result.assistant_turns, 1)
+        self.assertEqual(result.verdicts[0]["verdict"]["value"], True)
+
+    async def test_streamed_run_over_a_buffered_provider_still_yields_the_report(self) -> None:
+        """Watch a provider that does not stream: events replay, result is intact."""
+        seen: list[StreamEvent] = []
+        result = await OneJudge(executable=str(BINARY)).run(
+            command_config(), "python stream boundary", on_event=seen.append
+        )
+        self.assertEqual([event["event"]["input"] for event in seen], [{"command": "git status"}])
+        self.assertTrue(result.completed)
+
+    async def test_malformed_stream_lines_are_typed_contract_errors(self) -> None:
+        """Reject an unmodelled envelope and a stream with no terminal line."""
+        for mode, needle in (
+            ("garbage-stream", "stream line was not valid JSON"),
+            ("scalar-stream", "stream line was not a JSON object"),
+            ("bad-stream", "unrecognized onejudge stream line type"),
+            ("truncated-stream", "without a terminal result line"),
+            # `event* result EOF`: nothing may follow the terminal line.
+            ("trailing-unknown", "after its terminal result line"),
+            ("trailing-event", "after its terminal result line"),
+            ("trailing-result", "after its terminal result line"),
+        ):
+            client = OneJudge(
+                executable=sys.executable,
+                executable_args=(str(FIXTURE),),
+                env={"ONEJUDGE_SDK_FIXTURE_MODE": mode},
+            )
+            with self.subTest(mode=mode), self.assertRaises(ContractError) as raised:
+                await client.run({}, "fixture task", on_event=lambda _event: None)
+            self.assertIn(needle, str(raised.exception))
+
+    async def test_streaming_failure_fails_fast_and_reaps_the_child(self) -> None:
+        """End the call on the failure, not on a child that keeps running."""
+
+        def explode(_event: StreamEvent) -> None:
+            raise _HandlerFailure("handler gave up")
+
+        def ignore(_event: StreamEvent) -> None:
+            return None
+
+        directory = Path(tempfile.mkdtemp(prefix="onejudge-sdk-reap-"))
+        cases: tuple[tuple[str, type[Exception], EventHandler], ...] = (
+            # A forbidden trailing line from a process that then blocks.
+            ("trailing-then-block", ContractError, ignore),
+            # A well-formed event whose handler raises, same blocking process.
+            ("blocking-stream", _HandlerFailure, explode),
+        )
+        for mode, expected, handler in cases:
+            pid_path = directory / f"{mode}.pid"
+            client = OneJudge(
+                executable=sys.executable,
+                executable_args=(str(FIXTURE),),
+                env={
+                    "ONEJUDGE_SDK_FIXTURE_MODE": mode,
+                    "ONEJUDGE_SDK_FIXTURE_PID": str(pid_path),
+                },
+            )
+            started = time.monotonic()
+            with self.subTest(mode=mode), self.assertRaises(expected):
+                await client.run({}, "fixture task", on_event=handler)
+            # The fixture sleeps 30s after publishing; waiting it out would mean the
+            # SDK hung on the child's pipes instead of failing on what it read.
+            self.assertLess(time.monotonic() - started, 10, mode)
+            # The stderr drain is awaited, not merely cancelled, so the failed call
+            # leaves nothing of its own still scheduled.
+            current = asyncio.current_task()
+            self.assertEqual(
+                [task for task in asyncio.all_tasks() if task is not current], [], mode
+            )
+            pid = int(pid_path.read_text(encoding="utf-8"))
+            if os.name != "nt":  # POSIX-only liveness probe
+                with self.subTest(mode=mode), self.assertRaises(ProcessLookupError):
+                    os.kill(pid, 0)
+
+    async def test_on_event_is_validated_before_spawn(self) -> None:
+        """A non-callable handler fails at the Python boundary, not mid-run."""
+        client = OneJudge(executable="definitely-not-started")
+        with self.assertRaises(ContractError):
+            # Deliberately invalid: exercises the boundary check.
+            await client.run({}, "task", on_event="not callable")  # type: ignore[arg-type]
 
     async def test_real_cli_runtime_error_keeps_exit_and_stderr(self) -> None:
         """Exit 2 remains distinguishable from an incomplete report."""

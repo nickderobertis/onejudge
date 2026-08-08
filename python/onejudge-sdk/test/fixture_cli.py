@@ -2,16 +2,58 @@
 
 from __future__ import annotations
 
-import os
 import json
+import os
 import sys
 import time
+
+
+def _report(task: str) -> dict[str, object]:
+    """A minimal report that satisfies the versioned contract."""
+    return {
+        "schema_version": 5,
+        "transcript": {"messages": [{"role": "user", "content": task}]},
+        "stopped_early": False,
+    }
+
+
+def _publish(*lines: object) -> None:
+    """Write stream lines and flush, so a blocking fixture still delivers them."""
+    sys.stdout.write("".join(json.dumps(line) + "\n" for line in lines))
+    sys.stdout.flush()
+
+
+def _record_pid() -> None:
+    """Publish this pid before writing anything, so a fast failure cannot race it."""
+    path = os.environ.get("ONEJUDGE_SDK_FIXTURE_PID")
+    if path:
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write(str(os.getpid()))
+            handle.flush()
+
+
+def _block() -> int:
+    """Outlive the caller unless it reaps us."""
+    time.sleep(30)
+    return 0
 
 
 def main() -> int:
     """Select one deterministic boundary failure."""
     mode = os.environ["ONEJUDGE_SDK_FIXTURE_MODE"]
     task = sys.stdin.read()
+    if mode == "trailing-then-block":
+        # A complete stream, one forbidden trailing line, then a child that keeps
+        # running: the SDK must fail on the line and reap us, not wait us out.
+        _record_pid()
+        _publish({"type": "result", "report": _report(task)}, {"type": "progress", "pct": 100})
+        return _block()
+    if mode == "blocking-stream":
+        # A well-formed event, then a child that keeps running — so a handler that
+        # raises has to be what ends the call.
+        _record_pid()
+        _publish({"type": "event", "turn": 1, "event": {"kind": "tool_call", "index": 0}})
+        return _block()
     if mode == "invalid-json":
         if task != "fixture task":
             return 4
@@ -19,6 +61,37 @@ def main() -> int:
         return 0
     if mode == "timeout":
         time.sleep(30)
+        return 0
+    if mode.startswith("trailing-"):
+        # A complete stream, then one more line the grammar forbids.
+        result = {"type": "result", "report": _report(task)}
+        trailing = {
+            "trailing-unknown": {"type": "progress", "pct": 100},
+            "trailing-event": {
+                "type": "event",
+                "turn": 1,
+                "event": {"kind": "tool_call", "index": 9},
+            },
+            "trailing-result": result,
+        }[mode]
+        _publish(result, trailing)
+        return 0
+    if mode == "garbage-stream":
+        sys.stdout.write("not json at all\n")
+        return 0
+    if mode == "scalar-stream":
+        sys.stdout.write("[1, 2, 3]\n")
+        return 0
+    if mode == "bad-stream":
+        # A streamed run whose lines this SDK must reject rather than half-accept.
+        sys.stdout.write(json.dumps({"type": "progress", "pct": 10}) + "\n")
+        return 0
+    if mode == "truncated-stream":
+        # Events, then no terminal `result` line: not a finished run.
+        sys.stdout.write(
+            json.dumps({"type": "event", "turn": 1, "event": {"kind": "tool_call", "index": 0}})
+            + "\n"
+        )
         return 0
     if mode == "v4-report":
         sys.stdout.write(

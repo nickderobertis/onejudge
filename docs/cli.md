@@ -71,6 +71,7 @@ file, which beats the built-in default**:
 | `--session` | `ONEJUDGE_SESSION` | the caller-owned session name |
 | `--provider` | `ONEJUDGE_PROVIDER` | just the backend kind (`oneharness`/`command`/`split`) |
 | `--format` | — | `human` (default) or `json` |
+| `--stream` | — | publish the run on stdout as the [streamed protocol](streaming.md) (needs `--format json`, refuses `--output`) |
 | `--output`, `-o` | — | write the result to a file instead of stdout |
 
 Each `ONEJUDGE_*` variable is the flag name in upper-snake-case. An empty value
@@ -91,6 +92,10 @@ simulated user even if the config had none.
 - **`--format json`:** the versioned [`Report`](contract.md) — transcript +
   verdicts + usage, stamped with `schema_version`. This reuses onejudge's existing
   wire contract; it is not a new one.
+- **`--format json --stream`:** the same report, preceded by one NDJSON
+  `{"type":"event",…}` line per tool event **as it happens** — so a consumer can
+  watch a 600–2000 second turn instead of waiting it out. See
+  [streaming.md](streaming.md).
 
 The **exit code** is `0` only when the task **completed** and every **boolean**
 eval passed. A run that hits `max_turns` without satisfying `done_when`, or whose
@@ -114,7 +119,7 @@ Top-level keys:
 
 | key | purpose |
 |-----|---------|
-| `provider` | which backend runs the harness: `kind` is `oneharness` (`bin`, `judge_config`), `command` (`command: [...]`), or `split` (a `skill:` + `judge:` **sub-provider** pair — distinct from the top-level `skill:` below) |
+| `provider` | which backend runs the harness: `kind` is `oneharness` (`bin`, `judge_config`, `stream`), `command` (`command: [...]`), or `split` (a `skill:` + `judge:` **sub-provider** pair — distinct from the top-level `skill:` below) |
 | `skill` | a skill directory (containing `SKILL.md`) whose body seeds the system prompt, resolved relative to the config file; optional |
 | `system_prompt` | extra system-prompt text; used alone, or prepended before a `skill` body when both are set; optional |
 | `task` | the task to drive to completion (or supply via `--task`) |
@@ -139,8 +144,9 @@ call goes through oneharness:
 
 - **`oneharness`** (default) — shell out to the `oneharness` CLI (0.3.20+) to drive
   a real harness (Claude Code, Codex, …). The agent side uses the discovered
-  `oneharness.toml`; the judge side uses `judge_config` (`--config`). See
-  [live-tier.md](live-tier.md).
+  `oneharness.toml`; the judge side uses `judge_config` (`--config`). Set
+  `stream: true` when that binary publishes its agent turn as the
+  [streamed protocol](streaming.md). See [live-tier.md](live-tier.md).
 - **`command`** — a custom backend speaking the [JSON-lines protocol](protocol.md).
 - **`split`** — compose a skill-runner with a separate judge / simulated-user
   backend (e.g. drive the agent on one harness, judge on another).

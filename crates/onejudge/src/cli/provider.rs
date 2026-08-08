@@ -39,8 +39,14 @@ impl AnyProvider {
     /// [`CliError::Config`] if a backend's argv is empty or otherwise invalid.
     pub fn build(spec: &ProviderSpec) -> Result<Self, CliError> {
         match spec {
-            ProviderSpec::Oneharness { bin, judge_config } => {
-                let mut provider = OneharnessProvider::new().with_bin(bin);
+            ProviderSpec::Oneharness {
+                bin,
+                judge_config,
+                stream,
+            } => {
+                let mut provider = OneharnessProvider::new()
+                    .with_bin(bin)
+                    .with_streaming(*stream);
                 if let Some(config) = judge_config {
                     provider = provider.with_judge_config(config.clone());
                 }
@@ -60,6 +66,32 @@ impl AnyProvider {
 }
 
 impl Provider for AnyProvider {
+    // Telemetry is collected by the backend that made the call, so this wrapper has
+    // to forward both halves — without them the CLI's report carries no telemetry
+    // at all, no matter what the backend recorded.
+    fn reset_telemetry(&self) {
+        match self {
+            AnyProvider::Oneharness(p) => p.reset_telemetry(),
+            AnyProvider::Command(p) => p.reset_telemetry(),
+            AnyProvider::Split { skill, judge } => {
+                skill.reset_telemetry();
+                judge.reset_telemetry();
+            }
+        }
+    }
+
+    fn invocation_telemetry(&self) -> Vec<crate::InvocationTelemetry> {
+        match self {
+            AnyProvider::Oneharness(p) => p.invocation_telemetry(),
+            AnyProvider::Command(p) => p.invocation_telemetry(),
+            AnyProvider::Split { skill, judge } => {
+                let mut records = skill.invocation_telemetry();
+                records.extend(judge.invocation_telemetry());
+                records
+            }
+        }
+    }
+
     fn respond(
         &self,
         skill: &SkillRef<'_>,
@@ -140,6 +172,7 @@ mod tests {
         let oh = AnyProvider::build(&ProviderSpec::Oneharness {
             bin: "oneharness".into(),
             judge_config: Some("oneharness.judge.toml".into()),
+            stream: false,
         })
         .unwrap();
         assert!(matches!(oh, AnyProvider::Oneharness(_)));
@@ -163,6 +196,7 @@ mod tests {
             skill: Box::new(ProviderSpec::Oneharness {
                 bin: "oneharness".into(),
                 judge_config: None,
+                stream: true,
             }),
             judge: Box::new(ProviderSpec::Command {
                 command: vec!["judge".into()],
