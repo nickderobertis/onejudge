@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.5](https://github.com/nickderobertis/onejudge/compare/v0.3.4...v0.3.5) - 2026-08-08
+
+### Added
+
+- *(oneharness)* drive the boundary through oneharness's typed contract ([#35](https://github.com/nickderobertis/onejudge/pull/35))
+- accept streamed NDJSON providers and surface events live ([#33](https://github.com/nickderobertis/onejudge/pull/33))
+
 ## [0.3.4](https://github.com/nickderobertis/onejudge/compare/v0.3.3...v0.3.4) - 2026-07-19
 
 ### Added
