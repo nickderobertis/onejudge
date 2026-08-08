@@ -635,6 +635,7 @@ fn a_buffered_provider_replays_events_and_honors_a_breaking_sink() {
     let engine = Engine::new(&provider, settings());
     let skill = skill_with("[[reply:done]][[event:git status]]");
     let mut seen = 0;
+    let started = std::time::Instant::now();
     let outcome = engine
         .run_streaming(
             &Conversation::multi_turn(skill, "go", SimulatedUser::new("A tester.").max_turns(5)),
@@ -644,7 +645,12 @@ fn a_buffered_provider_replays_events_and_honors_a_breaking_sink() {
             },
         )
         .unwrap();
+    let elapsed = started.elapsed();
     assert_eq!(seen, 1);
+    assert!(
+        elapsed < std::time::Duration::from_secs(10),
+        "the child was waited out, not torn down: {elapsed:?}"
+    );
     assert!(outcome.stopped_early);
     assert_eq!(outcome.transcript.assistant_turns(), 1);
 }
@@ -667,9 +673,12 @@ fn a_streamed_run_still_recovers_from_a_rejected_session() {
 
 #[test]
 fn a_breaking_sink_tears_down_a_streamed_turn() {
-    // The sink stops on the first event; the provider kills the child mid-turn (it
-    // would otherwise block on `[[stream-wait]]` forever) and the run reports it
-    // stopped early with the events it did see.
+    // Cancellation, across the real process boundary: the sink stops on the first
+    // event and the provider tears the child down mid-turn. The double is blocked
+    // before its terminal line on a file that never appears and gives up on its own
+    // only after 30s, so the elapsed bound below is what proves the child was
+    // *terminated* rather than waited out — and the run still reports the events it
+    // did see, stopped early.
     let provider = streaming_oneharness();
     let engine = Engine::new(&provider, settings());
     let never = scratch_path("streamed-never.marker");
@@ -678,6 +687,7 @@ fn a_breaking_sink_tears_down_a_streamed_turn() {
         never.display()
     ));
     let mut seen = 0;
+    let started = std::time::Instant::now();
     let outcome = engine
         .run_streaming(
             &Conversation::multi_turn(skill, "go", SimulatedUser::new("A tester.").max_turns(5)),
@@ -687,7 +697,12 @@ fn a_breaking_sink_tears_down_a_streamed_turn() {
             },
         )
         .unwrap();
+    let elapsed = started.elapsed();
     assert_eq!(seen, 1);
+    assert!(
+        elapsed < std::time::Duration::from_secs(10),
+        "the child was waited out, not torn down: {elapsed:?}"
+    );
     assert!(outcome.stopped_early);
     assert_eq!(
         outcome
@@ -759,4 +774,215 @@ fn outcome_bundles_into_a_versioned_report() {
     assert_eq!(report.schema_version, SCHEMA_VERSION);
     assert_eq!(report.verdicts.len(), 1);
     assert_eq!(report.transcript.assistant_turns(), 1);
+}
+
+// --- Fallback chains, timeouts, and per-candidate attribution --------------
+//
+// These drive the shapes `run_mode = "fallback"` produces. They are the reason
+// onejudge reads oneharness's report through oneharness's own types: every one of
+// them is a report whose *first* result is not the turn.
+
+/// The attribution the agent side recorded for its first turn.
+fn agent_attribution(outcome: &onejudge::Outcome) -> onejudge::HarnessAttribution {
+    outcome
+        .telemetry
+        .as_ref()
+        .expect("telemetry")
+        .attribution
+        .iter()
+        .find(|a| a.role == onejudge::TelemetryRole::Agent)
+        .expect("the agent invocation recorded its candidates")
+        .clone()
+}
+
+#[test]
+fn a_fallback_chain_advances_past_a_quota_refusal_and_runs_the_next_candidate() {
+    // oneharness falls through a candidate rejected before it did any work. Its
+    // report leads with that refusal, so a reader that took `results[0]` would fail
+    // the run with `quota` even though a later candidate answered fine.
+    let provider = fake_oneharness();
+    let engine = Engine::new(&provider, settings());
+    let outcome = engine
+        .run(&Conversation::single_turn(
+            skill_with("[[reply:answered anyway]][[fallback:codex|quota]]"),
+            "go",
+        ))
+        .expect("the chain settled on a candidate that ran");
+
+    assert_eq!(outcome.transcript.messages[1].content, "answered anyway");
+    let attribution = agent_attribution(&outcome);
+    assert_eq!(attribution.ran.as_deref(), Some("claude-code"));
+    assert_eq!(attribution.fell_through.len(), 1);
+    assert_eq!(attribution.fell_through[0].harness, "codex");
+    assert_eq!(attribution.fell_through[0].reason, "quota");
+    // Both attempts are attributable to their identity, with the refusal typed.
+    assert_eq!(attribution.candidates.len(), 2);
+    assert_eq!(attribution.candidates[0].harness_id, "codex");
+    assert_eq!(
+        attribution.candidates[0].failure_kind.as_deref(),
+        Some("quota")
+    );
+    assert!(!attribution.candidates[0].ran);
+    assert!(attribution.candidates[1].ran);
+}
+
+#[test]
+fn a_fallback_chain_advances_past_an_auth_refusal_over_several_identities() {
+    // Several accounts of the same harness are distinct candidates; the composed
+    // id, not the base harness, is what identifies the one that ran.
+    let provider = fake_oneharness();
+    let engine = Engine::new(&provider, settings());
+    let outcome = engine
+        .run(&Conversation::single_turn(
+            skill_with(
+                "[[reply:third time lucky]][[fallback:codex:personal|auth,codex:work|quota]]",
+            ),
+            "go",
+        ))
+        .expect("the chain settled on a candidate that ran");
+
+    assert_eq!(outcome.transcript.messages[1].content, "third time lucky");
+    let attribution = agent_attribution(&outcome);
+    let reasons: Vec<_> = attribution
+        .fell_through
+        .iter()
+        .map(|f| f.reason.as_str())
+        .collect();
+    assert_eq!(reasons, ["auth", "quota"]);
+    let ids: Vec<_> = attribution
+        .candidates
+        .iter()
+        .map(|c| c.harness_id.as_str())
+        .collect();
+    assert_eq!(ids, ["codex:personal", "codex:work", "claude-code"]);
+    assert_eq!(
+        attribution.candidates[0].variant.as_deref(),
+        Some("personal")
+    );
+}
+
+#[test]
+fn a_fallback_chain_does_not_fall_through_a_task_failure() {
+    // The chain stops at the first candidate that actually RAN, whatever came of
+    // it. A real task failure there must reach the caller classified — routing
+    // around it would mask a broken skill as a broken environment.
+    let provider = fake_oneharness();
+    let engine = Engine::new(&provider, settings());
+    let err = engine
+        .run(&Conversation::single_turn(
+            skill_with("[[fail:model_not_found]][[fallback:codex|quota]]"),
+            "go",
+        ))
+        .unwrap_err();
+
+    assert_eq!(err.kind(), Some(ProviderErrorKind::ModelNotFound));
+    assert!(err.to_string().contains("model_not_found"), "{err}");
+}
+
+#[test]
+fn an_exhausted_fallback_chain_is_one_classified_error_naming_every_candidate() {
+    let provider = fake_oneharness();
+    let engine = Engine::new(&provider, settings());
+    let err = engine
+        .run(&Conversation::single_turn(
+            skill_with("[[fallback-exhausted:codex|not-installed,claude-code|auth]]"),
+            "go",
+        ))
+        .unwrap_err();
+
+    // Classified by the last candidate tried — what a caller would retry against.
+    assert_eq!(err.kind(), Some(ProviderErrorKind::Auth));
+    let message = err.to_string();
+    assert!(message.contains("codex [not-installed]"), "{message}");
+    assert!(message.contains("claude-code [auth]"), "{message}");
+}
+
+#[test]
+fn a_per_turn_timeout_is_classified_rather_than_banked_as_an_empty_turn() {
+    // oneharness kills a harness that outran `--timeout` and reports `status:
+    // timeout` with NO failure_kind. Reading only failure_kind made that a
+    // successful turn with an empty assistant message, which the judge then scored.
+    for (token, expected) in [
+        ("timeout", ProviderErrorKind::Timeout),
+        ("spawn-error", ProviderErrorKind::Spawn),
+        ("skipped", ProviderErrorKind::Spawn),
+    ] {
+        let provider = fake_oneharness();
+        let engine = Engine::new(&provider, settings());
+        let err = engine
+            .run(&Conversation::single_turn(
+                skill_with(&format!("[[status:{token}]]")),
+                "go",
+            ))
+            .unwrap_err();
+        assert_eq!(err.kind(), Some(expected), "{token}");
+        assert!(err.to_string().contains("did not run the turn"), "{token}");
+    }
+}
+
+#[test]
+fn the_per_candidate_history_record_is_read_back_through_oneharnesss_own_reader() {
+    // oneharness writes one normalized history record per ATTEMPTED candidate, and
+    // that record — not the run report — is where it keeps the invocation's
+    // measurements. onejudge reads the session file back with oneharness's own
+    // reader, so every attempt is attributable to an identity and a record id.
+    let history = scratch_path("attribution-history.jsonl");
+    let provider = fake_oneharness();
+    let engine = Engine::new(&provider, settings().with_session_name("attributed"));
+    let outcome = engine
+        .run(&Conversation::single_turn(
+            skill_with(&format!(
+                "[[reply:done]][[fallback:codex|quota]][[history:{}]]",
+                history.display()
+            )),
+            "go",
+        ))
+        .expect("the chain settled on a candidate that ran");
+
+    let attribution = agent_attribution(&outcome);
+    assert_eq!(
+        attribution.history_file.as_deref(),
+        Some(history.to_str().unwrap())
+    );
+    let ids: Vec<_> = attribution
+        .candidates
+        .iter()
+        .map(|c| c.history_id.clone().expect("every attempt has a record"))
+        .collect();
+    assert_eq!(ids.len(), 2);
+    assert_ne!(ids[0], ids[1], "each attempt has its own record");
+
+    // The measurements come from the record, which the run report never carries.
+    let telemetry = outcome.telemetry.expect("telemetry");
+    assert_eq!(telemetry.agent.model_ms, Some(10));
+    assert_eq!(telemetry.agent.tool_ms, Some(3));
+    assert_eq!(telemetry.sessions.len(), 1);
+    assert_eq!(
+        telemetry.sessions[0].history_id.as_deref(),
+        Some(ids[1].as_str()),
+        "the session link points at the record for the candidate that RAN"
+    );
+}
+
+#[test]
+fn a_failed_invocation_is_still_attributed_to_the_identities_it_tried() {
+    // Attribution matters most when the run failed, so a failure must not discard
+    // it. The engine surfaces the error, and the provider still recorded which
+    // candidates were attempted and why each was refused.
+    let provider = fake_oneharness();
+    let engine = Engine::new(&provider, settings());
+    let err = engine
+        .run(&Conversation::single_turn(
+            skill_with("[[fallback-exhausted:codex|quota,claude-code|auth]]"),
+            "go",
+        ))
+        .unwrap_err();
+    assert_eq!(err.kind(), Some(ProviderErrorKind::Auth));
+
+    let recorded = onejudge::Provider::invocation_telemetry(&provider);
+    assert_eq!(
+        recorded.len(),
+        1,
+        "the failed invocation was still recorded"
+    );
 }

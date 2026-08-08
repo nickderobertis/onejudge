@@ -1067,3 +1067,140 @@ fn binary_schema_prints_the_annotated_config() {
     assert!(stdout.contains("provider:"));
     assert!(stdout.contains("done_when"));
 }
+
+// --- Structured harness attribution through the binary --------------------
+
+#[test]
+fn binary_run_json_reports_which_harness_identities_were_attempted() {
+    // Everything the library learns about the candidates oneharness attempted has
+    // to be readable off the CLI's JSON, not just off an in-process `Telemetry`.
+    let config = Path::new(env!("CARGO_TARGET_TMPDIR")).join("attribution.yaml");
+    let history = Path::new(env!("CARGO_TARGET_TMPDIR")).join("cli-attribution-history.jsonl");
+    let _ = std::fs::remove_file(&history);
+    let bin = serde_json::to_string(&fake_oneharness_bin()).unwrap();
+    std::fs::write(
+        &config,
+        format!(
+            "provider:\n  kind: oneharness\n  bin: {bin}\n\
+             task: attribute this\n\
+             system_prompt: '[[reply:attributed]][[fallback:codex|quota]][[history:{}]]'\n",
+            history.display()
+        ),
+    )
+    .unwrap();
+    let output = Command::new(onejudge_bin())
+        .args(["run", config.to_str().unwrap(), "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+
+    let report: onejudge::Report =
+        serde_json::from_str(&String::from_utf8(output.stdout).unwrap()).unwrap();
+    let telemetry = report.telemetry.expect("telemetry reaches the report");
+    let agent = telemetry
+        .attribution
+        .iter()
+        .find(|a| a.role == onejudge::TelemetryRole::Agent)
+        .expect("the agent invocation is attributed");
+    assert_eq!(agent.ran.as_deref(), Some("claude-code"));
+    assert_eq!(agent.fell_through[0].harness, "codex");
+    assert_eq!(agent.fell_through[0].reason, "quota");
+    assert_eq!(agent.candidates.len(), 2);
+    assert_eq!(agent.candidates[0].failure_kind.as_deref(), Some("quota"));
+    assert_eq!(agent.candidates[0].status, "nonzero");
+    assert!(agent.candidates[0].history_id.is_some());
+    assert_eq!(
+        agent.history_file.as_deref(),
+        Some(history.to_str().unwrap())
+    );
+}
+
+#[test]
+fn binary_run_json_writes_a_structured_failure_document_when_the_run_fails() {
+    // A failed run produces no report, but it is exactly the case a caller needs
+    // attribution for. Under `--format json` the failure and the identities that
+    // were tried go where the report would have — machine-readable, exit code 2.
+    let config = Path::new(env!("CARGO_TARGET_TMPDIR")).join("attribution-failure.yaml");
+    let bin = serde_json::to_string(&fake_oneharness_bin()).unwrap();
+    std::fs::write(
+        &config,
+        format!(
+            "provider:\n  kind: oneharness\n  bin: {bin}\n\
+             task: fail this\n\
+             system_prompt: '[[fallback-exhausted:codex|quota,claude-code|auth]]'\n"
+        ),
+    )
+    .unwrap();
+    let output = Command::new(onejudge_bin())
+        .args(["run", config.to_str().unwrap(), "--format", "json"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+
+    let failure: onejudge::cli::FailureReport =
+        serde_json::from_str(&String::from_utf8(output.stdout).unwrap())
+            .expect("the failure document is on stdout");
+    assert_eq!(failure.schema_version, onejudge::SCHEMA_VERSION);
+    assert_eq!(failure.error.kind, Some(onejudge::ProviderErrorKind::Auth));
+    assert!(failure.error.message.contains("codex [quota]"));
+    let telemetry = failure
+        .telemetry
+        .expect("the failed run is still attributed");
+    let agent = &telemetry.attribution[0];
+    assert_eq!(agent.role, onejudge::TelemetryRole::Agent);
+    assert_eq!(agent.ran, None, "no candidate ran");
+    let ids: Vec<_> = agent
+        .candidates
+        .iter()
+        .map(|c| c.harness_id.as_str())
+        .collect();
+    assert_eq!(ids, ["codex", "claude-code"]);
+    // The human message is unchanged on stderr — the document is additive.
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("onejudge: run failed"), "{stderr}");
+}
+
+#[test]
+fn binary_stream_reports_a_failure_as_json_on_stderr_leaving_the_protocol_intact() {
+    // stdout under `--stream` is the `event* result EOF` protocol, so a failure
+    // cannot be published there without inventing an envelope every consumer would
+    // have to learn. It goes to stderr as one JSON document instead.
+    let config = Path::new(env!("CARGO_TARGET_TMPDIR")).join("stream-attribution-failure.yaml");
+    std::fs::write(
+        &config,
+        streaming_config_yaml(
+            "task: fail this\nsystem_prompt: '[[fallback-exhausted:codex|quota]]'\n",
+        ),
+    )
+    .unwrap();
+    let output = Command::new(onejudge_bin())
+        .args([
+            "run",
+            config.to_str().unwrap(),
+            "--format",
+            "json",
+            "--stream",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(
+        String::from_utf8(output.stdout).unwrap().trim().is_empty(),
+        "the stream protocol stays exactly `event* result EOF`"
+    );
+
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    let document = stderr
+        .lines()
+        .find(|line| line.starts_with('{'))
+        .expect("one JSON line on stderr");
+    let failure: onejudge::cli::FailureReport =
+        serde_json::from_str(document).expect("the failure document is on stderr");
+    assert_eq!(failure.error.kind, Some(onejudge::ProviderErrorKind::Quota));
+    assert_eq!(
+        failure.telemetry.expect("attributed").attribution[0]
+            .candidates
+            .len(),
+        1
+    );
+}

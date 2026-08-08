@@ -17,6 +17,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 /// purpose; a label this version does not recognize becomes
 /// [`ProviderErrorKind::Other`] rather than a new, unhandled string.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "sdk-schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum ProviderErrorKind {
     /// Authentication/authorization failed (missing or rejected credentials).

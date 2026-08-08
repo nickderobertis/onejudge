@@ -227,7 +227,19 @@ fn run_task(args: RunArgs) -> Result<i32, CliError> {
     let mut progress = |line: &str| {
         eprintln!("{line}");
     };
-    let summary = run_plan(plan, format, &mut progress)?;
+    let summary = match run_plan_reporting_failure(plan, format, &mut progress) {
+        Ok(summary) => summary,
+        Err(failure) => {
+            // A failed run produces no report, but it does produce attribution —
+            // which harness identity refused, on which side. Under `--format json`
+            // that is written where the report would have gone, so a programmatic
+            // caller never has to parse it back out of a human message.
+            if format == Format::Json {
+                write_output(output.as_ref(), &render_failure_json(&failure)?)?;
+            }
+            return Err(failure.error);
+        }
+    };
 
     let rendered = match format {
         Format::Human => render_human(&summary),
@@ -247,7 +259,7 @@ fn run_task(args: RunArgs) -> Result<i32, CliError> {
 fn run_streamed(plan: Plan) -> Result<i32, CliError> {
     let mut stdout = std::io::stdout();
     let mut failure = None;
-    let summary = run_plan_streaming(plan, &mut |event| {
+    let summary = match run_plan_streaming_reporting_failure(plan, &mut |event| {
         if let Err(e) = write_line(&mut stdout, &StreamLine::Event(event)) {
             // Stop the run rather than keep burning harness calls into a pipe that
             // no longer accepts them (a consumer that hung up mid-turn).
@@ -255,7 +267,20 @@ fn run_streamed(plan: Plan) -> Result<i32, CliError> {
             return ControlFlow::Break(());
         }
         ControlFlow::Continue(())
-    })?;
+    }) {
+        Ok(summary) => summary,
+        Err(run_failure) => {
+            // stdout is the `event* result EOF` protocol, so a failure cannot be
+            // published there without inventing a third envelope every consumer
+            // would have to learn. It goes to stderr as ONE compact JSON line
+            // instead — still machine-readable, still line-oriented, and the
+            // protocol on stdout stays exactly as documented.
+            if let Ok(json) = serde_json::to_string(&FailureReport::new(&run_failure)) {
+                eprintln!("{json}");
+            }
+            return Err(run_failure.error);
+        }
+    };
     if let Some(e) = failure {
         return Err(e);
     }
@@ -455,6 +480,35 @@ pub struct EvalResult {
     pub reason: String,
 }
 
+/// A run that did not produce a report, with whatever the provider had already
+/// recorded when it failed.
+///
+/// Returned boxed (`Result<_, Box<RunFailure>>`) because the telemetry it carries
+/// is far larger than a summary, and every success would otherwise pay for it.
+///
+/// A failure is exactly the case a caller most needs attribution for — *which*
+/// harness identity refused, on *which* side of the conversation — and a failed
+/// run produces no [`Report`] to carry it. So the telemetry is returned alongside
+/// the error, and `onejudge run --format json` renders both (see
+/// [`render_failure_json`]) rather than leaving stdout empty.
+#[derive(Debug)]
+pub struct RunFailure {
+    /// Why the run did not complete.
+    pub error: CliError,
+    /// Timing, usage, and per-invocation harness attribution recorded before the
+    /// failure; `None` when nothing ran at all (a config or provider-build error).
+    pub telemetry: Option<crate::Telemetry>,
+}
+
+impl From<CliError> for Box<RunFailure> {
+    fn from(error: CliError) -> Self {
+        Box::new(RunFailure {
+            error,
+            telemetry: None,
+        })
+    }
+}
+
 /// Drive `plan` to completion, re-judge its `done_when`, score its evals, and
 /// bundle everything into a [`RunSummary`]. `progress` receives a line per tool
 /// event during a `Human`-format run (streamed); a `Json` run is buffered.
@@ -467,6 +521,19 @@ pub fn run_plan(
     format: Format,
     progress: &mut dyn FnMut(&str),
 ) -> Result<RunSummary, CliError> {
+    run_plan_reporting_failure(plan, format, progress).map_err(|failure| failure.error)
+}
+
+/// [`run_plan`], additionally returning the telemetry a *failed* run had recorded
+/// — the only place harness attribution for a failed invocation is reachable.
+///
+/// # Errors
+/// As [`run_plan`], wrapped in a [`RunFailure`].
+pub fn run_plan_reporting_failure(
+    plan: Plan,
+    format: Format,
+    progress: &mut dyn FnMut(&str),
+) -> Result<RunSummary, Box<RunFailure>> {
     match format {
         Format::Human => execute(
             plan,
@@ -495,12 +562,30 @@ pub fn run_plan_streaming(
     plan: Plan,
     on_event: &mut EventSink<'_>,
 ) -> Result<RunSummary, CliError> {
+    execute(plan, Some(on_event)).map_err(|failure| failure.error)
+}
+
+/// [`run_plan_streaming`], additionally returning the telemetry a *failed* run had
+/// recorded. See [`RunFailure`].
+///
+/// # Errors
+/// As [`run_plan_streaming`], wrapped in a [`RunFailure`].
+pub fn run_plan_streaming_reporting_failure(
+    plan: Plan,
+    on_event: &mut EventSink<'_>,
+) -> Result<RunSummary, Box<RunFailure>> {
     execute(plan, Some(on_event))
 }
 
 /// The one run driver both entry points share: `None` runs the buffered engine
 /// loop, `Some(sink)` the streaming one.
-fn execute(plan: Plan, on_event: Option<&mut EventSink<'_>>) -> Result<RunSummary, CliError> {
+///
+/// The engine's telemetry is read once the loop has finished **either way**, so a
+/// failure carries the same per-invocation harness attribution a success does.
+fn execute(
+    plan: Plan,
+    on_event: Option<&mut EventSink<'_>>,
+) -> Result<RunSummary, Box<RunFailure>> {
     let Plan {
         provider,
         settings,
@@ -519,103 +604,113 @@ fn execute(plan: Plan, on_event: Option<&mut EventSink<'_>>) -> Result<RunSummar
 
     let backend = AnyProvider::build(&provider)?;
     let engine = Engine::new(&backend, settings);
+    // Read the engine's telemetry once the loop is done, whichever way it ended, so
+    // a failure still carries which harness identities the run attempted.
+    let drive = || -> Result<RunSummary, CliError> {
+        let mut outcome = match on_event {
+            Some(sink) => engine.run_streaming(&conversation, sink)?,
+            None => engine.run(&conversation)?,
+        };
 
-    let mut outcome = match on_event {
-        Some(sink) => engine.run_streaming(&conversation, sink)?,
-        None => engine.run(&conversation)?,
-    };
+        let mut verdicts: Vec<NamedVerdict> = Vec::new();
 
-    let mut verdicts: Vec<NamedVerdict> = Vec::new();
-
-    // Re-judge the completion condition against the FINAL transcript: this is the
-    // authoritative "did the task actually complete?" signal that drives the exit
-    // code (the loop's own mid-run check can be preempted by the turn cap).
-    let done = match &done_when {
-        Some(criterion) => {
-            let verdict = engine.judge_boolean(criterion, &outcome.transcript)?;
-            let satisfied = matches!(verdict.value, JudgeValue::Bool(true));
-            verdicts.push(NamedVerdict::new(
-                criterion.clone(),
-                JudgeKind::Boolean,
-                verdict,
-            ));
-            Some(DoneWhen {
-                criterion: criterion.clone(),
-                satisfied,
-            })
-        }
-        None => None,
-    };
-
-    let hit_max_turns = multi_turn && outcome.transcript.assistant_turns() >= max_turns as usize;
-    let completed = match &done {
-        Some(d) => d.satisfied,
-        None => !hit_max_turns,
-    };
-
-    let mut eval_results = Vec::with_capacity(evals.len());
-    for eval in &evals {
-        let result = match eval.kind {
-            EvalKind::Boolean => {
-                let verdict = engine.judge_boolean(&eval.criterion, &outcome.transcript)?;
-                let passed = matches!(verdict.value, JudgeValue::Bool(true));
-                let reason = verdict.reason.clone();
+        // Re-judge the completion condition against the FINAL transcript: this is the
+        // authoritative "did the task actually complete?" signal that drives the exit
+        // code (the loop's own mid-run check can be preempted by the turn cap).
+        let done = match &done_when {
+            Some(criterion) => {
+                let verdict = engine.judge_boolean(criterion, &outcome.transcript)?;
+                let satisfied = matches!(verdict.value, JudgeValue::Bool(true));
                 verdicts.push(NamedVerdict::new(
-                    eval.criterion.clone(),
+                    criterion.clone(),
                     JudgeKind::Boolean,
                     verdict,
                 ));
-                EvalResult {
-                    criterion: eval.criterion.clone(),
-                    outcome: EvalOutcome::Boolean(passed),
-                    reason,
-                }
+                Some(DoneWhen {
+                    criterion: criterion.clone(),
+                    satisfied,
+                })
             }
-            EvalKind::Numeric { scale: (min, max) } => {
-                let verdict =
-                    engine.judge_numeric(&eval.criterion, min, max, &outcome.transcript)?;
-                // A numeric query yields a number; treat a contract-violating bool
-                // as the scale floor rather than inventing a separate empty state.
-                let score = match verdict.value {
-                    JudgeValue::Number(n) => n,
-                    JudgeValue::Bool(_) => min,
-                };
-                let reason = verdict.reason.clone();
-                verdicts.push(NamedVerdict::new(
-                    eval.criterion.clone(),
-                    JudgeKind::Numeric,
-                    verdict,
-                ));
-                EvalResult {
-                    criterion: eval.criterion.clone(),
-                    outcome: EvalOutcome::Numeric(score),
-                    reason,
-                }
-            }
+            None => None,
         };
-        eval_results.push(result);
-    }
 
-    let assessment = match assessment {
-        Some(prompt) => {
-            let result = engine.assess(&prompt, &outcome.transcript)?;
-            if let Some(usage) = result.usage {
-                outcome.usage.get_or_insert_with(Usage::default).add(&usage);
-            }
-            Some(result.text)
+        let hit_max_turns =
+            multi_turn && outcome.transcript.assistant_turns() >= max_turns as usize;
+        let completed = match &done {
+            Some(d) => d.satisfied,
+            None => !hit_max_turns,
+        };
+
+        let mut eval_results = Vec::with_capacity(evals.len());
+        for eval in &evals {
+            let result = match eval.kind {
+                EvalKind::Boolean => {
+                    let verdict = engine.judge_boolean(&eval.criterion, &outcome.transcript)?;
+                    let passed = matches!(verdict.value, JudgeValue::Bool(true));
+                    let reason = verdict.reason.clone();
+                    verdicts.push(NamedVerdict::new(
+                        eval.criterion.clone(),
+                        JudgeKind::Boolean,
+                        verdict,
+                    ));
+                    EvalResult {
+                        criterion: eval.criterion.clone(),
+                        outcome: EvalOutcome::Boolean(passed),
+                        reason,
+                    }
+                }
+                EvalKind::Numeric { scale: (min, max) } => {
+                    let verdict =
+                        engine.judge_numeric(&eval.criterion, min, max, &outcome.transcript)?;
+                    // A numeric query yields a number; treat a contract-violating bool
+                    // as the scale floor rather than inventing a separate empty state.
+                    let score = match verdict.value {
+                        JudgeValue::Number(n) => n,
+                        JudgeValue::Bool(_) => min,
+                    };
+                    let reason = verdict.reason.clone();
+                    verdicts.push(NamedVerdict::new(
+                        eval.criterion.clone(),
+                        JudgeKind::Numeric,
+                        verdict,
+                    ));
+                    EvalResult {
+                        criterion: eval.criterion.clone(),
+                        outcome: EvalOutcome::Numeric(score),
+                        reason,
+                    }
+                }
+            };
+            eval_results.push(result);
         }
-        None => None,
-    };
-    outcome.telemetry = engine.telemetry();
-    let report = outcome.into_report_with_assessment(verdicts, assessment);
 
-    Ok(RunSummary {
-        report,
-        completed,
-        hit_max_turns,
-        max_turns,
-        done_when: done,
-        eval_results,
+        let assessment = match assessment {
+            Some(prompt) => {
+                let result = engine.assess(&prompt, &outcome.transcript)?;
+                if let Some(usage) = result.usage {
+                    outcome.usage.get_or_insert_with(Usage::default).add(&usage);
+                }
+                Some(result.text)
+            }
+            None => None,
+        };
+        outcome.telemetry = engine.telemetry();
+        let report = outcome.into_report_with_assessment(verdicts, assessment);
+
+        Ok(RunSummary {
+            report,
+            completed,
+            hit_max_turns,
+            max_turns,
+            done_when: done,
+            eval_results,
+        })
+    };
+    drive().map_err(|error| {
+        Box::new(RunFailure {
+            error,
+            telemetry: engine.telemetry(),
+        })
     })
 }
 
@@ -733,6 +828,64 @@ fn render_usage(usage: Option<&Usage>) -> String {
             }
         }
     }
+}
+
+/// The machine-readable document a `--format json` run writes when it produced no
+/// [`Report`]: why it failed, and the telemetry — including per-invocation harness
+/// attribution — recorded before it did.
+///
+/// Stamped with the same [`SCHEMA_VERSION`](crate::SCHEMA_VERSION) as a report, so
+/// one number describes both halves of the CLI's JSON surface. Additive: before
+/// this existed a failed `--format json` run wrote nothing at all.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "sdk-schema", derive(schemars::JsonSchema))]
+pub struct FailureReport {
+    /// The contract version this document was serialized under.
+    pub schema_version: u32,
+    /// Why the run did not complete.
+    pub error: FailureDetail,
+    /// Timing, usage, and per-invocation harness attribution recorded before the
+    /// failure; absent when nothing ran.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub telemetry: Option<crate::Telemetry>,
+}
+
+/// The failure itself, with the classification a caller branches on.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "sdk-schema", derive(schemars::JsonSchema))]
+pub struct FailureDetail {
+    /// The human-readable failure, exactly as it is printed on stderr.
+    pub message: String,
+    /// The provider failure category, when the failure came from a provider and
+    /// was classified (`auth`, `quota`, `timeout`, `spawn`, `protocol`, …).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<crate::ProviderErrorKind>,
+}
+
+impl FailureReport {
+    /// Build the document for `failure`.
+    #[must_use]
+    pub fn new(failure: &RunFailure) -> Self {
+        Self {
+            schema_version: crate::SCHEMA_VERSION,
+            error: FailureDetail {
+                message: failure.error.to_string(),
+                kind: match &failure.error {
+                    CliError::Engine(error) => error.kind(),
+                    CliError::Config(_) | CliError::Io(_) => None,
+                },
+            },
+            telemetry: failure.telemetry.clone(),
+        }
+    }
+}
+
+/// Serialize a [`FailureReport`] as pretty JSON.
+fn render_failure_json(failure: &RunFailure) -> Result<String, CliError> {
+    let mut json = serde_json::to_string_pretty(&FailureReport::new(failure))
+        .map_err(|e| CliError::Config(format!("could not serialize the failure report: {e}")))?;
+    json.push('\n');
+    Ok(json)
 }
 
 /// Serialize the versioned report as pretty JSON.
