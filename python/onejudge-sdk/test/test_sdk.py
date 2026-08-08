@@ -2,20 +2,28 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
 from onejudge_sdk import (
     ContractError,
+    EventHandler,
     OneJudge,
     OneJudgeProcessError,
     OneJudgeTimeoutError,
     RunConfig,
     StreamEvent,
 )
+
+
+class _HandlerFailure(Exception):
+    """Raised by an `on_event` handler, to prove it reaches the caller intact."""
+
 
 ROOT = Path(__file__).resolve().parents[3]
 SUFFIX = ".exe" if os.name == "nt" else ""
@@ -167,6 +175,49 @@ class OneJudgeTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(mode=mode), self.assertRaises(ContractError) as raised:
                 await client.run({}, "fixture task", on_event=lambda _event: None)
             self.assertIn(needle, str(raised.exception))
+
+    async def test_streaming_failure_fails_fast_and_reaps_the_child(self) -> None:
+        """End the call on the failure, not on a child that keeps running."""
+
+        def explode(_event: StreamEvent) -> None:
+            raise _HandlerFailure("handler gave up")
+
+        def ignore(_event: StreamEvent) -> None:
+            return None
+
+        directory = Path(tempfile.mkdtemp(prefix="onejudge-sdk-reap-"))
+        cases: tuple[tuple[str, type[Exception], EventHandler], ...] = (
+            # A forbidden trailing line from a process that then blocks.
+            ("trailing-then-block", ContractError, ignore),
+            # A well-formed event whose handler raises, same blocking process.
+            ("blocking-stream", _HandlerFailure, explode),
+        )
+        for mode, expected, handler in cases:
+            pid_path = directory / f"{mode}.pid"
+            client = OneJudge(
+                executable=sys.executable,
+                executable_args=(str(FIXTURE),),
+                env={
+                    "ONEJUDGE_SDK_FIXTURE_MODE": mode,
+                    "ONEJUDGE_SDK_FIXTURE_PID": str(pid_path),
+                },
+            )
+            started = time.monotonic()
+            with self.subTest(mode=mode), self.assertRaises(expected):
+                await client.run({}, "fixture task", on_event=handler)
+            # The fixture sleeps 30s after publishing; waiting it out would mean the
+            # SDK hung on the child's pipes instead of failing on what it read.
+            self.assertLess(time.monotonic() - started, 10, mode)
+            # The stderr drain is awaited, not merely cancelled, so the failed call
+            # leaves nothing of its own still scheduled.
+            current = asyncio.current_task()
+            self.assertEqual(
+                [task for task in asyncio.all_tasks() if task is not current], [], mode
+            )
+            pid = int(pid_path.read_text(encoding="utf-8"))
+            if os.name != "nt":  # POSIX-only liveness probe
+                with self.subTest(mode=mode), self.assertRaises(ProcessLookupError):
+                    os.kill(pid, 0)
 
     async def test_on_event_is_validated_before_spawn(self) -> None:
         """A non-callable handler fails at the Python boundary, not mid-run."""

@@ -88,20 +88,38 @@ async def _stream_exchange(
         raise ContractError("onejudge process pipes were not available")
     draining = asyncio.ensure_future(stderr.read())
     try:
-        stdin.write(task.encode())
-        await stdin.drain()
-    except (BrokenPipeError, ConnectionResetError):  # pragma: no cover - OS race
-        pass
-    stdin.close()
-
-    try:
+        try:
+            stdin.write(task.encode())
+            await stdin.drain()
+        except (BrokenPipeError, ConnectionResetError):  # pragma: no cover - OS race
+            pass
+        stdin.close()
         report = await _read_lines(stdout, on_event)
+        errors = await draining
     except BaseException:
-        draining.cancel()
+        # Every exceptional exit owns the same cleanup: a contract violation, a
+        # handler that raised, or an outer cancellation must not leave the CLI
+        # running or this drain task outliving the call. The original failure is
+        # what the caller needs, so it is re-raised untouched afterwards.
+        await _terminate(process)
+        await _discard(draining)
         raise
-    errors = await draining
     await process.wait()
     return report, errors
+
+
+async def _discard(draining: asyncio.Future[bytes]) -> None:
+    """Cancel the stderr drain and await it, so no task outlives this call.
+
+    It is cancelled rather than read to completion because a grandchild that
+    inherited the pipe can hold it open after the CLI itself is gone, and a
+    cleanup path is the last place that may block indefinitely.
+    """
+    draining.cancel()
+    try:
+        await draining
+    except asyncio.CancelledError:
+        pass
 
 
 async def _read_lines(
