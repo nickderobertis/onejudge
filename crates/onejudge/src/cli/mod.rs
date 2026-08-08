@@ -396,7 +396,7 @@ fn init(args: InitArgs) -> Result<i32, CliError> {
     }
 
     // Harness/model selection lives in oneharness's own config files now, so
-    // scaffold them by shelling out to `oneharness init` (oneharness 0.3.20+): the
+    // scaffold them by shelling out to `oneharness init` (oneharness 0.6.8+): the
     // discovered `oneharness.toml` drives the agent side, and `oneharness.judge.toml`
     // drives the judge / simulated-user side (`provider.judge_config`).
     oneharness_init(&args.oneharness_bin, "oneharness.toml", args.force)?;
@@ -417,7 +417,7 @@ fn oneharness_init(bin: &str, path: &str, force: bool) -> Result<(), CliError> {
     }
     let output = cmd.output().map_err(|e| {
         CliError::Config(format!(
-            "could not run `{bin} init {path}`: {e}. Is oneharness (0.3.20+) installed and on \
+            "could not run `{bin} init {path}`: {e}. Is oneharness (0.6.8+) installed and on \
              PATH? Install it or pass --oneharness-bin <path>."
         ))
     })?;
@@ -489,8 +489,8 @@ pub struct EvalResult {
 /// A failure is exactly the case a caller most needs attribution for — *which*
 /// harness identity refused, on *which* side of the conversation — and a failed
 /// run produces no [`Report`] to carry it. So the telemetry is returned alongside
-/// the error, and `onejudge run --format json` renders both (see
-/// [`render_failure_json`]) rather than leaving stdout empty.
+/// the error, and `onejudge run --format json` renders both as a
+/// [`FailureReport`] rather than leaving stdout empty.
 #[derive(Debug)]
 pub struct RunFailure {
     /// Why the run did not complete.

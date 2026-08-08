@@ -49,7 +49,7 @@ side runs under oneharness's discovered `oneharness.toml`, and the judge /
 simulated-user side runs under a separately-named config (`provider.judge_config`,
 default `oneharness.judge.toml`, passed as `oneharness run --config <path>`).
 `onejudge init` scaffolds all three by shelling out to `oneharness init` (needs
-oneharness **0.3.20+**): it runs `oneharness init oneharness.toml` and `oneharness
+oneharness **0.6.8+**): it runs `oneharness init oneharness.toml` and `oneharness
 init oneharness.judge.toml`, then writes the loop-only `onejudge.yaml`. Pass
 `--oneharness-bin <path>` if `oneharness` is not on `PATH`, and `--force` to
 overwrite existing files. To change the harness or model, edit those `.toml`
@@ -96,6 +96,17 @@ simulated user even if the config had none.
   `{"type":"event",…}` line per tool event **as it happens** — so a consumer can
   watch a 600–2000 second turn instead of waiting it out. See
   [streaming.md](streaming.md).
+- **A run that fails under `--format json`:** a versioned
+  [`FailureReport`](contract.md#when-a-run-fails) where the report would have gone
+  — the classified error plus the telemetry the run had recorded, including which
+  harness identities were attempted and why each was refused. Under `--stream` it
+  goes to **stderr** as one compact JSON line instead, so stdout stays exactly the
+  `event* result EOF` protocol. The human format is unchanged (stderr text).
+
+Every judged run reports, under `telemetry.attribution`, which harness identities
+each invocation attempted, on which **side** (agent vs judge), which one ran, and
+which a fallback chain routed around and why — so a failure is attributable to a
+side and an identity without parsing a message.
 
 The **exit code** is `0` only when the task **completed** and every **boolean**
 eval passed. A run that hits `max_turns` without satisfying `done_when`, or whose
@@ -142,7 +153,7 @@ is a loud, actionable error — never a silent default.
 The CLI can build any of onejudge's backends from `provider.kind`. Every model
 call goes through oneharness:
 
-- **`oneharness`** (default) — shell out to the `oneharness` CLI (0.3.20+) to drive
+- **`oneharness`** (default) — shell out to the `oneharness` CLI (0.6.8+) to drive
   a real harness (Claude Code, Codex, …). The agent side uses the discovered
   `oneharness.toml`; the judge side uses `judge_config` (`--config`). Set
   `stream: true` when that binary publishes its agent turn as the

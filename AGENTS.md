@@ -161,8 +161,8 @@ Use the `just` recipes; do not hand-roll equivalents. `just --list` is the index
 `onejudge` never talks to a model directly, and every model call goes through
 `oneharness`; a `Provider` (`provider.rs`) runs the skill, plays the simulated
 user, and judges the transcript. Three backends: `OneharnessProvider` (default;
-shells out to `oneharness run` — JSON report, targeting **v0.3.20+** for the
-uniform `--session` handle); `CommandProvider` (a small JSON-lines subprocess
+spawns `oneharness run` but reads its report through the **`oneharness-core`
+library** — see below); `CommandProvider` (a small JSON-lines subprocess
 protocol — see `docs/protocol.md` — backing the deterministic test doubles and any
 custom provider, which itself shells out to oneharness or an equivalent harness);
 and `SplitProvider` (`split.rs`; compose a skill-runner with a separate
@@ -180,6 +180,21 @@ rule that keeps it safe is that a *declared*-streaming provider's unmodelled lin
 a loud `Protocol` error, while a typeless bare report stays accepted (a degraded run
 is not a failed one).
 
+**onejudge depends on `oneharness-core` (published registry version) for the
+boundary's types, not just its bytes**: the report, the failure taxonomy, the
+fallback block, the streamed envelope, the normalized events, and the
+per-candidate history record are all oneharness's own declarations, so an upstream
+change is a compile error here rather than a silently-null field. Two behaviours
+follow only from reading it typed, and both have tests: under `run_mode =
+"fallback"` the turn is the candidate that **ran** (not `results[0]`, which is the
+one the chain routed around), and a candidate that timed out / could not spawn /
+was skipped carries no `failure_kind` — its `Status` is the signal, and ignoring it
+banks a vacuously empty turn. `docs/oneharness-library.md` records what is a typed
+call, what is still a subprocess, and the three upstream changes that would let
+the invocation move in-process too. The measurements onejudge's `telemetry`
+reports come from oneharness's **history record**, not its run report, which
+carries none of them.
+
 Prompt caching is oneharness's concern (the agent CLI it wraps caches by default,
 and oneharness has an explicit same-prefix batch/fork reuse path); onejudge stays
 out of enabling it but **surfaces** it — `Usage` carries `cache_read_tokens` /
@@ -189,9 +204,13 @@ criterion so the framing+transcript prefix is cacheable across criteria.
 ## The Report contract
 
 `Report` (`report.rs`, `SCHEMA_VERSION`) is onejudge's own versioned wire contract
-— transcript + verdicts + usage — that SDKs compose over and re-export. The
-serialized shape is drift-gated by `tests/contract.rs`: a wire change fails
-the gate until it is a deliberate edit that bumps `SCHEMA_VERSION` and the golden.
+— transcript + verdicts + usage + per-invocation harness attribution — that SDKs
+compose over and re-export. The serialized shape is drift-gated by
+`tests/contract.rs`: a wire change fails the gate until it is a deliberate edit
+that bumps `SCHEMA_VERSION` and the golden. A run that *fails* produces no report,
+so `--format json` writes a versioned `FailureReport` in its place (on stderr under
+`--stream`, where stdout is the event protocol) — same attribution, so a failure is
+attributable to a side and an identity without parsing a message.
 See `docs/contract.md`.
 
 ## Scripts and output are context

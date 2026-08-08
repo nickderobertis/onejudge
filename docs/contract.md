@@ -36,9 +36,41 @@ and re-export, so onejudge — not its consumers — owns the shape of a judged 
     "input_tokens": 12, "output_tokens": 3,
     "cache_read_tokens": 9, "cache_write_tokens": 4   // prompt-cache reads/writes, when the harness reports them
   },
+  "telemetry": {                        // omitted when nothing was measured
+    "wall_ms": 40,
+    "agent": { "model_ms": 20, "tool_ms": 5, "session_ids": ["native-agent-1"] },
+    "judge": { "model_ms": 10, "tool_ms": 0 },
+    "orchestration_ms": 5,
+    "sessions": [ /* one link per invocation that exposed a native session id */ ],
+    "attribution": [                    // omitted when the provider names no candidate
+      {
+        "role": "agent",               // "agent" | "judge" — which SIDE made the call
+        "turn_index": 1,               // joins to `sessions` by (role, turn_index)
+        "ran": "claude-code",          // the candidate that ran; null when none could
+        "fell_through": [              // a fallback chain's routed-around candidates
+          { "harness": "codex", "reason": "quota" }
+        ],
+        "candidates": [                // every ATTEMPTED identity, in order
+          {
+            "harness": "codex", "harness_id": "codex:work", "variant": "work",
+            "model": "gpt-5.5", "status": "nonzero", "available": true, "ran": false,
+            "failure_kind": "quota", "failure_kind_source": "stderr",
+            "exit_code": 1, "duration_ms": 4, "error": "out of credit",
+            "history_id": "019b76e0-codex"
+          }
+        ],
+        "history_file": "/state/oneharness/history/run-1-skill.jsonl"
+      }
+    ]
+  },
   "stopped_early": false
 }
 ```
+
+`telemetry.attribution` is what makes a failure attributable to a **side** (agent
+vs judge) and an **identity** (which harness, which account) without parsing a
+message. `status`, `failure_kind`, and each `fell_through.reason` are oneharness's
+own wire tokens, and `history_id` resolves through `oneharness history show`.
 
 `verdict.value` is a bool for a `boolean` verdict and a number for a `numeric`
 one. `usage` fields are each independently optional — absent means "no signal",
@@ -59,8 +91,8 @@ assert_eq!(report.schema_version, onejudge::SCHEMA_VERSION);
 ## Versioning and the drift gate
 
 The wire form is pinned by a canonical serialized example
-(`crates/onejudge/tests/golden/report.example-v5.json`) and its generated JSON
-Schema (`crates/onejudge/tests/golden/report.schema-v5.json`), both checked by
+(`crates/onejudge/tests/golden/report.example-v6.json`) and its generated JSON
+Schema (`crates/onejudge/tests/golden/report.schema-v6.json`), both checked by
 `tests/contract.rs`. Any change to the serialized shape — a renamed field, a new
 key, a changed default — fails that test, so it can only land as a **deliberate**
 edit that also bumps `SCHEMA_VERSION` and updates both goldens. Downstream SDKs
@@ -73,7 +105,29 @@ named JSON Schema roots:
 
 - `run_config`: the YAML config object accepted by `onejudge run`;
 - `report`: the versioned JSON output emitted by `--format json`;
-- `stream_event`: the `{ turn, event }` envelope delivered by streaming runs.
+- `stream_event`: the `{ turn, event }` envelope delivered by streaming runs;
+- `failure_report`: the document `--format json` writes **instead of** a report
+  when the run fails (see below).
+
+## When a run fails
+
+A failed run produces no `Report`, but it is exactly the case a caller needs
+attribution for. So `onejudge run --format json` writes a versioned
+`FailureReport` where the report would have gone (`--output` included), and exits
+2 as before:
+
+```jsonc
+{
+  "schema_version": 6,
+  "error": { "message": "run failed: provider error (respond): …", "kind": "auth" },
+  "telemetry": { /* as above, including `attribution` */ }
+}
+```
+
+Under `--stream` the same document goes to **stderr** as one compact JSON line —
+stdout there is the `event* result EOF` protocol (`docs/streaming.md`) and stays
+exactly as documented. The Python SDK parses whichever one this run wrote and
+attaches it to `OneJudgeProcessError.failure`.
 
 Generate it from the Rust contracts with:
 

@@ -9,7 +9,8 @@
 //! separately-configured harness/model — again without `--harness`/`--model`.
 //! Scaffold both with `onejudge init` (which shells out to `oneharness init`).
 //!
-//! It targets **oneharness v0.3.20+**: it always threads the uniform `--session
+//! It targets **oneharness v0.6.8+** — the version whose report contract it
+//! compiles against (`oneharness-core`). It always threads the uniform `--session
 //! <name>` handle (the engine's caller-owned name, mapped to the harness's native
 //! session in oneharness's on-disk store), and if a run fails because the harness
 //! does not support `--session`, it retries the same call once **without**
