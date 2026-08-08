@@ -359,19 +359,22 @@ impl OneharnessProvider {
         let mut events = Vec::new();
         let mut reading = std::io::BufReader::new(stdout);
         let outcome = read_stream(op, &mut reading, &mut events, on_event);
+        // Close the read end before waiting on the child, on EVERY path: nothing
+        // reads this pipe from here on, so a child still writing to it would
+        // otherwise block once it filled.
+        drop(reading);
         if !matches!(outcome, Ok(StreamOutcome::Report(_))) {
             // Aborted or malformed: the turn is over either way, so stop a child
             // that is still producing rather than wait out its full run.
             //
-            // Closing the read end is what terminates the *harness*, and it has to
-            // come first. onejudge cannot signal the harness itself — oneharness
-            // makes every harness its own process-group leader — but a broken
-            // stdout pipe is oneharness's own documented short-circuit: its next
-            // event write fails, and it terminates the process tree it owns before
-            // exiting. Killing it outright would deny it that teardown and leave
-            // the harness orphaned, still burning tokens. So the kill is only a
-            // backstop, for a child that does not take the hint in time.
-            drop(reading);
+            // The close above is also what terminates the *harness*, which is why
+            // it comes first. onejudge cannot signal the harness itself —
+            // oneharness makes every harness its own process-group leader — but a
+            // broken stdout pipe is oneharness's own documented short-circuit: its
+            // next event write fails, and it terminates the process tree it owns
+            // before exiting. Killing it outright would deny it that teardown and
+            // leave the harness orphaned, still burning tokens. So the kill is
+            // only a backstop, for a child that does not take the hint in time.
             if !exited_within(&mut child, TEARDOWN_GRACE) {
                 let _ = child.kill();
             }
