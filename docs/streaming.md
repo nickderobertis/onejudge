@@ -84,7 +84,7 @@ two envelopes, so an SDK can watch it live:
 ```console
 $ onejudge run onejudge.yaml --format json --stream
 {"type":"event","turn":1,"event":{"kind":"tool_call","name":"bash","input":{"command":"git commit -m fix"},"index":0}}
-{"type":"result","report":{"schema_version":5,…}}
+{"type":"result","report":{"schema_version":6,…}}
 ```
 
 The outbound `event` line adds `turn` — the 1-based assistant-turn index within the
@@ -97,6 +97,13 @@ provider failure).
 Each line is flushed as it is written. `--stream` requires `--format json` and
 refuses `--output` — the stream *is* stdout — and either misuse is a loud config
 error (exit 2) rather than a silently discarded stream.
+
+A run that **fails** publishes no terminal line (there is no report), and stdout
+keeps exactly this grammar: no third envelope type was invented for it. The
+structured failure — the classified error plus the harness attribution
+([contract.md](contract.md#when-a-run-fails)) — is written to **stderr** as one
+compact JSON line, which the Python SDK parses onto
+`OneJudgeProcessError.failure`.
 
 Outbound streaming does **not** require an inbound streamed provider. A buffered
 provider satisfies the same interface by replaying its finished turn's events, so

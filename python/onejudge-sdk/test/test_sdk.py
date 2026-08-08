@@ -67,7 +67,7 @@ class OneJudgeTests(unittest.IsolatedAsyncioTestCase):
         input_tokens = complete.usage["input_tokens"]
         self.assertIsNotNone(input_tokens)
         self.assertGreater(input_tokens or 0, 0)
-        self.assertEqual(complete.raw["schema_version"], 5)
+        self.assertEqual(complete.raw["schema_version"], 6)
         self.assertIsNone(complete.telemetry)
 
         incomplete = await client.run(command_config(incomplete=True), "keep working")
@@ -101,6 +101,72 @@ class OneJudgeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(telemetry["judge"]["session_ids"], ["native-judge"])
         self.assertEqual([link["role"] for link in telemetry["sessions"]], ["agent", "judge"])
         self.assertTrue(all(link.get("history_id") for link in telemetry["sessions"]))
+
+    async def test_a_failed_run_is_attributed_to_the_harness_identities_it_tried(self) -> None:
+        """Carry onejudge's structured failure document, not just its stderr."""
+        fake = ROOT / "target" / "debug" / f"onejudge-fake-oneharness{SUFFIX}"
+        config: RunConfig = {
+            "provider": {"kind": "oneharness", "bin": str(fake)},
+            "system_prompt": "[[fallback-exhausted:codex|quota,claude-code|auth]]",
+        }
+        with self.assertRaises(OneJudgeProcessError) as raised:
+            await OneJudge(executable=str(BINARY)).run(config, "fail this")
+        failure = raised.exception.failure
+        self.assertIsNotNone(failure)
+        assert failure is not None
+        self.assertEqual(failure["error"]["kind"], "auth")
+        telemetry = failure["telemetry"]
+        assert telemetry is not None
+        attribution = telemetry["attribution"][0]
+        self.assertEqual(attribution["role"], "agent")
+        self.assertIsNone(attribution.get("ran"))
+        self.assertEqual(
+            [candidate["harness_id"] for candidate in attribution["candidates"]],
+            ["codex", "claude-code"],
+        )
+        self.assertEqual(
+            [fell["reason"] for fell in attribution["fell_through"]],
+            ["quota", "auth"],
+        )
+
+    async def test_a_streamed_failure_carries_its_document_from_stderr(self) -> None:
+        """A streamed run keeps stdout for the protocol and the document on stderr."""
+        fake = ROOT / "target" / "debug" / f"onejudge-fake-oneharness{SUFFIX}"
+        config: RunConfig = {
+            "provider": {"kind": "oneharness", "bin": str(fake), "stream": True},
+            "system_prompt": "[[fallback-exhausted:codex|quota]]",
+        }
+        with self.assertRaises(OneJudgeProcessError) as raised:
+            await OneJudge(executable=str(BINARY)).run(
+                config, "fail this", on_event=lambda _event: None
+            )
+        failure = raised.exception.failure
+        assert failure is not None
+        self.assertEqual(failure["error"]["kind"], "quota")
+        telemetry = failure["telemetry"]
+        assert telemetry is not None
+        self.assertEqual(len(telemetry["attribution"][0]["candidates"]), 1)
+
+    async def test_an_unspawnable_provider_is_classified_without_any_attribution(self) -> None:
+        """A provider that never started names no identity, and says so."""
+        with self.assertRaises(OneJudgeProcessError) as raised:
+            await OneJudge(executable=str(BINARY)).run(
+                {"provider": {"kind": "oneharness", "bin": "definitely-not-a-binary-xyz"}},
+                "go",
+            )
+        failure = raised.exception.failure
+        assert failure is not None
+        self.assertEqual(failure["error"]["kind"], "spawn")
+        self.assertIsNone(failure.get("telemetry"))
+
+    async def test_a_config_refusal_before_any_run_leaves_no_document(self) -> None:
+        """onejudge refuses a bad config before driving anything, so there is none."""
+        with self.assertRaises(OneJudgeProcessError) as raised:
+            await OneJudge(executable=str(BINARY)).run(
+                {"skill": "/definitely/not/a/skill/directory"}, "go"
+            )
+        self.assertIsNone(raised.exception.failure)
+        self.assertIn("config error", raised.exception.stderr)
 
     async def test_version_four_report_without_telemetry_remains_compatible(self) -> None:
         """An upgraded SDK accepts and exposes no telemetry for a v4 report."""
@@ -142,7 +208,7 @@ class OneJudgeTests(unittest.IsolatedAsyncioTestCase):
         # The terminal line carries the ordinary, validated result.
         self.assertEqual(result.exit_code, 0)
         self.assertTrue(result.completed)
-        self.assertEqual(result.raw["schema_version"], 5)
+        self.assertEqual(result.raw["schema_version"], 6)
         self.assertEqual(result.assistant_turns, 1)
         self.assertEqual(result.verdicts[0]["verdict"]["value"], True)
 

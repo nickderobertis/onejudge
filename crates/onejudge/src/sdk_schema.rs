@@ -3,7 +3,10 @@
 use schemars::{generate::SchemaSettings, JsonSchema, Schema};
 use serde::Serialize;
 
-use crate::{cli::Config, Report, StreamEvent};
+use crate::{
+    cli::{Config, FailureReport},
+    Report, StreamEvent,
+};
 
 /// The deterministic bundle of onejudge's public SDK input/output contracts.
 #[derive(Debug, Serialize)]
@@ -14,6 +17,10 @@ pub struct SdkSchemaBundle {
     pub report: Schema,
     /// One live tool-event envelope emitted during a streaming run.
     pub stream_event: Schema,
+    /// Versioned JSON document emitted instead of a report when a `--format json`
+    /// run fails, carrying the classified error and the harness attribution the
+    /// run had recorded.
+    pub failure_report: Schema,
 }
 
 /// Generate a schema for a serialized output value.
@@ -32,5 +39,6 @@ pub fn bundle() -> SdkSchemaBundle {
         run_config: schemars::schema_for!(Config),
         report: schema_for_serialize::<Report>(),
         stream_event: schema_for_serialize::<StreamEvent<'static>>(),
+        failure_report: schema_for_serialize::<FailureReport>(),
     }
 }

@@ -18,13 +18,22 @@
 //! line with **no** `type` at all: that is the bare report a provider writes when
 //! it did not (or could not) stream, and accepting it is what keeps declaring
 //! streaming safe for a backend that degrades.
+//!
+//! The tagged half of the grammar is oneharness's own
+//! [`RunStreamEnvelope`](oneharness_core::domain::report::RunStreamEnvelope): the
+//! set of envelope types, the payload each promises, and the shape of an event are
+//! oneharness's declarations, so this reader cannot drift from the producer it
+//! reads. What stays here is what is onejudge's own: the line framing, the
+//! untagged-bare-report tolerance, the sink's short-circuit, and the `EOF` rule.
 
 use std::io::BufRead;
 use std::ops::ControlFlow;
 
+use oneharness_core::domain::report::RunStreamEnvelope;
 use serde_json::Value;
 
 use crate::error::{Error, ProviderErrorKind, Result};
+use crate::oneharness::tool_event;
 use crate::transcript::ToolEvent;
 
 /// How consuming a streamed provider's stdout ended.
@@ -145,53 +154,38 @@ fn parse_line(op: &str, line: &str) -> Result<StreamLine> {
             format!("streamed provider line was not a JSON object; got: {line}"),
         ));
     };
-    let Some(tag) = object.get("type") else {
+    if !object.contains_key("type") {
         // No discriminator at all: the bare report a provider writes when it did
-        // not stream. It is onejudge's document already, so take it as terminal.
+        // not stream. It is the same document a buffered run writes, so take it as
+        // terminal and let the report reader type it.
         return Ok(StreamLine::Report(value));
-    };
-    match tag.as_str() {
-        Some("event") => {
-            let raw = object.get("event").ok_or_else(|| {
-                protocol(
-                    op,
-                    format!("streamed `event` line carried no `event` object; got: {line}"),
-                )
-            })?;
-            let event: ToolEvent = serde_json::from_value(raw.clone()).map_err(|e| {
-                protocol(
-                    op,
-                    format!("streamed `event` line carried a malformed event: {e}; got: {line}"),
-                )
-            })?;
-            Ok(StreamLine::Event(event))
-        }
-        Some("result") => {
-            let report = object.get("report").cloned().ok_or_else(|| {
-                protocol(
-                    op,
-                    format!("streamed `result` line carried no `report` object; got: {line}"),
-                )
-            })?;
-            Ok(StreamLine::Report(report))
-        }
-        Some(other) => Err(protocol(
+    }
+    // Kept before the envelope consumes the line; the borrow of `value` ends here.
+    let report = object.get("report").cloned();
+    // Everything tagged is oneharness's grammar, so oneharness's own envelope
+    // decides it: an unmodelled `type`, a non-string `type`, a missing payload, and
+    // a malformed event are all its rejections, quoted verbatim.
+    let envelope: RunStreamEnvelope = serde_json::from_value(value).map_err(|e| {
+        protocol(
             op,
             format!(
-                "unrecognized streamed provider line type `{other}` \
-                 (expected `event` or `result`); got: {line}"
+                "streamed provider line broke the oneharness stream protocol: {e}; got: {line}"
             ),
-        )),
-        None => Err(protocol(
-            op,
-            format!("streamed provider line `type` was not a string; got: {line}"),
-        )),
+        )
+    })?;
+    match envelope {
+        RunStreamEnvelope::Event { event } => Ok(StreamLine::Event(tool_event(&event))),
+        // Re-take the report from the raw line: the envelope has already proven it
+        // is a well-formed report, and the report reader owns which candidate in it
+        // is the turn.
+        RunStreamEnvelope::Result { .. } => Ok(StreamLine::Report(report.unwrap_or(Value::Null))),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::oneharness::fixture;
 
     /// Read `text` as a stream, collecting the events the sink saw.
     fn read(text: &str) -> (Result<StreamOutcome>, Vec<ToolEvent>, usize) {
@@ -210,18 +204,34 @@ mod tests {
         (outcome, events, seen)
     }
 
+    /// The terminal `result` line for a run that replied `text`, built from
+    /// oneharness's own report type so the line is one a real producer writes.
+    fn result_line(text: &str) -> String {
+        let report = fixture::report(vec![fixture::result("claude-code", text)]);
+        serde_json::to_string(&serde_json::json!({ "type": "result", "report": report })).unwrap()
+    }
+
+    /// One live `event` line for oneharness's normalized action.
+    fn event_line(index: usize, name: &str, command: &str) -> String {
+        serde_json::to_string(
+            &serde_json::json!({ "type": "event", "event": fixture::event(index, name, command) }),
+        )
+        .unwrap()
+    }
+
     #[test]
     fn events_arrive_before_the_terminal_report() {
-        let (outcome, events, seen) = read(
-            "{\"type\":\"event\",\"event\":{\"kind\":\"tool_call\",\"name\":\"bash\",\
-             \"input\":{\"command\":\"ls\"},\"index\":0}}\n\
-             \n\
-             {\"type\":\"event\",\"event\":{\"kind\":\"tool_result\",\"index\":1}}\n\
-             {\"type\":\"result\",\"report\":{\"results\":[{\"text\":\"done\"}]}}\n",
+        let stream = format!(
+            "{}\n\n{}\n{}\n",
+            event_line(0, "bash", "ls"),
+            event_line(1, "bash", "git status"),
+            result_line("done")
         );
+        let (outcome, events, seen) = read(&stream);
         assert_eq!(seen, 2);
         assert_eq!(events.len(), 2);
         assert_eq!(events[0].name.as_deref(), Some("bash"));
+        assert_eq!(events[0].input.as_ref().unwrap()["command"], "ls");
         match outcome.unwrap() {
             StreamOutcome::Report(report) => {
                 assert_eq!(report["results"][0]["text"], "done");
@@ -230,21 +240,19 @@ mod tests {
         }
     }
 
-    /// The terminal line every trailing-content case below is followed by.
-    const RESULT: &str = "{\"type\":\"result\",\"report\":{\"results\":[{\"text\":\"done\"}]}}";
-
     #[test]
     fn anything_after_the_terminal_result_is_rejected() {
         // `event* result EOF`: once the result has landed the exchange is over, so
         // a further event, a second result, and an unmodelled envelope are all the
         // same violation — a provider that is not speaking this protocol.
+        let result = result_line("done");
         for trailing in [
-            "{\"type\":\"unknown\"}",
-            "{\"type\":\"event\",\"event\":{\"kind\":\"tool_call\",\"index\":9}}",
-            RESULT,
-            "trailing garbage",
+            "{\"type\":\"unknown\"}".to_string(),
+            event_line(9, "bash", "rm -rf /"),
+            result.clone(),
+            "trailing garbage".to_string(),
         ] {
-            let (outcome, events, seen) = read(&format!("{RESULT}\n{trailing}\n"));
+            let (outcome, events, seen) = read(&format!("{result}\n{trailing}\n"));
             let err = outcome
                 .err()
                 .unwrap_or_else(|| panic!("{trailing} must fail"));
@@ -263,15 +271,20 @@ mod tests {
     fn trailing_blank_lines_after_the_terminal_result_are_fine() {
         // Only *content* after the terminal line is a violation; a trailing newline
         // is how a well-behaved writer ends its output.
-        let (outcome, _, _) = read(&format!("{RESULT}\n\n   \n"));
+        let (outcome, _, _) = read(&format!("{}\n\n   \n", result_line("done")));
         assert!(matches!(outcome.unwrap(), StreamOutcome::Report(_)));
     }
 
     #[test]
     fn a_bare_report_document_is_still_accepted() {
         // The degraded path: a provider that declared streaming but answered with
-        // the one document a non-streaming run writes.
-        let (outcome, events, seen) = read("{\"results\":[{\"text\":\"buffered\"}]}\n");
+        // the one document a non-streaming run writes. It carries no `type`, which
+        // is the single tolerance this reader keeps for itself.
+        let bare = fixture::json(&fixture::report(vec![fixture::result(
+            "claude-code",
+            "buffered",
+        )]));
+        let (outcome, events, seen) = read(&format!("{bare}\n"));
         assert_eq!((seen, events.len()), (0, 0));
         match outcome.unwrap() {
             StreamOutcome::Report(report) => {
@@ -283,9 +296,12 @@ mod tests {
 
     #[test]
     fn a_breaking_sink_abandons_the_turn_with_the_events_so_far() {
-        let mut bytes = "{\"type\":\"event\",\"event\":{\"kind\":\"tool_call\",\"index\":0}}\n\
-             {\"type\":\"event\",\"event\":{\"kind\":\"tool_call\",\"index\":1}}\n"
-            .as_bytes();
+        let stream = format!(
+            "{}\n{}\n",
+            event_line(0, "bash", "ls"),
+            event_line(1, "bash", "pwd")
+        );
+        let mut bytes = stream.as_bytes();
         let mut events = Vec::new();
         let outcome = read_stream("respond", &mut bytes, &mut events, &mut |_| {
             ControlFlow::Break(())
@@ -298,23 +314,30 @@ mod tests {
     #[test]
     fn every_malformed_line_is_a_named_protocol_error() {
         for (text, needle) in [
-            ("not json at all\n", "was not valid JSON"),
-            ("[1,2,3]\n", "was not a JSON object"),
-            ("{\"type\":\"progress\",\"pct\":10}\n", "`progress`"),
-            ("{\"type\":7}\n", "`type` was not a string"),
-            ("{\"type\":\"event\"}\n", "carried no `event` object"),
+            ("not json at all\n".to_string(), "was not valid JSON"),
+            ("[1,2,3]\n".to_string(), "was not a JSON object"),
             (
-                "{\"type\":\"event\",\"event\":{\"name\":\"bash\"}}\n",
-                "malformed event",
+                "{\"type\":\"progress\",\"pct\":10}\n".to_string(),
+                "`progress`",
             ),
-            ("{\"type\":\"result\"}\n", "carried no `report` object"),
+            ("{\"type\":7}\n".to_string(), "missing string field `type`"),
+            ("{\"type\":\"event\"}\n".to_string(), "missing `event`"),
             (
-                "{\"type\":\"event\",\"event\":{\"kind\":\"tool_call\",\"index\":0}}\n",
+                "{\"type\":\"event\",\"event\":{\"name\":\"bash\"}}\n".to_string(),
+                "broke the oneharness stream protocol",
+            ),
+            ("{\"type\":\"result\"}\n".to_string(), "missing `report`"),
+            (
+                "{\"type\":\"result\",\"report\":{\"results\":[]}}\n".to_string(),
+                "broke the oneharness stream protocol",
+            ),
+            (
+                format!("{}\n", event_line(0, "bash", "ls")),
                 "ended without a terminal",
             ),
-            ("", "ended without a terminal"),
+            (String::new(), "ended without a terminal"),
         ] {
-            let (outcome, _, _) = read(text);
+            let (outcome, _, _) = read(&text);
             let err = outcome.err().unwrap_or_else(|| panic!("{text} must fail"));
             assert_eq!(err.kind(), Some(ProviderErrorKind::Protocol));
             assert!(

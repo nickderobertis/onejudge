@@ -15,6 +15,12 @@ categories = ["development-tools::testing"]
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+# The oneharness boundary is parsed into oneharness's OWN typed report/stream
+# contract rather than into shadow structs guessed by field name, so a change
+# upstream is a compile error here instead of a silently-null field at runtime.
+# Non-optional: `OneharnessProvider` is the default provider, so this is the
+# library's core surface, not an opt-in extra.
+oneharness-core = { workspace = true }
 # Only pulled by the optional `cli` / `skill` features. A bare library consumer
 # (`cargo add onejudge`) never sees clap or a YAML parser. `serde_yaml` is
 # archived/unmaintained, so the maintained `serde_yaml_ng` fork parses both the
@@ -23,6 +29,17 @@ thiserror = { workspace = true }
 clap = { version = "4", features = ["derive"], optional = true }
 serde_yaml_ng = { version = "0.10", optional = true }
 schemars = { workspace = true, optional = true }
+
+# Cancelling a turn signals the `oneharness run` child so it tears down the
+# harness tree it owns (`oneharness/mod.rs`). Unix-only: Windows has no SIGTERM,
+# and none is needed there — oneharness puts each harness tree in a Job Object
+# with `KILL_ON_JOB_CLOSE`, so ending the child already ends its descendants.
+[target.'cfg(unix)'.dependencies]
+rustix = { workspace = true }
+# Only for the `fake-provider` double, which must *catch* SIGTERM to model
+# oneharness's teardown (an uncatchable SIGKILL is exactly what this proves is not
+# enough). Optional, so it never reaches a library consumer.
+signal-hook = { workspace = true, optional = true }
 
 [dev-dependencies]
 # The contract drift gate (`tests/contract.rs`) serializes the public `Report`
@@ -33,7 +50,7 @@ serde_json = { workspace = true }
 # The deterministic test doubles the e2e suite drives as real subprocesses.
 # Non-default so a published `cargo add onejudge` / library build ships only the
 # engine — the doubles are test-only. `just check` and coverage enable it.
-fake-provider = []
+fake-provider = ["dep:signal-hook"]
 
 # Load a skill from disk (a `SKILL.md` directory) into a `SkillDefinition`. This is
 # onejudge's owned skill-execution primitive — a higher-level framework composes

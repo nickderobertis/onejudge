@@ -55,6 +55,98 @@ pub struct SessionLink {
     pub history_id: Option<String>,
 }
 
+/// One candidate identity oneharness attempted for a single invocation — the
+/// harness (and variant/model) it tried, and what came of it.
+///
+/// Under `run_mode = "fallback"` oneharness attempts candidates in priority order
+/// and stops at the first that runs the task, so an invocation can have several of
+/// these: the ones it fell through, then the one that ran. This is the typed form
+/// of oneharness's per-candidate record — the thing that lets a consumer attribute
+/// a failure to a *side* (agent vs judge) and an *identity* (which harness, which
+/// account) instead of grepping a message.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "sdk-schema", derive(schemars::JsonSchema))]
+pub struct CandidateAttempt {
+    /// Canonical harness id (e.g. `claude-code`).
+    pub harness: String,
+    /// Base id, or `<base>:<variant>` when a named preset selected the identity —
+    /// the selector that reproduces this candidate.
+    pub harness_id: String,
+    /// The named preset, when this candidate came from a composed harness id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub variant: Option<String>,
+    /// The model this candidate ran with, when one was requested.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// oneharness's status token: `ok`, `nonzero`, `timeout`, `spawn-error`,
+    /// `skipped`, or `planned`.
+    pub status: String,
+    /// Whether oneharness found the harness binary.
+    pub available: bool,
+    /// Whether this is the candidate that actually ran the turn.
+    pub ran: bool,
+    /// oneharness's normalized failure reason (`auth`, `rate_limit`,
+    /// `model_not_found`, `quota`, `tool_deferred`), when it classified one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure_kind: Option<String>,
+    /// Where that reason was read (`stderr`, `stdout`, `config:env_from`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure_kind_source: Option<String>,
+    /// The harness process's exit code, when it ran to completion.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
+    /// Wall-clock duration of this attempt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
+    /// oneharness's human-readable problem statement for a failed attempt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    /// The harness's own continuation id, when it exposed one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    /// The oneharness history record written for this attempt, when history was
+    /// on — the handle `oneharness history show` resolves.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub history_id: Option<String>,
+    /// This attempt's own token/cost accounting.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<Usage>,
+}
+
+/// One candidate a fallback chain fell through, with oneharness's reason token
+/// (`not-installed`, `spawn-error`, `auth`, `quota`, `model-not-found`,
+/// `rate-limit`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "sdk-schema", derive(schemars::JsonSchema))]
+pub struct FellThrough {
+    /// Canonical harness id.
+    pub harness: String,
+    /// Why it could not run the task at all.
+    pub reason: String,
+}
+
+/// What oneharness attempted for one provider invocation, placed on the side and
+/// turn that made the call.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "sdk-schema", derive(schemars::JsonSchema))]
+pub struct HarnessAttribution {
+    /// Which side of the conversation made this call.
+    pub role: TelemetryRole,
+    /// One-based invocation index within the role.
+    pub turn_index: u32,
+    /// The candidate that ran the turn, by composed id; `null` when none could.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ran: Option<String>,
+    /// Candidates a fallback chain routed around, in priority order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fell_through: Vec<FellThrough>,
+    /// Every attempted candidate, in the order oneharness tried them.
+    pub candidates: Vec<CandidateAttempt>,
+    /// The oneharness history session file this invocation appended to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub history_file: Option<String>,
+}
+
 /// Timing, usage, and native linkage for the complete agent+judge run.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "sdk-schema", derive(schemars::JsonSchema))]
@@ -70,6 +162,10 @@ pub struct Telemetry {
     /// Native session linkage records in invocation order.
     #[serde(default)]
     pub sessions: Vec<SessionLink>,
+    /// Which harness identities each invocation attempted, in invocation order.
+    /// Empty when the provider reports no candidate identities.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attribution: Vec<HarnessAttribution>,
 }
 
 /// One provider invocation before it is folded into public run telemetry.
@@ -85,6 +181,14 @@ pub struct InvocationTelemetry {
     pub(crate) started_at: Option<String>,
     pub(crate) finished_at: Option<String>,
     pub(crate) history_id: Option<String>,
+    /// The candidate that ran, by composed id; `None` when none could.
+    pub(crate) ran: Option<String>,
+    /// Candidates a fallback chain routed around, in priority order.
+    pub(crate) fell_through: Vec<FellThrough>,
+    /// Every attempted candidate, in the order the provider tried them.
+    pub(crate) candidates: Vec<CandidateAttempt>,
+    /// The provider's history session file for this invocation.
+    pub(crate) history_file: Option<String>,
 }
 
 fn strict_sum_u64(
@@ -143,38 +247,54 @@ pub(crate) fn aggregate(wall_ms: u64, records: &[InvocationTelemetry]) -> Option
         .saturating_add(agent.tool_ms.unwrap_or(0))
         .saturating_add(judge.model_ms.unwrap_or(0))
         .saturating_add(judge.tool_ms.unwrap_or(0));
+    // One turn counter per role, shared by the session links and the harness
+    // attribution so a consumer can join the two by (role, turn_index).
     let mut agent_turn = 0;
     let mut judge_turn = 0;
-    let sessions = records
-        .iter()
-        .filter_map(|record| {
-            let role = record.role?;
-            let turn_index = match role {
-                TelemetryRole::Agent => {
-                    agent_turn += 1;
-                    agent_turn
-                }
-                TelemetryRole::Judge => {
-                    judge_turn += 1;
-                    judge_turn
-                }
-            };
-            Some(SessionLink {
-                session_id: record.session_id.clone()?,
+    let mut sessions = Vec::new();
+    let mut attribution = Vec::new();
+    for record in records {
+        let Some(role) = record.role else { continue };
+        let turn_index = match role {
+            TelemetryRole::Agent => {
+                agent_turn += 1;
+                agent_turn
+            }
+            TelemetryRole::Judge => {
+                judge_turn += 1;
+                judge_turn
+            }
+        };
+        if let (Some(session_id), Some(started_at)) = (&record.session_id, &record.started_at) {
+            sessions.push(SessionLink {
+                session_id: session_id.clone(),
                 role,
                 turn_index,
-                started_at: record.started_at.clone()?,
+                started_at: started_at.clone(),
                 finished_at: record.finished_at.clone(),
                 history_id: record.history_id.clone(),
-            })
-        })
-        .collect();
+            });
+        }
+        // A provider that names no candidate identity contributes no attribution;
+        // an empty entry would claim knowledge the invocation never had.
+        if !record.candidates.is_empty() {
+            attribution.push(HarnessAttribution {
+                role,
+                turn_index,
+                ran: record.ran.clone(),
+                fell_through: record.fell_through.clone(),
+                candidates: record.candidates.clone(),
+                history_file: record.history_file.clone(),
+            });
+        }
+    }
     Some(Telemetry {
         wall_ms,
         agent,
         judge,
         orchestration_ms: wall_ms.saturating_sub(attributed),
         sessions,
+        attribution,
     })
 }
 
@@ -199,6 +319,48 @@ mod tests {
             started_at: Some("2026-01-01T00:00:00Z".into()),
             finished_at: Some("2026-01-01T00:00:00.009Z".into()),
             history_id: Some(format!("history-{session}")),
+            ran: Some("claude-code".into()),
+            fell_through: vec![FellThrough {
+                harness: "codex".into(),
+                reason: "quota".into(),
+            }],
+            candidates: vec![
+                CandidateAttempt {
+                    harness: "codex".into(),
+                    harness_id: "codex".into(),
+                    variant: None,
+                    model: None,
+                    status: "nonzero".into(),
+                    available: true,
+                    ran: false,
+                    failure_kind: Some("quota".into()),
+                    failure_kind_source: Some("stderr".into()),
+                    exit_code: Some(1),
+                    duration_ms: Some(4),
+                    error: Some("out of credit".into()),
+                    session_id: None,
+                    history_id: Some("history-codex".into()),
+                    usage: None,
+                },
+                CandidateAttempt {
+                    harness: "claude-code".into(),
+                    harness_id: "claude-code".into(),
+                    variant: None,
+                    model: None,
+                    status: "ok".into(),
+                    available: true,
+                    ran: true,
+                    failure_kind: None,
+                    failure_kind_source: None,
+                    exit_code: Some(0),
+                    duration_ms: Some(9),
+                    error: None,
+                    session_id: Some(session.into()),
+                    history_id: Some(format!("history-{session}")),
+                    usage: None,
+                },
+            ],
+            history_file: Some("/state/oneharness/history/s.jsonl".into()),
         }
     }
 

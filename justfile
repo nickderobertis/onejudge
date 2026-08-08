@@ -24,6 +24,10 @@ bootstrap:
 # release-target drift gate.
 check: format-check lint doc test audit check-release-targets check-python-sdk-release-trigger
 
+# `just gate` is the same gate under the name callers outside this repo use for
+# it. An alias, not a second recipe, so the two can never drift apart.
+alias gate := check
+
 # The deterministic gate enables the test doubles, CLI, and SDK schema export,
 # never `--all-features`. Every model call goes through oneharness; the gate
 # fakes only the model via real subprocess doubles. Coverage excludes src/bin/.
@@ -85,9 +89,9 @@ check-release-targets:
 check-python-sdk-release-trigger:
     ./scripts/check-python-sdk-release-trigger.sh
 
-# Check the crate still builds on the declared MSRV (needs 1.82.0 installed).
+# Check the crate still builds on the declared MSRV (needs 1.86.0 installed).
 msrv:
-    cargo +1.82.0 check --locked --all-targets --features fake-provider
+    cargo +1.86.0 check --locked --all-targets --features fake-provider
 
 # Upgrade dependencies, then re-run the full gate; commit the refreshed lockfile.
 upgrade:

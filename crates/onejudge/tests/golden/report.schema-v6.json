@@ -69,6 +69,183 @@
     "stopped_early"
   ],
   "$defs": {
+    "CandidateAttempt": {
+      "description": "One candidate identity oneharness attempted for a single invocation — the\nharness (and variant/model) it tried, and what came of it.\n\nUnder `run_mode = \"fallback\"` oneharness attempts candidates in priority order\nand stops at the first that runs the task, so an invocation can have several of\nthese: the ones it fell through, then the one that ran. This is the typed form\nof oneharness's per-candidate record — the thing that lets a consumer attribute\na failure to a *side* (agent vs judge) and an *identity* (which harness, which\naccount) instead of grepping a message.",
+      "type": "object",
+      "properties": {
+        "available": {
+          "description": "Whether oneharness found the harness binary.",
+          "type": "boolean"
+        },
+        "duration_ms": {
+          "description": "Wall-clock duration of this attempt.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "error": {
+          "description": "oneharness's human-readable problem statement for a failed attempt.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "exit_code": {
+          "description": "The harness process's exit code, when it ran to completion.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32"
+        },
+        "failure_kind": {
+          "description": "oneharness's normalized failure reason (`auth`, `rate_limit`,\n`model_not_found`, `quota`, `tool_deferred`), when it classified one.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "failure_kind_source": {
+          "description": "Where that reason was read (`stderr`, `stdout`, `config:env_from`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "harness": {
+          "description": "Canonical harness id (e.g. `claude-code`).",
+          "type": "string"
+        },
+        "harness_id": {
+          "description": "Base id, or `<base>:<variant>` when a named preset selected the identity —\nthe selector that reproduces this candidate.",
+          "type": "string"
+        },
+        "history_id": {
+          "description": "The oneharness history record written for this attempt, when history was\non — the handle `oneharness history show` resolves.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "model": {
+          "description": "The model this candidate ran with, when one was requested.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ran": {
+          "description": "Whether this is the candidate that actually ran the turn.",
+          "type": "boolean"
+        },
+        "session_id": {
+          "description": "The harness's own continuation id, when it exposed one.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "description": "oneharness's status token: `ok`, `nonzero`, `timeout`, `spawn-error`,\n`skipped`, or `planned`.",
+          "type": "string"
+        },
+        "usage": {
+          "description": "This attempt's own token/cost accounting.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Usage"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "variant": {
+          "description": "The named preset, when this candidate came from a composed harness id.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "harness",
+        "harness_id",
+        "status",
+        "available",
+        "ran"
+      ]
+    },
+    "FellThrough": {
+      "description": "One candidate a fallback chain fell through, with oneharness's reason token\n(`not-installed`, `spawn-error`, `auth`, `quota`, `model-not-found`,\n`rate-limit`).",
+      "type": "object",
+      "properties": {
+        "harness": {
+          "description": "Canonical harness id.",
+          "type": "string"
+        },
+        "reason": {
+          "description": "Why it could not run the task at all.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "harness",
+        "reason"
+      ]
+    },
+    "HarnessAttribution": {
+      "description": "What oneharness attempted for one provider invocation, placed on the side and\nturn that made the call.",
+      "type": "object",
+      "properties": {
+        "candidates": {
+          "description": "Every attempted candidate, in the order oneharness tried them.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CandidateAttempt"
+          }
+        },
+        "fell_through": {
+          "description": "Candidates a fallback chain routed around, in priority order.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/FellThrough"
+          }
+        },
+        "history_file": {
+          "description": "The oneharness history session file this invocation appended to.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ran": {
+          "description": "The candidate that ran the turn, by composed id; `null` when none could.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "role": {
+          "description": "Which side of the conversation made this call.",
+          "$ref": "#/$defs/TelemetryRole"
+        },
+        "turn_index": {
+          "description": "One-based invocation index within the role.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "role",
+        "turn_index",
+        "candidates"
+      ]
+    },
     "JudgeKind": {
       "description": "The kind of judgement requested.",
       "oneOf": [
@@ -299,6 +476,13 @@
         "agent": {
           "description": "Agent-side measurements.",
           "$ref": "#/$defs/PartyTelemetry"
+        },
+        "attribution": {
+          "description": "Which harness identities each invocation attempted, in invocation order.\nEmpty when the provider reports no candidate identities.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/HarnessAttribution"
+          }
         },
         "judge": {
           "description": "Simulated-user, supervisor, and evaluator measurements.",

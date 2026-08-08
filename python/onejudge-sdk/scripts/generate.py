@@ -13,11 +13,16 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[3]
 OUTPUT = ROOT / "python" / "onejudge-sdk" / "src" / "onejudge_sdk" / "_generated"
+# ruff's configured line length (python/onejudge-sdk/pyproject.toml). Generated
+# output has to come out already formatted, since `ruff format --check` runs over
+# it in the gate.
+LINE_LENGTH = 100
 INPUT_ROOTS = ("run_config",)
 TYPE_ROOTS = {
     "run_config": "RunConfig",
     "report": "RunReport",
     "stream_event": "StreamEvent",
+    "failure_report": "FailureReport",
 }
 
 
@@ -61,8 +66,18 @@ def property_map(node: Any, result: dict[str, str]) -> None:
 
 
 def literal_expression(values: list[Any]) -> str:
-    """Render JSON constants as a Python Literal expression."""
-    return f"Literal[{', '.join(json.dumps(value) for value in values)}]"
+    """Render JSON constants as a Python Literal expression.
+
+    Wrapped one value per line once the single-line form would exceed the
+    formatter's line length, so a wide enum (every provider failure category, say)
+    is emitted already formatted rather than failing `ruff format --check`.
+    """
+    rendered = [json.dumps(value) for value in values]
+    single = f"Literal[{', '.join(rendered)}]"
+    if len(single) <= LINE_LENGTH:
+        return single
+    body = "".join(f"    {value},\n" for value in rendered)
+    return f"Literal[\n{body}]"
 
 
 def type_expression(schema: dict[str, Any]) -> str:

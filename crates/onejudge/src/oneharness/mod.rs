@@ -9,7 +9,10 @@
 //! separately-configured harness/model — again without `--harness`/`--model`.
 //! Scaffold both with `onejudge init` (which shells out to `oneharness init`).
 //!
-//! It targets **oneharness v0.3.20+**: it always threads the uniform `--session
+//! It targets **oneharness v0.6.9+** — the version whose report contract it
+//! compiles against (`oneharness-core`), and the first whose `run` verb answers a
+//! cancellation signal by tearing its harness tree down instead of dying and
+//! orphaning it. It always threads the uniform `--session
 //! <name>` handle (the engine's caller-owned name, mapped to the harness's native
 //! session in oneharness's on-disk store), and if a run fails because the harness
 //! does not support `--session`, it retries the same call once **without**
@@ -24,20 +27,48 @@
 //! report is parsed exactly as a bare report is, so a streamed run and a buffered
 //! one produce the same turn.
 //!
+//! The **report** it reads back is oneharness's own typed contract
+//! (`oneharness_core::domain::report`), not a shadow struct declared here — see
+//! [`report`] for what that buys, including reading the candidate a fallback chain
+//! actually ran instead of the first one it routed around. The per-candidate
+//! history record oneharness writes for every attempt is read back through
+//! oneharness's own reader; see [`history`].
+//!
 //! The pure pieces — argument construction, report parsing, error classification —
 //! are separated from the one thin `spawn + wait` shell so they are
 //! deterministically unit-tested; the whole path is proven end-to-end against a
 //! fake `oneharness` binary in the e2e suite and against a real one in the live
 //! tier (`docs/live-tier.md`).
+//!
+//! **Why this hop is still a subprocess.** oneharness's library surface
+//! (`oneharness::commands::run::run`) writes its report to the *process's* stdout
+//! and returns only an exit code: it neither returns a `RunReport` nor accepts an
+//! event sink, so an in-process call could not deliver streamed events to a caller
+//! and would collide with onejudge's own stdout contract (`--format json`,
+//! `--stream`). Spawning also keeps oneharness's per-turn timeout, its cancellation
+//! path, and its termination of the harness's descendants inside the process that
+//! owns them — and keeps that process in *onejudge's* process group, where a
+//! terminal Ctrl-C or a parent's group signal still reaches it.
+//!
+//! **Cancelling a turn tears oneharness down by escalation, never by kill alone.**
+//! A harness is its own process-group leader, so onejudge can never signal it; every
+//! rung is addressed to oneharness, which owns the tree. Closing its stdout reaches a
+//! producer that is still writing; SIGTERM reaches one whose harness has gone
+//! *silent*, which since v0.6.9 is a cancellation its runner polls for and turns into
+//! a `Finish::Terminate`; the kill is only the backstop. See [`terminate`] for why
+//! all three rungs earn their place, and `docs/oneharness-library.md`.
+
+#[cfg(test)]
+pub(crate) mod fixture;
+mod history;
+mod report;
 
 use std::cell::RefCell;
 use std::io::{Read as _, Write};
 use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
-
-use serde::Deserialize;
-use serde_json::Value;
+use std::time::{Duration, Instant};
 
 use crate::error::{Error, ProviderErrorKind, Result};
 use crate::provider::{
@@ -46,9 +77,11 @@ use crate::provider::{
     JudgeVerdict, Provider, SkillRef, SupervisorQuery, SupervisorTurn, UserTurn,
 };
 use crate::stream::{read_stream, StreamOutcome};
-use crate::telemetry::{InvocationTelemetry, TelemetryRole};
+use crate::telemetry::{CandidateAttempt, FellThrough, InvocationTelemetry, TelemetryRole};
 use crate::transcript::{Message, ToolEvent};
-use crate::usage::Usage;
+
+pub(crate) use report::tool_event;
+use report::{parse_report, parse_report_value, Invocation};
 
 /// The default judge/simulated-user oneharness config filename.
 const DEFAULT_JUDGE_CONFIG: &str = "oneharness.judge.toml";
@@ -56,6 +89,13 @@ const DEFAULT_JUDGE_CONFIG: &str = "oneharness.judge.toml";
 /// The stable substring in oneharness's error when a harness cannot bind a
 /// `--session` name (its `OneharnessError::SessionUnsupported`). Matching it lets
 /// onejudge retry the call without `--session` instead of failing the run.
+///
+/// It is a substring because oneharness reports this one *before* it can emit a
+/// report — a usage error on stderr, not a `failure_kind` — so there is nothing
+/// typed on the wire to match. `session_unsupported_marker_tracks_oneharness` in
+/// this module's tests pins it against `OneharnessError::SessionUnsupported`'s own
+/// rendering, so an upstream rewording fails the gate here instead of silently
+/// turning the graceful retry into a failed run.
 const SESSION_UNSUPPORTED_MARKER: &str = "does not support --session";
 
 /// Whether `err` is oneharness rejecting `--session` because the harness exposes no
@@ -63,6 +103,106 @@ const SESSION_UNSUPPORTED_MARKER: &str = "does not support --session";
 /// without `--session`).
 fn is_session_unsupported(err: &Error) -> bool {
     err.to_string().contains(SESSION_UNSUPPORTED_MARKER)
+}
+
+/// How long a cancelled `oneharness run` is given to notice its closed stdout
+/// before onejudge escalates to a signal.
+///
+/// A producer that is still writing observes the broken pipe on its very next
+/// write, so this only has to cover the gap to that write. It is deliberately short:
+/// a *silent* producer will never use it, and waits it out before being signalled.
+const PIPE_CLOSE_GRACE: Duration = Duration::from_millis(250);
+
+/// How long a signalled `oneharness run` is then given to tear down the harness
+/// tree it owns before onejudge kills it outright.
+///
+/// oneharness's runner polls for cancellation on a short slice of its own, so this
+/// only has to cover that slice plus the reaping of the tree — while staying short
+/// enough that cancelling a turn is still responsive.
+const TEARDOWN_GRACE: Duration = Duration::from_secs(2);
+
+/// How often the grace period above re-checks the child.
+const TEARDOWN_POLL: Duration = Duration::from_millis(10);
+
+/// Tear down a `oneharness run` whose turn was abandoned, and through it the
+/// harness tree it owns.
+///
+/// onejudge can never signal the *harness*: oneharness makes every harness its own
+/// process-group leader precisely so a signal aimed at the runner does not race it.
+/// Everything here is therefore addressed to **oneharness**, which owns the tree
+/// and is the only party that can reap it.
+///
+/// Teardown escalates, cheapest and most cooperative first, because each rung
+/// reaches a case the one before it cannot:
+///
+/// 1. **The closed stdout** (already dropped by the caller). A producer that is
+///    still writing sees the broken pipe on its next write and short-circuits into
+///    its own teardown. This rung alone is what onejudge used to rely on.
+/// 2. **SIGTERM.** A producer whose *harness* has gone silent never writes again,
+///    so it never observes rung 1 — it would sit there until the backstop killed
+///    it, and an uncatchable kill denies it the teardown, orphaning a live harness
+///    that keeps burning tokens. Since v0.6.9 `oneharness run` installs
+///    SIGINT/SIGTERM handlers, and its runner polls for the resulting cancellation
+///    on its own time slice rather than only when the harness writes, so this
+///    reaches the silent case and still ends in `Finish::Terminate`.
+/// 3. **SIGKILL**, for a child that answers neither.
+///
+/// Rung 1 is kept, and kept first, precisely because rung 2 is not free: SIGTERM's
+/// *default* disposition is to terminate, so signalling a producer that would have
+/// torn down on the broken pipe — an older oneharness, or the window before it
+/// installs its handlers — would cut it off mid-teardown. Waiting out
+/// [`PIPE_CLOSE_GRACE`] first costs a silent harness a quarter second against a
+/// turn measured in hundreds of seconds.
+///
+/// On Windows there is no rung 2 and none is needed: oneharness puts each harness
+/// tree in a Job Object with `KILL_ON_JOB_CLOSE`, so rung 3 already ends the
+/// descendants.
+fn terminate(child: &mut std::process::Child) {
+    if exited_within(child, PIPE_CLOSE_GRACE) {
+        return;
+    }
+    request_stop(child);
+    if !exited_within(child, TEARDOWN_GRACE) {
+        let _ = child.kill();
+    }
+}
+
+/// Ask `child` to cancel, the way an operator's Ctrl-C would.
+///
+/// Best-effort by nature: a child that has already exited is an `ESRCH` this
+/// deliberately ignores, because the next thing the caller does is wait for it.
+#[cfg(unix)]
+fn request_stop(child: &std::process::Child) {
+    // The child has been spawned and not yet reaped, so its id still names it (a
+    // zombie at worst) and can never have been recycled onto an unrelated process.
+    let Some(pid) = i32::try_from(child.id())
+        .ok()
+        .and_then(rustix::process::Pid::from_raw)
+    else {
+        return;
+    };
+    let _ = rustix::process::kill_process(pid, rustix::process::Signal::TERM);
+}
+
+/// Windows has no SIGTERM, and needs none: the Job Object teardown described on
+/// [`terminate`] makes the backstop kill sufficient there.
+#[cfg(not(unix))]
+fn request_stop(_child: &std::process::Child) {}
+
+/// Wait up to `grace` for `child` to exit on its own, returning whether it did.
+///
+/// A `try_wait` error is reported as "did not exit", so an unwaitable child still
+/// reaches the backstop kill.
+fn exited_within(child: &mut std::process::Child, grace: Duration) -> bool {
+    let deadline = Instant::now() + grace;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => return true,
+            Err(_) => return false,
+            Ok(None) if Instant::now() >= deadline => return false,
+            Ok(None) => std::thread::sleep(TEARDOWN_POLL),
+        }
+    }
 }
 
 /// The default [`Provider`]: shells out to the `oneharness` CLI.
@@ -180,6 +320,43 @@ impl OneharnessProvider {
         Ok(turn)
     }
 
+    /// Read the report a finished `oneharness run` wrote, classify it, and record
+    /// the invocation's telemetry.
+    ///
+    /// oneharness writes its JSON report on stdout **even when it exits non-zero**
+    /// (a harness failure is reported, not signalled), so a failed run is parsed
+    /// exactly like a successful one: that is what turns an exhausted fallback
+    /// chain or a timed-out harness into a classified [`ProviderErrorKind`] with
+    /// per-candidate attribution instead of a stderr blob. Only output that is not
+    /// a report at all — a usage error, a rejected `--session` — falls back to the
+    /// process's own exit status and stderr.
+    fn finish(
+        &self,
+        op: &str,
+        status: &ExitStatus,
+        stdout: &str,
+        stderr: &str,
+    ) -> Result<Invocation> {
+        match parse_report(op, stdout) {
+            Ok(invocation) => {
+                // Record BEFORE surfacing the failure: a failed invocation is
+                // exactly the one whose per-candidate attribution a caller reads.
+                self.record(op, &invocation);
+                invocation.into_ok()
+            }
+            // No readable report at all. A non-zero exit here is oneharness
+            // refusing the call before it could produce one (a usage error, a
+            // rejected `--session`), so its own stderr is the finding.
+            Err(unreadable) => {
+                if status.success() {
+                    Err(unreadable)
+                } else {
+                    Err(exit_error(op, status, stderr))
+                }
+            }
+        }
+    }
+
     /// Run a judge/simulated-user turn under the judge config, threading `session`
     /// and — on a `SessionUnsupported` failure — retrying once without it. The
     /// prompt already inlines the whole transcript, so the retry needs no rebuild.
@@ -189,7 +366,7 @@ impl OneharnessProvider {
         prompt: &str,
         session: Option<&str>,
         cwd: Option<&str>,
-    ) -> Result<OneharnessResult> {
+    ) -> Result<Invocation> {
         if let Some(name) = session {
             let args = judge_side_args(self.judge_config.as_deref(), Some(name), cwd);
             match self.run(op, &args, prompt) {
@@ -210,23 +387,18 @@ impl OneharnessProvider {
     /// Spawn `oneharness run` with `args` and `prompt`, and return the parsed
     /// single-result report. The prompt is passed via stdin (`--prompt-file -`)
     /// so an arbitrarily long transcript never trips the OS argv limit.
-    fn run(&self, op: &str, args: &[String], prompt: &str) -> Result<OneharnessResult> {
+    fn run(&self, op: &str, args: &[String], prompt: &str) -> Result<Invocation> {
         let mut child = self.spawn(op, args)?;
         write_prompt(op, child.stdin.as_mut(), prompt)?;
         let output = child.wait_with_output().map_err(|e| {
             Error::provider(op.to_string(), format!("oneharness did not complete: {e}"))
         })?;
-        if !output.status.success() {
-            return Err(exit_error(
-                op,
-                &output.status,
-                &String::from_utf8_lossy(&output.stderr),
-            ));
-        }
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let result = parse_report(op, &stdout)?;
-        self.record(op, &result);
-        Ok(result)
+        self.finish(
+            op,
+            &output.status,
+            &String::from_utf8_lossy(&output.stdout),
+            &String::from_utf8_lossy(&output.stderr),
+        )
     }
 
     /// Spawn `oneharness run --stream` and consume its NDJSON stdout, delivering
@@ -261,16 +433,18 @@ impl OneharnessProvider {
             .ok_or_else(|| Error::provider(op.to_string(), "could not open oneharness stdout"))?;
 
         let mut events = Vec::new();
-        let outcome = read_stream(
-            op,
-            &mut std::io::BufReader::new(stdout),
-            &mut events,
-            on_event,
-        );
+        let mut reading = std::io::BufReader::new(stdout);
+        let outcome = read_stream(op, &mut reading, &mut events, on_event);
+        // Close the read end before waiting on the child, on EVERY path: nothing
+        // reads this pipe from here on, so a child still writing to it would
+        // otherwise block once it filled.
+        drop(reading);
         if !matches!(outcome, Ok(StreamOutcome::Report(_))) {
-            // Aborted or malformed: the turn is over either way, so stop a child
-            // that is still producing rather than wait out its full run.
-            let _ = child.kill();
+            // Aborted or malformed: the turn is over either way, so stop the child —
+            // and, through it, the harness tree it owns — rather than wait out its
+            // full run. See [`terminate`] for why that is a signal and not the
+            // closed pipe above.
+            terminate(&mut child);
         }
         let status = child.wait().map_err(|e| {
             Error::provider(op.to_string(), format!("oneharness did not complete: {e}"))
@@ -285,12 +459,23 @@ impl OneharnessProvider {
                 ..AssistantTurn::default()
             }),
             Ok(StreamOutcome::Report(report)) => {
-                if !status.success() {
-                    return Err(exit_error(op, &status, &stderr));
+                // The terminal report is read exactly as a buffered one is, so a
+                // streamed run and a buffered run classify a failure identically —
+                // including a chain that fell through to a different candidate.
+                match parse_report_value(op, report) {
+                    Ok(invocation) => {
+                        self.record(op, &invocation);
+                        let invocation = invocation.into_ok()?;
+                        // A clean report from a process that then died on teardown
+                        // is still a failed run; its stderr is the only account.
+                        if !status.success() {
+                            return Err(exit_error(op, &status, &stderr));
+                        }
+                        Ok(assistant_turn(&invocation))
+                    }
+                    Err(unreadable) if status.success() => Err(unreadable),
+                    Err(_) => Err(exit_error(op, &status, &stderr)),
                 }
-                let result = parse_report_value(op, report)?;
-                self.record(op, &result);
-                Ok(assistant_turn(&result))
             }
             // The stream violation is the finding; the child's exit status is not,
             // because the kill above may be what produced it. Its stderr still is —
@@ -320,15 +505,114 @@ impl OneharnessProvider {
             })
     }
 
-    /// Record one invocation's telemetry against the party that made the call.
-    fn record(&self, op: &str, result: &OneharnessResult) {
+    /// Record one invocation's telemetry and per-candidate attribution against the
+    /// party that made the call.
+    fn record(&self, op: &str, invocation: &Invocation) {
+        let role = if op == "respond" {
+            TelemetryRole::Agent
+        } else {
+            TelemetryRole::Judge
+        };
         self.telemetry
             .borrow_mut()
-            .push(result.telemetry(if op == "respond" {
-                TelemetryRole::Agent
-            } else {
-                TelemetryRole::Judge
-            }));
+            .push(invocation_telemetry(role, invocation));
+    }
+}
+
+/// Fold one finished invocation into the record the engine aggregates: the timing
+/// and session linkage for the candidate that ran, plus the identity of **every**
+/// candidate oneharness attempted.
+///
+/// The measurements come from the ran candidate's own
+/// [`ExecutionTelemetry`](oneharness_core::domain::report::ExecutionTelemetry) on
+/// the run report, and fall back to whatever the result object itself supplied (a
+/// producer standing in for oneharness may inline its timings instead). The
+/// history file is still read, but only for `history_id` — the one signal the
+/// report has no counterpart for.
+fn invocation_telemetry(role: TelemetryRole, invocation: &Invocation) -> InvocationTelemetry {
+    let report = &invocation.report;
+    let attempts = history::read_attempts(report);
+    let measured = invocation
+        .result()
+        .map(report::measured)
+        .unwrap_or_default();
+    let supplemental = &invocation.supplemental;
+    let candidates = report
+        .results
+        .iter()
+        .enumerate()
+        .map(|(index, result)| CandidateAttempt {
+            harness: result.harness.clone(),
+            harness_id: result.harness_id.clone(),
+            variant: result.variant.clone(),
+            model: result.model.clone(),
+            status: report::status_token(result.status).to_string(),
+            available: result.available,
+            ran: invocation.ran == Some(index),
+            failure_kind: result
+                .failure_kind
+                .map(|kind| report::failure_token(kind).to_string()),
+            failure_kind_source: result.failure_kind_source.clone(),
+            exit_code: result.exit_code,
+            duration_ms: report::millis(result.duration_ms),
+            error: result.error.clone(),
+            session_id: result.session_id.clone(),
+            history_id: attempts
+                .get(index)
+                .map(|record| record.history_id.to_string()),
+            usage: {
+                let usage = report::usage(result);
+                (!usage.is_empty()).then_some(usage)
+            },
+        })
+        .collect();
+    InvocationTelemetry {
+        role: Some(role),
+        model_ms: measured.model_ms.or(supplemental.model_ms),
+        tool_ms: measured.tool_ms.or(supplemental.tool_ms),
+        time_to_first_token_ms: measured
+            .time_to_first_token_ms
+            .or(supplemental.time_to_first_token_ms),
+        usage: invocation.usage().unwrap_or_default(),
+        session_id: invocation
+            .result()
+            .and_then(|result| result.session_id.clone()),
+        started_at: measured
+            .started_at
+            .or_else(|| supplemental.started_at.clone()),
+        finished_at: measured
+            .finished_at
+            .or_else(|| supplemental.finished_at.clone()),
+        history_id: invocation
+            .ran
+            .and_then(|index| attempts.get(index))
+            .map(|record| record.history_id.to_string())
+            .or_else(|| supplemental.history_id.clone()),
+        ran: invocation
+            .result()
+            .map(|result| result.harness_id.clone())
+            .or_else(|| {
+                report
+                    .fallback
+                    .as_ref()
+                    .and_then(|fallback| fallback.ran.clone())
+            }),
+        fell_through: report
+            .fallback
+            .as_ref()
+            .map(|fallback| {
+                fallback
+                    .fell_through
+                    .iter()
+                    .map(|fell| FellThrough {
+                        harness: fell.harness.clone(),
+                        reason: fell.reason.clone(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
+        candidates,
+        history_file: report.history_file.clone(),
     }
 }
 
@@ -368,13 +652,13 @@ fn with_stderr(err: Error, stderr: &str) -> Error {
     }
 }
 
-/// Lift one parsed oneharness result into the engine's assistant turn.
-fn assistant_turn(result: &OneharnessResult) -> AssistantTurn {
+/// Lift one parsed oneharness invocation into the engine's assistant turn.
+fn assistant_turn(invocation: &Invocation) -> AssistantTurn {
     AssistantTurn {
-        message: result.reply(),
+        message: invocation.reply(),
         done: false,
-        usage: result.usage(),
-        events: result.events.clone().unwrap_or_default(),
+        usage: invocation.usage(),
+        events: invocation.events(),
     }
 }
 
@@ -452,145 +736,6 @@ fn judge_side_args(
         args.push(name.into());
     }
     args
-}
-
-// --- Report model (the fields onejudge reads from oneharness's JSON) --------
-
-#[derive(Deserialize)]
-struct OneharnessReport {
-    #[serde(default)]
-    results: Vec<OneharnessResult>,
-}
-
-#[derive(Debug, Deserialize, Default)]
-struct OneharnessResult {
-    #[serde(default)]
-    text: Option<String>,
-    #[serde(default)]
-    usage: OneharnessUsage,
-    #[serde(default)]
-    events: Option<Vec<ToolEvent>>,
-    #[serde(default)]
-    failure_kind: Option<String>,
-    #[serde(default)]
-    error: Option<String>,
-    #[serde(default)]
-    stdout: String,
-    #[serde(default)]
-    model_ms: Option<u64>,
-    #[serde(default)]
-    tool_ms: Option<u64>,
-    #[serde(default)]
-    time_to_first_token_ms: Option<u64>,
-    #[serde(default)]
-    session_id: Option<String>,
-    #[serde(default)]
-    started_at: Option<String>,
-    #[serde(default)]
-    finished_at: Option<String>,
-    #[serde(default)]
-    history_id: Option<String>,
-}
-
-/// The usage signals onejudge reads from oneharness's report. oneharness reports
-/// a few more (e.g. `usage_source`) that serde ignores; the token/cost fields —
-/// including the prompt-cache reads/writes — map straight through by name.
-#[derive(Debug, Deserialize, Default)]
-struct OneharnessUsage {
-    #[serde(default)]
-    input_tokens: Option<u64>,
-    #[serde(default)]
-    output_tokens: Option<u64>,
-    #[serde(default)]
-    cache_read_tokens: Option<u64>,
-    #[serde(default)]
-    cache_write_tokens: Option<u64>,
-    #[serde(default)]
-    cost_usd: Option<f64>,
-}
-
-impl OneharnessResult {
-    /// The reply text, falling back to raw stdout for the (contractually rare)
-    /// case where a harness produced output but oneharness left `text` null.
-    fn reply(&self) -> String {
-        self.text
-            .clone()
-            .filter(|t| !t.is_empty())
-            .unwrap_or_else(|| self.stdout.clone())
-    }
-
-    fn usage(&self) -> Option<Usage> {
-        let usage = Usage {
-            input_tokens: self.usage.input_tokens,
-            output_tokens: self.usage.output_tokens,
-            cache_read_tokens: self.usage.cache_read_tokens,
-            cache_write_tokens: self.usage.cache_write_tokens,
-            cost_usd: self.usage.cost_usd,
-        };
-        (!usage.is_empty()).then_some(usage)
-    }
-
-    fn telemetry(&self, role: TelemetryRole) -> InvocationTelemetry {
-        InvocationTelemetry {
-            role: Some(role),
-            model_ms: self.model_ms,
-            tool_ms: self.tool_ms,
-            time_to_first_token_ms: self.time_to_first_token_ms,
-            usage: self.usage().unwrap_or_default(),
-            session_id: self.session_id.clone(),
-            started_at: self.started_at.clone(),
-            finished_at: self.finished_at.clone(),
-            history_id: self.history_id.clone(),
-        }
-    }
-}
-
-/// Parse a oneharness JSON report into its single result, turning a normalized
-/// `failure_kind` into a classified [`Error::Provider`].
-fn parse_report(op: &str, stdout: &str) -> Result<OneharnessResult> {
-    let value: Value = serde_json::from_str(stdout.trim()).map_err(|e| {
-        Error::provider_classified(
-            op.to_string(),
-            format!(
-                "oneharness report was not valid JSON: {e}; got: {}",
-                stdout.trim()
-            ),
-            ProviderErrorKind::Protocol,
-        )
-    })?;
-    parse_report_value(op, value)
-}
-
-/// Parse an already-decoded oneharness report document. The streamed protocol's
-/// terminal `result` line carries the report as JSON, so both paths land here and
-/// a streamed report is read exactly as a bare one is.
-fn parse_report_value(op: &str, value: Value) -> Result<OneharnessResult> {
-    let report: OneharnessReport = serde_json::from_value(value.clone()).map_err(|e| {
-        Error::provider_classified(
-            op.to_string(),
-            format!("oneharness report had an unreadable shape: {e}; got: {value}"),
-            ProviderErrorKind::Protocol,
-        )
-    })?;
-    let result = report.results.into_iter().next().ok_or_else(|| {
-        Error::provider_classified(
-            op.to_string(),
-            "oneharness report carried no results",
-            ProviderErrorKind::Protocol,
-        )
-    })?;
-    if let Some(kind) = &result.failure_kind {
-        let message = result
-            .error
-            .clone()
-            .unwrap_or_else(|| format!("harness failed ({kind})"));
-        return Err(Error::provider_classified(
-            op.to_string(),
-            message,
-            ProviderErrorKind::classify(kind),
-        ));
-    }
-    Ok(result)
 }
 
 impl Provider for OneharnessProvider {
@@ -686,6 +831,7 @@ impl Provider for OneharnessProvider {
 mod tests {
     use super::*;
     use crate::provider::JudgeKind;
+    use oneharness_core::errors::OneharnessError;
 
     #[test]
     fn builders_configure_bin_and_judge_config() {
@@ -785,43 +931,19 @@ mod tests {
     }
 
     #[test]
-    fn parse_report_reads_text_usage_events() {
-        let json = r#"{"results":[{"status":"ok","text":"hi","usage":{"input_tokens":3,"output_tokens":1,"cache_read_tokens":9,"cache_write_tokens":4},"events":[{"kind":"tool_call","name":"bash","input":{"command":"ls"},"index":0}]}]}"#;
-        let result = parse_report("respond", json).unwrap();
-        assert_eq!(result.reply(), "hi");
-        let usage = result.usage().unwrap();
-        assert_eq!(usage.input_tokens, Some(3));
-        // The prompt-cache reads/writes oneharness reports flow straight through.
-        assert_eq!(usage.cache_read_tokens, Some(9));
-        assert_eq!(usage.cache_write_tokens, Some(4));
-        assert_eq!(result.events.unwrap().len(), 1);
-    }
-
-    #[test]
-    fn parse_report_falls_back_to_stdout_when_text_null() {
-        let json = r#"{"results":[{"status":"ok","text":null,"stdout":"raw reply"}]}"#;
-        assert_eq!(parse_report("respond", json).unwrap().reply(), "raw reply");
-    }
-
-    #[test]
-    fn parse_report_classifies_failure_kind() {
-        let json = r#"{"results":[{"status":"error","failure_kind":"auth","error":"no key"}]}"#;
-        let err = parse_report("respond", json).unwrap_err();
-        assert_eq!(err.kind(), Some(ProviderErrorKind::Auth));
-        assert!(err.to_string().contains("no key"));
-    }
-
-    #[test]
-    fn parse_report_rejects_bad_json_and_empty_results() {
-        assert_eq!(
-            parse_report("respond", "not json").unwrap_err().kind(),
-            Some(ProviderErrorKind::Protocol)
-        );
-        assert_eq!(
-            parse_report("respond", r#"{"results":[]}"#)
-                .unwrap_err()
-                .kind(),
-            Some(ProviderErrorKind::Protocol)
+    fn session_unsupported_marker_tracks_oneharness() {
+        // oneharness refuses `--session` before it can emit a report, so this one
+        // recovery is driven off stderr text. Pin the substring against the error
+        // oneharness itself renders: an upstream rewording then fails here instead
+        // of silently turning the graceful retry into a failed run.
+        let upstream = OneharnessError::SessionUnsupported {
+            id: "goose".into(),
+            supported: "claude-code".into(),
+        }
+        .to_string();
+        assert!(
+            upstream.contains(SESSION_UNSUPPORTED_MARKER),
+            "oneharness now says: {upstream}"
         );
     }
 

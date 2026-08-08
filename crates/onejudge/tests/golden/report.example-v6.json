@@ -1,5 +1,5 @@
 {
-  "schema_version": 5,
+  "schema_version": 6,
   "transcript": {
     "messages": [
       {
@@ -70,6 +70,55 @@
         "started_at": "2026-01-01T00:00:00Z",
         "finished_at": "2026-01-01T00:00:00.025Z",
         "history_id": "019b76e0-history"
+      }
+    ],
+    "attribution": [
+      {
+        "role": "agent",
+        "turn_index": 1,
+        "ran": "claude-code",
+        "fell_through": [
+          {
+            "harness": "codex",
+            "reason": "quota"
+          }
+        ],
+        "candidates": [
+          {
+            "harness": "codex",
+            "harness_id": "codex:work",
+            "variant": "work",
+            "model": "gpt-5.5",
+            "status": "nonzero",
+            "available": true,
+            "ran": false,
+            "failure_kind": "quota",
+            "failure_kind_source": "stderr",
+            "exit_code": 1,
+            "duration_ms": 4,
+            "error": "out of credit",
+            "history_id": "019b76e0-codex"
+          },
+          {
+            "harness": "claude-code",
+            "harness_id": "claude-code",
+            "status": "ok",
+            "available": true,
+            "ran": true,
+            "exit_code": 0,
+            "duration_ms": 25,
+            "session_id": "native-agent-1",
+            "history_id": "019b76e0-history",
+            "usage": {
+              "input_tokens": 8,
+              "output_tokens": 2,
+              "cache_read_tokens": 4,
+              "cache_write_tokens": 1,
+              "cost_usd": 0.01
+            }
+          }
+        ],
+        "history_file": "/state/oneharness/history/run-1-skill.jsonl"
       }
     ]
   },
