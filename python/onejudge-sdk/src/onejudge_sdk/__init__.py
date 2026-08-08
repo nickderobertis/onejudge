@@ -3,7 +3,12 @@
 from ._client import EventHandler, OneJudge
 from ._errors import ContractError, OneJudgeProcessError, OneJudgeTimeoutError
 from ._generated_types import (
+    CandidateAttempt,
     EvalConfig,
+    FailureDetail,
+    FailureReport,
+    FellThrough,
+    HarnessAttribution,
     JudgeKind,
     JudgeVerdict,
     Message,
@@ -14,6 +19,7 @@ from ._generated_types import (
     RunConfig,
     RunReport,
     StreamEvent,
+    Telemetry,
     ToolEvent,
     Transcript,
     Usage,
@@ -23,9 +29,14 @@ from ._result import RunResult
 from ._version import __version__
 
 __all__ = [
+    "CandidateAttempt",
     "ContractError",
     "EvalConfig",
     "EventHandler",
+    "FailureDetail",
+    "FailureReport",
+    "FellThrough",
+    "HarnessAttribution",
     "JudgeKind",
     "JudgeVerdict",
     "Message",
@@ -40,6 +51,7 @@ __all__ = [
     "RunReport",
     "RunResult",
     "StreamEvent",
+    "Telemetry",
     "ToolEvent",
     "Transcript",
     "Usage",

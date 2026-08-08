@@ -10,6 +10,17 @@ ProviderKind = Literal["oneharness", "command", "split"]
 JudgeValue = Union[bool, float]
 Role = Literal["user", "assistant", "system"]
 TelemetryRole = Literal["agent", "judge"]
+ProviderErrorKind = Literal[
+    "auth",
+    "rate_limit",
+    "model_not_found",
+    "quota",
+    "overloaded",
+    "timeout",
+    "spawn",
+    "protocol",
+    "other",
+]
 
 
 class _EvalConfigRequired(TypedDict):
@@ -35,6 +46,44 @@ class UserConfig(TypedDict, total=False):
     done_when: Optional[str]
     max_turns: Optional[int]
     persona: str
+
+
+class _CandidateAttemptRequired(TypedDict):
+    available: bool
+    harness: str
+    harness_id: str
+    ran: bool
+    status: str
+
+
+class CandidateAttempt(_CandidateAttemptRequired, total=False):
+    duration_ms: Optional[int]
+    error: Optional[str]
+    exit_code: Optional[int]
+    failure_kind: Optional[str]
+    failure_kind_source: Optional[str]
+    history_id: Optional[str]
+    model: Optional[str]
+    session_id: Optional[str]
+    usage: Optional[Usage]
+    variant: Optional[str]
+
+
+class FellThrough(TypedDict):
+    harness: str
+    reason: str
+
+
+class _HarnessAttributionRequired(TypedDict):
+    candidates: Sequence[CandidateAttempt]
+    role: TelemetryRole
+    turn_index: int
+
+
+class HarnessAttribution(_HarnessAttributionRequired, total=False):
+    fell_through: Sequence[FellThrough]
+    history_file: Optional[str]
+    ran: Optional[str]
 
 
 class _JudgeVerdictRequired(TypedDict):
@@ -81,12 +130,16 @@ class SessionLink(_SessionLinkRequired, total=False):
     history_id: Optional[str]
 
 
-class Telemetry(TypedDict):
+class _TelemetryRequired(TypedDict):
     agent: PartyTelemetry
     judge: PartyTelemetry
     orchestration_ms: int
     sessions: Sequence[SessionLink]
     wall_ms: int
+
+
+class Telemetry(_TelemetryRequired, total=False):
+    attribution: Sequence[HarnessAttribution]
 
 
 class _ToolEventRequired(TypedDict):
@@ -110,6 +163,14 @@ class Usage(TypedDict, total=False):
     cost_usd: Optional[float]
     input_tokens: Optional[int]
     output_tokens: Optional[int]
+
+
+class _FailureDetailRequired(TypedDict):
+    message: str
+
+
+class FailureDetail(_FailureDetailRequired, total=False):
+    kind: Optional[ProviderErrorKind]
 
 
 class RunConfig(TypedDict, total=False):
@@ -140,3 +201,12 @@ class RunReport(_RunReportRequired, total=False):
 class StreamEvent(TypedDict):
     event: ToolEvent
     turn: int
+
+
+class _FailureReportRequired(TypedDict):
+    error: FailureDetail
+    schema_version: int
+
+
+class FailureReport(_FailureReportRequired, total=False):
+    telemetry: Optional[Telemetry]

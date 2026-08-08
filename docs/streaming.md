@@ -84,7 +84,7 @@ two envelopes, so an SDK can watch it live:
 ```console
 $ onejudge run onejudge.yaml --format json --stream
 {"type":"event","turn":1,"event":{"kind":"tool_call","name":"bash","input":{"command":"git commit -m fix"},"index":0}}
-{"type":"result","report":{"schema_version":5,…}}
+{"type":"result","report":{"schema_version":6,…}}
 ```
 
 The outbound `event` line adds `turn` — the 1-based assistant-turn index within the

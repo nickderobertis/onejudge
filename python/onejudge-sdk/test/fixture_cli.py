@@ -11,7 +11,7 @@ import time
 def _report(task: str) -> dict[str, object]:
     """A minimal report that satisfies the versioned contract."""
     return {
-        "schema_version": 5,
+        "schema_version": 6,
         "transcript": {"messages": [{"role": "user", "content": task}]},
         "stopped_early": False,
     }

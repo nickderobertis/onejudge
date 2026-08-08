@@ -16,7 +16,7 @@ from jsonschema import Draft202012Validator
 from jsonschema.protocols import Validator
 
 from ._errors import ContractError, OneJudgeProcessError, OneJudgeTimeoutError
-from ._generated_types import RunConfig, RunReport, StreamEvent
+from ._generated_types import FailureReport, RunConfig, RunReport, StreamEvent
 from ._result import RunResult
 
 _STREAM_LIMIT = 16 * 1024 * 1024
@@ -53,6 +53,30 @@ def _validate(root: str, value: Any, label: str) -> Any:
         path = ".".join(str(part) for part in error.absolute_path) or "<root>"
         details.append(f"{path}: {error.message}")
     raise ContractError(f"{label}: {'; '.join(details)}")
+
+
+def _failure_report(stdout: bytes, stderr: str) -> Optional[FailureReport]:
+    """onejudge's structured failure document, from wherever this run wrote it.
+
+    A buffered ``--format json`` run writes it on stdout, where the report would
+    have gone; a streamed run writes it as one compact JSON line on stderr, because
+    stdout is the ``event* result EOF`` protocol. Absent or unreadable output is
+    simply no document — the process error stands on its own either way.
+    """
+    candidates = [stdout.decode("utf-8", errors="replace")]
+    candidates.extend(line for line in stderr.splitlines() if line.startswith("{"))
+    for candidate in candidates:
+        try:
+            value = json.loads(candidate)
+        except (ValueError, UnicodeDecodeError):
+            continue
+        if not isinstance(value, Mapping) or "error" not in value:
+            continue
+        return cast(
+            "FailureReport",
+            _validate("failure_report", value, "invalid onejudge failure contract"),
+        )
+    return None
 
 
 def _input(value: Any) -> dict[str, Any]:
@@ -265,7 +289,7 @@ class OneJudge:
         stderr = stderr_bytes.decode("utf-8", errors="replace")
         returncode = process.returncode or 0
         if returncode not in (0, 1):
-            raise OneJudgeProcessError(returncode, stderr)
+            raise OneJudgeProcessError(returncode, stderr, _failure_report(stdout_bytes, stderr))
         if on_event is not None:
             if streamed is None:
                 raise ContractError("onejudge stream ended without a terminal result line")

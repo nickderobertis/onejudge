@@ -2,17 +2,34 @@
 
 from __future__ import annotations
 
+from typing import Optional
+
+from ._generated_types import FailureReport
+
 
 class ContractError(ValueError):
     """A value did not match its Rust-owned SDK contract."""
 
 
 class OneJudgeProcessError(RuntimeError):
-    """The onejudge subprocess could not produce a report."""
+    """The onejudge subprocess could not produce a report.
 
-    def __init__(self, returncode: int, stderr: str) -> None:
+    ``failure`` carries onejudge's structured failure document when it emitted one
+    (`--format json` writes it where the report would have gone; a streamed run
+    writes it as one JSON line on stderr, since stdout is the event protocol). It
+    says which harness identity refused and on which side of the conversation, so a
+    caller attributes a failure without parsing ``stderr``.
+    """
+
+    def __init__(
+        self,
+        returncode: int,
+        stderr: str,
+        failure: Optional[FailureReport] = None,
+    ) -> None:
         self.returncode = returncode
         self.stderr = stderr
+        self.failure = failure
         super().__init__(f"onejudge exited {returncode}: {stderr.strip()}")
 
 
