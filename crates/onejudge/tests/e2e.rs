@@ -570,10 +570,7 @@ fn a_declared_streaming_provider_that_degrades_to_a_bare_report_still_runs() {
 fn a_malformed_stream_fails_loudly_with_a_named_protocol_error() {
     for (marker, needle) in [
         ("[[stream-garbage]]", "was not valid JSON"),
-        (
-            "[[stream-unknown]]",
-            "unrecognized streamed provider line type",
-        ),
+        ("[[stream-unknown]]", "unknown run stream envelope type"),
         ("[[stream-truncate]]", "ended without a terminal"),
     ] {
         let provider = streaming_oneharness();

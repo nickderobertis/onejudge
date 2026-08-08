@@ -85,9 +85,9 @@ check-release-targets:
 check-python-sdk-release-trigger:
     ./scripts/check-python-sdk-release-trigger.sh
 
-# Check the crate still builds on the declared MSRV (needs 1.82.0 installed).
+# Check the crate still builds on the declared MSRV (needs 1.86.0 installed).
 msrv:
-    cargo +1.82.0 check --locked --all-targets --features fake-provider
+    cargo +1.86.0 check --locked --all-targets --features fake-provider
 
 # Upgrade dependencies, then re-run the full gate; commit the refreshed lockfile.
 upgrade:

@@ -1029,7 +1029,7 @@ fn binary_reports_a_malformed_provider_stream_and_exits_two() {
     assert_eq!(output.status.code(), Some(2));
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert!(
-        stderr.contains("unrecognized streamed provider line type `progress`"),
+        stderr.contains("unknown run stream envelope type `progress`"),
         "{stderr}"
     );
 }

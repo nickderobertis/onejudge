@@ -2,6 +2,13 @@
 //! CLI, so the `OneharnessProvider` path is exercised end-to-end (real argv,
 //! real subprocess, real report parsing) without a live harness or model.
 //!
+//! Its report is built from **oneharness's own types**
+//! (`oneharness_core::domain::report`) and then serialized, never hand-written
+//! JSON. That is what keeps the double honest: the document the e2e suite feeds
+//! the real reader is the document oneharness's own contract produces, so a field
+//! that changes upstream changes here by construction instead of leaving the suite
+//! passing against a shape nothing emits any more.
+//!
 //! It reads the prompt from stdin (`--prompt-file -`), classifies it by shape
 //! (skill respond / simulated user / judge), and emits a `oneharness run` JSON
 //! report on stdout. It mirrors the real `run` flag contract (unrecognized flags
@@ -9,11 +16,25 @@
 //! live-path arg bug and `onejudge init` are caught/covered here. Markers in
 //! `--system` steer the skill turn: `[[reply:TEXT]]` sets the reply,
 //! `[[event:CMD]]` adds a `bash` tool event, `[[fail:KIND]]` returns a classified
-//! `failure_kind`, and `[[reject-session]]` makes a `--session` run exit non-zero
-//! with oneharness's `does not support --session` text (the graceful-retry path).
-//! The judge turn decides `true` iff the criterion appears in the transcript it
-//! was given — tool-event lines included — so an events-backed criterion is really
-//! decided by what the skill did.
+//! `failure_kind`, `[[status:TOKEN]]` returns a terminal status that carries no
+//! `failure_kind` at all (`timeout`, `spawn-error`, `skipped`), and
+//! `[[reject-session]]` makes a `--session` run exit non-zero with oneharness's
+//! `does not support --session` text (the graceful-retry path).
+//!
+//! **Fallback chains.** `[[fallback:ID|REASON,…]]` reports the run the way
+//! `run_mode = "fallback"` does: one result per *attempted* candidate — the listed
+//! ones fallen through, in order — then the candidate that ran, with the matching
+//! `fallback` block. `[[fallback-exhausted:ID|REASON,…]]` reports the chain where
+//! nothing could run (`fallback.ran` null), which is the shape onejudge must turn
+//! into one classified error rather than a turn.
+//!
+//! **History.** `[[history:PATH]]` writes the per-candidate history record
+//! oneharness writes for every attempt — its real event-sourced JSONL
+//! (`HistoryLine::Run`) — to PATH and reports it as `history_file`, so the suite
+//! drives onejudge's read of it through oneharness's own reader. Without the
+//! marker the invocation's measurements are inlined on the result object instead
+//! (the "producer that supplies its own timings" case onejudge also accepts),
+//! which keeps the rest of the suite independent of a shared on-disk store.
 //!
 //! Under `--stream` it speaks the **streamed provider protocol**
 //! (`docs/streaming.md`) instead: one `{"type":"event","event":{…}}` line per tool
@@ -36,7 +57,20 @@ use std::collections::HashMap;
 use std::io::{Read as _, Write as _};
 use std::time::{Duration, Instant};
 
+use oneharness_core::domain::events::ActionEvent;
+use oneharness_core::domain::history::{
+    HistoryId, HistoryLabels, HistoryLine, HistoryRecord, HistoryRunRecord,
+};
+use oneharness_core::domain::mode::PermissionMode;
+use oneharness_core::domain::report::{
+    FallThrough, FallbackReport, OutputFormat, RunReport, RunResult, SessionReport, Status,
+};
+use oneharness_core::domain::session::SessionPhase;
+use oneharness_core::domain::signals::{FailureKind, Usage};
 use serde_json::{json, Value};
+
+/// The harness this double claims to be, so a result carries a real identity.
+const HARNESS: &str = "claude-code";
 
 fn main() {
     // `oneharness init [PATH] [--force]` scaffolds a config file, mirroring the
@@ -76,56 +110,261 @@ fn main() {
         || prompt.contains("role-playing the USER")
         || prompt.contains("Assessment request:")
         || prompt.contains("Criterion:") && prompt.contains("single-line JSON object"));
-    let mut result = if prompt.contains("completion supervisor") {
-        json!({ "status": "ok", "text": supervisor_text(&prompt), "usage": usage(&prompt) })
+    let mut ran = if prompt.contains("completion supervisor") {
+        ok_result(supervisor_text(&prompt), &prompt)
     } else if prompt.contains("role-playing the USER") {
-        json!({ "status": "ok", "text": "Understood — please continue.", "usage": usage(&prompt) })
+        ok_result("Understood — please continue.".into(), &prompt)
     } else if prompt.contains("Criterion:") && prompt.contains("single-line JSON object") {
-        json!({ "status": "ok", "text": judge_text(&prompt), "usage": usage(&prompt) })
+        ok_result(judge_text(&prompt), &prompt)
     } else if prompt.contains("Assessment request:") {
         // `[[assess-empty]]` yields a well-formed reply with empty text, driving
         // the provider's empty-assessment guard across the real subprocess.
         let text = if prompt.contains("[[assess-empty]]") {
-            ""
+            String::new()
         } else {
-            "No follow-up work remains."
+            "No follow-up work remains.".into()
         };
-        json!({ "status": "ok", "text": text, "usage": usage(&prompt) })
+        ok_result(text, &prompt)
     } else {
         respond_result(system, session.as_deref(), &prompt)
     };
-    if result.get("failure_kind").is_none() {
-        let role = if is_agent { "agent" } else { "judge" };
-        let native_session = format!("native-{}", session.as_deref().unwrap_or(role));
-        result["model_ms"] = json!(if is_agent { 10 } else { 5 });
-        result["tool_ms"] = json!(if is_agent { 3 } else { 1 });
-        result["time_to_first_token_ms"] = json!(if is_agent { 2 } else { 1 });
-        result["session_id"] = json!(native_session);
-        result["started_at"] = json!(if is_agent {
-            "2026-01-01T00:00:00Z"
-        } else {
-            "2026-01-01T00:00:01Z"
-        });
-        result["finished_at"] = json!(if is_agent {
-            "2026-01-01T00:00:00.013Z"
-        } else {
-            "2026-01-01T00:00:01.006Z"
-        });
-        result["history_id"] = json!(format!("history-{role}-{}", prompt.len()));
+    if let Some(native) = session
+        .as_deref()
+        .or(Some(if is_agent { "agent" } else { "judge" }))
+    {
+        ran.session_id = Some(format!("native-{native}"));
     }
 
-    let mut report = json!({
-        "schema_version": "fake",
-        "results": [result],
+    // A fallback chain reports one result per ATTEMPTED candidate: the ones it fell
+    // through first, then the one that ran (or, when exhausted, only the failures).
+    let exhausted = marker(system, "fallback-exhausted");
+    let chain = exhausted.or_else(|| marker(system, "fallback"));
+    let fell_through: Vec<(String, String)> = chain
+        .map(|spec| {
+            spec.split(',')
+                .filter(|entry| !entry.is_empty())
+                .map(|entry| {
+                    let (id, reason) = entry.split_once('|').unwrap_or((entry, "auth"));
+                    (id.to_string(), reason.to_string())
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let mut results: Vec<RunResult> = fell_through
+        .iter()
+        .map(|(id, reason)| fell_through_result(id, reason))
+        .collect();
+    let fallback = chain.map(|_| FallbackReport {
+        ran: exhausted.is_none().then(|| ran.harness_id.clone()),
+        fell_through: fell_through
+            .iter()
+            .map(|(id, reason)| FallThrough {
+                harness: id.split(':').next().unwrap_or(id).to_string(),
+                reason: reason.clone(),
+            })
+            .collect(),
     });
-    if let Some(name) = session {
-        report["session"] = json!({ "name": name, "phase": "create" });
+    let ran_index = (exhausted.is_none()).then(|| {
+        results.push(ran.clone());
+        results.len() - 1
+    });
+
+    let failed = ran_index.is_none()
+        || results[ran_index.unwrap_or(0)].failure_kind.is_some()
+        || !matches!(
+            results[ran_index.unwrap_or(0)].status,
+            Status::Ok | Status::Nonzero
+        );
+
+    // The history record oneharness writes per attempt, when the test asked for it.
+    let history_file = marker(system, "history").map(|path| {
+        write_history(path, &results, is_agent);
+        path.to_string()
+    });
+
+    let report = RunReport {
+        schema_version: oneharness_core::domain::report::SCHEMA_VERSION.into(),
+        oneharness_version: "0.6.8-fake".into(),
+        prompt: prompt.clone(),
+        model: None,
+        models: None,
+        resume: None,
+        fork: false,
+        session: session.as_deref().map(|name| SessionReport {
+            name: name.to_string(),
+            phase: SessionPhase::Create,
+            token: Some(format!("native-{name}")),
+            store_file: None,
+        }),
+        permission_mode: PermissionMode::Default,
+        bypass_permissions: false,
+        dry_run: false,
+        schema: None,
+        schema_max_retries: None,
+        batch: None,
+        fallback,
+        mock_rules: None,
+        spy_file: None,
+        history_file,
+        config_files: Vec::new(),
+        results,
+    };
+
+    let mut document = serde_json::to_value(&report).expect("the report serializes");
+    // Without an on-disk history store the invocation's own measurements ride on
+    // the result object — the "producer supplies its own timings" case. oneharness
+    // itself keeps these on the history record, which `[[history:PATH]]` exercises.
+    if report.history_file.is_none() {
+        if let Some(index) = ran_index.filter(|_| !failed) {
+            let telemetry = inline_telemetry(is_agent, &prompt);
+            if let Some(result) = document["results"].get_mut(index) {
+                for (key, value) in telemetry {
+                    result[key] = value;
+                }
+            }
+        }
     }
+
     if flags.contains_key("--stream") {
-        emit_stream(system, &report);
-        return;
+        emit_stream(system, &document);
+    } else {
+        write_line(&document);
     }
-    write_line(&report);
+    // oneharness reports a harness failure in the JSON *and* exits non-zero.
+    if failed {
+        std::process::exit(1);
+    }
+}
+
+/// The measurements a producer that keeps no history store inlines on its result.
+fn inline_telemetry(is_agent: bool, prompt: &str) -> Vec<(&'static str, Value)> {
+    let role = if is_agent { "agent" } else { "judge" };
+    vec![
+        ("model_ms", json!(if is_agent { 10 } else { 5 })),
+        ("tool_ms", json!(if is_agent { 3 } else { 1 })),
+        (
+            "time_to_first_token_ms",
+            json!(if is_agent { 2 } else { 1 }),
+        ),
+        (
+            "started_at",
+            json!(if is_agent {
+                "2026-01-01T00:00:00Z"
+            } else {
+                "2026-01-01T00:00:01Z"
+            }),
+        ),
+        (
+            "finished_at",
+            json!(if is_agent {
+                "2026-01-01T00:00:00.013Z"
+            } else {
+                "2026-01-01T00:00:01.006Z"
+            }),
+        ),
+        (
+            "history_id",
+            json!(format!("history-{role}-{}", prompt.len())),
+        ),
+    ]
+}
+
+/// A successful result carrying `text`.
+fn ok_result(text: String, prompt: &str) -> RunResult {
+    let mut result = base_result(HARNESS);
+    result.text = Some(text);
+    result.usage = usage(prompt);
+    result
+}
+
+/// The envelope every result shares.
+fn base_result(harness_id: &str) -> RunResult {
+    let (harness, variant) = match harness_id.split_once(':') {
+        Some((base, variant)) => (base.to_string(), Some(variant.to_string())),
+        None => (harness_id.to_string(), None),
+    };
+    RunResult {
+        harness,
+        variant,
+        harness_id: harness_id.into(),
+        bin: harness_id.into(),
+        available: true,
+        status: Status::Ok,
+        prompt: None,
+        model: None,
+        exit_code: Some(0),
+        duration_ms: Some(30),
+        telemetry: None,
+        command: vec![harness_id.into(), "--print".into()],
+        output_format: OutputFormat::Json,
+        text: None,
+        text_source: Some("json:result".into()),
+        usage: Usage::default(),
+        usage_source: Some("json".into()),
+        session_id: None,
+        events: None,
+        events_source: None,
+        structured: None,
+        schema_valid: None,
+        schema_attempts: None,
+        schema_error: None,
+        failure_kind: None,
+        failure_kind_source: None,
+        stdout: String::new(),
+        stderr: String::new(),
+        error: None,
+    }
+}
+
+/// One candidate a fallback chain routed around, shaped the way oneharness shapes
+/// it: `not-installed` never ran (`skipped`), the rest were refused before doing
+/// any work (a classified `failure_kind` on a non-zero run).
+fn fell_through_result(harness_id: &str, reason: &str) -> RunResult {
+    let mut result = base_result(harness_id);
+    result.exit_code = Some(1);
+    result.duration_ms = None;
+    result.error = Some(format!("candidate `{harness_id}` could not run ({reason})"));
+    match reason {
+        "not-installed" => {
+            result.status = Status::Skipped;
+            result.available = false;
+            result.exit_code = None;
+        }
+        "spawn-error" => result.status = Status::SpawnError,
+        other => {
+            result.status = Status::Nonzero;
+            result.failure_kind = Some(failure_kind(&other.replace('-', "_")));
+            result.failure_kind_source = Some("stderr".into());
+        }
+    }
+    result
+}
+
+/// oneharness's classified failure for a `[[fail:KIND]]` / fall-through token.
+fn failure_kind(token: &str) -> FailureKind {
+    match token {
+        "auth" => FailureKind::Auth,
+        "rate_limit" => FailureKind::RateLimit,
+        "model_not_found" => FailureKind::ModelNotFound,
+        "quota" => FailureKind::Quota,
+        "tool_deferred" => FailureKind::ToolDeferred,
+        other => emit_error(&format!(
+            "`{other}` is not a oneharness failure_kind (the double mirrors the real taxonomy)"
+        )),
+    }
+}
+
+/// oneharness's terminal status for a `[[status:TOKEN]]` marker.
+fn status(token: &str) -> Status {
+    match token {
+        "ok" => Status::Ok,
+        "nonzero" => Status::Nonzero,
+        "timeout" => Status::Timeout,
+        "spawn-error" => Status::SpawnError,
+        "skipped" => Status::Skipped,
+        "planned" => Status::Planned,
+        other => emit_error(&format!("`{other}` is not a oneharness run status")),
+    }
 }
 
 /// Write one JSON document as a line on stdout, flushed immediately.
@@ -135,6 +374,68 @@ fn write_line(value: &Value) {
     let mut stdout = std::io::stdout();
     stdout.write_all(out.as_bytes()).expect("write line");
     stdout.flush().expect("flush line");
+}
+
+/// Append oneharness's own per-attempt history lines for `results` to `path`.
+///
+/// These are `HistoryLine::Run` records in oneharness's event-sourced JSONL, so
+/// onejudge reads them back with oneharness's own reader — the real format, not a
+/// shape invented here. A fallen-through candidate gets a record with no timing
+/// (it never reached the boundary a trace is measured between), exactly as
+/// oneharness writes one.
+fn write_history(path: &str, results: &[RunResult], is_agent: bool) {
+    if let Some(parent) = std::path::Path::new(path).parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let mut file = match std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
+        Ok(file) => file,
+        Err(e) => emit_error(&format!("could not open history file {path}: {e}")),
+    };
+    for (index, result) in results.iter().enumerate() {
+        let measured = matches!(result.status, Status::Ok) && result.failure_kind.is_none();
+        let record = HistoryRecord {
+            schema_version: oneharness_core::domain::history::SCHEMA_VERSION.into(),
+            history_id: HistoryId::legacy(
+                format!("{}-{index}-{}", result.harness_id, results.len()).as_bytes(),
+            ),
+            session: "fake".into(),
+            name: "fake".into(),
+            labels: HistoryLabels::default(),
+            project: "/tmp".into(),
+            timestamp: "2026-01-01T00:00:00Z".into(),
+            harness: result.harness.clone(),
+            variant: result.variant.clone(),
+            harness_id: result.harness_id.clone(),
+            model: result.model.clone(),
+            prompt: "p".into(),
+            permission_mode: PermissionMode::Default,
+            status: result.status,
+            exit_code: result.exit_code,
+            duration_ms: measured.then_some(30),
+            started_at: measured.then(|| "2026-01-01T00:00:00Z".to_string()),
+            finished_at: measured.then(|| "2026-01-01T00:00:00.030Z".to_string()),
+            model_ms: measured.then_some(if is_agent { 10 } else { 5 }),
+            tool_ms: measured.then_some(if is_agent { 3 } else { 1 }),
+            time_to_first_token_ms: measured.then_some(if is_agent { 2 } else { 1 }),
+            observed_tool_ms: None,
+            text: result.text.clone(),
+            text_source: result.text_source.clone(),
+            usage: result.usage.clone(),
+            session_id: result.session_id.clone(),
+            events: result.events.clone(),
+            failure_kind: result.failure_kind,
+            error: None,
+        };
+        let line = serde_json::to_string(&HistoryLine::Run(HistoryRunRecord::from_record(&record)))
+            .expect("a history record serializes");
+        if writeln!(file, "{line}").is_err() {
+            emit_error(&format!("could not append a history record to {path}"));
+        }
+    }
 }
 
 /// Publish `report` as the streamed protocol: one `event` envelope per tool event
@@ -152,7 +453,13 @@ fn emit_stream(system: &str, report: &Value) {
         stdout.flush().expect("flush line");
         return;
     }
-    for event in report["results"][0]["events"].as_array().unwrap_or(&vec![]) {
+    let events = report["results"]
+        .as_array()
+        .and_then(|results| results.last())
+        .and_then(|result| result["events"].as_array())
+        .cloned()
+        .unwrap_or_default();
+    for event in &events {
         write_line(&json!({ "type": "event", "event": event }));
     }
     if system.contains("[[stream-unknown]]") {
@@ -172,7 +479,7 @@ fn emit_stream(system: &str, report: &Value) {
     match marker(system, "stream-trailing") {
         Some("unknown") => write_line(&json!({ "type": "progress", "pct": 100 })),
         Some("event") => {
-            write_line(&json!({ "type": "event", "event": { "kind": "tool_call", "index": 9 } }));
+            write_line(&json!({ "type": "event", "event": tool_event(9, "ls") }));
         }
         Some("result") => write_line(&json!({ "type": "result", "report": report })),
         _ => {}
@@ -199,9 +506,9 @@ fn wait_for(path: &str) {
     }
 }
 
-/// A real oneharness never exits non-zero on a *harness* failure — it reports it
-/// in the JSON. So a stdin read failure (a harness-runner bug) is the only path
-/// that exits non-zero, matching oneharness's "spawn/protocol error" behavior.
+/// A real oneharness never exits non-zero on a *harness* failure without also
+/// reporting it in the JSON. So a stdin read failure (a harness-runner bug) is the
+/// path that exits 2, matching oneharness's own usage/spawn-error exit code.
 fn emit_error(message: &str) -> ! {
     eprintln!("fake-oneharness: {message}");
     std::process::exit(2);
@@ -278,15 +585,33 @@ fn parse_flags() -> HashMap<String, String> {
     flags
 }
 
-fn usage(text: &str) -> Value {
+fn usage(text: &str) -> Usage {
     // Deterministic prompt-cache counts so the e2e suite can prove they flow from
-    // the oneharness report through `OneharnessUsage` into the transcript usage.
-    json!({
-        "input_tokens": text.len(),
-        "output_tokens": 1,
-        "cache_read_tokens": 7,
-        "cache_write_tokens": 2,
-    })
+    // the oneharness report through the typed reader into the transcript usage.
+    Usage {
+        input_tokens: Some(text.len() as u64),
+        output_tokens: Some(1),
+        cache_read_tokens: Some(7),
+        cache_write_tokens: Some(2),
+        cost_usd: None,
+    }
+}
+
+/// One normalized tool call, in oneharness's own event shape.
+fn tool_event(index: usize, command: &str) -> ActionEvent {
+    ActionEvent {
+        kind: "tool_call".into(),
+        name: Some("bash".into()),
+        input: Some(json!({ "command": command })),
+        output: None,
+        index,
+        tool_call_id: None,
+        started_at: None,
+        finished_at: None,
+        duration_ms: None,
+        status: None,
+        timing_source: None,
+    }
 }
 
 /// Extract a `[[marker:ARG]]` directive's argument from `text`.
@@ -297,22 +622,29 @@ fn marker<'a>(text: &'a str, name: &str) -> Option<&'a str> {
     rest.find("]]").map(|end| &rest[..end])
 }
 
-fn respond_result(system: &str, session: Option<&str>, prompt: &str) -> Value {
+fn respond_result(system: &str, session: Option<&str>, prompt: &str) -> RunResult {
     if let Some(kind) = marker(system, "fail") {
-        return json!({
-            "status": "error",
-            "failure_kind": kind,
-            "error": format!("fake harness failure ({kind})"),
-        });
+        let mut result = base_result(HARNESS);
+        result.status = Status::Nonzero;
+        result.exit_code = Some(1);
+        result.failure_kind = Some(failure_kind(kind));
+        result.failure_kind_source = Some("stderr".into());
+        result.error = Some(format!("fake harness failure ({kind})"));
+        return result;
+    }
+    if let Some(token) = marker(system, "status") {
+        // A terminal status that carries NO failure_kind — a timeout, an
+        // unspawnable binary, a candidate that never ran.
+        let mut result = base_result(HARNESS);
+        result.status = status(token);
+        result.exit_code = None;
+        result.error = Some(format!("fake harness ended with status `{token}`"));
+        return result;
     }
     // Echo the caller-owned session name back as the reply, so the e2e suite can
     // observe that the engine threaded one name across the real subprocess.
     if system.contains("[[echo-session]]") {
-        return json!({
-            "status": "ok",
-            "text": session.unwrap_or("no-session"),
-            "usage": usage(prompt),
-        });
+        return ok_result(session.unwrap_or("no-session").to_string(), prompt);
     }
     let reply = marker(system, "reply")
         .map(str::to_string)
@@ -322,14 +654,10 @@ fn respond_result(system: &str, session: Option<&str>, prompt: &str) -> Value {
                 prompt.trim().chars().take(60).collect::<String>()
             )
         });
-    let mut result = json!({ "status": "ok", "text": reply, "usage": usage(prompt) });
+    let mut result = ok_result(reply, prompt);
     if let Some(cmd) = marker(system, "event") {
-        result["events"] = json!([{
-            "kind": "tool_call",
-            "name": "bash",
-            "input": { "command": cmd },
-            "index": 0
-        }]);
+        result.events = Some(vec![tool_event(0, cmd)]);
+        result.events_source = Some("stream-json:content-blocks".into());
     }
     result
 }

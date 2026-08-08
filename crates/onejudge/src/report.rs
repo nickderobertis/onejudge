@@ -20,8 +20,10 @@ use crate::usage::Usage;
 /// serialized shape of a report or the types it embeds. `1` was the initial
 /// contract; `2` added prompt-cache token fields to embedded [`Usage`], and `3`
 /// added the optional free-text `assessment`; `4` added `completion_reason`; `5`
-/// added optional two-party telemetry and native session linkage.
-pub const SCHEMA_VERSION: u32 = 5;
+/// added optional two-party telemetry and native session linkage; `6` added
+/// per-invocation harness attribution (`telemetry.attribution`) — which candidate
+/// identities the provider attempted, which one ran, and which it fell through.
+pub const SCHEMA_VERSION: u32 = 6;
 
 /// A judge verdict paired with the criterion it scored and the kind of
 /// judgement, so a serialized report is self-describing.
@@ -171,7 +173,7 @@ mod tests {
         assert!(!json.contains("verdicts"));
         assert!(!json.contains("usage"));
         assert!(!json.contains("assessment"));
-        assert!(json.contains("\"schema_version\":5"));
+        assert!(json.contains("\"schema_version\":6"));
         assert!(!json.contains("telemetry"));
     }
 

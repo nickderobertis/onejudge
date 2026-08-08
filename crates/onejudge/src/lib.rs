@@ -84,6 +84,9 @@ pub use skill::{load_skill, Frontmatter, SkillDefinition};
 pub use split::SplitProvider;
 #[doc(hidden)]
 pub use telemetry::InvocationTelemetry;
-pub use telemetry::{PartyTelemetry, SessionLink, Telemetry, TelemetryRole};
+pub use telemetry::{
+    CandidateAttempt, FellThrough, HarnessAttribution, PartyTelemetry, SessionLink, Telemetry,
+    TelemetryRole,
+};
 pub use transcript::{Message, Role, ToolEvent, ToolQuery, Transcript};
 pub use usage::Usage;

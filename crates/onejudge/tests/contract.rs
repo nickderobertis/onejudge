@@ -6,8 +6,9 @@
 //! break for the SDKs that compose over this contract.
 
 use onejudge::{
-    JudgeKind, JudgeValue, JudgeVerdict, Message, NamedVerdict, PartyTelemetry, Report,
-    SessionLink, Telemetry, TelemetryRole, ToolEvent, Transcript, Usage, SCHEMA_VERSION,
+    CandidateAttempt, FellThrough, HarnessAttribution, JudgeKind, JudgeValue, JudgeVerdict,
+    Message, NamedVerdict, PartyTelemetry, Report, SessionLink, Telemetry, TelemetryRole,
+    ToolEvent, Transcript, Usage, SCHEMA_VERSION,
 };
 
 /// The canonical report the golden is generated from: one tool-using assistant
@@ -76,23 +77,75 @@ fn canonical_report() -> Report {
             finished_at: Some("2026-01-01T00:00:00.025Z".into()),
             history_id: Some("019b76e0-history".into()),
         }],
+        attribution: vec![HarnessAttribution {
+            role: TelemetryRole::Agent,
+            turn_index: 1,
+            ran: Some("claude-code".into()),
+            fell_through: vec![FellThrough {
+                harness: "codex".into(),
+                reason: "quota".into(),
+            }],
+            candidates: vec![
+                CandidateAttempt {
+                    harness: "codex".into(),
+                    harness_id: "codex:work".into(),
+                    variant: Some("work".into()),
+                    model: Some("gpt-5.5".into()),
+                    status: "nonzero".into(),
+                    available: true,
+                    ran: false,
+                    failure_kind: Some("quota".into()),
+                    failure_kind_source: Some("stderr".into()),
+                    exit_code: Some(1),
+                    duration_ms: Some(4),
+                    error: Some("out of credit".into()),
+                    session_id: None,
+                    history_id: Some("019b76e0-codex".into()),
+                    usage: None,
+                },
+                CandidateAttempt {
+                    harness: "claude-code".into(),
+                    harness_id: "claude-code".into(),
+                    variant: None,
+                    model: None,
+                    status: "ok".into(),
+                    available: true,
+                    ran: true,
+                    failure_kind: None,
+                    failure_kind_source: None,
+                    exit_code: Some(0),
+                    duration_ms: Some(25),
+                    error: None,
+                    session_id: Some("native-agent-1".into()),
+                    history_id: Some("019b76e0-history".into()),
+                    usage: Some(Usage {
+                        input_tokens: Some(8),
+                        output_tokens: Some(2),
+                        cache_read_tokens: Some(4),
+                        cache_write_tokens: Some(1),
+                        cost_usd: Some(0.01),
+                    }),
+                },
+            ],
+            history_file: Some("/state/oneharness/history/run-1-skill.jsonl".into()),
+        }],
     });
     report
 }
 
-const EXAMPLE_GOLDEN: &str = include_str!("golden/report.example-v5.json");
+const EXAMPLE_GOLDEN: &str = include_str!("golden/report.example-v6.json");
 #[cfg(feature = "sdk-schema")]
-const SCHEMA_GOLDEN: &str = include_str!("golden/report.schema-v5.json");
+const SCHEMA_GOLDEN: &str = include_str!("golden/report.schema-v6.json");
 
 #[test]
-fn report_matches_the_golden_example_v5() {
-    assert_eq!(SCHEMA_VERSION, 5, "golden is for schema v5");
+fn report_matches_the_golden_example_v6() {
+    assert_eq!(SCHEMA_VERSION, 6, "golden is for schema v6");
     let actual = serde_json::to_string_pretty(&canonical_report()).unwrap();
     assert_eq!(
         actual.trim(),
         EXAMPLE_GOLDEN.trim(),
         "the Report wire form changed. If this is intentional, bump SCHEMA_VERSION \
-         and update the v5 contract goldens. Actual serialization:\n{actual}"
+         and update the v6 contract goldens. Actual serialization:\n{actual}"
     );
 }
 
@@ -104,7 +157,7 @@ fn golden_deserializes_back_to_the_canonical_report() {
 
 #[cfg(feature = "sdk-schema")]
 #[test]
-fn generated_report_schema_matches_the_schema_v5_golden() {
+fn generated_report_schema_matches_the_schema_v6_golden() {
     let actual = serde_json::to_value(onejudge::sdk_schema::bundle().report).unwrap();
     let golden: serde_json::Value = serde_json::from_str(SCHEMA_GOLDEN).unwrap();
     assert_eq!(

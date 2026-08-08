@@ -76,7 +76,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install MSRV toolchain
-        run: rustup toolchain install 1.82.0 --profile minimal
+        run: rustup toolchain install 1.86.0 --profile minimal
       - uses: extractions/setup-just@v3
       - run: just msrv
 

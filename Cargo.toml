@@ -5,13 +5,20 @@ members = ["crates/onejudge"]
 [workspace.package]
 version = "0.3.4"
 edition = "2021"
-rust-version = "1.82"
+# Floored by `oneharness-core`, whose typed report/stream contract onejudge parses
+# the oneharness boundary into (it declares 1.86). See `just msrv`.
+rust-version = "1.86"
 license = "MIT"
 repository = "https://github.com/nickderobertis/onejudge"
 authors = ["Nick DeRobertis"]
 description = "A simulated interaction and evaluation loop over oneharness: drive a harness through a multi-turn conversation and score the transcript."
 
 [workspace.dependencies]
+# oneharness's own engine crate. onejudge depends on it for the **wire contract**
+# of the boundary it drives — `RunReport` / `RunResult` / `FailureKind` /
+# `RunStreamEnvelope` — instead of re-declaring shadow serde structs that drift.
+# A published registry version, never a git rev.
+oneharness-core = "0.6.8"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
