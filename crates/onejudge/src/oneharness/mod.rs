@@ -456,13 +456,19 @@ impl OneharnessProvider {
 /// and session linkage for the candidate that ran, plus the identity of **every**
 /// candidate oneharness attempted.
 ///
-/// The measurements come from oneharness's own history record for the attempt when
-/// one is readable — the run report does not carry them — and fall back to whatever
-/// the result object itself supplied.
+/// The measurements come from the ran candidate's own
+/// [`ExecutionTelemetry`](oneharness_core::domain::report::ExecutionTelemetry) on
+/// the run report, and fall back to whatever the result object itself supplied (a
+/// producer standing in for oneharness may inline its timings instead). The
+/// history file is still read, but only for `history_id` — the one signal the
+/// report has no counterpart for.
 fn invocation_telemetry(role: TelemetryRole, invocation: &Invocation) -> InvocationTelemetry {
     let report = &invocation.report;
     let attempts = history::read_attempts(report);
-    let ran_record = invocation.ran.and_then(|index| attempts.get(index));
+    let measured = invocation
+        .result()
+        .map(report::measured)
+        .unwrap_or_default();
     let supplemental = &invocation.supplemental;
     let candidates = report
         .results
@@ -481,7 +487,7 @@ fn invocation_telemetry(role: TelemetryRole, invocation: &Invocation) -> Invocat
                 .map(|kind| report::failure_token(kind).to_string()),
             failure_kind_source: result.failure_kind_source.clone(),
             exit_code: result.exit_code,
-            duration_ms: history::millis(result.duration_ms),
+            duration_ms: report::millis(result.duration_ms),
             error: result.error.clone(),
             session_id: result.session_id.clone(),
             history_id: attempts
@@ -495,26 +501,24 @@ fn invocation_telemetry(role: TelemetryRole, invocation: &Invocation) -> Invocat
         .collect();
     InvocationTelemetry {
         role: Some(role),
-        model_ms: ran_record
-            .and_then(|record| history::millis(record.model_ms))
-            .or(supplemental.model_ms),
-        tool_ms: ran_record
-            .and_then(|record| history::millis(record.tool_ms))
-            .or(supplemental.tool_ms),
-        time_to_first_token_ms: ran_record
-            .and_then(|record| history::millis(record.time_to_first_token_ms))
+        model_ms: measured.model_ms.or(supplemental.model_ms),
+        tool_ms: measured.tool_ms.or(supplemental.tool_ms),
+        time_to_first_token_ms: measured
+            .time_to_first_token_ms
             .or(supplemental.time_to_first_token_ms),
         usage: invocation.usage().unwrap_or_default(),
         session_id: invocation
             .result()
             .and_then(|result| result.session_id.clone()),
-        started_at: ran_record
-            .and_then(|record| record.started_at.clone())
+        started_at: measured
+            .started_at
             .or_else(|| supplemental.started_at.clone()),
-        finished_at: ran_record
-            .and_then(|record| record.finished_at.clone())
+        finished_at: measured
+            .finished_at
             .or_else(|| supplemental.finished_at.clone()),
-        history_id: ran_record
+        history_id: invocation
+            .ran
+            .and_then(|index| attempts.get(index))
             .map(|record| record.history_id.to_string())
             .or_else(|| supplemental.history_id.clone()),
         ran: invocation

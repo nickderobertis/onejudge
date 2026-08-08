@@ -23,7 +23,7 @@
 //!   the crate's boundary invariant forbids.
 
 use oneharness_core::domain::events::ActionEvent;
-use oneharness_core::domain::report::{RunReport, RunResult, Status};
+use oneharness_core::domain::report::{ExecutionTelemetry, RunReport, RunResult, Status};
 use oneharness_core::domain::signals::FailureKind;
 use serde::Deserialize;
 use serde_json::Value;
@@ -124,6 +124,66 @@ impl Invocation {
     }
 }
 
+/// The measurements onejudge's `telemetry` contract reports for one candidate,
+/// read off **that candidate's own result**.
+///
+/// Since oneharness report schema `0.5` these ride on [`RunResult::telemetry`], so
+/// a consumer reads them off the run it just made. Before that they existed only
+/// on the history record, which is why onejudge used to re-open the history file
+/// the same run had just written — a second read of a side channel for numbers the
+/// report already had. See `docs/oneharness-library.md`.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(crate) struct Measured {
+    pub(crate) started_at: Option<String>,
+    pub(crate) finished_at: Option<String>,
+    pub(crate) model_ms: Option<u64>,
+    pub(crate) tool_ms: Option<u64>,
+    pub(crate) time_to_first_token_ms: Option<u64>,
+}
+
+/// Read one result's [`ExecutionTelemetry`], reporting only what the variant
+/// actually claims to have measured.
+///
+/// The variant is the whole point of reading this typed: each one states a
+/// *different* thing, and flattening them would report a guess as a measurement.
+/// In particular [`ExecutionTelemetry::StdoutObserved`] is deliberately **not**
+/// read as `tool_ms` — it is the union of tool intervals seen at the stdout pipe
+/// for a harness whose transcript carries no provider trace, which is a different
+/// quantity from the provider-measured split onejudge's contract reports (upstream
+/// keeps them in separate history fields for exactly that reason).
+pub(crate) fn measured(result: &RunResult) -> Measured {
+    match &result.telemetry {
+        Some(ExecutionTelemetry::ProviderMeasured {
+            started_at,
+            finished_at,
+            model_ms,
+            tool_ms,
+            time_to_first_token_ms,
+        }) => Measured {
+            started_at: Some(started_at.as_str().to_string()),
+            finished_at: finished_at.as_ref().map(|at| at.as_str().to_string()),
+            model_ms: millis(*model_ms),
+            tool_ms: millis(*tool_ms),
+            time_to_first_token_ms: millis(*time_to_first_token_ms),
+        },
+        // A run whose provider trace never completed: when it started is measured,
+        // the model/tool split is not. Reporting the bounds is what lets an
+        // operator place a failure in time.
+        Some(ExecutionTelemetry::PartialInvocation { started_at }) => Measured {
+            started_at: Some(started_at.as_str().to_string()),
+            ..Measured::default()
+        },
+        Some(ExecutionTelemetry::StdoutObserved { .. }) | None => Measured::default(),
+    }
+}
+
+/// A `u128` millisecond measurement narrowed to the `u64` onejudge's telemetry
+/// contract reports. A value that cannot fit is not a plausible duration, so it is
+/// reported as unknown rather than wrapped into a wrong one.
+pub(crate) fn millis(value: Option<u128>) -> Option<u64> {
+    value.and_then(|v| u64::try_from(v).ok())
+}
+
 /// Lift one of oneharness's normalized actions into onejudge's transcript event.
 /// oneharness's [`ActionEvent`] carries history-only lifecycle fields on top of
 /// these; the transcript keeps the four a consumer asserts on plus the ordering.
@@ -176,6 +236,7 @@ pub(crate) fn status_token(status: Status) -> &'static str {
         Status::Ok => "ok",
         Status::Nonzero => "nonzero",
         Status::Timeout => "timeout",
+        Status::Cancelled => "cancelled",
         Status::SpawnError => "spawn-error",
         Status::Skipped => "skipped",
         Status::Planned => "planned",
@@ -333,6 +394,11 @@ fn failure(op: &str, result: &RunResult) -> Option<Error> {
     }
     let kind = match result.status {
         Status::Timeout => ProviderErrorKind::Timeout,
+        // Torn down before it finished because the run was cancelled — distinct
+        // from a timeout, which was given its full deadline and exceeded it. Loud
+        // for the same reason: oneharness leaves `text` null, so a cancelled
+        // candidate that read as a turn would feed the judge an empty message.
+        Status::Cancelled => ProviderErrorKind::Cancelled,
         Status::SpawnError | Status::Skipped => ProviderErrorKind::Spawn,
         Status::Planned => ProviderErrorKind::Protocol,
         Status::Ok | Status::Nonzero => return None,
@@ -381,6 +447,64 @@ mod tests {
     }
 
     #[test]
+    fn measurements_are_read_off_the_results_own_telemetry() {
+        // Report schema `0.5` puts the measured trace on the result, so these come
+        // off the run onejudge just made — no second read of the history file.
+        let mut result = fixture::result("claude-code", "hi");
+        result.telemetry = Some(fixture::telemetry());
+        let invocation = parse(&fixture::report(vec![result])).unwrap();
+        assert_eq!(
+            measured(invocation.result().unwrap()),
+            Measured {
+                started_at: Some("2026-01-01T00:00:00.000Z".into()),
+                finished_at: Some("2026-01-01T00:00:00.030Z".into()),
+                model_ms: Some(11),
+                tool_ms: Some(4),
+                time_to_first_token_ms: Some(3),
+            }
+        );
+    }
+
+    #[test]
+    fn each_telemetry_variant_reports_only_what_it_measured() {
+        let measure = |telemetry| {
+            let mut result = fixture::result("codex", "hi");
+            result.telemetry = telemetry;
+            measured(&result)
+        };
+
+        // A trace that stopped mid-turn knows when the run began and nothing else:
+        // a model/tool split read out of it would be a guess, not a measurement.
+        assert_eq!(
+            measure(Some(ExecutionTelemetry::PartialInvocation {
+                started_at: "2026-01-01T00:00:00Z".parse().expect("a utc instant"),
+            })),
+            Measured {
+                started_at: Some("2026-01-01T00:00:00Z".into()),
+                ..Measured::default()
+            }
+        );
+
+        // Tool intervals seen at the stdout pipe are a different quantity from the
+        // provider-measured split this contract reports — upstream keeps them in
+        // separate fields — so they are not reported as `tool_ms`.
+        assert_eq!(
+            measure(Some(ExecutionTelemetry::StdoutObserved { tool_ms: 77 })),
+            Measured::default()
+        );
+
+        // No telemetry at all is unknown, never zero.
+        assert_eq!(measure(None), Measured::default());
+    }
+
+    #[test]
+    fn implausible_durations_are_reported_as_unknown_not_wrapped() {
+        assert_eq!(millis(Some(42)), Some(42));
+        assert_eq!(millis(None), None);
+        assert_eq!(millis(Some(u128::from(u64::MAX) + 1)), None);
+    }
+
+    #[test]
     fn falls_back_to_stdout_when_text_is_null() {
         let mut result = fixture::result("codex", "");
         result.text = None;
@@ -406,6 +530,10 @@ mod tests {
         // an empty assistant turn the judge then scores.
         for (status, expected) in [
             (Status::Timeout, ProviderErrorKind::Timeout),
+            // A run oneharness tore down on cancellation reports every cut-short
+            // candidate this way, and it is not a timeout: the deadline never
+            // expired, the caller stopped waiting.
+            (Status::Cancelled, ProviderErrorKind::Cancelled),
             (Status::SpawnError, ProviderErrorKind::Spawn),
             (Status::Skipped, ProviderErrorKind::Spawn),
             (Status::Planned, ProviderErrorKind::Protocol),

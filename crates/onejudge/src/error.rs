@@ -32,6 +32,12 @@ pub enum ProviderErrorKind {
     Overloaded,
     /// The call exceeded its deadline.
     Timeout,
+    /// The run was torn down before it finished because it was **cancelled** —
+    /// the caller stopped the turn, or the host was signalled. Distinct from
+    /// [`ProviderErrorKind::Timeout`], which was given its full deadline and
+    /// exceeded it: a cancelled call says nothing about whether the harness was
+    /// healthy, so it is not a reason to give up on the environment.
+    Cancelled,
     /// The provider process could not be started (binary missing, not runnable).
     Spawn,
     /// The provider ran but produced output that violated the protocol
@@ -54,6 +60,7 @@ impl ProviderErrorKind {
             "quota" => Self::Quota,
             "overloaded" => Self::Overloaded,
             "timeout" => Self::Timeout,
+            "cancelled" => Self::Cancelled,
             "spawn" => Self::Spawn,
             "protocol" => Self::Protocol,
             _ => Self::Other,
@@ -70,6 +77,7 @@ impl ProviderErrorKind {
             Self::Quota => "quota",
             Self::Overloaded => "overloaded",
             Self::Timeout => "timeout",
+            Self::Cancelled => "cancelled",
             Self::Spawn => "spawn",
             Self::Protocol => "protocol",
             Self::Other => "other",
@@ -151,6 +159,7 @@ mod tests {
             ProviderErrorKind::Quota,
             ProviderErrorKind::Overloaded,
             ProviderErrorKind::Timeout,
+            ProviderErrorKind::Cancelled,
             ProviderErrorKind::Spawn,
             ProviderErrorKind::Protocol,
             ProviderErrorKind::Other,

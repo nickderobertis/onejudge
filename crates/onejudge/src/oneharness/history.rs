@@ -3,11 +3,16 @@
 //!
 //! onejudge already asks every invocation for `--history`, so oneharness appends
 //! one normalized record per *attempted* candidate — including the ones a fallback
-//! chain fell through. That record, not the run report, is where oneharness keeps
-//! the measurements onejudge's own `telemetry` contract reports: `history_id`, the
-//! UTC invocation bounds, and the model/tool/time-to-first-token split. The run
-//! report deliberately carries none of them (`RunResult::telemetry` is
-//! `#[serde(skip)]`), so a reader of stdout alone reports them as unknown forever.
+//! chain fell through.
+//!
+//! **This is read for `history_id` and nothing else.** The measurements onejudge's
+//! `telemetry` contract reports — the invocation bounds and the
+//! model/tool/time-to-first-token split — now ride on the run report itself, as
+//! `RunResult::telemetry` (oneharness report schema `0.5`), and are read there by
+//! [`super::report::measured`]. Before `0.5` they existed only here, which forced
+//! onejudge to re-open the file the same run had just written. `history_id` is the
+//! one signal with no counterpart on the report: it names the record in
+//! oneharness's own store, so it is only knowable by reading that store.
 //!
 //! Correlation is positional and checked, never assumed: oneharness appends one
 //! record per result in result order, so this reads the session file's tail and
@@ -54,13 +59,6 @@ fn take_matching_tail(report: &RunReport, records: Vec<HistoryRecord>) -> Vec<Hi
     } else {
         Vec::new()
     }
-}
-
-/// A `u128` millisecond measurement narrowed to the `u64` onejudge's telemetry
-/// contract reports. A value that cannot fit is not a plausible duration, so it is
-/// reported as unknown rather than wrapped into a wrong one.
-pub(crate) fn millis(value: Option<u128>) -> Option<u64> {
-    value.and_then(|v| u64::try_from(v).ok())
 }
 
 #[cfg(test)]
@@ -156,12 +154,5 @@ mod tests {
             Some("2026-01-01T00:00:00Z")
         );
         std::fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
-    fn implausible_durations_are_reported_as_unknown_not_wrapped() {
-        assert_eq!(millis(Some(42)), Some(42));
-        assert_eq!(millis(None), None);
-        assert_eq!(millis(Some(u128::from(u64::MAX) + 1)), None);
     }
 }

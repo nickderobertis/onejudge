@@ -28,13 +28,17 @@
 //! nothing could run (`fallback.ran` null), which is the shape onejudge must turn
 //! into one classified error rather than a turn.
 //!
-//! **History.** `[[history:PATH]]` writes the per-candidate history record
-//! oneharness writes for every attempt — its real event-sourced JSONL
-//! (`HistoryLine::Run`) — to PATH and reports it as `history_file`, so the suite
-//! drives onejudge's read of it through oneharness's own reader. Without the
-//! marker the invocation's measurements are inlined on the result object instead
-//! (the "producer that supplies its own timings" case onejudge also accepts),
-//! which keeps the rest of the suite independent of a shared on-disk store.
+//! **Telemetry and history.** The measured trace always rides on the result that
+//! ran, as `RunResult::telemetry` (oneharness report schema `0.5`). `[[history:PATH]]`
+//! additionally writes the per-candidate history record oneharness writes for every
+//! attempt — its real event-sourced JSONL (`HistoryLine::Run`) — to PATH and reports
+//! it as `history_file`, so the suite drives onejudge's read of it through
+//! oneharness's own reader. That record is the only source of a `history_id`, and
+//! its *measurements* are deliberately different sentinels: onejudge must read the
+//! result, so a build that re-read the file reports 999 and fails loudly. Without
+//! the marker there is no record to name, so the id alone is inlined on the result
+//! (the "producer that supplies its own id" case onejudge also accepts), which
+//! keeps the rest of the suite independent of a shared on-disk store.
 //!
 //! Under `--stream` it speaks the **streamed provider protocol**
 //! (`docs/streaming.md`) instead: one `{"type":"event","event":{…}}` line per tool
@@ -70,7 +74,8 @@ use oneharness_core::domain::history::{
 };
 use oneharness_core::domain::mode::PermissionMode;
 use oneharness_core::domain::report::{
-    FallThrough, FallbackReport, OutputFormat, RunReport, RunResult, SessionReport, Status,
+    ExecutionTelemetry, FallThrough, FallbackReport, OutputFormat, RunReport, RunResult,
+    SessionReport, Status,
 };
 use oneharness_core::domain::session::SessionPhase;
 use oneharness_core::domain::signals::{FailureKind, Usage};
@@ -185,6 +190,15 @@ fn main() {
         results.len() - 1
     });
 
+    // The measured trace oneharness puts on the result it ran (report schema
+    // `0.5`). A fallen-through candidate gets none — it never reached the boundary
+    // a trace is measured between.
+    if let Some(index) = ran_index {
+        if matches!(results[index].status, Status::Ok) && results[index].failure_kind.is_none() {
+            results[index].telemetry = Some(provider_measured(is_agent));
+        }
+    }
+
     let failed = ran_index.is_none()
         || results[ran_index.unwrap_or(0)].failure_kind.is_some()
         || !matches!(
@@ -194,7 +208,7 @@ fn main() {
 
     // The history record oneharness writes per attempt, when the test asked for it.
     let history_file = marker(system, "history").map(|path| {
-        write_history(path, &results, is_agent);
+        write_history(path, &results);
         path.to_string()
     });
 
@@ -227,9 +241,10 @@ fn main() {
     };
 
     let mut document = serde_json::to_value(&report).expect("the report serializes");
-    // Without an on-disk history store the invocation's own measurements ride on
-    // the result object — the "producer supplies its own timings" case. oneharness
-    // itself keeps these on the history record, which `[[history:PATH]]` exercises.
+    // Without an on-disk history store there is no record to name, so the id rides
+    // on the result instead — the "producer supplies its own history id" case.
+    // `[[history:PATH]]` exercises the real store, which is the only source of a
+    // record id. The *measurements* are on the result either way, above.
     if report.history_file.is_none() {
         if let Some(index) = ran_index.filter(|_| !failed) {
             let telemetry = inline_telemetry(is_agent, &prompt);
@@ -252,37 +267,33 @@ fn main() {
     }
 }
 
-/// The measurements a producer that keeps no history store inlines on its result.
+/// The measured trace oneharness reports on the result it ran.
+fn provider_measured(is_agent: bool) -> ExecutionTelemetry {
+    let at = |instant: &str| instant.parse().expect("a run instant");
+    ExecutionTelemetry::ProviderMeasured {
+        started_at: at(if is_agent {
+            "2026-01-01T00:00:00.000Z"
+        } else {
+            "2026-01-01T00:00:01.000Z"
+        }),
+        finished_at: Some(at(if is_agent {
+            "2026-01-01T00:00:00.013Z"
+        } else {
+            "2026-01-01T00:00:01.006Z"
+        })),
+        model_ms: Some(if is_agent { 10 } else { 5 }),
+        tool_ms: Some(if is_agent { 3 } else { 1 }),
+        time_to_first_token_ms: Some(if is_agent { 2 } else { 1 }),
+    }
+}
+
+/// The record id a producer that keeps no history store inlines on its result.
 fn inline_telemetry(is_agent: bool, prompt: &str) -> Vec<(&'static str, Value)> {
     let role = if is_agent { "agent" } else { "judge" };
-    vec![
-        ("model_ms", json!(if is_agent { 10 } else { 5 })),
-        ("tool_ms", json!(if is_agent { 3 } else { 1 })),
-        (
-            "time_to_first_token_ms",
-            json!(if is_agent { 2 } else { 1 }),
-        ),
-        (
-            "started_at",
-            json!(if is_agent {
-                "2026-01-01T00:00:00Z"
-            } else {
-                "2026-01-01T00:00:01Z"
-            }),
-        ),
-        (
-            "finished_at",
-            json!(if is_agent {
-                "2026-01-01T00:00:00.013Z"
-            } else {
-                "2026-01-01T00:00:01.006Z"
-            }),
-        ),
-        (
-            "history_id",
-            json!(format!("history-{role}-{}", prompt.len())),
-        ),
-    ]
+    vec![(
+        "history_id",
+        json!(format!("history-{role}-{}", prompt.len())),
+    )]
 }
 
 /// A successful result carrying `text`.
@@ -399,7 +410,7 @@ fn write_line(value: &Value) {
 /// shape invented here. A fallen-through candidate gets a record with no timing
 /// (it never reached the boundary a trace is measured between), exactly as
 /// oneharness writes one.
-fn write_history(path: &str, results: &[RunResult], is_agent: bool) {
+fn write_history(path: &str, results: &[RunResult]) {
     if let Some(parent) = std::path::Path::new(path).parent() {
         let _ = std::fs::create_dir_all(parent);
     }
@@ -432,11 +443,22 @@ fn write_history(path: &str, results: &[RunResult], is_agent: bool) {
             status: result.status,
             exit_code: result.exit_code,
             duration_ms: measured.then_some(30),
-            started_at: measured.then(|| "2026-01-01T00:00:00Z".to_string()),
-            finished_at: measured.then(|| "2026-01-01T00:00:00.030Z".to_string()),
-            model_ms: measured.then_some(if is_agent { 10 } else { 5 }),
-            tool_ms: measured.then_some(if is_agent { 3 } else { 1 }),
-            time_to_first_token_ms: measured.then_some(if is_agent { 2 } else { 1 }),
+            // Deliberately NOT the numbers on the result's own telemetry above.
+            // Real oneharness writes the same measurement to both places, which is
+            // exactly why a test could not otherwise tell which one onejudge read.
+            // Since report schema `0.5` the result is the source and this file is
+            // consulted for `history_id` alone, so a run that reported these
+            // sentinels would be reading the side channel again.
+            //
+            // They still have to be a *coherent* record: oneharness validates its
+            // own run lines on read (`model_ms + tool_ms <= duration_ms`, and a
+            // non-empty `started_at`) and silently drops one that does not hold, so
+            // an incoherent sentinel would take the `history_id` down with it.
+            started_at: measured.then(|| "1999-09-09T09:09:09Z".to_string()),
+            finished_at: measured.then(|| "1999-09-09T09:09:09.999Z".to_string()),
+            model_ms: measured.then_some(20),
+            tool_ms: measured.then_some(9),
+            time_to_first_token_ms: measured.then_some(8),
             observed_tool_ms: None,
             text: result.text.clone(),
             text_source: result.text_source.clone(),

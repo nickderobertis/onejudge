@@ -1026,10 +1026,19 @@ fn the_per_candidate_history_record_is_read_back_through_oneharnesss_own_reader(
     assert_eq!(ids.len(), 2);
     assert_ne!(ids[0], ids[1], "each attempt has its own record");
 
-    // The measurements come from the record, which the run report never carries.
+    // The measurements come off the RESULT's own `ExecutionTelemetry`, which the
+    // run report has carried since oneharness report schema `0.5`. The double
+    // writes deliberately different numbers (999) into the history record, so a
+    // build that re-read the file for measurements it already had reports those
+    // instead — which is what these assertions catch.
     let telemetry = outcome.telemetry.expect("telemetry");
     assert_eq!(telemetry.agent.model_ms, Some(10));
     assert_eq!(telemetry.agent.tool_ms, Some(3));
+    assert_eq!(telemetry.agent.time_to_first_token_ms, Some(2));
+    assert_eq!(
+        telemetry.sessions[0].started_at, "2026-01-01T00:00:00.000Z",
+        "the invocation bounds come from the report, not the history record"
+    );
     assert_eq!(telemetry.sessions.len(), 1);
     assert_eq!(
         telemetry.sessions[0].history_id.as_deref(),

@@ -10,7 +10,7 @@ use oneharness_core::domain::events::ActionEvent;
 use oneharness_core::domain::history::{HistoryId, HistoryLabels, HistoryRecord};
 use oneharness_core::domain::mode::PermissionMode;
 use oneharness_core::domain::report::{
-    FallThrough, FallbackReport, OutputFormat, RunReport, RunResult, Status,
+    ExecutionTelemetry, FallThrough, FallbackReport, OutputFormat, RunReport, RunResult, Status,
 };
 use oneharness_core::domain::signals::{FailureKind, Usage};
 
@@ -116,6 +116,18 @@ pub(crate) fn report(results: Vec<RunResult>) -> RunReport {
         history_file: None,
         config_files: Vec::new(),
         results,
+    }
+}
+
+/// A complete provider-measured trace, as oneharness puts it on a result since
+/// report schema `0.5`.
+pub(crate) fn telemetry() -> ExecutionTelemetry {
+    ExecutionTelemetry::ProviderMeasured {
+        started_at: "2026-01-01T00:00:00.000Z".parse().expect("a run instant"),
+        finished_at: Some("2026-01-01T00:00:00.030Z".parse().expect("a run instant")),
+        model_ms: Some(11),
+        tool_ms: Some(4),
+        time_to_first_token_ms: Some(3),
     }
 }
 
