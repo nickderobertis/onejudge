@@ -70,14 +70,42 @@ Any one of these, upstream in `oneharness`, would make the hop collapsible:
 Until then this is the smallest hop that preserves the behaviours the split
 exists to protect.
 
+## Cancellation: close the stream, then kill
+
+A cancelled or malformed streamed turn must terminate the **harness**, not just
+the `oneharness` process onejudge spawned. onejudge cannot do that by signalling:
+every harness is its own process-group leader (below), so nothing onejudge sends
+reaches it. What onejudge can do is hand oneharness its own cancellation signal.
+
+`oneharness run --stream` writes each event to stdout, and a failed write is its
+documented short-circuit: `stream_one_harness` returns `StreamStep::Stop`,
+`run_job_streaming` ends the run as `StreamEnd::Stopped`, and that maps to
+`Finish::Terminate` → `Tree::terminate`, which SIGTERMs then SIGKILLs the
+harness's *own* process group. So `run_streamed`
+(`crates/onejudge/src/oneharness/mod.rs`) drops the stdout reader **first**, waits
+up to `TEARDOWN_GRACE` for oneharness to take the hint and exit, and only kills it
+outright as a backstop. Killing first — which is what it used to do — denied
+oneharness that teardown and orphaned the harness, still burning tokens.
+
+`cancelling_a_streamed_turn_terminates_the_harness_oneharness_spawned` in
+`tests/e2e.rs` is the gate on this. The double spawns a harness stand-in in its
+own process group, publishes that process's pid and a liveness port, and (like
+oneharness) tears it down only when its own stdout breaks; the test then proves
+from outside the tree that the stand-in stopped answering. Reverting the teardown
+to an outright kill fails it in ~10s, naming the surviving pid.
+
+The residual is bounded and worth knowing: oneharness only notices the broken pipe
+on its *next* write, so a harness that emits nothing for longer than
+`TEARDOWN_GRACE` still reaches the backstop kill and is orphaned. Closing that gap
+needs a `SIGINT`/`SIGTERM` handler upstream in oneharness that runs the same
+`Finish::Terminate` teardown; it does not need any new library API.
+
 ## Why onejudge does not own the `oneharness` process as a group
 
-A cancelled streamed turn tears the child down with one `kill` of the
-`oneharness` process onejudge spawned (`run_streamed` in
-`crates/onejudge/src/oneharness/mod.rs`). The obvious-looking upgrade — spawn it
-into a process group / Job Object (`command-group`) so the kill reaches its
-descendants too — was evaluated and **deliberately rejected**. Do not re-add it
-without changing one of these two facts:
+The obvious-looking alternative — spawn `oneharness` into a process group / Job
+Object (`command-group`) so a kill reaches its descendants — was evaluated and
+**deliberately rejected**. Do not re-add it without changing one of these two
+facts:
 
 - **On Unix it cannot reach the descendants that matter.** Every harness
   oneharness runs is spawned through `oneharness_core::io::process::Process::spawn`,
@@ -94,14 +122,8 @@ without changing one of these two facts:
   reach `oneharness` because it shares onejudge's group. Detaching it would leave
   a live `oneharness` — and its harness — behind on the most common cancel path.
 
-The residual leak is real and belongs upstream: when onejudge kills `oneharness`,
-oneharness dies without running its own `Finish::Terminate` teardown, so the
-harness CLI it had detached is orphaned. oneharness already owns every piece
-needed to fix it (`Process::finish(Finish::Terminate)` terminates its tree on its
-own timeout); what is missing is a `SIGINT`/`SIGTERM` handler that runs that
-teardown when its *parent* cancels it. Until oneharness has one, no change on
-this side can terminate the harness on cancellation — the library API is not the
-obstacle, signal handling in the process that owns those children is.
+Neither would it have bought the descendant termination above, which comes from
+closing the stream rather than from the shape of the kill.
 
 ## Known gap worth reporting upstream
 

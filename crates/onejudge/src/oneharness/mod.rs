@@ -46,8 +46,13 @@
 //! `--stream`). Spawning also keeps oneharness's per-turn timeout, its cancellation
 //! path, and its termination of the harness's descendants inside the process that
 //! owns them — and keeps that process in *onejudge's* process group, where a
-//! terminal Ctrl-C or a parent's group signal still reaches it. See
-//! `docs/oneharness-library.md`.
+//! terminal Ctrl-C or a parent's group signal still reaches it.
+//!
+//! **Cancelling a turn therefore closes the stream before it kills anything.** A
+//! harness is its own process-group leader, so onejudge can never signal it; what
+//! it can do is close oneharness's stdout, which is oneharness's own short-circuit
+//! signal to terminate the tree it owns. Only if it does not exit within
+//! [`TEARDOWN_GRACE`] is it killed outright. See `docs/oneharness-library.md`.
 
 #[cfg(test)]
 pub(crate) mod fixture;
@@ -59,6 +64,7 @@ use std::io::{Read as _, Write};
 use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
+use std::time::{Duration, Instant};
 
 use crate::error::{Error, ProviderErrorKind, Result};
 use crate::provider::{
@@ -93,6 +99,34 @@ const SESSION_UNSUPPORTED_MARKER: &str = "does not support --session";
 /// without `--session`).
 fn is_session_unsupported(err: &Error) -> bool {
     err.to_string().contains(SESSION_UNSUPPORTED_MARKER)
+}
+
+/// How long a cancelled `oneharness run` is given to notice its closed stdout and
+/// tear down the harness tree it owns before onejudge kills it outright.
+///
+/// oneharness observes the broken pipe on its *next* write, so this only has to
+/// cover the gap to the next streamed event — while staying short enough that
+/// cancelling a turn is still responsive. A harness that stays silent past it is
+/// the residual case the backstop kill covers, and the one that orphans it.
+const TEARDOWN_GRACE: Duration = Duration::from_secs(2);
+
+/// How often the grace period above re-checks the child.
+const TEARDOWN_POLL: Duration = Duration::from_millis(10);
+
+/// Wait up to `grace` for `child` to exit on its own, returning whether it did.
+///
+/// A `try_wait` error is reported as "did not exit", so an unwaitable child still
+/// reaches the backstop kill.
+fn exited_within(child: &mut std::process::Child, grace: Duration) -> bool {
+    let deadline = Instant::now() + grace;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => return true,
+            Err(_) => return false,
+            Ok(None) if Instant::now() >= deadline => return false,
+            Ok(None) => std::thread::sleep(TEARDOWN_POLL),
+        }
+    }
 }
 
 /// The default [`Provider`]: shells out to the `oneharness` CLI.
@@ -323,21 +357,24 @@ impl OneharnessProvider {
             .ok_or_else(|| Error::provider(op.to_string(), "could not open oneharness stdout"))?;
 
         let mut events = Vec::new();
-        let outcome = read_stream(
-            op,
-            &mut std::io::BufReader::new(stdout),
-            &mut events,
-            on_event,
-        );
+        let mut reading = std::io::BufReader::new(stdout);
+        let outcome = read_stream(op, &mut reading, &mut events, on_event);
         if !matches!(outcome, Ok(StreamOutcome::Report(_))) {
             // Aborted or malformed: the turn is over either way, so stop a child
             // that is still producing rather than wait out its full run.
             //
-            // One child, not a process group: oneharness makes every harness its
-            // own group leader, so a group kill would reach nothing extra, while
-            // detaching this child would cost it the terminal's (and a parent's)
-            // SIGINT. See `docs/oneharness-library.md`.
-            let _ = child.kill();
+            // Closing the read end is what terminates the *harness*, and it has to
+            // come first. onejudge cannot signal the harness itself — oneharness
+            // makes every harness its own process-group leader — but a broken
+            // stdout pipe is oneharness's own documented short-circuit: its next
+            // event write fails, and it terminates the process tree it owns before
+            // exiting. Killing it outright would deny it that teardown and leave
+            // the harness orphaned, still burning tokens. So the kill is only a
+            // backstop, for a child that does not take the hint in time.
+            drop(reading);
+            if !exited_within(&mut child, TEARDOWN_GRACE) {
+                let _ = child.kill();
+            }
         }
         let status = child.wait().map_err(|e| {
             Error::provider(op.to_string(), format!("oneharness did not complete: {e}"))

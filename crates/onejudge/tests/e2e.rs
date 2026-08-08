@@ -718,6 +718,75 @@ fn a_breaking_sink_tears_down_a_streamed_turn() {
     );
 }
 
+/// The `<pid> <port>` the double's harness stand-in published once it was live.
+fn descendant_handle(path: &std::path::Path) -> (u32, u16) {
+    let raw = std::fs::read_to_string(path).expect("the harness stand-in published its handle");
+    let (pid, port) = raw
+        .trim()
+        .split_once(' ')
+        .expect("handle is `<pid> <port>`");
+    (
+        pid.parse().expect("a pid"),
+        port.parse().expect("a liveness port"),
+    )
+}
+
+/// Whether the harness stand-in is still answering on its liveness port — asked
+/// from outside the process tree, so it holds however the process died.
+fn descendant_is_running(port: u16) -> bool {
+    std::net::TcpStream::connect_timeout(
+        &std::net::SocketAddr::from(([127, 0, 0, 1], port)),
+        std::time::Duration::from_millis(200),
+    )
+    .is_ok()
+}
+
+#[test]
+fn cancelling_a_streamed_turn_terminates_the_harness_oneharness_spawned() {
+    // The descendant that matters is the harness, and onejudge can never signal it:
+    // oneharness makes every harness its own process-group leader. So cancellation
+    // has to be cooperative — close oneharness's stdout and let *it* terminate the
+    // tree it owns. The double models both halves: it spawns a detached stand-in,
+    // publishes its pid and a liveness port, and tears it down only when its own
+    // stdout breaks. A build that killed oneharness outright never delivers that
+    // signal, and the stand-in below outlives the turn.
+    let handle = scratch_path("streamed-descendant.handle");
+    let provider = streaming_oneharness();
+    let engine = Engine::new(&provider, settings());
+    let skill = skill_with(&format!(
+        "[[reply:unreachable]][[stream-descendant:{}]]",
+        handle.display()
+    ));
+    let mut live = None;
+    let outcome = engine
+        .run_streaming(&Conversation::single_turn(skill, "go"), &mut |_event| {
+            // Recorded mid-turn, and asserted live here, so the check after the
+            // run cannot pass against a stand-in that never started.
+            let (pid, port) = descendant_handle(&handle);
+            assert!(
+                descendant_is_running(port),
+                "the harness stand-in (pid {pid}) was not running during the turn"
+            );
+            live = Some((pid, port));
+            ControlFlow::Break(())
+        })
+        .unwrap();
+    assert!(outcome.stopped_early);
+
+    let (pid, port) = live.expect("the sink saw an event");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while descendant_is_running(port) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the harness stand-in (pid {pid}) outlived the cancelled turn: onejudge \
+             killed oneharness instead of closing the stream first, so oneharness \
+             never terminated the process tree it owns"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    let _ = std::fs::remove_file(&handle);
+}
+
 // --- SplitProvider journeys (two DIFFERENT real-subprocess backends) --------
 
 #[test]

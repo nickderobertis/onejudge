@@ -50,6 +50,13 @@
 //! *after* the terminal one, and `[[stream-then-fail]]` writes a complete stream
 //! and then exits non-zero.
 //!
+//! `[[stream-descendant:HANDLE]]` models oneharness's **cancellation** contract
+//! instead: it spawns a harness stand-in in its own process group (unreachable by
+//! anything onejudge signals), publishes that process's pid and a liveness port to
+//! HANDLE, and streams until its stdout breaks — the signal oneharness turns into
+//! `StreamStep::Stop` and a `Finish::Terminate` of the tree it owns. A consumer
+//! that kills this process instead never gets there, and the stand-in survives.
+//!
 //! Built only under the `fake-provider` feature; never shipped to a consumer.
 #![allow(missing_docs)]
 
@@ -79,6 +86,15 @@ fn main() {
     let argv: Vec<String> = std::env::args().skip(1).collect();
     if argv.first().map(String::as_str) == Some("init") {
         run_init(&argv[1..]);
+    }
+    // Not an oneharness verb: this is how the double re-execs itself as the
+    // *harness* stand-in for `[[stream-descendant:…]]`. Handled before flag
+    // parsing for the same reason `init` is.
+    if argv.first().map(String::as_str) == Some("--descendant") {
+        let Some(handle) = argv.get(1) else {
+            emit_error("--descendant needs a handle path");
+        };
+        run_descendant(handle);
     }
 
     let flags = parse_flags();
@@ -470,6 +486,9 @@ fn emit_stream(system: &str, report: &Value) {
         // Every event, then silence: the stream never reaches its terminal line.
         return;
     }
+    if let Some(handle) = marker(system, "stream-descendant") {
+        stream_until_the_consumer_leaves(handle);
+    }
     if let Some(path) = marker(system, "stream-wait") {
         wait_for(path);
     }
@@ -495,15 +514,118 @@ fn emit_stream(system: &str, report: &Value) {
 /// never creates it — the bounded wait then fails the run loudly rather than
 /// hanging the suite forever.
 fn wait_for(path: &str) {
+    wait_for_path(path, "the streamed events never reached a live consumer");
+}
+
+/// Block until `path` exists, failing loudly after 30s rather than hanging.
+fn wait_for_path(path: &str, why: &str) {
     let deadline = Instant::now() + Duration::from_secs(30);
     while !std::path::Path::new(path).exists() {
         if Instant::now() >= deadline {
-            emit_error(&format!(
-                "timed out waiting for {path}: the streamed events never reached a live consumer"
-            ));
+            emit_error(&format!("timed out waiting for {path}: {why}"));
         }
         std::thread::sleep(Duration::from_millis(10));
     }
+}
+
+/// Model oneharness's *cancellation* contract, which is what makes a cancelled
+/// turn terminate the harness rather than orphan it.
+///
+/// Spawn the harness stand-in the way `oneharness_core::io::process` spawns every
+/// harness — in its own process group, unreachable by anything onejudge signals —
+/// then stream events until the consumer goes away. A failed write is the broken
+/// pipe oneharness treats as `StreamStep::Stop`, and like oneharness's
+/// `Finish::Terminate` this tears the harness down before exiting. A consumer that
+/// kills this process instead never gets here, and leaves the stand-in running.
+fn stream_until_the_consumer_leaves(handle: &str) -> ! {
+    let mut harness = spawn_harness(handle);
+    let mut index = 0usize;
+    // The consumer's break reaches us only as a failed write, so keep publishing.
+    while write_line_checked(&json!({ "type": "event", "event": tool_event(index, "sleep 600") }))
+        .is_ok()
+    {
+        index += 1;
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let _ = harness.kill();
+    let _ = harness.wait();
+    std::process::exit(0);
+}
+
+/// Re-exec this binary as the harness stand-in and block until it has published
+/// its handle. No inherited pipes: a stand-in holding the consumer's stdout or
+/// stderr would keep them from ever reaching EOF.
+fn spawn_harness(handle: &str) -> std::process::Child {
+    let _ = std::fs::remove_file(handle);
+    let exe = std::env::current_exe().unwrap_or_else(|e| emit_error(&format!("current exe: {e}")));
+    let mut command = std::process::Command::new(exe);
+    command
+        .arg("--descendant")
+        .arg(handle)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    detach(&mut command);
+    let child = command
+        .spawn()
+        .unwrap_or_else(|e| emit_error(&format!("could not spawn the harness stand-in: {e}")));
+    wait_for_path(handle, "the harness stand-in never published its handle");
+    child
+}
+
+/// Put `command` in its own process group, exactly as oneharness does for a
+/// harness, so no signal aimed at this process or its group can reach it.
+#[cfg(unix)]
+fn detach(command: &mut std::process::Command) {
+    use std::os::unix::process::CommandExt as _;
+    command.process_group(0);
+}
+
+/// The Windows equivalent: a new process group, detached from the parent's.
+#[cfg(windows)]
+fn detach(command: &mut std::process::Command) {
+    use std::os::windows::process::CommandExt as _;
+    const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+    command.creation_flags(CREATE_NEW_PROCESS_GROUP);
+}
+
+/// The harness stand-in: publish `<pid> <port>`, then idle on a listening socket
+/// so a test can ask from the outside whether this process is still running.
+///
+/// The self-imposed deadline is hygiene, not behaviour: a *failing* cancellation
+/// test must not leak an immortal process onto a CI runner. It is far longer than
+/// any assertion window, so it can never make a failing test pass.
+fn run_descendant(handle: &str) -> ! {
+    let listener =
+        std::net::TcpListener::bind("127.0.0.1:0").unwrap_or_else(|e| emit_error(&format!("{e}")));
+    let port = listener
+        .local_addr()
+        .unwrap_or_else(|e| emit_error(&format!("{e}")))
+        .port();
+    listener
+        .set_nonblocking(true)
+        .unwrap_or_else(|e| emit_error(&format!("{e}")));
+    // Publish via rename so a reader never sees a half-written handle.
+    let staged = format!("{handle}.staging");
+    let _ = std::fs::write(&staged, format!("{} {port}", std::process::id()));
+    let _ = std::fs::rename(&staged, handle);
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while Instant::now() < deadline {
+        // Answering at all is the liveness signal; the connection itself is not.
+        drop(listener.accept());
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    std::process::exit(0);
+}
+
+/// Like [`write_line`], but reports a broken pipe instead of panicking on it —
+/// the signal a consumer that closed the stream is meant to deliver.
+fn write_line_checked(value: &Value) -> std::io::Result<()> {
+    let mut out = serde_json::to_string(value).expect("value serializes");
+    out.push('\n');
+    let mut stdout = std::io::stdout();
+    stdout.write_all(out.as_bytes())?;
+    stdout.flush()
 }
 
 /// A real oneharness never exits non-zero on a *harness* failure without also

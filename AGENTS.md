@@ -69,9 +69,9 @@ Built up from the `create-repo` skill's reference axes, not a single template.
 Use the `just` recipes; do not hand-roll equivalents. `just --list` is the index.
 
 - `just bootstrap` — fetch the pinned toolchain + `cargo fetch` from a clean clone.
-- `just check` — the full gate: format check, clippy (deny warnings), doc build,
-  coverage-enforced tests **including e2e**, and the supply-chain audit. Must
-  pass before any commit or PR.
+- `just check` (alias: `just gate`) — the full gate: format check, clippy (deny
+  warnings), doc build, coverage-enforced tests **including e2e**, and the
+  supply-chain audit. Must pass before any commit or PR.
 - `just test` (coverage-enforced) / `just test-fast` / `just test-e2e` /
   `just lint` / `just format` / `just audit` / `just msrv` — individual steps.
 - `just test-live` — the credentialed real `oneharness` tier, out of `check`.
