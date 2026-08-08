@@ -70,6 +70,39 @@ Any one of these, upstream in `oneharness`, would make the hop collapsible:
 Until then this is the smallest hop that preserves the behaviours the split
 exists to protect.
 
+## Why onejudge does not own the `oneharness` process as a group
+
+A cancelled streamed turn tears the child down with one `kill` of the
+`oneharness` process onejudge spawned (`run_streamed` in
+`crates/onejudge/src/oneharness/mod.rs`). The obvious-looking upgrade — spawn it
+into a process group / Job Object (`command-group`) so the kill reaches its
+descendants too — was evaluated and **deliberately rejected**. Do not re-add it
+without changing one of these two facts:
+
+- **On Unix it cannot reach the descendants that matter.** Every harness
+  oneharness runs is spawned through `oneharness_core::io::process::Process::spawn`,
+  whose Unix `Tree::prepare` calls `setpgid(0, 0)` in `pre_exec` — each harness is
+  its own group leader *by design*, so it is not a member of any group onejudge
+  could signal. A group kill from here would terminate exactly the one process a
+  plain `kill` already terminates. (On Windows it would reach them, since a
+  descendant stays in the outer Job Object as well as oneharness's own. The gain
+  is Windows-only; the cost below is not.)
+- **It would break the cancellation that does work.** A child in its own process
+  group no longer receives the terminal's `SIGINT`, nor a signal a parent sends
+  to onejudge's group. Today Ctrl-C on `onejudge run`, and a parent tearing down
+  onejudge's group in the `onepipeline → oneagentgraph → onejudge` chain, both
+  reach `oneharness` because it shares onejudge's group. Detaching it would leave
+  a live `oneharness` — and its harness — behind on the most common cancel path.
+
+The residual leak is real and belongs upstream: when onejudge kills `oneharness`,
+oneharness dies without running its own `Finish::Terminate` teardown, so the
+harness CLI it had detached is orphaned. oneharness already owns every piece
+needed to fix it (`Process::finish(Finish::Terminate)` terminates its tree on its
+own timeout); what is missing is a `SIGINT`/`SIGTERM` handler that runs that
+teardown when its *parent* cancels it. Until oneharness has one, no change on
+this side can terminate the harness on cancellation — the library API is not the
+obstacle, signal handling in the process that owns those children is.
+
 ## Known gap worth reporting upstream
 
 `oneharness run`'s report does **not** carry the invocation's measurements —

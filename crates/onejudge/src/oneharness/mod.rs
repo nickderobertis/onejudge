@@ -45,7 +45,9 @@
 //! and would collide with onejudge's own stdout contract (`--format json`,
 //! `--stream`). Spawning also keeps oneharness's per-turn timeout, its cancellation
 //! path, and its termination of the harness's descendants inside the process that
-//! owns them. See `docs/oneharness-library.md`.
+//! owns them — and keeps that process in *onejudge's* process group, where a
+//! terminal Ctrl-C or a parent's group signal still reaches it. See
+//! `docs/oneharness-library.md`.
 
 #[cfg(test)]
 pub(crate) mod fixture;
@@ -330,6 +332,11 @@ impl OneharnessProvider {
         if !matches!(outcome, Ok(StreamOutcome::Report(_))) {
             // Aborted or malformed: the turn is over either way, so stop a child
             // that is still producing rather than wait out its full run.
+            //
+            // One child, not a process group: oneharness makes every harness its
+            // own group leader, so a group kill would reach nothing extra, while
+            // detaching this child would cost it the terminal's (and a parent's)
+            // SIGINT. See `docs/oneharness-library.md`.
             let _ = child.kill();
         }
         let status = child.wait().map_err(|e| {

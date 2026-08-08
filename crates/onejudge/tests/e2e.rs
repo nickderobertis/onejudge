@@ -679,6 +679,11 @@ fn a_breaking_sink_tears_down_a_streamed_turn() {
     // only after 30s, so the elapsed bound below is what proves the child was
     // *terminated* rather than waited out — and the run still reports the events it
     // did see, stopped early.
+    //
+    // The bound proves termination, not just an early return: the turn cannot come
+    // back until the stderr drain reaches EOF, and EOF on that pipe requires every
+    // process holding its write end to be gone. A build that abandoned the child
+    // instead of killing it would sit here for the double's full 30s.
     let provider = streaming_oneharness();
     let engine = Engine::new(&provider, settings());
     let never = scratch_path("streamed-never.marker");
