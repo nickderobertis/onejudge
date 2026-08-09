@@ -18,6 +18,12 @@ use onejudge::{
     ProviderErrorKind, Settings, SimulatedUser, Skill, SplitProvider, ToolQuery, SCHEMA_VERSION,
 };
 
+mod support;
+
+use support::{await_path, descendant_handle, descendant_is_running, scratch_path};
+#[cfg(unix)]
+use support::{kill_group, process_exists, OwnedProcessGroups};
+
 /// A [`CommandProvider`] pointed at the built echo test double.
 fn echo() -> CommandProvider {
     CommandProvider::new(vec![
@@ -484,14 +490,6 @@ fn streaming_oneharness() -> OneharnessProvider {
     fake_oneharness().with_streaming(true)
 }
 
-/// A unique path under the integration-test tmp dir, removed if it survived an
-/// earlier run.
-fn scratch_path(name: &str) -> std::path::PathBuf {
-    let path = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(name);
-    let _ = std::fs::remove_file(&path);
-    path
-}
-
 #[test]
 fn streamed_events_reach_the_sink_before_the_turn_ends() {
     // The double publishes its event line, then blocks until the file this sink
@@ -716,29 +714,6 @@ fn a_breaking_sink_tears_down_a_streamed_turn() {
         1,
         "the delivered event is kept on the abandoned turn"
     );
-}
-
-/// The `<pid> <port>` the double's harness stand-in published once it was live.
-fn descendant_handle(path: &std::path::Path) -> (u32, u16) {
-    let raw = std::fs::read_to_string(path).expect("the harness stand-in published its handle");
-    let (pid, port) = raw
-        .trim()
-        .split_once(' ')
-        .expect("handle is `<pid> <port>`");
-    (
-        pid.parse().expect("a pid"),
-        port.parse().expect("a liveness port"),
-    )
-}
-
-/// Whether the harness stand-in is still answering on its liveness port — asked
-/// from outside the process tree, so it holds however the process died.
-fn descendant_is_running(port: u16) -> bool {
-    std::net::TcpStream::connect_timeout(
-        &std::net::SocketAddr::from(([127, 0, 0, 1], port)),
-        std::time::Duration::from_millis(200),
-    )
-    .is_ok()
 }
 
 #[test]
@@ -1253,69 +1228,6 @@ fn a_hook_that_cannot_group_a_process_fails_the_turn_instead_of_running_it() {
     // The child it refused is never reported as a process of the run.
     assert!(onejudge::Provider::spawned_processes(&provider).is_empty());
     assert_eq!(hook.seen.lock().unwrap().len(), 1);
-}
-
-/// An embedder-owned group per spawned process: onejudge's child becomes its own
-/// POSIX process-group leader, so its pid *is* the group id, and everything it
-/// goes on to spawn inherits the group. This is the POSIX half of what a Windows
-/// embedder does with a job object.
-#[cfg(unix)]
-#[derive(Default)]
-struct OwnedProcessGroups {
-    groups: std::sync::Mutex<Vec<u32>>,
-}
-
-#[cfg(unix)]
-impl onejudge::SpawnHook for OwnedProcessGroups {
-    fn spawning(
-        &self,
-        command: &mut std::process::Command,
-        _context: &onejudge::SpawnContext<'_>,
-    ) -> std::io::Result<()> {
-        use std::os::unix::process::CommandExt as _;
-        command.process_group(0);
-        Ok(())
-    }
-
-    fn spawned(
-        &self,
-        child: &std::process::Child,
-        _context: &onejudge::SpawnContext<'_>,
-    ) -> std::io::Result<Option<String>> {
-        self.groups.lock().unwrap().push(child.id());
-        Ok(Some(format!("pgid:{}", child.id())))
-    }
-}
-
-/// Terminate an embedder-owned process group the way a `cancel --kill` does:
-/// unconditionally, to every member, including descendants the group leader is no
-/// longer around to reap.
-#[cfg(unix)]
-fn kill_group(pgid: u32) {
-    let pid = i32::try_from(pgid)
-        .ok()
-        .and_then(rustix::process::Pid::from_raw)
-        .expect("a real pid");
-    let _ = rustix::process::kill_process_group(pid, rustix::process::Signal::KILL);
-}
-
-/// Whether `pid` still names a live (or unreaped) process.
-#[cfg(unix)]
-fn process_exists(pid: u32) -> bool {
-    i32::try_from(pid)
-        .ok()
-        .and_then(rustix::process::Pid::from_raw)
-        .is_some_and(|pid| rustix::process::test_kill_process(pid).is_ok())
-}
-
-/// Block until `path` exists, failing loudly rather than hanging.
-#[cfg(unix)]
-fn await_path(path: &std::path::Path, why: &str) {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
-    while !path.exists() {
-        assert!(std::time::Instant::now() < deadline, "{why}");
-        std::thread::sleep(std::time::Duration::from_millis(20));
-    }
 }
 
 #[cfg(unix)]

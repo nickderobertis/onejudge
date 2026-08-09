@@ -10,7 +10,7 @@ use std::path::PathBuf;
 
 use serde::Deserialize;
 
-use crate::{Conversation, JudgeKind, Settings, SimulatedUser, Skill};
+use crate::{Conversation, JudgeKind, Settings, SharedSpawnHook, SimulatedUser, Skill};
 
 use super::CliError;
 
@@ -344,6 +344,9 @@ impl Config {
             evals,
             done_when,
             assessment,
+            // A config file cannot name an in-process hook; an embedder installs
+            // one with `Plan::with_spawn_hook`, and no hook is today's behaviour.
+            spawn_hook: None,
         })
     }
 }
@@ -512,7 +515,6 @@ pub struct Eval {
 }
 
 /// Everything the run driver needs, resolved and validated from the config.
-#[derive(Debug)]
 pub struct Plan {
     /// The provider backend to build.
     pub provider: ProviderSpec,
@@ -527,6 +529,48 @@ pub struct Plan {
     pub done_when: Option<String>,
     /// Prompt for the optional free-text assessment.
     pub assessment: Option<String>,
+    /// The embedder's [`SpawnHook`](crate::SpawnHook), installed on **every**
+    /// backend the plan builds. `None` — the only thing a config file can produce
+    /// — leaves today's behaviour: the run spawns into onejudge's own group and
+    /// claims none. Set it with [`Plan::with_spawn_hook`].
+    pub spawn_hook: Option<SharedSpawnHook>,
+}
+
+impl std::fmt::Debug for Plan {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // A `dyn SpawnHook` is not `Debug`; whether one is installed is the part a
+        // reader of a plan's `Debug` output actually needs.
+        f.debug_struct("Plan")
+            .field("provider", &self.provider)
+            .field("settings", &self.settings)
+            .field("conversation", &self.conversation)
+            .field("evals", &self.evals)
+            .field("done_when", &self.done_when)
+            .field("assessment", &self.assessment)
+            .field("spawn_hook", &self.spawn_hook.is_some())
+            .finish()
+    }
+}
+
+impl Plan {
+    /// Offer every process this plan spawns to `hook` before it starts work, so an
+    /// embedder driving onejudge **through a plan** — rather than building the
+    /// providers itself — can place each one in a group it owns and can later
+    /// terminate.
+    ///
+    /// This is the plan-level reach of the same seam
+    /// [`OneharnessProvider::with_spawn_hook`](crate::OneharnessProvider::with_spawn_hook)
+    /// exposes, not a second mechanism: the hook is installed on whichever backend
+    /// [`ProviderSpec`] names, and on **both** sides of a `split` — so one
+    /// embedder-owned group spans the whole two-party worker + judge tree, which is
+    /// the case a cancel otherwise leaks.
+    ///
+    /// See [`SpawnHook`](crate::SpawnHook) and `docs/spawn-hook.md`.
+    #[must_use]
+    pub fn with_spawn_hook(mut self, hook: SharedSpawnHook) -> Self {
+        self.spawn_hook = Some(hook);
+        self
+    }
 }
 
 fn default_eval_kind() -> JudgeKind {
@@ -682,6 +726,25 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    /// A hook that overrides neither half — enough to prove the plan carries one.
+    struct Inert;
+    impl crate::SpawnHook for Inert {}
+
+    #[test]
+    fn a_plan_carries_no_spawn_hook_until_an_embedder_installs_one() {
+        // A config file cannot name an in-process hook, so a resolved plan starts
+        // without one and behaves exactly as it did before the seam existed.
+        let plan = Config::from_yaml("task: x\n").unwrap().into_plan().unwrap();
+        assert!(plan.spawn_hook.is_none());
+        assert!(format!("{plan:?}").contains("spawn_hook: false"));
+
+        let installed = plan.with_spawn_hook(std::sync::Arc::new(Inert));
+        assert!(installed.spawn_hook.is_some());
+        assert!(format!("{installed:?}").contains("spawn_hook: true"));
+        // The rest of the plan is untouched by installing one.
+        assert_eq!(installed.conversation.input, "x");
     }
 
     #[test]

@@ -10,7 +10,8 @@ use std::ops::ControlFlow;
 
 use crate::{
     Assessment, AssistantTurn, CommandProvider, JudgeQuery, JudgeVerdict, Message,
-    OneharnessProvider, Provider, SkillRef, SupervisorQuery, SupervisorTurn, ToolEvent, UserTurn,
+    OneharnessProvider, Provider, SharedSpawnHook, SkillRef, SupervisorQuery, SupervisorTurn,
+    ToolEvent, UserTurn,
 };
 
 use super::config::ProviderSpec;
@@ -61,6 +62,24 @@ impl AnyProvider {
                 skill: Box::new(AnyProvider::build(skill)?),
                 judge: Box::new(AnyProvider::build(judge)?),
             }),
+        }
+    }
+
+    /// Install `hook` on this backend — and, for a `split`, on **both** of its
+    /// children, so one embedder-owned group spans the whole two-party tree rather
+    /// than only the side that happened to spawn first.
+    ///
+    /// Each variant forwards to its own backend's `with_spawn_hook`, so this is the
+    /// reach of the existing seam rather than a second grouping mechanism.
+    #[must_use]
+    pub fn with_spawn_hook(self, hook: SharedSpawnHook) -> Self {
+        match self {
+            AnyProvider::Oneharness(p) => AnyProvider::Oneharness(p.with_spawn_hook(hook)),
+            AnyProvider::Command(p) => AnyProvider::Command(p.with_spawn_hook(hook)),
+            AnyProvider::Split { skill, judge } => AnyProvider::Split {
+                skill: Box::new(skill.with_spawn_hook(hook.clone())),
+                judge: Box::new(judge.with_spawn_hook(hook)),
+            },
         }
     }
 }

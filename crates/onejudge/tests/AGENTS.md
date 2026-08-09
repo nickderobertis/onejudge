@@ -17,6 +17,10 @@ repo-wide contract; this covers only what differs here.
 - **Coverage excludes `src/bin/`.** The doubles are test infrastructure, not the
   shipped library, so they are outside the 95% line-coverage bar — put the real
   assertions on the library's behavior, not the double's.
+- **`support/mod.rs` holds what more than one suite needs** — the scratch paths,
+  the out-of-tree liveness check for a leaked harness stand-in, and the POSIX
+  process-group hook the cancellation journeys drive. `e2e.rs` runs them against
+  the engine, `cli.rs` against a `Plan`; put a helper here rather than copying it.
 - **`live.rs` is the real-harness tier**: every test is `#[ignore]`-d, compiles
   in the normal build, and runs only via `just test-live` / the `live` workflow.
   See `docs/live-tier.md`.
