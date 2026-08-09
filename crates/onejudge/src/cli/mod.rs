@@ -527,6 +527,9 @@ impl From<CliError> for Box<RunFailure> {
 /// bundle everything into a [`RunSummary`]. `progress` receives a line per tool
 /// event during a `Human`-format run (streamed); a `Json` run is buffered.
 ///
+/// Every process this spawns is offered to the plan's
+/// [`spawn_hook`](Plan::with_spawn_hook), if an embedder installed one.
+///
 /// # Errors
 /// [`CliError::Engine`] on a provider/engine failure; [`CliError::Config`] if the
 /// provider cannot be built.
@@ -607,6 +610,7 @@ fn execute(
         evals,
         done_when,
         assessment,
+        spawn_hook,
     } = plan;
 
     let multi_turn = conversation.user.is_some();
@@ -616,7 +620,14 @@ fn execute(
         .and_then(|u| u.max_turns)
         .unwrap_or(settings.max_turns);
 
-    let backend = AnyProvider::build(&provider)?;
+    // An embedder that drives a plan never builds the backend itself, so the plan is
+    // where its spawn hook has to reach the processes the run creates — every one of
+    // them, including both sides of a two-party `split`. Without a hook the backend
+    // is built exactly as before.
+    let backend = match spawn_hook {
+        Some(hook) => AnyProvider::build(&provider)?.with_spawn_hook(hook),
+        None => AnyProvider::build(&provider)?,
+    };
     let engine = Engine::new(&backend, settings);
     // Read the engine's telemetry once the loop is done, whichever way it ended, so
     // a failure still carries which harness identities the run attempted.

@@ -212,9 +212,12 @@ longer group what onejudge spawns by grouping onejudge, so `SpawnHook`
 write that unblocks the child's stdin. The **embedder owns the group**; onejudge
 takes no grouping policy and reports a `group` on `Report::processes` only when a
 hook named one. A hook that fails is a loud `Spawn` error with the child torn
-down, never a silent ungrouped run. `docs/spawn-hook.md` is the contract; the e2e
-that gates it kills the group and asserts an orphaned harness stand-in dies with
-it. When adding a new spawn site, route it through `Spawner` — a `Command::spawn`
+down, never a silent ungrouped run. It is installed per provider **or** on a
+`Plan` (`Plan::with_spawn_hook`) for an embedder that drives the CLI's run driver
+instead of building providers — the plan installs it on both children of a
+`split`, which is the two-party tree a cancel otherwise leaks.
+`docs/spawn-hook.md` is the contract; one e2e per entry point kills the group and
+asserts an orphaned harness stand-in dies with it. When adding a new spawn site, route it through `Spawner` — a `Command::spawn`
 that bypasses it is invisible to the embedder and to the report.
 
 Prompt caching is oneharness's concern (the agent CLI it wraps caches by default,

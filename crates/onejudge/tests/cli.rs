@@ -19,6 +19,12 @@ use std::process::Command;
 
 use onejudge::cli::{exit_code, render_human, run_plan, Config, EvalOutcome, Format};
 
+mod support;
+
+use support::{await_path, descendant_handle, descendant_is_running, scratch_path};
+#[cfg(unix)]
+use support::{kill_group, process_exists, OwnedProcessGroups};
+
 /// The built echo test double's path (a `CommandProvider` backend).
 fn echo_bin() -> String {
     env!("CARGO_BIN_EXE_onejudge-echo-provider").to_string()
@@ -1247,4 +1253,242 @@ fn binary_stream_reports_a_failure_as_json_on_stderr_leaving_the_protocol_intact
             .len(),
         1
     );
+}
+
+// --- The spawn seam at the PLAN level --------------------------------------
+//
+// `SpawnHook` gives an in-process embedder back the OS grouping the subprocess
+// boundary used to supply — but an embedder that drives onejudge through a
+// `Plan` never builds a provider itself, so before `Plan::with_spawn_hook` it
+// had no way to install one. The processes a plan spawned therefore sat in
+// onejudge's own group, and a `cancel --kill` had no tree to name. See
+// `docs/spawn-hook.md`.
+
+/// A two-party plan: the agent's turns and the judge's each run on their own
+/// `oneharness` backend (the fake double), which is the shape that leaks — one
+/// hook has to reach BOTH sides.
+fn split_plan_yaml(body: &str) -> String {
+    let bin = serde_json::to_string(&fake_oneharness_bin()).unwrap();
+    format!(
+        "provider:\n  kind: split\n  \
+         skill:\n    kind: oneharness\n    bin: {bin}\n  \
+         judge:\n    kind: oneharness\n    bin: {bin}\n{body}"
+    )
+}
+
+/// A hook that names one embedder-owned group for the whole run and records what
+/// it was offered — the portable half of what the `killpg` journey below proves.
+#[derive(Default)]
+struct OneGroup {
+    seen: std::sync::Mutex<Vec<(onejudge::TelemetryRole, String)>>,
+}
+
+impl onejudge::SpawnHook for OneGroup {
+    fn spawned(
+        &self,
+        child: &std::process::Child,
+        context: &onejudge::SpawnContext<'_>,
+    ) -> std::io::Result<Option<String>> {
+        assert!(child.id() > 0, "the hook is offered a live process");
+        self.seen
+            .lock()
+            .unwrap()
+            .push((context.role, context.op.to_string()));
+        Ok(Some("job:plan-1".to_string()))
+    }
+}
+
+/// A two-party plan over the echo double, so both sides can be driven on every
+/// platform the crate supports.
+fn two_party_command_plan() -> onejudge::cli::Plan {
+    let echo = serde_json::to_string(&echo_bin()).unwrap();
+    let yaml = format!(
+        "provider:\n  kind: split\n  \
+         skill:\n    kind: command\n    command: [{echo}]\n  \
+         judge:\n    kind: command\n    command: [{echo}]\n\
+         task: please commit\nsystem_prompt: 'Commit it.'\n\
+         user:\n  persona: A tester.\n  max_turns: 2\n"
+    );
+    Config::from_yaml(&yaml).unwrap().into_plan().unwrap()
+}
+
+#[test]
+fn a_plans_spawn_hook_reaches_both_sides_of_a_two_party_run() {
+    // One embedder-owned group has to span BOTH backends a plan builds — the side
+    // that runs the worker and the side that judges/plays the user. Installing the
+    // hook on the plan reaches every process either one spawns.
+    let hook = std::sync::Arc::new(OneGroup::default());
+    let installed: onejudge::SharedSpawnHook = hook.clone();
+    let mut sink = |_: &str| {};
+    let summary = run_plan(
+        two_party_command_plan().with_spawn_hook(installed),
+        Format::Json,
+        &mut sink,
+    )
+    .unwrap();
+
+    let seen = hook.seen.lock().unwrap().clone();
+    assert!(
+        seen.iter()
+            .any(|(role, op)| *role == onejudge::TelemetryRole::Agent && op == "respond"),
+        "the worker side's spawns were offered: {seen:?}"
+    );
+    assert!(
+        seen.iter()
+            .any(|(role, _)| *role == onejudge::TelemetryRole::Judge),
+        "the judge side's spawns were offered: {seen:?}"
+    );
+
+    // Everything the hook was offered is what the plan's report names, with the
+    // group the hook placed it in — the same records `--format json` prints.
+    assert_eq!(summary.report.processes.len(), seen.len());
+    assert!(summary
+        .report
+        .processes
+        .iter()
+        .all(|p| p.group.as_deref() == Some("job:plan-1") && p.pid > 0));
+}
+
+#[test]
+fn a_plan_without_a_spawn_hook_keeps_todays_behaviour_and_claims_no_group() {
+    // The no-hook plan is unchanged: it still spawns, still reports what it
+    // spawned, and says honestly that no group claimed it.
+    let mut sink = |_: &str| {};
+    let summary = run_plan(two_party_command_plan(), Format::Json, &mut sink).unwrap();
+    assert!(!summary.report.processes.is_empty());
+    assert!(summary.report.processes.iter().all(|p| p.group.is_none()));
+    let json = serde_json::to_string(&summary.report).unwrap();
+    assert!(!json.contains("\"group\""));
+}
+
+#[test]
+fn binary_run_json_reports_both_sides_processes_of_a_two_party_plan() {
+    // What the plan-level hook can now group in-process is machine-readable from
+    // the CLI for the same two-party run: one `processes` record per spawn, on
+    // both sides, each naming the group that claimed it — none, here, because a
+    // command line cannot install an in-process hook and onejudge never invents
+    // a group it did not observe.
+    let config = Path::new(env!("CARGO_TARGET_TMPDIR")).join("split-processes.yaml");
+    std::fs::write(
+        &config,
+        split_plan_yaml(
+            "task: spawn on both sides\nsystem_prompt: '[[reply:spawned]]'\n\
+             user:\n  persona: A tester.\n  done_when: spawned\n  max_turns: 3\n",
+        ),
+    )
+    .unwrap();
+    let output = Command::new(onejudge_bin())
+        .args(["run", config.to_str().unwrap(), "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: onejudge::Report =
+        serde_json::from_str(&String::from_utf8(output.stdout).unwrap()).unwrap();
+    assert!(report
+        .processes
+        .iter()
+        .any(|p| p.role == onejudge::TelemetryRole::Agent && p.op == "respond"));
+    assert!(report
+        .processes
+        .iter()
+        .any(|p| p.role == onejudge::TelemetryRole::Judge));
+    assert!(report
+        .processes
+        .iter()
+        .all(|p| p.pid > 0 && p.group.is_none()));
+}
+
+#[cfg(unix)]
+#[test]
+fn a_plan_driven_embedders_group_reaps_the_whole_two_party_harness_tree_on_a_kill_cancel() {
+    // The defect this reach closes, driven exactly as oneagentgraph hits it: a
+    // library embedder that drives a PLAN (config → plan → `run_plan`), a
+    // two-party run where each party's harness stand-in outlives the `oneharness`
+    // process that spawned it, and a cancel that must reap the whole tree.
+    //
+    // Without a plan-level hook there is no group to name here — the plan's
+    // spawned processes sit in onejudge's own group, which is the test runner's,
+    // so the only available `killpg` would take the test process with it. That is
+    // why this cannot be written against a build without the reach.
+    let agent_handle = scratch_path("plan-grouped-agent.handle");
+    let judge_handle = scratch_path("plan-grouped-judge.handle");
+    let never = scratch_path("plan-grouped-judge.hold");
+
+    let hook = std::sync::Arc::new(OwnedProcessGroups::default());
+    let installed: onejudge::SharedSpawnHook = hook.clone();
+    // The agent side leaks a stand-in whose `oneharness` then exits; the judge
+    // side (steered through the task, which the supervisor prompt inlines) leaks
+    // its own and then holds, so the run is still in flight when the embedder
+    // cancels.
+    let yaml = split_plan_yaml(&format!(
+        "task: 'go [[orphan:{}]][[hold:{}]]'\n\
+         system_prompt: '[[reply:acknowledged]][[orphan:{}]]'\n\
+         user:\n  persona: A patient tester.\n  max_turns: 2\n",
+        judge_handle.display(),
+        never.display(),
+        agent_handle.display(),
+    ));
+
+    let worker = std::thread::spawn(move || {
+        let plan = Config::from_yaml(&yaml)
+            .unwrap()
+            .into_plan()
+            .unwrap()
+            .with_spawn_hook(installed);
+        let mut sink = |_: &str| {};
+        run_plan(plan, Format::Json, &mut sink).map(|_| ())
+    });
+
+    await_path(&agent_handle, "the agent's harness stand-in never started");
+    await_path(&judge_handle, "the judge's harness stand-in never started");
+    let (agent_pid, agent_port) = descendant_handle(&agent_handle);
+    let (judge_pid, judge_port) = descendant_handle(&judge_handle);
+    assert!(
+        descendant_is_running(agent_port) && descendant_is_running(judge_port),
+        "both harness stand-ins were running when the run was cancelled"
+    );
+
+    // Cancel with kill semantics: terminate every group the embedder was handed.
+    // Nothing else is signalled — the stand-ins are reached only because they
+    // inherited a group the hook created around a process the *plan* spawned.
+    let groups = hook.groups.lock().unwrap().clone();
+    assert!(
+        groups.len() >= 2,
+        "both parties' spawns were placed in a group: {groups:?}"
+    );
+    for pgid in &groups {
+        kill_group(*pgid);
+    }
+
+    let outcome = worker.join().expect("the run thread did not panic");
+    assert!(
+        outcome.is_err(),
+        "killing the group ends the in-flight run rather than letting it complete"
+    );
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while descendant_is_running(agent_port) || descendant_is_running(judge_port) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "a harness stand-in (agent {agent_pid}, judge {judge_pid}) outlived the \
+             cancelled plan: the process it descends from was not in a group the \
+             embedder could terminate"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    // Every process the plan itself spawned is gone too.
+    for pgid in &groups {
+        assert!(
+            !process_exists(*pgid),
+            "the process the plan spawned as group {pgid} survived the kill"
+        );
+    }
+
+    for path in [&agent_handle, &judge_handle] {
+        let _ = std::fs::remove_file(path);
+    }
 }

@@ -34,7 +34,9 @@
 //!   it owns (a POSIX process group, a Windows job object) and still terminate the
 //!   whole harness tree on cancellation. The embedder owns the group; onejudge only
 //!   reports what a hook said it did, on [`Report::processes`] (see
-//!   `docs/spawn-hook.md`).
+//!   `docs/spawn-hook.md`). Install it on each provider, or — driving the run
+//!   through the CLI's plan — on the plan itself (`Plan::with_spawn_hook`, under
+//!   the `cli` feature), which reaches both sides of a two-party run.
 //!
 //! # Example
 //!

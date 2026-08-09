@@ -72,6 +72,28 @@ let engine = Engine::new(&provider, Settings::new());
 
 `CommandProvider::with_spawn_hook` is the same, for a custom backend.
 
+### …when you drive a `Plan`
+
+An embedder that drives onejudge through the CLI's run driver (`Config` →
+`Plan` → `run_plan` / `run_plan_streaming*`) never builds a provider itself, so
+it installs the hook on the **plan** instead:
+
+```rust
+use onejudge::cli::{run_plan, Config, Format};
+
+let plan = Config::from_yaml(&yaml)?
+    .into_plan()?
+    .with_spawn_hook(hook.clone());   // reaches every process the plan spawns
+let summary = run_plan(plan, Format::Json, &mut |_| {})?;
+```
+
+This is the same seam, not a second one: the plan installs the hook on whichever
+backend its `provider:` names, and on **both** children of a `split` — so one
+group spans the whole two-party worker + judge tree, which is exactly what a
+`cancel --kill` otherwise leaks. A plan with no hook is unchanged behaviour, and
+`onejudge run` itself installs none (a command line cannot name an in-process
+hook; a shell embedder groups the `onejudge` process instead).
+
 ## What it does *not* do silently
 
 - **No hook installed → today's behaviour, unchanged.** onejudge spawns into its
@@ -102,16 +124,25 @@ instead ([contract.md](contract.md)):
 
 ## How it is proven
 
-`crates/onejudge/tests/e2e.rs`'s
-`an_embedder_group_reaps_the_whole_two_party_harness_tree_on_a_kill_cancel` drives
-onejudge as a library over the real subprocess boundary: a hook that makes each
-spawned process its own POSIX process-group leader, a two-party run where each
-party's harness stand-in **outlives** the `oneharness` process that spawned it, a
-`killpg(SIGKILL)` of the groups the hook handed back, and an assertion — from
-outside the tree, over each stand-in's liveness socket — that every one of them is
-gone.
+One journey per entry point an embedder has, both driving onejudge as a library
+over the real subprocess boundary: a hook that makes each spawned process its own
+POSIX process-group leader, a two-party run where each party's harness stand-in
+**outlives** the `oneharness` process that spawned it, a `killpg(SIGKILL)` of the
+groups the hook handed back, and an assertion — from outside the tree, over each
+stand-in's liveness socket — that every one of them is gone.
 
-Without the seam that test cannot be written: the spawned processes sit in
+- `tests/e2e.rs`'s
+  `an_embedder_group_reaps_the_whole_two_party_harness_tree_on_a_kill_cancel`
+  builds the providers itself (`SplitProvider` + `with_spawn_hook`).
+- `tests/cli.rs`'s
+  `a_plan_driven_embedders_group_reaps_the_whole_two_party_harness_tree_on_a_kill_cancel`
+  drives a **plan** (`Config` → `into_plan` → `with_spawn_hook` → `run_plan`),
+  the entry point a plan-driven embedder actually uses.
+
+The shared helpers live in `tests/support/mod.rs`.
+
+Without the seam neither test can be written: the spawned processes sit in
 onejudge's own group, which is the caller's, so the only available `killpg` would
-take the caller with it. Removing just the `process_group` call from the hook makes
-the test fail on exactly the orphaned-harness assertion.
+take the caller with it. Removing just the `process_group` call from the hook — or,
+for the plan journey, the hook's install in the run driver — makes the test fail on
+exactly the orphaned-harness assertion.
