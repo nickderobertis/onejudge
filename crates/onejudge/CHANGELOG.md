@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.7](https://github.com/nickderobertis/onejudge/compare/v0.3.6...v0.3.7) - 2026-08-09
+
+### Added
+
+- let a plan-driven embedder group the processes onejudge spawns ([#40](https://github.com/nickderobertis/onejudge/pull/40))
+
 ## [0.3.6](https://github.com/nickderobertis/onejudge/compare/v0.3.5...v0.3.6) - 2026-08-09
 
 ### Added
