@@ -1,5 +1,5 @@
 {
-  "schema_version": 6,
+  "schema_version": 7,
   "transcript": {
     "messages": [
       {
@@ -122,5 +122,20 @@
       }
     ]
   },
+  "processes": [
+    {
+      "role": "agent",
+      "op": "respond",
+      "program": "oneharness",
+      "pid": 4242,
+      "group": "job:run-1"
+    },
+    {
+      "role": "judge",
+      "op": "judge",
+      "program": "oneharness",
+      "pid": 4243
+    }
+  ],
   "stopped_early": false
 }

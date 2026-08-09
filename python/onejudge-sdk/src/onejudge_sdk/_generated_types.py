@@ -131,6 +131,17 @@ class SessionLink(_SessionLinkRequired, total=False):
     history_id: Optional[str]
 
 
+class _SpawnedProcessRequired(TypedDict):
+    op: str
+    pid: int
+    program: str
+    role: TelemetryRole
+
+
+class SpawnedProcess(_SpawnedProcessRequired, total=False):
+    group: Optional[str]
+
+
 class _TelemetryRequired(TypedDict):
     agent: PartyTelemetry
     judge: PartyTelemetry
@@ -194,6 +205,7 @@ class _RunReportRequired(TypedDict):
 class RunReport(_RunReportRequired, total=False):
     assessment: Optional[str]
     completion_reason: Optional[str]
+    processes: Sequence[SpawnedProcess]
     telemetry: Optional[Telemetry]
     usage: Optional[Usage]
     verdicts: Sequence[NamedVerdict]
@@ -210,4 +222,5 @@ class _FailureReportRequired(TypedDict):
 
 
 class FailureReport(_FailureReportRequired, total=False):
+    processes: Sequence[SpawnedProcess]
     telemetry: Optional[Telemetry]

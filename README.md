@@ -129,6 +129,12 @@ to publish tool events on stdout as they occur, ahead of that same report
   serializable bundle of the transcript, verdicts, optional free-text
   `assessment`, and usage that higher-level
   frameworks compose over and re-export. See [docs/contract.md](docs/contract.md).
+- **`SpawnHook`** is the seam for an **in-process embedder**: onejudge offers every
+  process it is about to create so the embedder can place it in a group it owns —
+  a POSIX process group, a Windows job object — and still reap the whole harness
+  tree when a run is cancelled. The embedder owns the group; onejudge reports what
+  a hook claimed on `Report::processes`. See
+  [docs/spawn-hook.md](docs/spawn-hook.md).
 
 Two things it improves over the in-skilltest engine:
 

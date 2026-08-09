@@ -1122,3 +1122,300 @@ fn a_failed_invocation_is_still_attributed_to_the_identities_it_tried() {
         "the failed invocation was still recorded"
     );
 }
+
+// --- The spawn seam: an embedder-owned group around what onejudge spawns ----
+//
+// Driving onejudge in-process removes the OS grouping the subprocess boundary used
+// to supply: the harness processes are created by the embedder's own process,
+// inside whatever group it happens to be in, so a cancel can no longer name a tree
+// to terminate and an orphaned harness keeps calling the model. `SpawnHook` is the
+// seam that gives the embedder the group back — onejudge offers each process, the
+// embedder owns the group. See `docs/spawn-hook.md`.
+
+/// A [`SpawnHook`] that records what onejudge offered it, and answers with the
+/// group label the test asked for.
+#[derive(Default)]
+struct RecordingHook {
+    seen: std::sync::Mutex<Vec<(onejudge::TelemetryRole, String, String)>>,
+    label: Option<&'static str>,
+    refuse: bool,
+}
+
+impl onejudge::SpawnHook for RecordingHook {
+    fn spawned(
+        &self,
+        child: &std::process::Child,
+        context: &onejudge::SpawnContext<'_>,
+    ) -> std::io::Result<Option<String>> {
+        assert!(child.id() > 0, "the hook is offered a live process");
+        self.seen.lock().unwrap().push((
+            context.role,
+            context.op.to_string(),
+            context.program.to_string(),
+        ));
+        if self.refuse {
+            return Err(std::io::Error::other("no group could be created"));
+        }
+        Ok(self.label.map(String::from))
+    }
+}
+
+/// The two-party conversation both hook journeys drive: one agent turn on the
+/// fake oneharness, then one supervisor turn on the echo command provider.
+fn two_party_conversation() -> Conversation {
+    Conversation::multi_turn(
+        skill_with("[[reply:acknowledged]]"),
+        "go",
+        SimulatedUser::new("A patient tester.").max_turns(2),
+    )
+}
+
+#[test]
+fn a_spawn_hook_is_offered_every_process_both_parties_spawn() {
+    // One embedder-owned group has to span BOTH backends of a split run, so the
+    // same hook is installed on each and every spawn — agent and judge, oneharness
+    // and command provider — passes through it.
+    let hook = std::sync::Arc::new(RecordingHook {
+        label: Some("job:run-1"),
+        ..RecordingHook::default()
+    });
+    let shared: onejudge::SharedSpawnHook = hook.clone();
+    let provider = SplitProvider::new(
+        fake_oneharness().with_spawn_hook(shared.clone()),
+        echo().with_spawn_hook(shared),
+    );
+    let engine = Engine::new(&provider, settings());
+    let outcome = engine.run(&two_party_conversation()).unwrap();
+
+    let seen = hook.seen.lock().unwrap().clone();
+    let agent: Vec<_> = seen
+        .iter()
+        .filter(|(role, ..)| *role == onejudge::TelemetryRole::Agent)
+        .collect();
+    let judge: Vec<_> = seen
+        .iter()
+        .filter(|(role, ..)| *role == onejudge::TelemetryRole::Judge)
+        .collect();
+    assert!(!agent.is_empty(), "the agent side's spawns were offered");
+    assert!(!judge.is_empty(), "the judge side's spawns were offered");
+    assert!(agent.iter().all(|(_, op, _)| op == "respond"));
+    assert!(judge.iter().any(|(_, op, _)| op == "supervisor"));
+    assert!(agent
+        .iter()
+        .all(|(_, _, program)| program.contains("fake-oneharness")));
+    assert!(judge
+        .iter()
+        .all(|(_, _, program)| program.contains("echo-provider")));
+
+    // Everything the hook was offered is what the run reports, with the group the
+    // hook named — and it reaches the versioned wire contract, so an operator sees
+    // the same thing from `onejudge run --format json`.
+    assert_eq!(outcome.processes.len(), seen.len());
+    assert!(outcome
+        .processes
+        .iter()
+        .all(|p| p.group.as_deref() == Some("job:run-1") && p.pid > 0));
+    let report = outcome.into_report(vec![]);
+    assert_eq!(report.processes.len(), seen.len());
+    let json = serde_json::to_string(&report).unwrap();
+    assert!(json.contains("job:run-1"));
+}
+
+#[test]
+fn without_a_hook_the_run_reports_its_processes_and_claims_no_group() {
+    // The no-hook default is unchanged behaviour — and the report says so honestly
+    // rather than naming a group that does not exist.
+    let provider = SplitProvider::new(fake_oneharness(), echo());
+    let engine = Engine::new(&provider, settings());
+    let outcome = engine.run(&two_party_conversation()).unwrap();
+    assert!(!outcome.processes.is_empty());
+    assert!(outcome.processes.iter().all(|p| p.group.is_none()));
+    let json = serde_json::to_string(&outcome.into_report(vec![])).unwrap();
+    assert!(!json.contains("\"group\""));
+}
+
+#[test]
+fn a_hook_that_cannot_group_a_process_fails_the_turn_instead_of_running_it() {
+    // Running a harness the embedder cannot terminate is the defect the hook
+    // exists to prevent, so a hook that fails is loud, not a silent fallback to
+    // an ungrouped process.
+    let hook = std::sync::Arc::new(RecordingHook {
+        refuse: true,
+        ..RecordingHook::default()
+    });
+    let provider = fake_oneharness().with_spawn_hook(hook.clone());
+    let engine = Engine::new(&provider, settings());
+    let err = engine
+        .run(&Conversation::single_turn(skill_with("[[reply:x]]"), "go"))
+        .unwrap_err();
+    assert_eq!(err.kind(), Some(ProviderErrorKind::Spawn));
+    assert!(err.to_string().contains("spawn hook"), "{err}");
+    // The child it refused is never reported as a process of the run.
+    assert!(onejudge::Provider::spawned_processes(&provider).is_empty());
+    assert_eq!(hook.seen.lock().unwrap().len(), 1);
+}
+
+/// An embedder-owned group per spawned process: onejudge's child becomes its own
+/// POSIX process-group leader, so its pid *is* the group id, and everything it
+/// goes on to spawn inherits the group. This is the POSIX half of what a Windows
+/// embedder does with a job object.
+#[cfg(unix)]
+#[derive(Default)]
+struct OwnedProcessGroups {
+    groups: std::sync::Mutex<Vec<u32>>,
+}
+
+#[cfg(unix)]
+impl onejudge::SpawnHook for OwnedProcessGroups {
+    fn spawning(
+        &self,
+        command: &mut std::process::Command,
+        _context: &onejudge::SpawnContext<'_>,
+    ) -> std::io::Result<()> {
+        use std::os::unix::process::CommandExt as _;
+        command.process_group(0);
+        Ok(())
+    }
+
+    fn spawned(
+        &self,
+        child: &std::process::Child,
+        _context: &onejudge::SpawnContext<'_>,
+    ) -> std::io::Result<Option<String>> {
+        self.groups.lock().unwrap().push(child.id());
+        Ok(Some(format!("pgid:{}", child.id())))
+    }
+}
+
+/// Terminate an embedder-owned process group the way a `cancel --kill` does:
+/// unconditionally, to every member, including descendants the group leader is no
+/// longer around to reap.
+#[cfg(unix)]
+fn kill_group(pgid: u32) {
+    let pid = i32::try_from(pgid)
+        .ok()
+        .and_then(rustix::process::Pid::from_raw)
+        .expect("a real pid");
+    let _ = rustix::process::kill_process_group(pid, rustix::process::Signal::KILL);
+}
+
+/// Whether `pid` still names a live (or unreaped) process.
+#[cfg(unix)]
+fn process_exists(pid: u32) -> bool {
+    i32::try_from(pid)
+        .ok()
+        .and_then(rustix::process::Pid::from_raw)
+        .is_some_and(|pid| rustix::process::test_kill_process(pid).is_ok())
+}
+
+/// Block until `path` exists, failing loudly rather than hanging.
+#[cfg(unix)]
+fn await_path(path: &std::path::Path, why: &str) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while !path.exists() {
+        assert!(std::time::Instant::now() < deadline, "{why}");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn an_embedder_group_reaps_the_whole_two_party_harness_tree_on_a_kill_cancel() {
+    // The defect this seam closes, driven exactly as an embedder hits it: onejudge
+    // as a LIBRARY, a two-party run (worker plus judge), each party's harness
+    // outliving the `oneharness` process that spawned it, and a cancel that must
+    // reap the whole tree. Without a hook there is no group to name here — the
+    // spawned processes sit in onejudge's own group, which is the test runner's, so
+    // the only available `killpg` would take the test process with it. That is why
+    // this cannot be written against a build without the seam.
+    //
+    // The agent's harness stand-in is orphaned deliberately (its `oneharness` has
+    // already exited and been reaped) and the judge's `oneharness` is still in
+    // flight, so the kill has to reach both a live child and a descendant whose
+    // parent is gone.
+    let agent_handle = scratch_path("grouped-agent.handle");
+    let judge_handle = scratch_path("grouped-judge.handle");
+    let never = scratch_path("grouped-judge.hold");
+
+    let hook = std::sync::Arc::new(OwnedProcessGroups::default());
+    let installed: onejudge::SharedSpawnHook = hook.clone();
+    let skill = skill_with(&format!(
+        "[[reply:acknowledged]][[orphan:{}]]",
+        agent_handle.display()
+    ));
+    // The judge side is steered through the task, which the supervisor prompt
+    // inlines: it leaks its own stand-in and then holds, so the run is still in
+    // flight when the embedder cancels.
+    let task = format!(
+        "go [[orphan:{}]][[hold:{}]]",
+        judge_handle.display(),
+        never.display()
+    );
+    let worker = std::thread::spawn(move || {
+        let provider = SplitProvider::new(
+            fake_oneharness().with_spawn_hook(installed.clone()),
+            fake_oneharness().with_spawn_hook(installed),
+        );
+        let engine = Engine::new(&provider, settings());
+        engine
+            .run(&Conversation::multi_turn(
+                skill,
+                task,
+                SimulatedUser::new("A patient tester.").max_turns(2),
+            ))
+            .map(|_| ())
+    });
+
+    await_path(&agent_handle, "the agent's harness stand-in never started");
+    await_path(&judge_handle, "the judge's harness stand-in never started");
+    let (agent_pid, agent_port) = descendant_handle(&agent_handle);
+    let (judge_pid, judge_port) = descendant_handle(&judge_handle);
+    assert!(
+        descendant_is_running(agent_port) && descendant_is_running(judge_port),
+        "both harness stand-ins were running when the run was cancelled"
+    );
+
+    // Cancel with kill semantics: terminate every group the embedder was handed.
+    // Nothing else is signalled — the harness stand-ins are reached only because
+    // they inherited a group the hook created.
+    let groups = hook.groups.lock().unwrap().clone();
+    assert!(
+        groups.len() >= 2,
+        "both parties' spawns were placed in a group: {groups:?}"
+    );
+    for pgid in &groups {
+        kill_group(*pgid);
+    }
+
+    let outcome = worker.join().expect("the run thread did not panic");
+    assert!(
+        outcome.is_err(),
+        "killing the group ends the in-flight run rather than letting it complete"
+    );
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while descendant_is_running(agent_port) || descendant_is_running(judge_port) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "a harness stand-in (agent {agent_pid}, judge {judge_pid}) outlived the \
+             cancelled run: the process it descends from was not in a group the \
+             embedder could terminate"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    // Every process onejudge itself spawned is gone too. These are asked about by
+    // pid because the run thread waited on each, so a survivor would be a live
+    // process, not an unreaped zombie — which is why the *descendants* above are
+    // asked from outside instead: once their parent exits they are reparented, and
+    // a terminated descendant can still be nameable until its new parent reaps it.
+    for pgid in &groups {
+        assert!(
+            !process_exists(*pgid),
+            "the process onejudge spawned as group {pgid} survived the kill"
+        );
+    }
+
+    for path in [&agent_handle, &judge_handle] {
+        let _ = std::fs::remove_file(path);
+    }
+}

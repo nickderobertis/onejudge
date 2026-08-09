@@ -64,6 +64,16 @@
 //! `StreamStep::Stop` and a `Finish::Terminate` of the tree it owns. A consumer
 //! that kills this process instead never gets there, and the stand-in survives.
 //!
+//! **Process grouping.** `[[orphan:HANDLE]]` spawns a harness stand-in that stays
+//! in *this* process's OS process group and is never torn down — the leaked harness
+//! an embedder's group has to reach — publishes its pid and liveness port to
+//! HANDLE, and then reports normally. `[[hold:PATH]]` blocks until PATH exists (it
+//! never does, in the grouping journey), so the run is still in flight when the
+//! embedder cancels. Unlike every other marker these two are read from `--system`
+//! on the **agent** side and from the **prompt** on the judge side — the supervisor
+//! prompt inlines the task, so one run can steer both parties. See
+//! `docs/spawn-hook.md`.
+//!
 //! `[[stream-silent-descendant:HANDLE]]` (Unix) models the same contract for a
 //! harness that produces **no output**, which is the case a broken pipe cannot
 //! reach: it writes one event and then goes silent forever, tearing the stand-in
@@ -140,6 +150,18 @@ fn main() {
         || prompt.contains("role-playing the USER")
         || prompt.contains("Assessment request:")
         || prompt.contains("Criterion:") && prompt.contains("single-line JSON object"));
+    // The process-grouping journey (`docs/spawn-hook.md`). Read from `--system` on
+    // the agent side and from the prompt on the judge side, because those are the
+    // two texts a caller controls per party — which is what lets ONE run drive both
+    // halves of a two-party tree.
+    let steering = if is_agent { system } else { prompt.as_str() };
+    if let Some(handle) = marker(steering, "orphan") {
+        orphan_harness(handle);
+    }
+    if let Some(path) = marker(steering, "hold") {
+        wait_for_path(path, "the [[hold:…]] marker was never released");
+    }
+
     let mut ran = if prompt.contains("completion supervisor") {
         ok_result(supervisor_text(&prompt), &prompt)
     } else if prompt.contains("role-playing the USER") {
@@ -618,6 +640,41 @@ fn idle_until_signalled(handle: &str) -> ! {
     let _ = harness.kill();
     let _ = harness.wait();
     std::process::exit(0);
+}
+
+/// Spawn a harness stand-in that **outlives this process** and stays in this
+/// process's own OS process group.
+///
+/// This is the descendant an embedder's group has to reach: nothing here ever
+/// terminates it, and by the time onejudge's cancellation runs, the `oneharness`
+/// process that created it may already be gone. The only handle left on it is the
+/// group it inherited — which exists only if an embedder's
+/// [`SpawnHook`](onejudge::SpawnHook) made one. Deliberately NOT `detach`ed, for
+/// exactly that reason: this models a descendant inside the tree, not the
+/// harness's own new group that [`spawn_harness`] models.
+///
+/// Its own 60s deadline (see [`run_descendant`]) is hygiene only — far longer than
+/// any assertion window, so a failing test leaks nothing but can never pass.
+fn orphan_harness(handle: &str) {
+    let _ = std::fs::remove_file(handle);
+    let exe = std::env::current_exe().unwrap_or_else(|e| emit_error(&format!("current exe: {e}")));
+    // The `Child` is dropped, not waited on: dropping it does not kill the process,
+    // which is the point — it must survive this process, as a real harness does.
+    // Waiting here would defeat the whole marker, so the lint is wrong for this one
+    // site; the stand-in's own 60s deadline keeps it from leaking onto a runner.
+    #[allow(
+        clippy::zombie_processes,
+        reason = "the stand-in must OUTLIVE this process; that is what the marker models"
+    )]
+    std::process::Command::new(exe)
+        .arg("--descendant")
+        .arg(handle)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap_or_else(|e| emit_error(&format!("could not spawn the harness stand-in: {e}")));
+    wait_for_path(handle, "the harness stand-in never published its handle");
 }
 
 /// Re-exec this binary as the harness stand-in and block until it has published

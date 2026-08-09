@@ -957,6 +957,50 @@ fn binary_run_json_carries_the_backend_telemetry() {
 }
 
 #[test]
+fn binary_run_json_reports_the_processes_it_spawned_and_names_no_group() {
+    // What an in-process embedder learns through its spawn hook — which processes
+    // the run created, on which side, and whether a group claimed them — is
+    // machine-readable from the CLI too. The CLI installs no hook, so every record
+    // says so by carrying no `group` rather than inventing one.
+    let config = Path::new(env!("CARGO_TARGET_TMPDIR")).join("processes.yaml");
+    let bin = serde_json::to_string(&fake_oneharness_bin()).unwrap();
+    std::fs::write(
+        &config,
+        format!(
+            "provider:\n  kind: oneharness\n  bin: {bin}\n\
+             task: spawn something\nsystem_prompt: '[[reply:spawned]]'\n\
+             evals:\n  - criterion: spawned\n    kind: boolean\n"
+        ),
+    )
+    .unwrap();
+    let output = Command::new(onejudge_bin())
+        .args(["run", config.to_str().unwrap(), "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let report: onejudge::Report = serde_json::from_str(&stdout).unwrap();
+    assert!(
+        !report.processes.is_empty(),
+        "the run reports the processes it spawned"
+    );
+    assert!(report
+        .processes
+        .iter()
+        .any(|p| p.role == onejudge::TelemetryRole::Agent && p.op == "respond"));
+    assert!(report
+        .processes
+        .iter()
+        .any(|p| p.role == onejudge::TelemetryRole::Judge && p.op == "judge"));
+    assert!(report.processes.iter().all(|p| p.pid > 0));
+    assert!(
+        report.processes.iter().all(|p| p.group.is_none()),
+        "no hook is installed, so no group is claimed"
+    );
+    assert!(!stdout.contains("\"group\""));
+}
+
+#[test]
 fn binary_stream_exits_one_when_the_run_is_incomplete() {
     // The stream is an output format, not a status: the exit code still reports
     // whether the task completed.

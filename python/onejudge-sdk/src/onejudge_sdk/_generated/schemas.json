@@ -353,6 +353,43 @@
         ],
         "type": "object"
       },
+      "SpawnedProcess": {
+        "description": "One process onejudge spawned for a run, and the group an embedder's\n[`SpawnHook`] placed it in.\n\nCarried on [`Report::processes`](crate::Report::processes) (and on the CLI's\n`--format json` failure document), so what an in-process embedder can observe\nthrough the hook is also machine-readable from the command line.\n\n`group` is present **only** when a hook named one: onejudge never reports a\ngroup that does not exist, so a `null` group is the honest statement that this\nprocess is in whatever group onejudge itself was in.",
+        "properties": {
+          "group": {
+            "description": "The embedder-owned group a [`SpawnHook`] reported placing it in.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "op": {
+            "description": "The provider operation that asked for it.",
+            "type": "string"
+          },
+          "pid": {
+            "description": "The operating-system process id it was given.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "program": {
+            "description": "The program that was run (`argv[0]`).",
+            "type": "string"
+          },
+          "role": {
+            "$ref": "#/$defs/TelemetryRole",
+            "description": "Which side of the conversation the process served."
+          }
+        },
+        "required": [
+          "role",
+          "op",
+          "program",
+          "pid"
+        ],
+        "type": "object"
+      },
       "Telemetry": {
         "description": "Timing, usage, and native linkage for the complete agent+judge run.",
         "properties": {
@@ -473,6 +510,13 @@
       "error": {
         "$ref": "#/$defs/FailureDetail",
         "description": "Why the run did not complete."
+      },
+      "processes": {
+        "description": "The processes the failed run had already spawned, with the embedder-owned\ngroup each was placed in. Absent when nothing was spawned.",
+        "items": {
+          "$ref": "#/$defs/SpawnedProcess"
+        },
+        "type": "array"
       },
       "schema_version": {
         "description": "The contract version this document was serialized under.",
@@ -901,6 +945,43 @@
         ],
         "type": "object"
       },
+      "SpawnedProcess": {
+        "description": "One process onejudge spawned for a run, and the group an embedder's\n[`SpawnHook`] placed it in.\n\nCarried on [`Report::processes`](crate::Report::processes) (and on the CLI's\n`--format json` failure document), so what an in-process embedder can observe\nthrough the hook is also machine-readable from the command line.\n\n`group` is present **only** when a hook named one: onejudge never reports a\ngroup that does not exist, so a `null` group is the honest statement that this\nprocess is in whatever group onejudge itself was in.",
+        "properties": {
+          "group": {
+            "description": "The embedder-owned group a [`SpawnHook`] reported placing it in.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "op": {
+            "description": "The provider operation that asked for it.",
+            "type": "string"
+          },
+          "pid": {
+            "description": "The operating-system process id it was given.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "program": {
+            "description": "The program that was run (`argv[0]`).",
+            "type": "string"
+          },
+          "role": {
+            "$ref": "#/$defs/TelemetryRole",
+            "description": "Which side of the conversation the process served."
+          }
+        },
+        "required": [
+          "role",
+          "op",
+          "program",
+          "pid"
+        ],
+        "type": "object"
+      },
       "Telemetry": {
         "description": "Timing, usage, and native linkage for the complete agent+judge run.",
         "properties": {
@@ -1085,6 +1166,13 @@
           "string",
           "null"
         ]
+      },
+      "processes": {
+        "description": "Every process the run spawned, and the embedder-owned group a\n[`SpawnHook`](crate::SpawnHook) placed each one in.\n\nThis is the machine-readable form of what an in-process embedder observes\nthrough the hook, so `onejudge run --format json` reports it too. A record\nwhose `group` is absent is not grouped \u2014 onejudge never names a group it did\nnot observe a hook create.",
+        "items": {
+          "$ref": "#/$defs/SpawnedProcess"
+        },
+        "type": "array"
       },
       "schema_version": {
         "description": "The contract version this report was serialized under.",

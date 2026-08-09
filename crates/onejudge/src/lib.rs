@@ -29,6 +29,12 @@
 //! - [`Report`] is onejudge's own versioned contract ([`SCHEMA_VERSION`]): a
 //!   serializable bundle of the transcript, verdicts, and usage that downstream
 //!   SDKs compose over and re-export (see `docs/contract.md`).
+//! - [`SpawnHook`] is the seam for an **in-process embedder**: onejudge offers
+//!   every process it is about to create, so the embedder can place it in a group
+//!   it owns (a POSIX process group, a Windows job object) and still terminate the
+//!   whole harness tree on cancellation. The embedder owns the group; onejudge only
+//!   reports what a hook said it did, on [`Report::processes`] (see
+//!   `docs/spawn-hook.md`).
 //!
 //! # Example
 //!
@@ -60,6 +66,7 @@ mod provider;
 mod report;
 #[cfg(feature = "skill")]
 mod skill;
+mod spawn;
 mod split;
 mod stream;
 mod telemetry;
@@ -81,6 +88,7 @@ pub use report::{NamedVerdict, Report, SCHEMA_VERSION};
 pub mod sdk_schema;
 #[cfg(feature = "skill")]
 pub use skill::{load_skill, Frontmatter, SkillDefinition};
+pub use spawn::{SharedSpawnHook, SpawnContext, SpawnHook, SpawnedProcess};
 pub use split::SplitProvider;
 #[doc(hidden)]
 pub use telemetry::InvocationTelemetry;

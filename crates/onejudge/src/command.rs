@@ -18,6 +18,7 @@ use crate::provider::{
     Assessment, AssistantTurn, JudgeKind, JudgeQuery, JudgeValue, JudgeVerdict, Provider, SkillRef,
     SupervisorOutcome, SupervisorQuery, SupervisorTurn, UserTurn,
 };
+use crate::spawn::{role_of, SharedSpawnHook, SpawnContext, SpawnedProcess, Spawner};
 use crate::transcript::{Message, ToolEvent};
 use crate::usage::Usage;
 
@@ -126,6 +127,7 @@ struct AssessmentPayload {
 #[derive(Debug, Clone)]
 pub struct CommandProvider {
     argv: Vec<String>,
+    spawner: Spawner,
 }
 
 impl CommandProvider {
@@ -138,7 +140,19 @@ impl CommandProvider {
         if argv.is_empty() {
             return Err(Error::Invalid("provider command is empty".into()));
         }
-        Ok(Self { argv })
+        Ok(Self {
+            argv,
+            spawner: Spawner::default(),
+        })
+    }
+
+    /// Offer every process this provider spawns to `hook` before it starts work,
+    /// so an in-process embedder can place it in a group it owns and can later
+    /// terminate. See [`SpawnHook`](crate::SpawnHook).
+    #[must_use]
+    pub fn with_spawn_hook(mut self, hook: SharedSpawnHook) -> Self {
+        self.spawner.install(hook);
+        self
     }
 
     /// Send one request and parse the single response object from stdout.
@@ -147,13 +161,20 @@ impl CommandProvider {
             Error::provider(op.to_string(), format!("could not encode request: {e}"))
         })?;
 
-        let mut child = Command::new(&self.argv[0])
+        let mut command = Command::new(&self.argv[0]);
+        command
             .args(&self.argv[1..])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|e| {
+            .stderr(Stdio::piped());
+        let mut child = self.spawner.spawn(
+            &mut command,
+            &SpawnContext {
+                role: role_of(op),
+                op,
+                program: &self.argv[0],
+            },
+            |e| {
                 Error::provider_classified(
                     op.to_string(),
                     format!(
@@ -162,7 +183,8 @@ impl CommandProvider {
                     ),
                     ProviderErrorKind::Spawn,
                 )
-            })?;
+            },
+        )?;
 
         {
             let stdin = child
@@ -210,6 +232,14 @@ impl CommandProvider {
 }
 
 impl Provider for CommandProvider {
+    fn reset_telemetry(&self) {
+        self.spawner.reset();
+    }
+
+    fn spawned_processes(&self) -> Vec<SpawnedProcess> {
+        self.spawner.records()
+    }
+
     fn respond(
         &self,
         skill: &SkillRef<'_>,
