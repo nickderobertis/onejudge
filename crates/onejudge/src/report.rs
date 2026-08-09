@@ -12,6 +12,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::provider::{JudgeKind, JudgeVerdict};
+use crate::spawn::SpawnedProcess;
 use crate::telemetry::Telemetry;
 use crate::transcript::Transcript;
 use crate::usage::Usage;
@@ -22,8 +23,10 @@ use crate::usage::Usage;
 /// added the optional free-text `assessment`; `4` added `completion_reason`; `5`
 /// added optional two-party telemetry and native session linkage; `6` added
 /// per-invocation harness attribution (`telemetry.attribution`) — which candidate
-/// identities the provider attempted, which one ran, and which it fell through.
-pub const SCHEMA_VERSION: u32 = 6;
+/// identities the provider attempted, which one ran, and which it fell through;
+/// `7` added `processes` — the processes the run spawned and the embedder-owned
+/// group a [`SpawnHook`](crate::SpawnHook) placed each in.
+pub const SCHEMA_VERSION: u32 = 7;
 
 /// A judge verdict paired with the criterion it scored and the kind of
 /// judgement, so a serialized report is self-describing.
@@ -78,6 +81,15 @@ pub struct Report {
     /// Timing, per-party usage, and native oneharness session linkage.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub telemetry: Option<Telemetry>,
+    /// Every process the run spawned, and the embedder-owned group a
+    /// [`SpawnHook`](crate::SpawnHook) placed each one in.
+    ///
+    /// This is the machine-readable form of what an in-process embedder observes
+    /// through the hook, so `onejudge run --format json` reports it too. A record
+    /// whose `group` is absent is not grouped — onejudge never names a group it did
+    /// not observe a hook create.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub processes: Vec<SpawnedProcess>,
     /// Whether a streaming sink asked to short-circuit the run.
     #[serde(default)]
     pub stopped_early: bool,
@@ -100,6 +112,7 @@ impl Report {
             completion_reason: None,
             usage,
             telemetry: None,
+            processes: Vec::new(),
             stopped_early,
         }
     }
@@ -173,8 +186,38 @@ mod tests {
         assert!(!json.contains("verdicts"));
         assert!(!json.contains("usage"));
         assert!(!json.contains("assessment"));
-        assert!(json.contains("\"schema_version\":6"));
+        assert!(json.contains("\"schema_version\":7"));
         assert!(!json.contains("telemetry"));
+        // A run that spawned nothing reports no processes, rather than an empty
+        // claim about grouping.
+        assert!(!json.contains("processes"));
+    }
+
+    #[test]
+    fn spawned_processes_round_trip_and_report_only_an_observed_group() {
+        let mut report = Report::new(Transcript::from_input("hi"), vec![], None, false);
+        report.processes = vec![
+            SpawnedProcess {
+                role: crate::TelemetryRole::Agent,
+                op: "respond".into(),
+                program: "oneharness".into(),
+                pid: 4242,
+                group: Some("job:run-1".into()),
+            },
+            SpawnedProcess {
+                role: crate::TelemetryRole::Judge,
+                op: "judge".into(),
+                program: "oneharness".into(),
+                pid: 4243,
+                group: None,
+            },
+        ];
+        let json = serde_json::to_string(&report).unwrap();
+        assert!(json.contains("\"pid\":4242"));
+        assert!(json.contains("job:run-1"));
+        // The ungrouped record omits `group` entirely rather than inventing one.
+        assert_eq!(json.matches("\"group\"").count(), 1);
+        assert_eq!(serde_json::from_str::<Report>(&json).unwrap(), report);
     }
 
     #[test]

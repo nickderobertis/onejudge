@@ -62,6 +62,15 @@ impl<S: Provider, J: Provider> Provider for SplitProvider<S, J> {
         records
     }
 
+    // Both halves of the split spawn, so both halves' processes are reported —
+    // otherwise an embedder grouping a two-party run would see only one side of
+    // the tree it owns.
+    fn spawned_processes(&self) -> Vec<crate::SpawnedProcess> {
+        let mut records = self.skill.spawned_processes();
+        records.extend(self.judge.spawned_processes());
+        records
+    }
+
     fn respond(
         &self,
         skill: &SkillRef<'_>,

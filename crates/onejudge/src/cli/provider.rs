@@ -92,6 +92,18 @@ impl Provider for AnyProvider {
         }
     }
 
+    fn spawned_processes(&self) -> Vec<crate::SpawnedProcess> {
+        match self {
+            AnyProvider::Oneharness(p) => p.spawned_processes(),
+            AnyProvider::Command(p) => p.spawned_processes(),
+            AnyProvider::Split { skill, judge } => {
+                let mut records = skill.spawned_processes();
+                records.extend(judge.spawned_processes());
+                records
+            }
+        }
+    }
+
     fn respond(
         &self,
         skill: &SkillRef<'_>,

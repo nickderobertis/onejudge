@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Report",
-  "description": "A judged run: the transcript, the verdicts scored against it, aggregated\nusage, and whether a streaming sink short-circuited the run — stamped with the\n[`SCHEMA_VERSION`] of the contract that produced it.\n\nBuild one from an [`Outcome`](crate::Outcome) with\n[`Outcome::into_report`](crate::Outcome::into_report), or directly with\n[`Report::new`].",
+  "description": "A judged run: the transcript, the verdicts scored against it, aggregated\nusage, and whether a streaming sink short-circuited the run \u2014 stamped with the\n[`SCHEMA_VERSION`] of the contract that produced it.\n\nBuild one from an [`Outcome`](crate::Outcome) with\n[`Outcome::into_report`](crate::Outcome::into_report), or directly with\n[`Report::new`].",
   "type": "object",
   "properties": {
     "assessment": {
@@ -17,6 +17,13 @@
         "string",
         "null"
       ]
+    },
+    "processes": {
+      "description": "Every process the run spawned, and the embedder-owned group a\n[`SpawnHook`](crate::SpawnHook) placed each one in.\n\nThis is the machine-readable form of what an in-process embedder observes\nthrough the hook, so `onejudge run --format json` reports it too. A record\nwhose `group` is absent is not grouped \u2014 onejudge never names a group it did\nnot observe a hook create.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/SpawnedProcess"
+      }
     },
     "schema_version": {
       "description": "The contract version this report was serialized under.",
@@ -70,7 +77,7 @@
   ],
   "$defs": {
     "CandidateAttempt": {
-      "description": "One candidate identity oneharness attempted for a single invocation — the\nharness (and variant/model) it tried, and what came of it.\n\nUnder `run_mode = \"fallback\"` oneharness attempts candidates in priority order\nand stops at the first that runs the task, so an invocation can have several of\nthese: the ones it fell through, then the one that ran. This is the typed form\nof oneharness's per-candidate record — the thing that lets a consumer attribute\na failure to a *side* (agent vs judge) and an *identity* (which harness, which\naccount) instead of grepping a message.",
+      "description": "One candidate identity oneharness attempted for a single invocation \u2014 the\nharness (and variant/model) it tried, and what came of it.\n\nUnder `run_mode = \"fallback\"` oneharness attempts candidates in priority order\nand stops at the first that runs the task, so an invocation can have several of\nthese: the ones it fell through, then the one that ran. This is the typed form\nof oneharness's per-candidate record \u2014 the thing that lets a consumer attribute\na failure to a *side* (agent vs judge) and an *identity* (which harness, which\naccount) instead of grepping a message.",
       "type": "object",
       "properties": {
         "available": {
@@ -120,11 +127,11 @@
           "type": "string"
         },
         "harness_id": {
-          "description": "Base id, or `<base>:<variant>` when a named preset selected the identity —\nthe selector that reproduces this candidate.",
+          "description": "Base id, or `<base>:<variant>` when a named preset selected the identity \u2014\nthe selector that reproduces this candidate.",
           "type": "string"
         },
         "history_id": {
-          "description": "The oneharness history record written for this attempt, when history was\non — the handle `oneharness history show` resolves.",
+          "description": "The oneharness history record written for this attempt, when history was\non \u2014 the handle `oneharness history show` resolves.",
           "type": [
             "string",
             "null"
@@ -469,6 +476,43 @@
         "finished_at"
       ]
     },
+    "SpawnedProcess": {
+      "description": "One process onejudge spawned for a run, and the group an embedder's\n[`SpawnHook`] placed it in.\n\nCarried on [`Report::processes`](crate::Report::processes) (and on the CLI's\n`--format json` failure document), so what an in-process embedder can observe\nthrough the hook is also machine-readable from the command line.\n\n`group` is present **only** when a hook named one: onejudge never reports a\ngroup that does not exist, so a `null` group is the honest statement that this\nprocess is in whatever group onejudge itself was in.",
+      "type": "object",
+      "properties": {
+        "group": {
+          "description": "The embedder-owned group a [`SpawnHook`] reported placing it in.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "op": {
+          "description": "The provider operation that asked for it.",
+          "type": "string"
+        },
+        "pid": {
+          "description": "The operating-system process id it was given.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "program": {
+          "description": "The program that was run (`argv[0]`).",
+          "type": "string"
+        },
+        "role": {
+          "description": "Which side of the conversation the process served.",
+          "$ref": "#/$defs/TelemetryRole"
+        }
+      },
+      "required": [
+        "role",
+        "op",
+        "program",
+        "pid"
+      ]
+    },
     "Telemetry": {
       "description": "Timing, usage, and native linkage for the complete agent+judge run.",
       "type": "object",
@@ -587,11 +631,11 @@
       ]
     },
     "Usage": {
-      "description": "Token / cost usage for one provider call, or a running total.\n\nEach field is independently optional because not every harness reports every\nsignal (cost is commonly absent on subscription auth, and cache counts only\nwhen the harness surfaces prompt-cache reads/writes). `None` means \"no\nsignal\", never \"zero\" — so a total stays `None` until something reports a real\nnumber, then accumulates.",
+      "description": "Token / cost usage for one provider call, or a running total.\n\nEach field is independently optional because not every harness reports every\nsignal (cost is commonly absent on subscription auth, and cache counts only\nwhen the harness surfaces prompt-cache reads/writes). `None` means \"no\nsignal\", never \"zero\" \u2014 so a total stays `None` until something reports a real\nnumber, then accumulates.",
       "type": "object",
       "properties": {
         "cache_read_tokens": {
-          "description": "Prompt tokens served from the provider's prompt cache — a cheap read of a\npreviously-written prefix — when the harness reports them. `None` when the\nharness does not surface cache counts, never `0` as a guess.",
+          "description": "Prompt tokens served from the provider's prompt cache \u2014 a cheap read of a\npreviously-written prefix \u2014 when the harness reports them. `None` when the\nharness does not surface cache counts, never `0` as a guess.",
           "type": [
             "integer",
             "null"

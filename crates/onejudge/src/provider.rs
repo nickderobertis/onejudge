@@ -179,6 +179,15 @@ pub trait Provider {
         Vec::new()
     }
 
+    /// Return the processes this provider spawned since the last reset, with the
+    /// group an embedder's [`SpawnHook`](crate::SpawnHook) placed each one in.
+    ///
+    /// Empty for a provider that spawns nothing (an in-memory backend), so the
+    /// engine reports only processes that really exist.
+    fn spawned_processes(&self) -> Vec<crate::SpawnedProcess> {
+        Vec::new()
+    }
+
     /// Run one assistant/skill turn given the conversation so far.
     ///
     /// `session`, when `Some`, is a **caller-owned session name** the engine

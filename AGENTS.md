@@ -203,6 +203,20 @@ floors at oneharness **0.6.9**, the first release whose `run` answers a signal b
 tearing that tree down. Two e2e tests gate the pair, one per rung; see
 `docs/oneharness-library.md` before touching the order.
 
+**Every hop that moves in-process gives up something the subprocess boundary was
+supplying.** oneharness's descendant teardown was the first (restored by signalling
+it, above); OS **process grouping** is the second. An in-process embedder can no
+longer group what onejudge spawns by grouping onejudge, so `SpawnHook`
+(`spawn.rs`) offers each process before it starts work — `spawning` for the POSIX
+`Command`, `spawned` for the live Windows `Child` handle, both before the prompt
+write that unblocks the child's stdin. The **embedder owns the group**; onejudge
+takes no grouping policy and reports a `group` on `Report::processes` only when a
+hook named one. A hook that fails is a loud `Spawn` error with the child torn
+down, never a silent ungrouped run. `docs/spawn-hook.md` is the contract; the e2e
+that gates it kills the group and asserts an orphaned harness stand-in dies with
+it. When adding a new spawn site, route it through `Spawner` — a `Command::spawn`
+that bypasses it is invisible to the embedder and to the report.
+
 Prompt caching is oneharness's concern (the agent CLI it wraps caches by default,
 and oneharness has an explicit same-prefix batch/fork reuse path); onejudge stays
 out of enabling it but **surfaces** it — `Usage` carries `cache_read_tokens` /
@@ -212,8 +226,8 @@ criterion so the framing+transcript prefix is cacheable across criteria.
 ## The Report contract
 
 `Report` (`report.rs`, `SCHEMA_VERSION`) is onejudge's own versioned wire contract
-— transcript + verdicts + usage + per-invocation harness attribution — that SDKs
-compose over and re-export. The serialized shape is drift-gated by
+— transcript + verdicts + usage + per-invocation harness attribution + the
+processes the run spawned — that SDKs compose over and re-export. The serialized shape is drift-gated by
 `tests/contract.rs`: a wire change fails the gate until it is a deliberate edit
 that bumps `SCHEMA_VERSION` and the golden. A run that *fails* produces no report,
 so `--format json` writes a versioned `FailureReport` in its place (on stderr under

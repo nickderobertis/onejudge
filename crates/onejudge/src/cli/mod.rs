@@ -507,6 +507,10 @@ pub struct RunFailure {
     /// Timing, usage, and per-invocation harness attribution recorded before the
     /// failure; `None` when nothing ran at all (a config or provider-build error).
     pub telemetry: Option<crate::Telemetry>,
+    /// The processes the failed run had already spawned, and the embedder-owned
+    /// group each was placed in — what a caller cleaning up after the failure needs
+    /// to name. Empty when nothing was spawned.
+    pub processes: Vec<crate::SpawnedProcess>,
 }
 
 impl From<CliError> for Box<RunFailure> {
@@ -514,6 +518,7 @@ impl From<CliError> for Box<RunFailure> {
         Box::new(RunFailure {
             error,
             telemetry: None,
+            processes: Vec::new(),
         })
     }
 }
@@ -704,6 +709,7 @@ fn execute(
             None => None,
         };
         outcome.telemetry = engine.telemetry();
+        outcome.processes = engine.spawned_processes();
         let report = outcome.into_report_with_assessment(verdicts, assessment);
 
         Ok(RunSummary {
@@ -719,6 +725,7 @@ fn execute(
         Box::new(RunFailure {
             error,
             telemetry: engine.telemetry(),
+            processes: engine.spawned_processes(),
         })
     })
 }
@@ -857,6 +864,10 @@ pub struct FailureReport {
     /// failure; absent when nothing ran.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub telemetry: Option<crate::Telemetry>,
+    /// The processes the failed run had already spawned, with the embedder-owned
+    /// group each was placed in. Absent when nothing was spawned.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub processes: Vec<crate::SpawnedProcess>,
 }
 
 /// The failure itself, with the classification a caller branches on.
@@ -885,6 +896,7 @@ impl FailureReport {
                 },
             },
             telemetry: failure.telemetry.clone(),
+            processes: failure.processes.clone(),
         }
     }
 }
@@ -1038,7 +1050,7 @@ mod tests {
     fn json_render_is_the_versioned_report() {
         let report = Report::new(Transcript::from_input("hi"), vec![], None, false);
         let json = render_json(&report).unwrap();
-        assert!(json.contains("\"schema_version\": 6"));
+        assert!(json.contains("\"schema_version\": 7"));
     }
 
     #[test]

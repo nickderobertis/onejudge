@@ -67,7 +67,12 @@ class OneJudgeTests(unittest.IsolatedAsyncioTestCase):
         input_tokens = complete.usage["input_tokens"]
         self.assertIsNotNone(input_tokens)
         self.assertGreater(input_tokens or 0, 0)
-        self.assertEqual(complete.raw["schema_version"], 6)
+        self.assertEqual(complete.raw["schema_version"], 7)
+        # The processes a run spawned are machine-readable from the CLI. No spawn
+        # hook can be installed across a subprocess boundary, so none claims a group.
+        self.assertTrue(complete.processes)
+        self.assertTrue(all(p["pid"] > 0 for p in complete.processes))
+        self.assertTrue(all(p.get("group") is None for p in complete.processes))
         self.assertIsNone(complete.telemetry)
 
         incomplete = await client.run(command_config(incomplete=True), "keep working")
@@ -208,7 +213,7 @@ class OneJudgeTests(unittest.IsolatedAsyncioTestCase):
         # The terminal line carries the ordinary, validated result.
         self.assertEqual(result.exit_code, 0)
         self.assertTrue(result.completed)
-        self.assertEqual(result.raw["schema_version"], 6)
+        self.assertEqual(result.raw["schema_version"], 7)
         self.assertEqual(result.assistant_turns, 1)
         self.assertEqual(result.verdicts[0]["verdict"]["value"], True)
 

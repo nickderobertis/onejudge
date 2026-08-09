@@ -9,7 +9,7 @@ and re-export, so onejudge — not its consumers — owns the shape of a judged 
 
 ```jsonc
 {
-  "schema_version": 6,                 // bump on any wire change
+  "schema_version": 7,                 // bump on any wire change
   "transcript": {
     "messages": [
       { "role": "user", "content": "commit the fix" },
@@ -63,6 +63,11 @@ and re-export, so onejudge — not its consumers — owns the shape of a judged 
       }
     ]
   },
+  "processes": [                        // omitted when the run spawned nothing
+    { "role": "agent", "op": "respond", "program": "oneharness", "pid": 41231,
+      "group": "job:run-1" },          // only when a SpawnHook named one
+    { "role": "judge", "op": "judge", "program": "oneharness", "pid": 41244 }
+  ],
   "stopped_early": false
 }
 ```
@@ -88,11 +93,19 @@ let report = outcome.into_report(vec![
 assert_eq!(report.schema_version, onejudge::SCHEMA_VERSION);
 ```
 
+## `processes` — what the run spawned, and who owns its group
+
+`group` is present **only** when an in-process embedder's
+[`SpawnHook`](spawn-hook.md) reported placing that process in a group it owns. A
+record without one is not grouped — onejudge never names a group it did not
+observe, so a `null` here is a fact, not a default. The CLI installs no hook, so
+its records carry pids and no group.
+
 ## Versioning and the drift gate
 
 The wire form is pinned by a canonical serialized example
-(`crates/onejudge/tests/golden/report.example-v6.json`) and its generated JSON
-Schema (`crates/onejudge/tests/golden/report.schema-v6.json`), both checked by
+(`crates/onejudge/tests/golden/report.example-v7.json`) and its generated JSON
+Schema (`crates/onejudge/tests/golden/report.schema-v7.json`), both checked by
 `tests/contract.rs`. Any change to the serialized shape — a renamed field, a new
 key, a changed default — fails that test, so it can only land as a **deliberate**
 edit that also bumps `SCHEMA_VERSION` and updates both goldens. Downstream SDKs
@@ -118,9 +131,10 @@ attribution for. So `onejudge run --format json` writes a versioned
 
 ```jsonc
 {
-  "schema_version": 6,
+  "schema_version": 7,
   "error": { "message": "run failed: provider error (respond): …", "kind": "auth" },
-  "telemetry": { /* as above, including `attribution` */ }
+  "telemetry": { /* as above, including `attribution` */ },
+  "processes": [ /* what the failed run had already spawned, as below */ ]
 }
 ```
 

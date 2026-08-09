@@ -13,6 +13,7 @@ use crate::provider::{
     SkillRef, SupervisorOutcome, SupervisorQuery,
 };
 use crate::report::{NamedVerdict, Report};
+use crate::spawn::SpawnedProcess;
 use crate::telemetry::{aggregate, Telemetry};
 use crate::transcript::{Message, ToolEvent, Transcript};
 use crate::usage::Usage;
@@ -188,6 +189,10 @@ pub struct Outcome {
     pub completion_reason: Option<String>,
     /// Timing, per-party usage, and native session linkage, when provided.
     pub telemetry: Option<Telemetry>,
+    /// Every process the provider spawned for this run, with the group an
+    /// embedder's [`SpawnHook`](crate::SpawnHook) placed it in. Empty for a
+    /// provider that spawns nothing.
+    pub processes: Vec<SpawnedProcess>,
 }
 
 impl Outcome {
@@ -209,6 +214,7 @@ impl Outcome {
         let mut report = Report::new(self.transcript, verdicts, self.usage, self.stopped_early);
         report.completion_reason = self.completion_reason;
         report.telemetry = self.telemetry;
+        report.processes = self.processes;
         match assessment {
             Some(text) => report.with_assessment(text),
             None => report,
@@ -378,6 +384,7 @@ impl<'a> Engine<'a> {
             stopped_early,
             completion_reason,
             telemetry: self.telemetry(),
+            processes: self.spawned_processes(),
         }
     }
 
@@ -388,6 +395,16 @@ impl<'a> Engine<'a> {
             u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
         });
         aggregate(wall_ms, &self.provider.invocation_telemetry())
+    }
+
+    /// Every process the provider has spawned since the run began, with the group
+    /// an embedder's [`SpawnHook`](crate::SpawnHook) reported placing it in.
+    ///
+    /// Readable after a *failed* run too, so a caller that has to clean up knows
+    /// what was created before the failure.
+    #[must_use]
+    pub fn spawned_processes(&self) -> Vec<SpawnedProcess> {
+        self.provider.spawned_processes()
     }
 
     fn judge_boolean_raw(&self, criterion: &str, transcript: &Transcript) -> Result<JudgeVerdict> {

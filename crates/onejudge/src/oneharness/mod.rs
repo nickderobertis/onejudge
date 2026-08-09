@@ -76,6 +76,7 @@ use crate::provider::{
     latest_or_inline, parse_supervisor, parse_verdict, Assessment, AssistantTurn, JudgeQuery,
     JudgeVerdict, Provider, SkillRef, SupervisorQuery, SupervisorTurn, UserTurn,
 };
+use crate::spawn::{role_of, SharedSpawnHook, SpawnContext, SpawnedProcess, Spawner};
 use crate::stream::{read_stream, StreamOutcome};
 use crate::telemetry::{CandidateAttempt, FellThrough, InvocationTelemetry, TelemetryRole};
 use crate::transcript::{Message, ToolEvent};
@@ -211,6 +212,7 @@ pub struct OneharnessProvider {
     judge_config: Option<PathBuf>,
     stream: bool,
     telemetry: RefCell<Vec<InvocationTelemetry>>,
+    spawner: Spawner,
 }
 
 impl Default for OneharnessProvider {
@@ -229,7 +231,21 @@ impl OneharnessProvider {
             judge_config: Some(PathBuf::from(DEFAULT_JUDGE_CONFIG)),
             stream: false,
             telemetry: RefCell::new(Vec::new()),
+            spawner: Spawner::default(),
         }
+    }
+
+    /// Offer every `oneharness` process this provider spawns to `hook` before it
+    /// starts work, so an in-process embedder can place it — and, through it, the
+    /// harness tree oneharness goes on to own — in a group the embedder can later
+    /// terminate. See [`SpawnHook`](crate::SpawnHook).
+    ///
+    /// Install the *same* hook on both backends of a
+    /// [`SplitProvider`](crate::SplitProvider) to cover the whole two-party tree.
+    #[must_use]
+    pub fn with_spawn_hook(mut self, hook: SharedSpawnHook) -> Self {
+        self.spawner.install(hook);
+        self
     }
 
     /// Override the `oneharness` binary path (e.g. a pinned install, or the fake
@@ -486,14 +502,25 @@ impl OneharnessProvider {
     }
 
     /// Spawn the configured `oneharness` binary with `args`, all three pipes open.
+    ///
+    /// Routed through the [`Spawner`] so an embedder's [`SpawnHook`](crate::SpawnHook)
+    /// can place the process in a group it owns *before* the prompt is written —
+    /// which is what starts the turn, since `--prompt-file -` blocks on stdin.
     fn spawn(&self, op: &str, args: &[String]) -> Result<std::process::Child> {
-        Command::new(&self.bin)
+        let mut command = Command::new(&self.bin);
+        command
             .args(args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|e| {
+            .stderr(Stdio::piped());
+        self.spawner.spawn(
+            &mut command,
+            &SpawnContext {
+                role: role_of(op),
+                op,
+                program: &self.bin,
+            },
+            |e| {
                 Error::provider_classified(
                     op.to_string(),
                     format!(
@@ -502,7 +529,8 @@ impl OneharnessProvider {
                     ),
                     ProviderErrorKind::Spawn,
                 )
-            })
+            },
+        )
     }
 
     /// Record one invocation's telemetry and per-candidate attribution against the
@@ -741,10 +769,15 @@ fn judge_side_args(
 impl Provider for OneharnessProvider {
     fn reset_telemetry(&self) {
         self.telemetry.borrow_mut().clear();
+        self.spawner.reset();
     }
 
     fn invocation_telemetry(&self) -> Vec<InvocationTelemetry> {
         self.telemetry.borrow().clone()
+    }
+
+    fn spawned_processes(&self) -> Vec<SpawnedProcess> {
+        self.spawner.records()
     }
 
     fn respond(

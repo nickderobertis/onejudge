@@ -108,6 +108,13 @@ each invocation attempted, on which **side** (agent vs judge), which one ran, an
 which a fallback chain routed around and why — so a failure is attributable to a
 side and an identity without parsing a message.
 
+It also reports, under `processes`, every OS process the run spawned — side, op,
+program, and pid — plus the group an in-process embedder's
+[`SpawnHook`](spawn-hook.md) placed it in. The CLI installs no hook, so its
+records carry no `group`: onejudge never names a group it did not observe. The
+same array rides on the `FailureReport`, so a caller cleaning up after a failed
+run can still name what was created.
+
 The **exit code** is `0` only when the task **completed** and every **boolean**
 eval passed. A run that hits `max_turns` without satisfying `done_when`, or whose
 boolean eval fails, exits `1`. Numeric evals are score-and-report — they never

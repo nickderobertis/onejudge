@@ -6,7 +6,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Optional
 
-from ._generated_types import NamedVerdict, RunReport, Telemetry, Usage
+from ._generated_types import NamedVerdict, RunReport, SpawnedProcess, Telemetry, Usage
 
 
 @dataclass(frozen=True)
@@ -36,6 +36,11 @@ class RunResult:
     def telemetry(self) -> Optional[Telemetry]:
         """Return two-party timing/usage and native linkage when available."""
         return self.raw.get("telemetry")
+
+    @property
+    def processes(self) -> Sequence[SpawnedProcess]:
+        """Return the processes the run spawned, with any embedder-owned group."""
+        return self.raw.get("processes", [])
 
     @property
     def assistant_turns(self) -> int:
