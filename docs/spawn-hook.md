@@ -143,6 +143,15 @@ The shared helpers live in `tests/support/mod.rs`.
 
 Without the seam neither test can be written: the spawned processes sit in
 onejudge's own group, which is the caller's, so the only available `killpg` would
-take the caller with it. Removing just the `process_group` call from the hook — or,
-for the plan journey, the hook's install in the run driver — makes the test fail on
-exactly the orphaned-harness assertion.
+take the caller with it. Three mutations show each test gates a distinct claim,
+and each fails for its own reason:
+
+- Removing the `process_group` call from the hook leaves it naming a group it
+  never created, so the `killpg` reaches nothing — the test fails on exactly the
+  orphaned-harness assertion.
+- Dropping the run driver's install (the pre-`Plan::with_spawn_hook` state) hands
+  the embedder **no** group at all: the plan journey fails earlier, on the
+  assertion that both parties' spawns were placed in one.
+- Installing on only the `skill` child of a `split` hands back one group instead
+  of two, failing the same assertion — which is what makes the two-party reach,
+  not just the plan-level API, the thing under test.

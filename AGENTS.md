@@ -217,8 +217,9 @@ down, never a silent ungrouped run. It is installed per provider **or** on a
 instead of building providers — the plan installs it on both children of a
 `split`, which is the two-party tree a cancel otherwise leaks.
 `docs/spawn-hook.md` is the contract; one e2e per entry point kills the group and
-asserts an orphaned harness stand-in dies with it. When adding a new spawn site, route it through `Spawner` — a `Command::spawn`
-that bypasses it is invisible to the embedder and to the report.
+asserts an orphaned harness stand-in dies with it. When adding a new spawn site,
+route it through `Spawner` — a `Command::spawn` that bypasses it is invisible to
+the embedder and to the report.
 
 Prompt caching is oneharness's concern (the agent CLI it wraps caches by default,
 and oneharness has an explicit same-prefix batch/fork reuse path); onejudge stays
