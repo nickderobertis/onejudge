@@ -647,7 +647,7 @@ dependencies = [
 
 [[package]]
 name = "onejudge"
-version = "0.3.5"
+version = "0.3.6"
 dependencies = [
  "clap",
  "oneharness-core",
