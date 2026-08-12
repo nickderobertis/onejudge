@@ -10,8 +10,9 @@
 //! Scaffold both with `onejudge init` (which shells out to `oneharness init`).
 //!
 //! It targets **oneharness v0.6.14+** — the release carrying the report contract
-//! it compiles against (`oneharness-core` 0.6.13) and the `run --control` /
-//! `interrupt` pair it reports the address of; v0.6.9 was the first whose `run`
+//! it compiles against (`oneharness-core`, pinned in the workspace manifest) and
+//! the `run --control` / `interrupt` pair it reports the address of; v0.6.9 was
+//! the first whose `run`
 //! verb answers a cancellation signal by tearing its harness tree down instead of
 //! dying and orphaning it. It always threads the uniform `--session
 //! <name>` handle (the engine's caller-owned name, mapped to the harness's native

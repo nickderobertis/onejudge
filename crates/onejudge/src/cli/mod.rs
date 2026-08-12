@@ -967,15 +967,23 @@ mod tests {
              produce the report this build parses"
         );
 
-        // The prose that repeats it, so a bump cannot land in the code alone.
+        // Everything else that repeats it — prose and rustdoc alike — so a bump
+        // cannot land in the code alone. A file that states the minimum and is not
+        // on this list is a copy nothing reconciles, which is the drift this gate
+        // exists to make impossible.
         for (name, text) in [
             ("README.md", include_str!("../../../../README.md")),
             ("AGENTS.md", include_str!("../../../../AGENTS.md")),
             ("docs/cli.md", include_str!("../../../../docs/cli.md")),
             (
+                "docs/control.md",
+                include_str!("../../../../docs/control.md"),
+            ),
+            (
                 "docs/live-tier.md",
                 include_str!("../../../../docs/live-tier.md"),
             ),
+            ("oneharness/mod.rs", include_str!("../oneharness/mod.rs")),
         ] {
             assert!(
                 text.contains(MIN_ONEHARNESS),

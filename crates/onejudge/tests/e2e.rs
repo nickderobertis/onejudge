@@ -1555,10 +1555,13 @@ fn a_platform_with_no_unix_socket_degrades_before_the_call() {
         .contains("unix domain socket"));
 }
 
+#[cfg(unix)]
 #[test]
 fn a_harness_that_cannot_bind_a_session_leaves_the_control_ask_unaddressable() {
     // `--control` is addressed by the `--session` name, so a harness that exposes
-    // no session id headlessly has nowhere for the socket to live. Both are
+    // no session id headlessly has nowhere for the socket to live. Unix-only
+    // because a platform with no socket never gets as far as asking — see
+    // `a_platform_with_no_unix_socket_degrades_before_the_call`. Both are
     // dropped and the turn is re-inlined — the run still completes, and the
     // reason says which of the two degradations took the lever away.
     let provider = fake_oneharness().with_control(true);
