@@ -34,7 +34,6 @@ pub const SCHEMA_VERSION: u32 = 8;
 /// The skip predicate for a field that is always serialized but must not be
 /// *required* of a document being read. Used by [`Report::control`]; see the
 /// reasoning there.
-#[allow(clippy::trivially_copy_pass_by_ref)]
 fn never<T>(_: &T) -> bool {
     false
 }
