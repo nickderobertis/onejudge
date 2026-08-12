@@ -1179,6 +1179,7 @@ mod control {
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
+            .envs(detached_profile())
             .spawn()
             .unwrap_or_else(|e| emit_error(&format!("could not spawn the control server: {e}")));
         wait_for_path(
@@ -1205,6 +1206,7 @@ mod control {
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
+            .envs(detached_profile())
             .spawn()
             .unwrap_or_else(|e| emit_error(&format!("could not spawn the turn stand-in: {e}")));
         let stdin = turn
@@ -1256,6 +1258,19 @@ mod control {
             let _ = file.flush();
         }
         std::process::exit(0);
+    }
+
+    /// Redirect a detached child's coverage profile out of the run's merge set.
+    ///
+    /// These two outlive the test that started them by a fraction of a second —
+    /// long enough to be writing their `.profraw` while `cargo llvm-cov` is
+    /// merging, which surfaces as a corrupt profile and fails the gate on a run
+    /// where every test passed. `src/bin/` is excluded from coverage anyway, so
+    /// the profile has nothing to contribute; sending it to a temp path keeps the
+    /// race from existing rather than making it rarer.
+    fn detached_profile() -> [(String, String); 1] {
+        let path = std::env::temp_dir().join("onejudge-detached-%p.profraw");
+        [("LLVM_PROFILE_FILE".to_string(), path.display().to_string())]
     }
 
     /// oneharness's own rendering of a refusal, on stderr, with its usage exit code.
