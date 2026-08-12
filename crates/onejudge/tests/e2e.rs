@@ -1556,6 +1556,33 @@ fn a_platform_with_no_unix_socket_degrades_before_the_call() {
 }
 
 #[test]
+fn a_harness_that_cannot_bind_a_session_leaves_the_control_ask_unaddressable() {
+    // `--control` is addressed by the `--session` name, so a harness that exposes
+    // no session id headlessly has nowhere for the socket to live. Both are
+    // dropped and the turn is re-inlined — the run still completes, and the
+    // reason says which of the two degradations took the lever away.
+    let provider = fake_oneharness().with_control(true);
+    let engine = Engine::new(&provider, settings());
+    let outcome = engine
+        .run(&Conversation::single_turn(
+            skill_with("[[reply:no session here]][[reject-session]]"),
+            "go",
+        ))
+        .expect("a sessionless harness still runs the turn");
+    assert_eq!(outcome.transcript.messages[1].content, "no session here");
+
+    let report = outcome.into_report(vec![]);
+    assert!(report.control.is_none());
+    let reason = report
+        .control_unavailable
+        .expect("a lever with no address has to say why");
+    assert!(
+        reason.contains("--session"),
+        "the reason should name the session the address needs, got: {reason}"
+    );
+}
+
+#[test]
 fn no_control_ask_reports_neither_an_address_nor_a_reason() {
     // The default. `control: null` with no reason beside it is how a supervisor
     // tells "this run was never asked to be controllable" from "it was, and could
