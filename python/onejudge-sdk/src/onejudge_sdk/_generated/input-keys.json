@@ -3,6 +3,7 @@
     "assessment": "assessment",
     "bin": "bin",
     "command": "command",
+    "control": "control",
     "criterion": "criterion",
     "done_when": "done_when",
     "evals": "evals",

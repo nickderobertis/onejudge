@@ -198,10 +198,23 @@ schema `0.5`); the history file is still read, but only for `history_id`.
 **Cancelling a turn escalates: close oneharness's stdout, then SIGTERM it, then
 kill.** Each rung reaches a case the one before cannot — a silent harness never
 observes a broken pipe, and an uncatchable kill denies oneharness the teardown of
-the tree it owns, orphaning a harness that keeps billing. This is why the crate
-floors at oneharness **0.6.9**, the first release whose `run` answers a signal by
-tearing that tree down. Two e2e tests gate the pair, one per rung; see
+the tree it owns, orphaning a harness that keeps billing. This first moved the crate's floor to oneharness
+0.6.9, the release whose `run` answers a signal by tearing that tree down; the
+floor is now **0.6.14** (see turn control, below). Two e2e tests gate the pair, one per rung; see
 `docs/oneharness-library.md` before touching the order.
+
+**Turn control is an address, not a lever onejudge pulls.** `provider.control:
+true` (default off) adds `--control` to the **agent-side** `oneharness run`, and
+`Report::control` reports the three values `oneharness interrupt` addresses that
+turn with (`session`, `session_dir`, `cwd`) — read back from oneharness's report,
+so a fallback chain names the candidate that *ran*. `control` is serialized even
+when null; a refused ask is `null` **plus** `control_unavailable`, because "never
+asked" and "asked and refused" are different facts. A refusal costs no model
+tokens (oneharness validates before spawning), so the call is retried without the
+flag rather than failing the run. This is why the crate advertises oneharness
+**0.6.14+**. `docs/control.md` is the contract; the e2e that matters drives a real
+socket and asserts the reported address *redirects the live turn*, not that it
+merely exists.
 
 **Every hop that moves in-process gives up something the subprocess boundary was
 supplying.** oneharness's descendant teardown was the first (restored by signalling

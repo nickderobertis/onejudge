@@ -1,5 +1,5 @@
 {
-  "schema_version": 7,
+  "schema_version": 8,
   "transcript": {
     "messages": [
       {
@@ -137,5 +137,10 @@
       "pid": 4243
     }
   ],
+  "control": {
+    "session": "run-1-skill",
+    "session_dir": "/state/oneharness/sessions",
+    "cwd": "/work/repo"
+  },
   "stopped_early": false
 }

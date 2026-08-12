@@ -6,9 +6,9 @@
 //! break for the SDKs that compose over this contract.
 
 use onejudge::{
-    CandidateAttempt, FellThrough, HarnessAttribution, JudgeKind, JudgeValue, JudgeVerdict,
-    Message, NamedVerdict, PartyTelemetry, Report, SessionLink, SpawnedProcess, Telemetry,
-    TelemetryRole, ToolEvent, Transcript, Usage, SCHEMA_VERSION,
+    CandidateAttempt, ControlAddress, ControlOutcome, FellThrough, HarnessAttribution, JudgeKind,
+    JudgeValue, JudgeVerdict, Message, NamedVerdict, PartyTelemetry, Report, SessionLink,
+    SpawnedProcess, Telemetry, TelemetryRole, ToolEvent, Transcript, Usage, SCHEMA_VERSION,
 };
 
 /// The canonical report the golden is generated from: one tool-using assistant
@@ -130,6 +130,13 @@ fn canonical_report() -> Report {
             history_file: Some("/state/oneharness/history/run-1-skill.jsonl".into()),
         }],
     });
+    // The address a supervisor interrupts this run's agent turn at — exactly the
+    // three values `oneharness interrupt` takes, and nothing else.
+    report = report.with_control(&ControlOutcome::Open(ControlAddress {
+        session: "run-1-skill".into(),
+        session_dir: "/state/oneharness/sessions".into(),
+        cwd: "/work/repo".into(),
+    }));
     // Both halves of the grouping contract: a process an embedder's spawn hook
     // claimed, and one it did not — the latter serialized WITHOUT a `group`, so a
     // consumer can never read a group onejudge did not observe.
@@ -152,19 +159,19 @@ fn canonical_report() -> Report {
     report
 }
 
-const EXAMPLE_GOLDEN: &str = include_str!("golden/report.example-v7.json");
+const EXAMPLE_GOLDEN: &str = include_str!("golden/report.example-v8.json");
 #[cfg(feature = "sdk-schema")]
-const SCHEMA_GOLDEN: &str = include_str!("golden/report.schema-v7.json");
+const SCHEMA_GOLDEN: &str = include_str!("golden/report.schema-v8.json");
 
 #[test]
-fn report_matches_the_golden_example_v7() {
-    assert_eq!(SCHEMA_VERSION, 7, "golden is for schema v7");
+fn report_matches_the_golden_example_v8() {
+    assert_eq!(SCHEMA_VERSION, 8, "golden is for schema v8");
     let actual = serde_json::to_string_pretty(&canonical_report()).unwrap();
     assert_eq!(
         actual.trim(),
         EXAMPLE_GOLDEN.trim(),
         "the Report wire form changed. If this is intentional, bump SCHEMA_VERSION \
-         and update the v7 contract goldens. Actual serialization:\n{actual}"
+         and update the v8 contract goldens. Actual serialization:\n{actual}"
     );
 }
 
@@ -176,7 +183,7 @@ fn golden_deserializes_back_to_the_canonical_report() {
 
 #[cfg(feature = "sdk-schema")]
 #[test]
-fn generated_report_schema_matches_the_schema_v7_golden() {
+fn generated_report_schema_matches_the_schema_v8_golden() {
     let actual = serde_json::to_value(onejudge::sdk_schema::bundle().report).unwrap();
     let golden: serde_json::Value = serde_json::from_str(SCHEMA_GOLDEN).unwrap();
     assert_eq!(

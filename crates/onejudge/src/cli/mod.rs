@@ -31,13 +31,21 @@ const DEFAULT_CONFIG: &str = "onejudge.yaml";
 /// It doubles as the documentation of the config surface.
 pub const STARTER_CONFIG: &str = include_str!("starter.yaml");
 
-/// The oldest `oneharness` this build works against, as told to an operator.
+/// The oldest `oneharness` **CLI** this build works against, as told to an
+/// operator: the first release whose `run --control` opens a turn-control socket
+/// and whose `interrupt --input` can redirect the turn onejudge reports the
+/// address of (`docs/control.md`).
 ///
 /// One source for every message the CLI prints, and drift-gated in this module's
 /// tests against the `oneharness-core` requirement in the workspace manifest and
 /// against the prose that repeats it — so bumping the pin without bumping what an
 /// operator is told to install fails the gate instead of shipping a wrong number.
-const MIN_ONEHARNESS: &str = "0.6.9";
+///
+/// It is a *lower bound on* the core pin rather than equal to it, because the two
+/// crates version independently: there is no `oneharness` 0.6.13, and the 0.6.14
+/// CLI is the one that carries `oneharness-core` 0.6.13. Naming the core version
+/// here would tell an operator to install a CLI that was never published.
+const MIN_ONEHARNESS: &str = "0.6.14";
 
 /// Errors surfaced by the CLI. Config/validation problems are separated from IO
 /// and engine failures so the entrypoint can exit with a fitting code.
@@ -939,6 +947,11 @@ mod tests {
         // requirement, in CLI messages, and in prose. Only the manifest actually
         // constrains the build, so it is the source; this is the gate that keeps
         // the other two from drifting off it — which they had.
+        //
+        // The relation is `>=`, not `==`: the CLI and its engine crate version
+        // independently (no `oneharness` 0.6.13 was ever published), so a CLI
+        // older than the core it embeds is the drift worth catching, while a newer
+        // one is simply the release that carries it.
         let manifest = include_str!("../../../../Cargo.toml");
         let pinned = manifest
             .lines()
@@ -947,9 +960,11 @@ mod tests {
             .trim()
             .trim_matches('"')
             .to_string();
-        assert_eq!(
-            pinned, MIN_ONEHARNESS,
-            "the advertised minimum drifted from the oneharness-core requirement"
+        assert!(
+            version_parts(MIN_ONEHARNESS) >= version_parts(&pinned),
+            "the advertised oneharness minimum {MIN_ONEHARNESS} is older than the pinned \
+             oneharness-core {pinned}, so an operator following it installs a CLI that cannot \
+             produce the report this build parses"
         );
 
         // The prose that repeats it, so a bump cannot land in the code alone.
@@ -967,6 +982,17 @@ mod tests {
                 "{name} does not mention the advertised oneharness minimum {MIN_ONEHARNESS}"
             );
         }
+    }
+
+    /// A `major.minor.patch` string as comparable numbers. Only used by the drift
+    /// gate above, where both inputs are release versions this repo writes.
+    fn version_parts(version: &str) -> (u32, u32, u32) {
+        let mut parts = version.split('.').map(|p| p.parse::<u32>().unwrap_or(0));
+        (
+            parts.next().unwrap_or(0),
+            parts.next().unwrap_or(0),
+            parts.next().unwrap_or(0),
+        )
     }
 
     fn summary(completed: bool, hit_max: bool, evals: Vec<EvalResult>) -> RunSummary {
@@ -1061,7 +1087,7 @@ mod tests {
     fn json_render_is_the_versioned_report() {
         let report = Report::new(Transcript::from_input("hi"), vec![], None, false);
         let json = render_json(&report).unwrap();
-        assert!(json.contains("\"schema_version\": 7"));
+        assert!(json.contains("\"schema_version\": 8"));
     }
 
     #[test]

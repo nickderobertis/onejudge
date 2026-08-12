@@ -37,6 +37,12 @@
 //!   `docs/spawn-hook.md`). Install it on each provider, or — driving the run
 //!   through the CLI's plan — on the plan itself (`Plan::with_spawn_hook`, under
 //!   the `cli` feature), which reaches both sides of a two-party run.
+//! - [`ControlOutcome`] is the answer to "can something *outside* this run redirect
+//!   the turn in flight?". Asked for with `OneharnessProvider::with_control` (or
+//!   `provider.control: true`) and off by default, it reports the
+//!   [`ControlAddress`] an `oneharness interrupt` process would use — or why the
+//!   ask could not be honored. onejudge never interrupts anything itself; see
+//!   `docs/control.md`.
 //!
 //! # Example
 //!
@@ -61,6 +67,7 @@
 #[cfg(feature = "cli")]
 pub mod cli;
 mod command;
+mod control;
 mod engine;
 mod error;
 mod oneharness;
@@ -76,6 +83,7 @@ mod transcript;
 mod usage;
 
 pub use command::CommandProvider;
+pub use control::{ControlAddress, ControlOutcome};
 pub use engine::{Conversation, Engine, Outcome, Settings, SimulatedUser, Skill, StreamEvent};
 pub use error::{Error, ProviderErrorKind, Result};
 pub use oneharness::OneharnessProvider;

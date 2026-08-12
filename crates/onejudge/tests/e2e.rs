@@ -1331,3 +1331,222 @@ fn an_embedder_group_reaps_the_whole_two_party_harness_tree_on_a_kill_cancel() {
         let _ = std::fs::remove_file(path);
     }
 }
+
+// --- Out-of-band turn control (docs/control.md) ----------------------------
+
+/// Be `oneharness interrupt`, using oneharness's **own** code rather than a
+/// re-implementation of it: resolve the store the address names, read the session
+/// record the pre-flight refusal is decided from, and send one request frame to the
+/// socket that store's directory holds. This is exactly what `commands::interrupt`
+/// does with the same three argv values, so a test that passes here is a test that
+/// the reported address is one the real verb can resolve.
+#[cfg(unix)]
+fn interrupt_at(
+    address: &onejudge::ControlAddress,
+    input: &str,
+) -> (
+    oneharness_core::domain::session::SessionRecord,
+    oneharness_core::domain::control::ControlResponse,
+) {
+    use oneharness_core::domain::control::{socket_path, ControlRequest, RedirectInput};
+    use oneharness_core::io::{control, session as session_io};
+
+    let dir = session_io::resolve_dir(Some(&address.session_dir))
+        .expect("`--session-dir` resolves to a store");
+    let record = session_io::read(&session_io::session_path(
+        &dir,
+        std::path::Path::new(&address.cwd),
+        &address.session,
+    ))
+    .expect("`oneharness interrupt` finds a session record at the reported address");
+    // The pre-flight refusal: a harness with no control mechanism is answered from
+    // the store, before the socket is dialled. Passing it means the address names
+    // an identity that can be interrupted at all.
+    assert!(
+        record.harness.spec().control.is_some(),
+        "the reported address names `{}`, which declares no turn control, so an \
+         interrupt would be refused `unsupported` without ever dialling",
+        record.harness
+    );
+    let request =
+        ControlRequest::redirect(RedirectInput::new(input).expect("a usable redirection"));
+    let response = control::send(&socket_path(&dir, &address.session), &request);
+    (record, response)
+}
+
+/// Read `path` until it holds `needle`, or fail loudly. The frames are written by
+/// another process, so a bounded wait is the difference between an assertion and a
+/// race.
+#[cfg(unix)]
+fn await_contents(path: &std::path::Path, needle: &str) -> String {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    loop {
+        let text = std::fs::read_to_string(path).unwrap_or_default();
+        if text.contains(needle) {
+            return text;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the live turn never received `{needle}`; it got: {text}"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn the_reported_control_address_is_one_oneharness_interrupt_can_redirect_the_turn_through() {
+    let store = support::control_store("ctl-open");
+    let sink = scratch_path("control-sink-open");
+    let worktree = "/skills/demo";
+    let instructions = format!(
+        "[[reply:on it]][[control-store:{}]][[control-linger:{}]]",
+        store.display(),
+        sink.display()
+    );
+
+    let provider = fake_oneharness().with_control(true);
+    let engine = Engine::new(&provider, settings().with_session_name("Run 42"));
+    let outcome = engine
+        .run(&Conversation::single_turn(
+            Skill::new("demo", worktree, &instructions),
+            "start the long job",
+        ))
+        .expect("a controlled turn is an ordinary turn that also opened a socket");
+    let report = outcome.into_report(vec![]);
+
+    let address = report
+        .control
+        .clone()
+        .expect("a controlled run reports where its turn is addressed");
+    assert!(report.control_unavailable.is_none());
+    // The session is the handle oneharness *stored*, not the one onejudge passed:
+    // `Run 42-skill` is sanitized to `run-42-skill` before it keys the store, and an
+    // address carrying the unsanitized name would resolve to nothing.
+    assert_eq!(address.session, "run-42-skill");
+    assert_eq!(address.cwd, worktree);
+    assert_eq!(
+        std::path::Path::new(&address.session_dir),
+        store.canonicalize().unwrap(),
+        "the store directory comes from the socket the run really opened"
+    );
+
+    // Now be the supervisor: stop the turn and say what to do instead.
+    let (record, response) = interrupt_at(&address, "stop — fix the failing test first");
+    assert_eq!(record.harness.to_string(), "claude-code");
+    assert!(
+        response.is_ok(),
+        "the reported address did not reach a live turn: {response:?}"
+    );
+
+    // And the correction really landed *in the turn*: the abort frame and then the
+    // operator's message, on the same stdin the harness is reading.
+    let delivered = await_contents(&sink, "stop — fix the failing test first");
+    assert!(
+        delivered.contains("control_request"),
+        "the interrupt frame never reached the turn: {delivered}"
+    );
+
+    let _ = std::fs::remove_file(&sink);
+    let _ = std::fs::remove_dir_all(&store);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_fallback_chain_reports_the_session_of_the_candidate_that_ran() {
+    // The chain routes around `qwen` — which declares no turn control — and a later
+    // candidate does the work. An address bound to the first candidate tried would
+    // make `oneharness interrupt` refuse `unsupported` from the store, before it
+    // ever dialled; `interrupt_at` asserts that pre-flight passes.
+    let store = support::control_store("ctl-chain");
+    let sink = scratch_path("control-sink-fallback");
+    let instructions = format!(
+        "[[reply:on it]][[fallback:qwen|quota]][[control-store:{}]][[control-linger:{}]]",
+        store.display(),
+        sink.display()
+    );
+
+    let provider = fake_oneharness().with_control(true);
+    let engine = Engine::new(&provider, settings().with_session_name("chain"));
+    let outcome = engine
+        .run(&Conversation::single_turn(
+            Skill::new("demo", "/skills/demo", &instructions),
+            "start the long job",
+        ))
+        .expect("a chain that routed around a candidate still ran the turn");
+    let report = outcome.into_report(vec![]);
+    let attribution = &report.telemetry.as_ref().unwrap().attribution[0];
+    assert_eq!(
+        attribution.fell_through[0].harness, "qwen",
+        "the chain really did route around its first candidate"
+    );
+
+    let address = report
+        .control
+        .clone()
+        .expect("the chain reports an address");
+    let (record, response) = interrupt_at(&address, "different plan: revert instead");
+    assert_eq!(
+        record.harness.to_string(),
+        "claude-code",
+        "the address names the identity that ran, not the one the chain skipped"
+    );
+    assert!(response.is_ok(), "{response:?}");
+    await_contents(&sink, "different plan: revert instead");
+
+    let _ = std::fs::remove_file(&sink);
+    let _ = std::fs::remove_dir_all(&store);
+}
+
+#[test]
+fn a_control_ask_a_harness_cannot_honor_degrades_instead_of_failing_the_run() {
+    // oneharness refuses `--control` for a harness with no control mechanism, and
+    // it refuses before spawning anything — so the turn is worth retrying without
+    // the flag rather than losing to it.
+    let store = support::control_store("ctl-refused");
+    let instructions = format!(
+        "[[reply:done anyway]][[control-unsupported:qwen]][[control-store:{}]]",
+        store.display()
+    );
+
+    let provider = fake_oneharness().with_control(true);
+    let engine = Engine::new(&provider, settings());
+    let outcome = engine
+        .run(&Conversation::single_turn(
+            Skill::new("demo", "/skills/demo", &instructions),
+            "go",
+        ))
+        .expect("a refused control ask must not fail the run it rode on");
+    assert_eq!(outcome.transcript.messages[1].content, "done anyway");
+
+    let report = outcome.into_report(vec![]);
+    assert!(report.control.is_none());
+    let reason = report
+        .control_unavailable
+        .expect("an asked-for lever that does not exist has to say so");
+    assert!(
+        reason.contains("has no out-of-band turn control"),
+        "the reason should quote oneharness's own refusal, got: {reason}"
+    );
+    let _ = std::fs::remove_dir_all(&store);
+}
+
+#[test]
+fn no_control_ask_reports_neither_an_address_nor_a_reason() {
+    // The default. `control: null` with no reason beside it is how a supervisor
+    // tells "this run was never asked to be controllable" from "it was, and could
+    // not be" — the two states the field would otherwise collapse.
+    let provider = fake_oneharness();
+    let engine = Engine::new(&provider, settings());
+    let outcome = engine
+        .run(&Conversation::single_turn(
+            skill_with("[[reply:done]]"),
+            "go",
+        ))
+        .unwrap();
+    let report = outcome.into_report(vec![]);
+    assert!(report.control.is_none());
+    assert!(report.control_unavailable.is_none());
+    let json = serde_json::to_string(&report).unwrap();
+    assert!(json.contains("\"control\":null"));
+}

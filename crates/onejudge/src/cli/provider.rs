@@ -44,10 +44,12 @@ impl AnyProvider {
                 bin,
                 judge_config,
                 stream,
+                control,
             } => {
                 let mut provider = OneharnessProvider::new()
                     .with_bin(bin)
-                    .with_streaming(*stream);
+                    .with_streaming(*stream)
+                    .with_control(*control);
                 if let Some(config) = judge_config {
                     provider = provider.with_judge_config(config.clone());
                 }
@@ -120,6 +122,16 @@ impl Provider for AnyProvider {
                 records.extend(judge.spawned_processes());
                 records
             }
+        }
+    }
+
+    // The skill side owns the controllable turn, exactly as
+    // [`crate::SplitProvider`] decides it.
+    fn control(&self) -> crate::ControlOutcome {
+        match self {
+            AnyProvider::Oneharness(p) => p.control(),
+            AnyProvider::Command(p) => p.control(),
+            AnyProvider::Split { skill, .. } => skill.control(),
         }
     }
 
@@ -204,6 +216,7 @@ mod tests {
             bin: "oneharness".into(),
             judge_config: Some("oneharness.judge.toml".into()),
             stream: false,
+            control: false,
         })
         .unwrap();
         assert!(matches!(oh, AnyProvider::Oneharness(_)));
@@ -228,6 +241,7 @@ mod tests {
                 bin: "oneharness".into(),
                 judge_config: None,
                 stream: true,
+                control: false,
             }),
             judge: Box::new(ProviderSpec::Command {
                 command: vec!["judge".into()],

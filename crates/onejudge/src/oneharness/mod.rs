@@ -9,10 +9,11 @@
 //! separately-configured harness/model — again without `--harness`/`--model`.
 //! Scaffold both with `onejudge init` (which shells out to `oneharness init`).
 //!
-//! It targets **oneharness v0.6.9+** — the version whose report contract it
-//! compiles against (`oneharness-core`), and the first whose `run` verb answers a
-//! cancellation signal by tearing its harness tree down instead of dying and
-//! orphaning it. It always threads the uniform `--session
+//! It targets **oneharness v0.6.14+** — the release carrying the report contract
+//! it compiles against (`oneharness-core` 0.6.13) and the `run --control` /
+//! `interrupt` pair it reports the address of; v0.6.9 was the first whose `run`
+//! verb answers a cancellation signal by tearing its harness tree down instead of
+//! dying and orphaning it. It always threads the uniform `--session
 //! <name>` handle (the engine's caller-owned name, mapped to the harness's native
 //! session in oneharness's on-disk store), and if a run fails because the harness
 //! does not support `--session`, it retries the same call once **without**
@@ -50,6 +51,14 @@
 //! owns them — and keeps that process in *onejudge's* process group, where a
 //! terminal Ctrl-C or a parent's group signal still reaches it.
 //!
+//! It can also ask for a **controllable** agent turn (`with_control`): the
+//! agent-side call adds `--control`, oneharness opens an out-of-band socket for the
+//! turn, and the address an `oneharness interrupt` process would use is reported on
+//! [`Provider::control`]. onejudge never interrupts anything — it asks, and it
+//! reports where the answer is. A oneharness that refuses the ask does so before
+//! spawning a harness, so the call is retried once without the flag and the refusal
+//! becomes a stated reason rather than a failed run. See `docs/control.md`.
+//!
 //! **Cancelling a turn tears oneharness down by escalation, never by kill alone.**
 //! A harness is its own process-group leader, so onejudge can never signal it; every
 //! rung is addressed to oneharness, which owns the tree. Closing its stdout reaches a
@@ -70,6 +79,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
 
+use crate::control::{ControlAddress, ControlOutcome};
 use crate::error::{Error, ProviderErrorKind, Result};
 use crate::provider::{
     build_assessment_prompt, build_judge_prompt, build_supervisor_prompt, build_user_prompt,
@@ -82,7 +92,7 @@ use crate::telemetry::{CandidateAttempt, FellThrough, InvocationTelemetry, Telem
 use crate::transcript::{Message, ToolEvent};
 
 pub(crate) use report::tool_event;
-use report::{parse_report, parse_report_value, Invocation};
+use report::{parse_report, parse_report_value, ControlSocket, Invocation};
 
 /// The default judge/simulated-user oneharness config filename.
 const DEFAULT_JUDGE_CONFIG: &str = "oneharness.judge.toml";
@@ -104,6 +114,54 @@ const SESSION_UNSUPPORTED_MARKER: &str = "does not support --session";
 /// without `--session`).
 fn is_session_unsupported(err: &Error) -> bool {
     err.to_string().contains(SESSION_UNSUPPORTED_MARKER)
+}
+
+/// The stable substrings in every refusal `oneharness run --control` can answer
+/// with: a harness with no control mechanism, a run shape that has no single turn
+/// to address, an incompatible output format or stream, a platform with no unix
+/// sockets, or a socket that could not be opened.
+///
+/// Substrings for the same reason [`SESSION_UNSUPPORTED_MARKER`] is one: every one
+/// of these is a *usage* error oneharness reports before it can produce a report,
+/// so there is nothing typed on the wire to match. Every variant either quotes the
+/// flag or names the socket, and
+/// `control_refusal_markers_track_oneharness` in this module's tests pins the
+/// whole set against `OneharnessError`'s own rendering, so an upstream rewording
+/// fails the gate here instead of silently turning a degraded run into a failed one.
+const CONTROL_REFUSED_MARKERS: [&str; 3] = ["--control", "control socket", "controlled turn"];
+
+/// Whether `err` is oneharness refusing the *control ask* — as opposed to failing
+/// the turn. Only consulted on a call that actually passed `--control`.
+fn is_control_refused(err: &Error) -> bool {
+    let text = err.to_string();
+    CONTROL_REFUSED_MARKERS
+        .iter()
+        .any(|marker| text.contains(marker))
+}
+
+/// Why this platform cannot carry a control channel, or `None` when it can.
+///
+/// A parameter rather than a `cfg!` at the call site so the Windows answer is
+/// asserted on every host: the degradation this returns is the whole of what a
+/// Windows caller gets, and a CI matrix that only *runs* it there would leave it
+/// unproven wherever the gate actually runs.
+fn control_platform_reason(unix: bool) -> Option<&'static str> {
+    (!unix).then_some(
+        "oneharness's turn-control socket is a unix domain socket, which this platform does not \
+         provide",
+    )
+}
+
+/// oneharness's own words for a refusal, as the reason a report carries.
+///
+/// Quoted rather than re-described: the refusal names the harness, the run shape,
+/// or the control-capable alternatives, and a supervisor deciding how to route
+/// around it needs that, not onejudge's paraphrase.
+fn refusal(err: &Error) -> String {
+    match err {
+        Error::Provider { message, .. } => message.clone(),
+        other => other.to_string(),
+    }
 }
 
 /// How long a cancelled `oneharness run` is given to notice its closed stdout
@@ -211,6 +269,17 @@ pub struct OneharnessProvider {
     bin: String,
     judge_config: Option<PathBuf>,
     stream: bool,
+    control: bool,
+    /// What the agent side could say about turn control on the last run: the
+    /// address of the socket it opened, or why it has none. Reset with telemetry,
+    /// because it describes one run and not the provider.
+    control_outcome: RefCell<ControlOutcome>,
+    /// The socket the agent side's last report named, before the working
+    /// directory is folded in to make it an address. Written where the report is
+    /// parsed (which is the only place that sees it) and consumed by
+    /// [`OneharnessProvider::run_respond`], which is the only place that knows the
+    /// `--cwd` the turn ran under.
+    control_socket: RefCell<Option<ControlSocket>>,
     telemetry: RefCell<Vec<InvocationTelemetry>>,
     spawner: Spawner,
 }
@@ -230,6 +299,9 @@ impl OneharnessProvider {
             bin: "oneharness".into(),
             judge_config: Some(PathBuf::from(DEFAULT_JUDGE_CONFIG)),
             stream: false,
+            control: false,
+            control_outcome: RefCell::new(ControlOutcome::NotRequested),
+            control_socket: RefCell::new(None),
             telemetry: RefCell::new(Vec::new()),
             spawner: Spawner::default(),
         }
@@ -283,10 +355,72 @@ impl OneharnessProvider {
         self
     }
 
+    /// Ask for a **controllable** agent turn: the agent-side call adds
+    /// `oneharness run --control`, which opens an out-of-band unix socket for the
+    /// turn's lifetime so a separate `oneharness interrupt` process can redirect
+    /// it in flight. The address is reported on [`Provider::control`] and on
+    /// [`Report::control`](crate::Report::control); onejudge itself never
+    /// interrupts anything.
+    ///
+    /// **Off by default**, and off changes nothing at all — no flag, no socket,
+    /// the same argv. On, the ask is best-effort in exactly one direction: a
+    /// oneharness that refuses `--control` (a harness with no control mechanism, a
+    /// run shape control cannot address, a platform with no unix sockets) does so
+    /// *before* anything spawns, so the call is retried once without it and the
+    /// refusal is reported as [`ControlOutcome::Unavailable`] rather than failing
+    /// a run the caller asked to have judged.
+    ///
+    /// Only the agent side is controlled. A judge or simulated-user turn is short
+    /// and has nothing to redirect, and giving it a socket would put two runs on
+    /// one address.
+    #[must_use]
+    pub fn with_control(mut self, control: bool) -> Self {
+        self.control = control;
+        self
+    }
+
+    /// Record why an asked-for control channel is missing, and warn — a caller
+    /// that asked for a lever must not have to diff two reports to learn it has
+    /// none.
+    fn control_unavailable(&self, reason: impl Into<String>) {
+        let reason = reason.into();
+        eprintln!("onejudge: warning — no out-of-band turn control for this run: {reason}");
+        *self.control_outcome.borrow_mut() = ControlOutcome::Unavailable(reason);
+    }
+
+    /// Fold the working directory the turn ran under into the socket the report
+    /// named, producing the address `oneharness interrupt` takes.
+    ///
+    /// A controlled attempt that returned a report with no control block is the
+    /// one case that cannot happen through oneharness (it refuses the flag rather
+    /// than honoring it silently) and must still not be reported as a lever: it
+    /// becomes an `Unavailable` naming the producer.
+    fn control_address(&self, worktree: &str) {
+        match self.control_socket.borrow_mut().take() {
+            Some(socket) => {
+                *self.control_outcome.borrow_mut() = ControlOutcome::Open(ControlAddress {
+                    session: socket.session,
+                    session_dir: socket.session_dir,
+                    cwd: worktree.to_string(),
+                });
+            }
+            None => self.control_unavailable(
+                "the run accepted `--control` but its report named no control socket",
+            ),
+        }
+    }
+
     /// Run a skill turn, threading `session` and — on a `SessionUnsupported`
     /// failure — retrying once without it, re-inlining the transcript. Tool events
     /// reach `on_event` live when the provider streams, and are replayed from the
     /// finished turn when it does not.
+    ///
+    /// A control ask ([`OneharnessProvider::with_control`]) rides the same ladder:
+    /// the most capable call is tried first, and each retry drops exactly the one
+    /// thing the previous attempt was refused for. Both refusals cost no model
+    /// tokens — oneharness validates the flags before it spawns a harness — which
+    /// is what makes retrying cheaper than making the caller pre-declare what its
+    /// harness can do.
     fn run_respond(
         &self,
         instructions: &str,
@@ -295,25 +429,82 @@ impl OneharnessProvider {
         session: Option<&str>,
         on_event: &mut dyn FnMut(&ToolEvent) -> ControlFlow<()>,
     ) -> Result<AssistantTurn> {
+        let mut session = session;
         if let Some(name) = session {
             // A continued session only needs the latest user turn.
-            let args = respond_args(instructions, worktree, Some(name), Some(name), self.stream);
             let prompt = latest_or_inline(messages, true);
-            match self.respond_once(&args, &prompt, on_event) {
-                Ok(turn) => return Ok(turn),
-                Err(e) if is_session_unsupported(&e) => {
-                    eprintln!(
-                        "onejudge: warning — the agent harness does not support --session; \
-                         retrying without it (re-inlining the transcript)"
-                    );
+            if self.wants_control() {
+                let args = respond_args(
+                    instructions,
+                    worktree,
+                    Some(name),
+                    Some(name),
+                    self.stream,
+                    true,
+                );
+                match self.respond_once(&args, &prompt, on_event) {
+                    Ok(turn) => {
+                        self.control_address(worktree);
+                        return Ok(turn);
+                    }
+                    // oneharness refused the control ask itself, before spawning
+                    // anything: drop the flag and run the turn as an ordinary one.
+                    Err(e) if is_control_refused(&e) => self.control_unavailable(refusal(&e)),
+                    Err(e) if is_session_unsupported(&e) => {
+                        // `--control` is addressed by the session name, so a
+                        // harness with no session has no address either.
+                        self.control_unavailable(
+                            "the agent harness does not support --session, which --control needs \
+                             for an address",
+                        );
+                        session = None;
+                    }
+                    Err(e) => return Err(e),
                 }
-                Err(e) => return Err(e),
+            }
+            if let Some(name) = session {
+                let args = respond_args(
+                    instructions,
+                    worktree,
+                    Some(name),
+                    Some(name),
+                    self.stream,
+                    false,
+                );
+                match self.respond_once(&args, &prompt, on_event) {
+                    Ok(turn) => return Ok(turn),
+                    Err(e) if is_session_unsupported(&e) => {
+                        eprintln!(
+                            "onejudge: warning — the agent harness does not support --session; \
+                             retrying without it (re-inlining the transcript)"
+                        );
+                    }
+                    Err(e) => return Err(e),
+                }
             }
         }
         // Fresh or fallback call: inline the whole conversation, no `--session`.
-        let args = respond_args(instructions, worktree, None, session, self.stream);
+        let args = respond_args(instructions, worktree, None, session, self.stream, false);
         let prompt = latest_or_inline(messages, false);
         self.respond_once(&args, &prompt, on_event)
+    }
+
+    /// Whether this call should ask for a controllable turn.
+    ///
+    /// Windows is answered here rather than by oneharness, so the ask degrades to
+    /// a stated reason instead of a refused run: oneharness's control socket is a
+    /// unix domain socket, and there is nothing for a retry to discover.
+    fn wants_control(&self) -> bool {
+        if !self.control {
+            return false;
+        }
+        match control_platform_reason(cfg!(unix)) {
+            Some(reason) => {
+                self.control_unavailable(reason);
+                false
+            }
+            None => true,
+        }
     }
 
     /// One agent-side invocation: streamed when the provider declared streaming,
@@ -534,13 +725,17 @@ impl OneharnessProvider {
     }
 
     /// Record one invocation's telemetry and per-candidate attribution against the
-    /// party that made the call.
+    /// party that made the call — and, on the agent side, the control socket the
+    /// report named.
     fn record(&self, op: &str, invocation: &Invocation) {
         let role = if op == "respond" {
             TelemetryRole::Agent
         } else {
             TelemetryRole::Judge
         };
+        if op == "respond" && self.control {
+            *self.control_socket.borrow_mut() = report::control_socket(&invocation.report);
+        }
         self.telemetry
             .borrow_mut()
             .push(invocation_telemetry(role, invocation));
@@ -702,6 +897,7 @@ fn respond_args(
     session: Option<&str>,
     history_name: Option<&str>,
     stream: bool,
+    control: bool,
 ) -> Vec<String> {
     // `oneharness run` emits a JSON report by default; `--compact` makes it a
     // single line. There is no `--format` flag on `run`.
@@ -731,6 +927,12 @@ fn respond_args(
     if let Some(name) = session {
         args.push("--session".into());
         args.push(name.into());
+    }
+    // `--control` opens the out-of-band turn-control socket, addressed by the
+    // `--session` name above — which is why it is pushed only alongside one, and
+    // why the caller drops it when it drops the session.
+    if control && session.is_some() {
+        args.push("--control".into());
     }
     args
 }
@@ -770,6 +972,11 @@ impl Provider for OneharnessProvider {
     fn reset_telemetry(&self) {
         self.telemetry.borrow_mut().clear();
         self.spawner.reset();
+        // The control address describes one run's turn, not the provider, so a
+        // second run must never inherit the first's — least of all an address
+        // whose socket is gone.
+        *self.control_outcome.borrow_mut() = ControlOutcome::NotRequested;
+        *self.control_socket.borrow_mut() = None;
     }
 
     fn invocation_telemetry(&self) -> Vec<InvocationTelemetry> {
@@ -778,6 +985,10 @@ impl Provider for OneharnessProvider {
 
     fn spawned_processes(&self) -> Vec<SpawnedProcess> {
         self.spawner.records()
+    }
+
+    fn control(&self) -> ControlOutcome {
+        self.control_outcome.borrow().clone()
     }
 
     fn respond(
@@ -901,6 +1112,7 @@ mod tests {
             Some("run-1-skill"),
             Some("run-1-skill"),
             false,
+            false,
         );
         assert!(args.windows(2).any(|w| w == ["--session", "run-1-skill"]));
         assert!(args.iter().any(|a| a == "--events"));
@@ -913,7 +1125,7 @@ mod tests {
         assert!(!args.iter().any(|a| a == "--stream"));
 
         // No session supplied: no `--session`.
-        let none = respond_args("do x", "/work", None, None, false);
+        let none = respond_args("do x", "/work", None, None, false, false);
         assert!(!none.iter().any(|a| a == "--session"));
     }
 
@@ -921,7 +1133,14 @@ mod tests {
     fn streaming_adds_the_stream_flag_to_the_agent_side_only() {
         let provider = OneharnessProvider::new().with_streaming(true);
         assert!(provider.stream);
-        let args = respond_args("do x", "/work", Some("s"), Some("s"), provider.stream);
+        let args = respond_args(
+            "do x",
+            "/work",
+            Some("s"),
+            Some("s"),
+            provider.stream,
+            false,
+        );
         assert!(args.iter().any(|a| a == "--stream"));
         // The judge / simulated-user side stays buffered: streaming is about the
         // long agent turn, not the short judgement calls.
@@ -978,6 +1197,120 @@ mod tests {
             upstream.contains(SESSION_UNSUPPORTED_MARKER),
             "oneharness now says: {upstream}"
         );
+    }
+
+    #[test]
+    fn control_refusal_markers_track_oneharness() {
+        // Every way `oneharness run --control` can refuse the ask, in oneharness's
+        // own rendering. Each is a usage error before a report exists, so the
+        // degradation is driven off stderr text — and an upstream rewording has to
+        // fail here rather than turn a degraded run into a failed one.
+        let refusals = [
+            OneharnessError::ControlNeedsSession,
+            OneharnessError::ControlUnsupported {
+                id: "qwen".into(),
+                supported: "claude-code, codex".into(),
+            },
+            OneharnessError::ControlSingleHarness {
+                selected: "claude-code, codex".into(),
+            },
+            OneharnessError::ControlBatch,
+            OneharnessError::ControlPlatform,
+            OneharnessError::ControlStreamUnsupported {
+                id: "opencode".into(),
+            },
+            OneharnessError::ControlSchema,
+            OneharnessError::ControlModeUnsupported {
+                id: "opencode".into(),
+                mode: "edit",
+            },
+            OneharnessError::ControlOutputFormat {
+                id: "claude-code".into(),
+                required: "stream-json".into(),
+                selected: "text".into(),
+            },
+            OneharnessError::ControlSocket {
+                path: "/state/control/x.sock".into(),
+                source: std::io::Error::other("in use"),
+            },
+            OneharnessError::MultiModelConflict {
+                with: "--control",
+                why: "control drives one live turn",
+            },
+        ];
+        for refusal in refusals {
+            let err = stderr_error(&format!("oneharness: error: {refusal}"));
+            assert!(
+                is_control_refused(&err),
+                "onejudge would fail the run instead of degrading; oneharness now says: {refusal}"
+            );
+        }
+        // And it must not swallow an ordinary turn failure as a control refusal.
+        let unrelated = stderr_error("oneharness: error: harness `codex` is not installed");
+        assert!(!is_control_refused(&unrelated));
+    }
+
+    #[test]
+    fn a_platform_without_unix_sockets_degrades_with_a_stated_reason() {
+        // The Windows answer, asserted wherever the gate runs: the ask is dropped
+        // with a reason rather than sent to a oneharness that would refuse the run.
+        let reason = control_platform_reason(false).expect("a non-unix host has no socket");
+        assert!(reason.contains("unix domain socket"));
+        assert!(control_platform_reason(true).is_none());
+    }
+
+    #[test]
+    fn control_rides_the_agent_argv_only_alongside_a_session() {
+        let with = respond_args("do x", "/work", Some("s"), Some("s"), false, true);
+        assert!(with.iter().any(|a| a == "--control"));
+        // Off by default: the argv is byte-identical to a run that never asked.
+        let without = respond_args("do x", "/work", Some("s"), Some("s"), false, false);
+        assert!(!without.iter().any(|a| a == "--control"));
+        // `--control` is addressed by the session name, so dropping the session
+        // drops it too rather than sending oneharness an unaddressable ask.
+        let sessionless = respond_args("do x", "/work", None, Some("s"), false, true);
+        assert!(!sessionless.iter().any(|a| a == "--control"));
+        // The judge side is never controlled.
+        assert!(!judge_side_args(None, Some("s"), None)
+            .iter()
+            .any(|a| a == "--control"));
+    }
+
+    #[test]
+    fn a_provider_that_never_asked_reports_no_control() {
+        assert_eq!(
+            OneharnessProvider::new().control(),
+            ControlOutcome::NotRequested
+        );
+        // Asking does not by itself claim an address: only a turn that got one does.
+        assert_eq!(
+            OneharnessProvider::new().with_control(true).control(),
+            ControlOutcome::NotRequested
+        );
+    }
+
+    #[test]
+    fn a_controlled_report_with_no_socket_is_unavailable_not_open() {
+        // oneharness refuses `--control` rather than honoring it silently, so this
+        // is unreachable through it — but a stand-in producer could, and reporting
+        // a lever that does not exist is the one failure this feature must not have.
+        let provider = OneharnessProvider::new().with_control(true);
+        provider.control_address("/work");
+        assert!(provider
+            .control()
+            .unavailable_reason()
+            .expect("a missing socket is a stated reason")
+            .contains("named no control socket"));
+    }
+
+    /// The classified error a `oneharness` process that refused the call produces,
+    /// carrying `stderr` — the shape [`is_control_refused`] reads.
+    fn stderr_error(stderr: &str) -> Error {
+        Error::provider_classified(
+            "respond".to_string(),
+            format!("oneharness exited with exit status: 2: {stderr}"),
+            ProviderErrorKind::Protocol,
+        )
     }
 
     #[test]

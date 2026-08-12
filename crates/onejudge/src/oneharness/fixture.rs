@@ -115,6 +115,7 @@ pub(crate) fn report(results: Vec<RunResult>) -> RunReport {
         spy_file: None,
         history_file: None,
         config_files: Vec::new(),
+        control: None,
         results,
     }
 }

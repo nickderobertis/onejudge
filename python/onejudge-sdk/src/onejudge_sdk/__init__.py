@@ -4,6 +4,7 @@ from ._client import EventHandler, OneJudge
 from ._errors import ContractError, OneJudgeProcessError, OneJudgeTimeoutError
 from ._generated_types import (
     CandidateAttempt,
+    ControlAddress,
     EvalConfig,
     FailureDetail,
     FailureReport,
@@ -32,6 +33,7 @@ from ._version import __version__
 __all__ = [
     "CandidateAttempt",
     "ContractError",
+    "ControlAddress",
     "EvalConfig",
     "EventHandler",
     "FailureDetail",

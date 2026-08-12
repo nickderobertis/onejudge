@@ -74,6 +74,17 @@
 //! prompt inlines the task, so one run can steer both parties. See
 //! `docs/spawn-hook.md`.
 //!
+//! **Turn control.** `--control` opens a real unix socket through oneharness's own
+//! `io::control` listener, writes the session record `oneharness interrupt` reads
+//! before it dials, and reports the `control` block — so the address onejudge
+//! publishes is one an interrupt can actually resolve. `[[control-store:DIR]]` is
+//! required for a controlled run (the double refuses to touch the platform session
+//! store, which is the developer's own), `[[control-linger:SINK]]` hands the socket
+//! to a child that outlives the report — the only way an out-of-process interrupt
+//! can reach the turn the report just named — and records every frame delivered
+//! into the live turn's stdin at SINK, and `[[control-unsupported:ID]]` refuses the
+//! ask the way a harness with no control mechanism does. See `docs/control.md`.
+//!
 //! `[[stream-silent-descendant:HANDLE]]` (Unix) models the same contract for a
 //! harness that produces **no output**, which is the case a broken pipe cannot
 //! reach: it writes one event and then goes silent forever, tearing the stand-in
@@ -120,6 +131,23 @@ fn main() {
         };
         run_descendant(handle);
     }
+    // The two halves of a lingering control socket, re-exec'd for the same reason:
+    // a socket only oneharness's own process owns cannot outlive it, and the e2e
+    // has to address the turn from outside after the report names it.
+    #[cfg(unix)]
+    if argv.first().map(String::as_str) == Some("--control-server") {
+        let (Some(socket), Some(sink)) = (argv.get(1), argv.get(2)) else {
+            emit_error("--control-server needs a socket path and a sink path");
+        };
+        control::run_server(socket, sink);
+    }
+    #[cfg(unix)]
+    if argv.first().map(String::as_str) == Some("--control-harness") {
+        let Some(sink) = argv.get(1) else {
+            emit_error("--control-harness needs a sink path");
+        };
+        control::run_harness(sink);
+    }
 
     let flags = parse_flags();
     let mut prompt = String::new();
@@ -144,6 +172,14 @@ fn main() {
              headlessly, so a named handle cannot be mapped to it. supported: claude-code"
         );
         std::process::exit(1);
+    }
+
+    // `--control` is validated before anything runs, exactly as oneharness
+    // validates it: every refusal here is a usage error the caller must be able to
+    // degrade from without having paid for a turn.
+    let control_wanted = flags.contains_key("--control");
+    if control_wanted {
+        control::validate(session.as_deref(), system);
     }
 
     let is_agent = !(prompt.contains("completion supervisor")
@@ -243,6 +279,20 @@ fn main() {
         path.to_string()
     });
 
+    // The control block, and with it the session record `oneharness interrupt`
+    // reads before it dials. Built here rather than up front because both bind to
+    // the candidate that RAN — which a fallback chain does not know until now.
+    let control = control_wanted.then(|| {
+        control::open(
+            session
+                .as_deref()
+                .expect("validate refuses --control without --session"),
+            flags.get("--cwd").map_or(".", String::as_str),
+            ran_index.map_or(HARNESS, |index| results[index].harness_id.as_str()),
+            system,
+        )
+    });
+
     let report = RunReport {
         schema_version: oneharness_core::domain::report::SCHEMA_VERSION.into(),
         oneharness_version: "0.6.9-fake".into(),
@@ -252,7 +302,10 @@ fn main() {
         resume: None,
         fork: false,
         session: session.as_deref().map(|name| SessionReport {
-            name: name.to_string(),
+            // The SANITIZED handle, exactly as oneharness's `finalize_session`
+            // reports it: it is what the store keyed the record on, and therefore
+            // what an `oneharness interrupt` has to be told.
+            name: oneharness_core::domain::history::sanitize_name(name),
             phase: SessionPhase::Create,
             token: Some(format!("native-{name}")),
             store_file: None,
@@ -268,6 +321,7 @@ fn main() {
         spy_file: None,
         history_file,
         config_files: Vec::new(),
+        control,
         results,
     };
 
@@ -803,7 +857,13 @@ fn parse_flags() -> HashMap<String, String> {
         "--cwd",
         "--history-name",
     ];
-    const TOGGLES: &[&str] = &["--events", "--compact", "--history", "--stream"];
+    const TOGGLES: &[&str] = &[
+        "--events",
+        "--compact",
+        "--history",
+        "--stream",
+        "--control",
+    ];
 
     let args: Vec<String> = std::env::args().skip(1).collect();
     let mut flags = HashMap::new();
@@ -970,5 +1030,237 @@ fn parse_scale(prompt: &str) -> (f64, f64) {
     match (min, max) {
         (Some(lo), Some(hi)) => (lo, hi),
         _ => (0.0, 10.0),
+    }
+}
+
+/// Out-of-band turn control, modelled with **oneharness's own** control code:
+/// the same `io::control` listener a real run binds, the same registry-declared
+/// mechanism, the same session record `oneharness interrupt` reads before it
+/// dials. Nothing about the address is invented here, which is what makes the
+/// e2e's "the reported address is the turn's address" claim mean something.
+///
+/// The store lives wherever `ONEJUDGE_FAKE_SESSION_DIR` says. A real oneharness
+/// falls back to the platform state dir; the double refuses to, because a test
+/// must never write into the developer's own session store.
+///
+/// `[[control-unsupported]]` refuses the ask the way a harness with no control
+/// mechanism does, and `[[control-linger:SINK]]` hands the socket to a child that
+/// outlives the report — the only way an out-of-process interrupt can reach the
+/// turn the report just named.
+mod control {
+    use oneharness_core::domain::control::{
+        socket_path, AbsolutePath, ControlReport, ControlShape,
+    };
+    use oneharness_core::domain::harness::{self, HarnessIdentity};
+    use oneharness_core::errors::OneharnessError;
+    use oneharness_core::io::session as session_io;
+
+    use super::{emit_error, marker, wait_for_path, HARNESS};
+
+    /// Refuse a control ask the way `oneharness run` refuses one — a usage error
+    /// on stderr before anything spawns, in oneharness's own words, so onejudge's
+    /// degradation is matched against the real text rather than a paraphrase.
+    pub fn validate(session: Option<&str>, system: &str) {
+        if session.is_none() {
+            refuse(&OneharnessError::ControlNeedsSession);
+        }
+        if marker(system, "control-store").is_none() {
+            emit_error("a controlled run needs [[control-store:DIR]]");
+        }
+        if let Some(id) = marker(system, "control-unsupported") {
+            refuse(&OneharnessError::ControlUnsupported {
+                id: id.to_string(),
+                supported: control_capable_ids(),
+            });
+        }
+        if !cfg!(unix) {
+            refuse(&OneharnessError::ControlPlatform);
+        }
+    }
+
+    /// Open the socket for this turn and report where it is, binding the session
+    /// handle to `ran` — the identity that actually did the turn, which in a
+    /// fallback chain is not the first candidate.
+    pub fn open(session: &str, cwd: &str, ran: &str, system: &str) -> ControlReport {
+        let dir = std::path::PathBuf::from(
+            marker(system, "control-store")
+                .unwrap_or_else(|| emit_error("validate refuses a controlled run with no store")),
+        );
+        std::fs::create_dir_all(dir.join("control"))
+            .unwrap_or_else(|e| emit_error(&format!("could not create the control dir: {e}")));
+        let dir = std::fs::canonicalize(&dir)
+            .unwrap_or_else(|e| emit_error(&format!("could not resolve the session store: {e}")));
+        write_session_record(&dir, cwd, ran, session);
+
+        let socket = socket_path(&dir, session);
+        match marker(system, "control-linger") {
+            Some(sink) => spawn_server(&socket, sink),
+            None => bind_here(&socket),
+        }
+        ControlReport {
+            socket: AbsolutePath::new(&socket)
+                .unwrap_or_else(|e| emit_error(&format!("control socket path: {e}"))),
+            mechanism: shape(),
+            interrupts: Vec::new(),
+        }
+    }
+
+    /// The mechanism the registry declares for the harness this double claims to
+    /// be — read off oneharness rather than named here, so a registry change that
+    /// took Claude Code's control away fails the suite instead of passing it.
+    fn shape() -> ControlShape {
+        harness::by_id(HARNESS)
+            .and_then(|spec| spec.control)
+            .unwrap_or_else(|| emit_error("the registry declares no control for this harness"))
+    }
+
+    fn control_capable_ids() -> String {
+        harness::all()
+            .iter()
+            .filter(|spec| spec.control.is_some())
+            .map(|spec| spec.id)
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
+    /// Write the record `oneharness interrupt` reads to decide, before dialling,
+    /// whether this session's harness can be interrupted at all — bound to the
+    /// identity that ran, exactly as `finalize_session` binds it.
+    fn write_session_record(dir: &std::path::Path, cwd: &str, ran: &str, session: &str) {
+        let project = std::path::Path::new(cwd);
+        let identity: HarnessIdentity = ran
+            .parse()
+            .unwrap_or_else(|e| emit_error(&format!("`{ran}` is not a harness identity: {e}")));
+        let path = session_io::session_path(dir, project, session);
+        session_io::write(
+            &path,
+            project,
+            &identity,
+            session,
+            &format!("native-{session}"),
+            None,
+        )
+        .unwrap_or_else(|e| emit_error(&format!("could not write the session record: {e}")));
+    }
+
+    #[cfg(unix)]
+    fn bind_here(socket: &std::path::Path) {
+        let listener = oneharness_core::io::control::bind(socket, shape(), None)
+            .unwrap_or_else(|e| emit_error(&format!("could not bind {}: {e}", socket.display())));
+        // The socket has to stay addressable for as long as this process is the
+        // run: dropping the listener unlinks it, and a report naming a socket that
+        // is already gone is precisely the address bug this double exists to
+        // catch. Handing its lifetime to process exit is where a real run's ends.
+        std::mem::forget(listener);
+    }
+
+    #[cfg(not(unix))]
+    fn bind_here(_socket: &std::path::Path) {
+        emit_error("validate refuses --control off unix");
+    }
+
+    /// Hand the socket to a child, so it survives this process and an interrupt
+    /// sent *after* the report can still reach a live turn.
+    fn spawn_server(socket: &std::path::Path, sink: &str) {
+        let _ = std::fs::remove_file(socket);
+        let exe =
+            std::env::current_exe().unwrap_or_else(|e| emit_error(&format!("current exe: {e}")));
+        #[allow(
+            clippy::zombie_processes,
+            reason = "the server must OUTLIVE this process; that is what the marker models"
+        )]
+        std::process::Command::new(exe)
+            .arg("--control-server")
+            .arg(socket)
+            .arg(sink)
+            // No inherited pipes: a server holding this process's stdout or stderr
+            // would keep them from ever reaching EOF, and the consumer waiting on
+            // them would block for the server's whole lifetime.
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap_or_else(|e| emit_error(&format!("could not spawn the control server: {e}")));
+        wait_for_path(
+            &socket.display().to_string(),
+            "the control server never bound its socket",
+        );
+    }
+
+    /// The lingering control server: oneharness's own listener over a live turn,
+    /// serving one request and then leaving.
+    ///
+    /// The "turn" is a child holding an open stdin, because that is what the
+    /// stdin-borne mechanism aborts — with no turn in flight the handle correctly
+    /// answers `no_active_turn`, and the e2e would prove nothing.
+    #[cfg(unix)]
+    pub fn run_server(socket: &str, sink: &str) -> ! {
+        use std::time::{Duration, Instant};
+
+        let exe =
+            std::env::current_exe().unwrap_or_else(|e| emit_error(&format!("current exe: {e}")));
+        let mut turn = std::process::Command::new(exe)
+            .arg("--control-harness")
+            .arg(sink)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap_or_else(|e| emit_error(&format!("could not spawn the turn stand-in: {e}")));
+        let stdin = turn
+            .stdin
+            .take()
+            .unwrap_or_else(|| emit_error("the turn stand-in has no stdin"));
+
+        let listener =
+            oneharness_core::io::control::bind(std::path::Path::new(socket), shape(), None)
+                .unwrap_or_else(|e| emit_error(&format!("could not bind {socket}: {e}")));
+        listener.handle_ref().begin_turn(stdin);
+
+        // One request, then leave — a supervisor's correction is the whole point,
+        // and a server that outlived it would hold the address against the next run.
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while Instant::now() < deadline && listener.handle_ref().events().is_empty() {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        // Deliver the redirection into the live turn the way the run's own driver
+        // does: the abort frame has landed, so the message it committed is now the
+        // next turn's prompt frame on the same stdin.
+        if let Some(input) = listener.handle_ref().take_redirect() {
+            if let Some(frame) =
+                oneharness_core::domain::control::prompt_frame(shape(), input.as_str())
+            {
+                let _ = listener.handle_ref().write_line(&frame);
+            }
+        }
+        listener.handle_ref().end_turn();
+        drop(listener);
+        let _ = turn.wait();
+        std::process::exit(0);
+    }
+
+    /// The turn stand-in: append every frame written into the live turn's stdin to
+    /// the sink, so the e2e can assert what actually reached the harness.
+    #[cfg(unix)]
+    pub fn run_harness(sink: &str) -> ! {
+        use std::io::{BufRead, Write};
+
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(sink)
+            .unwrap_or_else(|e| emit_error(&format!("could not open the sink {sink}: {e}")));
+        for line in std::io::stdin().lock().lines() {
+            let Ok(line) = line else { break };
+            let _ = writeln!(file, "{line}");
+            let _ = file.flush();
+        }
+        std::process::exit(0);
+    }
+
+    /// oneharness's own rendering of a refusal, on stderr, with its usage exit code.
+    fn refuse(err: &OneharnessError) -> ! {
+        eprintln!("oneharness: error: {err}");
+        std::process::exit(2);
     }
 }

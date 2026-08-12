@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import shutil
 import sys
 import tempfile
 import time
@@ -67,7 +68,11 @@ class OneJudgeTests(unittest.IsolatedAsyncioTestCase):
         input_tokens = complete.usage["input_tokens"]
         self.assertIsNotNone(input_tokens)
         self.assertGreater(input_tokens or 0, 0)
-        self.assertEqual(complete.raw["schema_version"], 7)
+        self.assertEqual(complete.raw["schema_version"], 8)
+        # A run that never asked for turn control reports neither an address nor
+        # a reason — the two states `control` alone would collapse.
+        self.assertIsNone(complete.control)
+        self.assertIsNone(complete.control_unavailable)
         # The processes a run spawned are machine-readable from the CLI. No spawn
         # hook can be installed across a subprocess boundary, so none claims a group.
         self.assertTrue(complete.processes)
@@ -106,6 +111,29 @@ class OneJudgeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(telemetry["judge"]["session_ids"], ["native-judge"])
         self.assertEqual([link["role"] for link in telemetry["sessions"]], ["agent", "judge"])
         self.assertTrue(all(link.get("history_id") for link in telemetry["sessions"]))
+
+    @unittest.skipIf(sys.platform == "win32", "the control socket is a unix socket")
+    async def test_a_controlled_run_publishes_the_turns_interrupt_address(self) -> None:
+        """Expose where an `oneharness interrupt` process addresses the turn."""
+        fake = ROOT / "target" / "debug" / f"onejudge-fake-oneharness{SUFFIX}"
+        # A short store path: a unix socket address is capped near 100 bytes.
+        store = tempfile.mkdtemp(prefix="oj-sdk-ctl-")
+        config: RunConfig = {
+            "provider": {"kind": "oneharness", "bin": str(fake), "control": True},
+            "system_prompt": f"[[reply:on it]][[control-store:{store}]]",
+            "session": "Run 9",
+        }
+        result = await OneJudge(executable=str(BINARY)).run(config, "start the long job")
+        address = result.control
+        self.assertIsNotNone(address)
+        assert address is not None
+        # Exactly the three values `oneharness interrupt` takes, and the session is
+        # the handle oneharness stored (sanitized), not the one that was asked for.
+        self.assertEqual(sorted(address), ["cwd", "session", "session_dir"])
+        self.assertEqual(address["session"], "run-9-skill")
+        self.assertEqual(Path(address["session_dir"]), Path(store).resolve())
+        self.assertIsNone(result.control_unavailable)
+        shutil.rmtree(store, ignore_errors=True)
 
     async def test_a_failed_run_is_attributed_to_the_harness_identities_it_tried(self) -> None:
         """Carry onejudge's structured failure document, not just its stderr."""
@@ -213,7 +241,7 @@ class OneJudgeTests(unittest.IsolatedAsyncioTestCase):
         # The terminal line carries the ordinary, validated result.
         self.assertEqual(result.exit_code, 0)
         self.assertTrue(result.completed)
-        self.assertEqual(result.raw["schema_version"], 7)
+        self.assertEqual(result.raw["schema_version"], 8)
         self.assertEqual(result.assistant_turns, 1)
         self.assertEqual(result.verdicts[0]["verdict"]["value"], True)
 

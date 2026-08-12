@@ -11,6 +11,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::control::{ControlAddress, ControlOutcome};
 use crate::provider::{JudgeKind, JudgeVerdict};
 use crate::spawn::SpawnedProcess;
 use crate::telemetry::Telemetry;
@@ -25,8 +26,18 @@ use crate::usage::Usage;
 /// per-invocation harness attribution (`telemetry.attribution`) — which candidate
 /// identities the provider attempted, which one ran, and which it fell through;
 /// `7` added `processes` — the processes the run spawned and the embedder-owned
-/// group a [`SpawnHook`](crate::SpawnHook) placed each in.
-pub const SCHEMA_VERSION: u32 = 7;
+/// group a [`SpawnHook`](crate::SpawnHook) placed each in; `8` added `control` —
+/// the address of the out-of-band turn-control channel a `provider.control: true`
+/// run opened — and its companion `control_unavailable`.
+pub const SCHEMA_VERSION: u32 = 8;
+
+/// The skip predicate for a field that is always serialized but must not be
+/// *required* of a document being read. Used by [`Report::control`]; see the
+/// reasoning there.
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn never<T>(_: &T) -> bool {
+    false
+}
 
 /// A judge verdict paired with the criterion it scored and the kind of
 /// judgement, so a serialized report is self-describing.
@@ -90,6 +101,29 @@ pub struct Report {
     /// not observe a hook create.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub processes: Vec<SpawnedProcess>,
+    /// Where an `oneharness interrupt` process addresses the controllable turn
+    /// this run's agent side opened (`provider.control: true`), or `null` when
+    /// control was not asked for.
+    ///
+    /// Serialized even when null — unlike the optional fields above — because a
+    /// supervisor keys on its presence to decide whether it has a lever at all,
+    /// and an absent key would make "no control" indistinguishable from a report
+    /// written before this field existed. `null` with a `control_unavailable`
+    /// reason beside it is the third case: asked for, and refused.
+    ///
+    /// Always *written*, but deliberately not *required* by the generated schema:
+    /// a reader must keep accepting the reports older onejudge versions wrote, and
+    /// producing more than the contract demands is what makes an additive field
+    /// additive. [`never`] is how those two are said at once — it is the skip
+    /// predicate that never skips, and its presence is what tells serde's schema
+    /// derive the key may be absent from a document.
+    #[serde(default, skip_serializing_if = "never")]
+    pub control: Option<ControlAddress>,
+    /// Why an *asked-for* control channel is missing, when one is. Absent unless
+    /// `provider.control` was on and the run could not be given a socket — which
+    /// is what keeps a refused ask from reading as an ask never made.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub control_unavailable: Option<String>,
     /// Whether a streaming sink asked to short-circuit the run.
     #[serde(default)]
     pub stopped_early: bool,
@@ -113,6 +147,8 @@ impl Report {
             usage,
             telemetry: None,
             processes: Vec::new(),
+            control: None,
+            control_unavailable: None,
             stopped_early,
         }
     }
@@ -121,6 +157,17 @@ impl Report {
     #[must_use]
     pub fn with_assessment(mut self, assessment: impl Into<String>) -> Self {
         self.assessment = Some(assessment.into());
+        self
+    }
+
+    /// Record what the run's agent side could say about out-of-band turn control.
+    ///
+    /// One method rather than two settable fields, so the report cannot hold the
+    /// contradiction of an address *and* a reason it has none.
+    #[must_use]
+    pub fn with_control(mut self, outcome: &ControlOutcome) -> Self {
+        self.control = outcome.address().cloned();
+        self.control_unavailable = outcome.unavailable_reason().map(String::from);
         self
     }
 }
@@ -186,11 +233,47 @@ mod tests {
         assert!(!json.contains("verdicts"));
         assert!(!json.contains("usage"));
         assert!(!json.contains("assessment"));
-        assert!(json.contains("\"schema_version\":7"));
+        assert!(json.contains("\"schema_version\":8"));
         assert!(!json.contains("telemetry"));
         // A run that spawned nothing reports no processes, rather than an empty
         // claim about grouping.
         assert!(!json.contains("processes"));
+        // `control` is the exception: it is always on the wire, so a supervisor
+        // reads "no controllable turn" rather than "an older onejudge".
+        assert!(json.contains("\"control\":null"));
+        assert!(!json.contains("control_unavailable"));
+    }
+
+    #[test]
+    fn a_refused_control_ask_is_not_an_ask_never_made() {
+        let base = Report::new(Transcript::from_input("hi"), vec![], None, false);
+
+        let never = base.clone().with_control(&ControlOutcome::NotRequested);
+        let never_json = serde_json::to_string(&never).unwrap();
+        assert!(never_json.contains("\"control\":null"));
+        assert!(!never_json.contains("control_unavailable"));
+
+        let refused = base.clone().with_control(&ControlOutcome::Unavailable(
+            "harness `codex` has no out-of-band turn control".into(),
+        ));
+        let refused_json = serde_json::to_string(&refused).unwrap();
+        // Same null address, but the reason is what tells the two apart.
+        assert!(refused_json.contains("\"control\":null"));
+        assert!(refused_json.contains("has no out-of-band turn control"));
+        assert_eq!(
+            serde_json::from_str::<Report>(&refused_json).unwrap(),
+            refused
+        );
+
+        let open = base.with_control(&ControlOutcome::Open(ControlAddress {
+            session: "run-42-skill".into(),
+            session_dir: "/state/oneharness/sessions".into(),
+            cwd: "/work/repo".into(),
+        }));
+        let open_json = serde_json::to_string(&open).unwrap();
+        assert!(open_json.contains("\"session\":\"run-42-skill\""));
+        assert!(!open_json.contains("control_unavailable"));
+        assert_eq!(serde_json::from_str::<Report>(&open_json).unwrap(), open);
     }
 
     #[test]

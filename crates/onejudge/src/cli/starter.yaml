@@ -16,6 +16,14 @@ provider:
   # stream: true                         # oneharness: the agent binary publishes
   #                                      # NDJSON tool events as they happen, then a
   #                                      # terminal report (see docs/streaming.md)
+  # control: true                        # oneharness: open an out-of-band turn-control
+  #                                      # socket for the AGENT turn, so a separate
+  #                                      # `oneharness interrupt` can redirect it in
+  #                                      # flight. Default false. The report's
+  #                                      # `control` block is the address; a harness
+  #                                      # that cannot be controlled degrades to a
+  #                                      # `control_unavailable` reason rather than
+  #                                      # failing the run (see docs/control.md)
   # kind: command  ->  command: ["my-provider", "--flag"]
   # kind: split    ->  skill: {..provider..}, judge: {..provider..}
 

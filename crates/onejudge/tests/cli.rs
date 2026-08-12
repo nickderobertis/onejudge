@@ -1492,3 +1492,59 @@ fn a_plan_driven_embedders_group_reaps_the_whole_two_party_harness_tree_on_a_kil
         let _ = std::fs::remove_file(path);
     }
 }
+
+#[cfg(unix)]
+#[test]
+fn binary_run_publishes_the_control_address_in_the_json_report() {
+    // The whole contract from a consumer's side: `provider.control: true` in YAML,
+    // and the shipped binary's `--format json` carries the three values
+    // `oneharness interrupt` addresses the turn with.
+    use oneharness_core::io::session as session_io;
+
+    let store = support::control_store("cli-ctl");
+    let bin = serde_json::to_string(&fake_oneharness_bin()).unwrap();
+    let system = format!(
+        "[[reply:the task is complete]][[control-store:{}]]",
+        store.display()
+    );
+    let yaml = format!(
+        "provider:\n  kind: oneharness\n  bin: {bin}\n  control: true\n\
+         task: go\n\
+         session: Run 7\n\
+         system_prompt: {}\n",
+        serde_json::to_string(&system).unwrap(),
+    );
+    let path = Path::new(env!("CARGO_TARGET_TMPDIR")).join("control.yaml");
+    std::fs::write(&path, yaml).unwrap();
+
+    let output = Command::new(onejudge_bin())
+        .args(["run", path.to_str().unwrap(), "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let control = report["control"].as_object().expect("an address");
+    assert_eq!(
+        control.keys().collect::<Vec<_>>(),
+        ["cwd", "session", "session_dir"],
+        "exactly the three values `oneharness interrupt` takes"
+    );
+    assert_eq!(control["session"], "run-7-skill");
+    assert!(report["control_unavailable"].is_null());
+
+    // The address resolves to the record an interrupt reads before it dials.
+    let dir = session_io::resolve_dir(control["session_dir"].as_str()).unwrap();
+    let record = session_io::read(&session_io::session_path(
+        &dir,
+        Path::new(control["cwd"].as_str().unwrap()),
+        control["session"].as_str().unwrap(),
+    ))
+    .expect("`oneharness interrupt` finds the session at the reported address");
+    assert!(record.harness.spec().control.is_some());
+
+    let _ = std::fs::remove_dir_all(&store);
+}

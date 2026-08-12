@@ -209,6 +209,48 @@ pub(crate) fn usage(result: &RunResult) -> Usage {
     }
 }
 
+/// The half of a control address the oneharness report carries: the session
+/// handle the run bound, and the store directory holding both that handle and its
+/// `control/<session>.sock`. The turn's working directory is the caller's to add.
+pub(crate) struct ControlSocket {
+    pub(crate) session: String,
+    pub(crate) session_dir: String,
+}
+
+/// Read the address of the control socket a `--control` run opened, or `None`
+/// when the report names none.
+///
+/// Both halves come off the report rather than off what onejudge asked for, and
+/// that is the point:
+///
+/// * The **session** is [`SessionReport::name`] — the handle as oneharness
+///   sanitized and *stored* it, bound by `finalize_session` to the candidate that
+///   actually ran. In a fallback chain the anchor is not necessarily the runner,
+///   so the name onejudge passed is not by itself the name `interrupt` will find
+///   a record under.
+/// * The **store directory** is the socket's own grandparent, because oneharness
+///   builds the socket path as `<session-dir>/control/<name>.sock` and canonicalizes
+///   it at bind time. Recomputing the platform default here would be a second
+///   source for one fact, and would be wrong for any run whose store was configured.
+///
+/// A socket path that is not valid UTF-8 has no address a caller can pass back on
+/// an argv, so it is reported as no address rather than a lossy one.
+pub(crate) fn control_socket(report: &RunReport) -> Option<ControlSocket> {
+    let control = report.control.as_ref()?;
+    let session = report.session.as_ref()?;
+    let session_dir = control
+        .socket
+        .as_path()
+        .parent()
+        .and_then(std::path::Path::parent)?
+        .to_str()?
+        .to_string();
+    Some(ControlSocket {
+        session: session.name.clone(),
+        session_dir,
+    })
+}
+
 /// Map oneharness's closed failure taxonomy onto onejudge's. Total on purpose: a
 /// new upstream kind fails to compile here instead of quietly becoming
 /// [`ProviderErrorKind::Other`] at some call site.
@@ -221,6 +263,11 @@ pub(crate) fn classify(kind: FailureKind) -> ProviderErrorKind {
         // A clean exit that only *deferred* a builtin tool call: a real refusal to
         // do the work, but not one of onejudge's specific environment categories.
         FailureKind::ToolDeferred => ProviderErrorKind::Other,
+        // The harness never saw the session this run asked to continue. Not one of
+        // onejudge's environment categories — the environment is fine and the task
+        // is still runnable — so it stays `Other` rather than borrowing a category
+        // that would tell a caller to stop trying.
+        FailureKind::SessionNotFound => ProviderErrorKind::Other,
     }
 }
 
