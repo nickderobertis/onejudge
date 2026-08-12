@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.8](https://github.com/nickderobertis/onejudge/compare/v0.3.7...v0.3.8) - 2026-08-12
+
+### Added
+
+- report where an oneharness interrupt can redirect the agent turn ([#44](https://github.com/nickderobertis/onejudge/pull/44))
+
 ## [0.3.7](https://github.com/nickderobertis/onejudge/compare/v0.3.6...v0.3.7) - 2026-08-09
 
 ### Added
