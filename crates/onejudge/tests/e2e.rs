@@ -1498,6 +1498,7 @@ fn a_fallback_chain_reports_the_session_of_the_candidate_that_ran() {
     let _ = std::fs::remove_dir_all(&store);
 }
 
+#[cfg(unix)]
 #[test]
 fn a_control_ask_a_harness_cannot_honor_degrades_instead_of_failing_the_run() {
     // oneharness refuses `--control` for a harness with no control mechanism, and
@@ -1529,6 +1530,29 @@ fn a_control_ask_a_harness_cannot_honor_degrades_instead_of_failing_the_run() {
         "the reason should quote oneharness's own refusal, got: {reason}"
     );
     let _ = std::fs::remove_dir_all(&store);
+}
+
+#[cfg(not(unix))]
+#[test]
+fn a_platform_with_no_unix_socket_degrades_before_the_call() {
+    // The Windows half of the same contract: onejudge answers the ask itself
+    // rather than spending a process on a refusal oneharness would have to make,
+    // and the run goes ahead. The reason is what keeps that distinguishable from
+    // a caller that never asked.
+    let provider = fake_oneharness().with_control(true);
+    let engine = Engine::new(&provider, settings());
+    let outcome = engine
+        .run(&Conversation::single_turn(
+            skill_with("[[reply:done anyway]]"),
+            "go",
+        ))
+        .expect("a platform with no socket must not fail the run");
+    let report = outcome.into_report(vec![]);
+    assert!(report.control.is_none());
+    assert!(report
+        .control_unavailable
+        .expect("the platform refusal is stated")
+        .contains("unix domain socket"));
 }
 
 #[test]
