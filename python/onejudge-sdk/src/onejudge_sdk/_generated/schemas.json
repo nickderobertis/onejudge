@@ -655,6 +655,29 @@
         ],
         "type": "object"
       },
+      "ControlAddress": {
+        "description": "Where an `oneharness interrupt` process addresses the controllable turn\nonejudge's agent side opened.\n\nThe three fields are the whole of `interrupt`'s addressing:\n\n```text\noneharness interrupt --session <session> --session-dir <session_dir> \\\n                     --cwd <cwd> --input \"<what to do instead>\"\n```\n\nThey are read back from the oneharness run report rather than re-derived from\nwhat onejudge asked for, so the address names the session the run actually\nbound \u2014 including in a fallback chain, where the handle is bound to the\ncandidate that *ran*, not the first one tried.",
+        "properties": {
+          "cwd": {
+            "description": "The working directory the turn runs in, which is how `interrupt` resolves\n*which project's* session the handle belongs to (`interrupt --cwd`). It is\nthe same string onejudge passed as `oneharness run --cwd`, because\noneharness slugs that string to key the store.",
+            "type": "string"
+          },
+          "session": {
+            "description": "The caller-owned session handle the turn is addressed by, as oneharness\nsanitized and stored it (`interrupt --session`).",
+            "type": "string"
+          },
+          "session_dir": {
+            "description": "The session store directory holding both the handle and its\n`control/<session>.sock` (`interrupt --session-dir`). Absolute: the\naddress is handed to a different process, so a relative path would name a\ndifferent directory depending on who read it.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session",
+          "session_dir",
+          "cwd"
+        ],
+        "type": "object"
+      },
       "FellThrough": {
         "description": "One candidate a fallback chain fell through, with oneharness's reason token\n(`not-installed`, `spawn-error`, `auth`, `quota`, `model-not-found`,\n`rate-limit`).",
         "properties": {
@@ -1167,6 +1190,25 @@
           "null"
         ]
       },
+      "control": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/ControlAddress"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Where an `oneharness interrupt` process addresses the controllable turn\nthis run's agent side opened (`provider.control: true`), or `null` when\ncontrol was not asked for.\n\nSerialized even when null \u2014 unlike the optional fields above \u2014 because a\nsupervisor keys on its presence to decide whether it has a lever at all,\nand an absent key would make \"no control\" indistinguishable from a report\nwritten before this field existed. `null` with a `control_unavailable`\nreason beside it is the third case: asked for, and refused.\n\nAlways *written*, but deliberately not *required* by the generated schema:\na reader must keep accepting the reports older onejudge versions wrote, and\nproducing more than the contract demands is what makes an additive field\nadditive. [`never`] is how those two are said at once \u2014 it is the skip\npredicate that never skips, and its presence is what tells serde's schema\nderive the key may be absent from a document."
+      },
+      "control_unavailable": {
+        "description": "Why an *asked-for* control channel is missing, when one is. Absent unless\n`provider.control` was on and the run could not be given a socket \u2014 which\nis what keeps a refused ask from reading as an ask never made.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
       "processes": {
         "description": "Every process the run spawned, and the embedder-owned group a\n[`SpawnHook`](crate::SpawnHook) placed each one in.\n\nThis is the machine-readable form of what an in-process embedder observes\nthrough the hook, so `onejudge run --format json` reports it too. A record\nwhose `group` is absent is not grouped \u2014 onejudge never names a group it did\nnot observe a hook create.",
         "items": {
@@ -1297,6 +1339,14 @@
             },
             "type": [
               "array",
+              "null"
+            ]
+          },
+          "control": {
+            "default": null,
+            "description": "`oneharness`: ask for a **controllable** agent turn \u2014 the agent-side call\nadds `oneharness run --control`, opening an out-of-band socket a separate\n`oneharness interrupt` process can redirect the in-flight turn through.\nDefault `false`, and `false` changes nothing about the run. The address\nlands on the report's `control` block; onejudge never interrupts anything\nitself. See `docs/control.md`.",
+            "type": [
+              "boolean",
               "null"
             ]
           },

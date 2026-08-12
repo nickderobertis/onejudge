@@ -7,6 +7,7 @@ use std::cell::RefCell;
 use std::ops::ControlFlow;
 use std::time::Instant;
 
+use crate::control::ControlOutcome;
 use crate::error::Result;
 use crate::provider::{
     build_judge_prompt, Assessment, AssistantTurn, JudgeKind, JudgeQuery, JudgeVerdict, Provider,
@@ -193,6 +194,10 @@ pub struct Outcome {
     /// embedder's [`SpawnHook`](crate::SpawnHook) placed it in. Empty for a
     /// provider that spawns nothing.
     pub processes: Vec<SpawnedProcess>,
+    /// Where an `oneharness interrupt` process addresses this run's controllable
+    /// turn, or why there is none. [`ControlOutcome::NotRequested`] unless the
+    /// provider was asked for control.
+    pub control: ControlOutcome,
 }
 
 impl Outcome {
@@ -215,6 +220,7 @@ impl Outcome {
         report.completion_reason = self.completion_reason;
         report.telemetry = self.telemetry;
         report.processes = self.processes;
+        report = report.with_control(&self.control);
         match assessment {
             Some(text) => report.with_assessment(text),
             None => report,
@@ -385,6 +391,7 @@ impl<'a> Engine<'a> {
             completion_reason,
             telemetry: self.telemetry(),
             processes: self.spawned_processes(),
+            control: self.provider.control(),
         }
     }
 

@@ -22,6 +22,21 @@ pub fn scratch_path(name: &str) -> std::path::PathBuf {
     path
 }
 
+/// A unique, empty oneharness **session store** for a controlled run: the
+/// directory its handle and its `control/<name>.sock` live under. Never the
+/// platform default, which is the developer's own store.
+///
+/// Deliberately NOT under `CARGO_TARGET_TMPDIR` like every other scratch path: a
+/// unix socket address is capped at ~100 bytes (`SUN_LEN`), and a target dir
+/// nested under a worktree path blows that before the socket name is even
+/// appended. The pid keeps two checkouts running the same test apart.
+pub fn control_store(name: &str) -> std::path::PathBuf {
+    let path = std::env::temp_dir().join(format!("oj-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&path);
+    std::fs::create_dir_all(&path).expect("the session store is creatable");
+    path
+}
+
 /// The `<pid> <port>` the double's harness stand-in published once it was live.
 pub fn descendant_handle(path: &std::path::Path) -> (u32, u16) {
     let raw = std::fs::read_to_string(path).expect("the harness stand-in published its handle");

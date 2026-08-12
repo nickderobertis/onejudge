@@ -9,7 +9,7 @@ and re-export, so onejudge — not its consumers — owns the shape of a judged 
 
 ```jsonc
 {
-  "schema_version": 7,                 // bump on any wire change
+  "schema_version": 8,                 // bump on any wire change
   "transcript": {
     "messages": [
       { "role": "user", "content": "commit the fix" },
@@ -68,6 +68,12 @@ and re-export, so onejudge — not its consumers — owns the shape of a judged 
       "group": "job:run-1" },          // only when a SpawnHook named one
     { "role": "judge", "op": "judge", "program": "oneharness", "pid": 41244 }
   ],
+  "control": {                          // ALWAYS present; null when not asked for
+    "session": "run-42-skill",         // the three values `oneharness interrupt` takes
+    "session_dir": "/state/oneharness/sessions",
+    "cwd": "/work/repo"
+  },
+  "control_unavailable": "…",           // omitted unless an ASKED-FOR lever is missing
   "stopped_early": false
 }
 ```
@@ -93,6 +99,15 @@ let report = outcome.into_report(vec![
 assert_eq!(report.schema_version, onejudge::SCHEMA_VERSION);
 ```
 
+## `control` — where a controllable turn is addressed
+
+Present on every report, so a supervisor keys on the value rather than on whether
+the key exists. `null` means turn control was not asked for
+(`provider.control: false`, the default). `null` **with** a `control_unavailable`
+reason beside it means it was asked for and could not be honored — a different
+fact, and the one a supervisor has to route around. See
+[control.md](control.md).
+
 ## `processes` — what the run spawned, and who owns its group
 
 `group` is present **only** when an in-process embedder's
@@ -104,8 +119,8 @@ its records carry pids and no group.
 ## Versioning and the drift gate
 
 The wire form is pinned by a canonical serialized example
-(`crates/onejudge/tests/golden/report.example-v7.json`) and its generated JSON
-Schema (`crates/onejudge/tests/golden/report.schema-v7.json`), both checked by
+(`crates/onejudge/tests/golden/report.example-v8.json`) and its generated JSON
+Schema (`crates/onejudge/tests/golden/report.schema-v8.json`), both checked by
 `tests/contract.rs`. Any change to the serialized shape — a renamed field, a new
 key, a changed default — fails that test, so it can only land as a **deliberate**
 edit that also bumps `SCHEMA_VERSION` and updates both goldens. Downstream SDKs

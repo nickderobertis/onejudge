@@ -188,6 +188,16 @@ pub trait Provider {
         Vec::new()
     }
 
+    /// Where an `oneharness interrupt` process addresses the controllable turn
+    /// this provider's **agent side** opened, if one was asked for.
+    ///
+    /// The default is [`ControlOutcome::NotRequested`](crate::ControlOutcome): a backend with no
+    /// out-of-band turn control never claims one. A composing provider forwards
+    /// the *skill-running* side, since that is the side the ask applies to.
+    fn control(&self) -> crate::ControlOutcome {
+        crate::ControlOutcome::NotRequested
+    }
+
     /// Run one assistant/skill turn given the conversation so far.
     ///
     /// `session`, when `Some`, is a **caller-owned session name** the engine

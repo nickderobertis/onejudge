@@ -119,6 +119,14 @@ pub struct ProviderConfig {
     /// terminal report line. Default `false` (one buffered report document).
     #[serde(default)]
     pub stream: Option<bool>,
+    /// `oneharness`: ask for a **controllable** agent turn — the agent-side call
+    /// adds `oneharness run --control`, opening an out-of-band socket a separate
+    /// `oneharness interrupt` process can redirect the in-flight turn through.
+    /// Default `false`, and `false` changes nothing about the run. The address
+    /// lands on the report's `control` block; onejudge never interrupts anything
+    /// itself. See `docs/control.md`.
+    #[serde(default)]
+    pub control: Option<bool>,
     /// `command`: the provider argv (program + args).
     #[serde(default)]
     pub command: Option<Vec<String>>,
@@ -360,6 +368,7 @@ impl ProviderConfig {
             bin,
             judge_config,
             stream,
+            control,
             command,
             skill,
             judge,
@@ -386,12 +395,14 @@ impl ProviderConfig {
                     bin: bin.unwrap_or_else(|| "oneharness".into()),
                     judge_config: judge_config.map(PathBuf::from),
                     stream: stream.unwrap_or(false),
+                    control: control.unwrap_or(false),
                 })
             }
             ProviderKind::Command => {
                 reject(bin.is_some(), "bin")?;
                 reject(judge_config.is_some(), "judge_config")?;
                 reject(stream.is_some(), "stream")?;
+                reject(control.is_some(), "control")?;
                 reject(skill.is_some(), "skill")?;
                 reject(judge.is_some(), "judge")?;
                 let command = command.filter(|c| !c.is_empty()).ok_or_else(|| {
@@ -403,6 +414,10 @@ impl ProviderConfig {
                 reject(bin.is_some(), "bin")?;
                 reject(judge_config.is_some(), "judge_config")?;
                 reject(stream.is_some(), "stream")?;
+                // A `split` has two backends, so a control ask on the wrapper says
+                // nothing about which turn it addresses. Set it on the `skill:`
+                // child, which is the side that runs the controllable turn.
+                reject(control.is_some(), "control")?;
                 reject(command.is_some(), "command")?;
                 let skill = skill.ok_or_else(|| {
                     CliError::Config("provider kind `split` needs a `skill` provider".into())
@@ -476,6 +491,8 @@ pub enum ProviderSpec {
         judge_config: Option<PathBuf>,
         /// The agent-side binary speaks the streamed provider protocol.
         stream: bool,
+        /// Ask for a controllable agent turn (`oneharness run --control`).
+        control: bool,
     },
     /// A custom command speaking the JSON-lines protocol.
     Command {
@@ -820,6 +837,58 @@ mod tests {
             ProviderSpec::Split { skill, .. } => assert!(matches!(
                 *skill,
                 ProviderSpec::Oneharness { stream: true, .. }
+            )),
+            other => panic!("expected split, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn control_resolves_onto_the_oneharness_spec_and_defaults_off() {
+        let asked = Config::from_yaml("task: x\nprovider:\n  kind: oneharness\n  control: true\n")
+            .unwrap()
+            .into_plan()
+            .unwrap();
+        assert!(matches!(
+            asked.provider,
+            ProviderSpec::Oneharness { control: true, .. }
+        ));
+
+        // Omitted: no socket, no flag, and a byte-identical argv — the default has
+        // to change nothing for every caller that predates turn control.
+        let plain = Config::from_yaml("task: x\n").unwrap().into_plan().unwrap();
+        assert!(matches!(
+            plain.provider,
+            ProviderSpec::Oneharness { control: false, .. }
+        ));
+    }
+
+    #[test]
+    fn control_is_rejected_under_a_kind_that_cannot_honor_it() {
+        // `control` describes the oneharness agent-side call. A `command` backend
+        // has no oneharness socket, and a `split` has two backends — so it declares
+        // it on the child that runs the controllable turn.
+        for yaml in [
+            "task: x\nprovider:\n  kind: command\n  command: [p]\n  control: true\n",
+            "task: x\nprovider:\n  kind: split\n  control: true\n  skill:\n    kind: oneharness\n  judge:\n    kind: oneharness\n",
+        ] {
+            let err = Config::from_yaml(yaml).unwrap().into_plan().unwrap_err();
+            assert!(
+                matches!(err, CliError::Config(m) if m.contains("control")),
+                "{yaml}"
+            );
+        }
+
+        // Under a split's own skill-side child it is valid, and reaches that child.
+        let plan = Config::from_yaml(
+            "task: x\nprovider:\n  kind: split\n  skill:\n    kind: oneharness\n    control: true\n  judge:\n    kind: command\n    command: [j]\n",
+        )
+        .unwrap()
+        .into_plan()
+        .unwrap();
+        match plan.provider {
+            ProviderSpec::Split { skill, .. } => assert!(matches!(
+                *skill,
+                ProviderSpec::Oneharness { control: true, .. }
             )),
             other => panic!("expected split, got {other:?}"),
         }

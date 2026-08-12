@@ -6,7 +6,14 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Optional
 
-from ._generated_types import NamedVerdict, RunReport, SpawnedProcess, Telemetry, Usage
+from ._generated_types import (
+    ControlAddress,
+    NamedVerdict,
+    RunReport,
+    SpawnedProcess,
+    Telemetry,
+    Usage,
+)
 
 
 @dataclass(frozen=True)
@@ -41,6 +48,20 @@ class RunResult:
     def processes(self) -> Sequence[SpawnedProcess]:
         """Return the processes the run spawned, with any embedder-owned group."""
         return self.raw.get("processes", [])
+
+    @property
+    def control(self) -> Optional[ControlAddress]:
+        """Return where `oneharness interrupt` addresses this run's turn.
+
+        ``None`` when turn control was not asked for, and also when it was asked
+        for and refused -- ``control_unavailable`` is what tells those apart.
+        """
+        return self.raw.get("control")
+
+    @property
+    def control_unavailable(self) -> Optional[str]:
+        """Return why an *asked-for* control channel is missing, if one is."""
+        return self.raw.get("control_unavailable")
 
     @property
     def assistant_turns(self) -> int:

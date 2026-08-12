@@ -36,6 +36,7 @@ class EvalConfig(_EvalConfigRequired, total=False):
 class ProviderConfig(TypedDict, total=False):
     bin: Optional[str]
     command: Optional[Sequence[str]]
+    control: Optional[bool]
     judge: Optional[ProviderConfig]
     judge_config: Optional[str]
     kind: ProviderKind
@@ -68,6 +69,12 @@ class CandidateAttempt(_CandidateAttemptRequired, total=False):
     session_id: Optional[str]
     usage: Optional[Usage]
     variant: Optional[str]
+
+
+class ControlAddress(TypedDict):
+    cwd: str
+    session: str
+    session_dir: str
 
 
 class FellThrough(TypedDict):
@@ -205,6 +212,8 @@ class _RunReportRequired(TypedDict):
 class RunReport(_RunReportRequired, total=False):
     assessment: Optional[str]
     completion_reason: Optional[str]
+    control: Optional[ControlAddress]
+    control_unavailable: Optional[str]
     processes: Sequence[SpawnedProcess]
     telemetry: Optional[Telemetry]
     usage: Optional[Usage]
