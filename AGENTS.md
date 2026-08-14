@@ -200,7 +200,8 @@ kill.** Each rung reaches a case the one before cannot — a silent harness neve
 observes a broken pipe, and an uncatchable kill denies oneharness the teardown of
 the tree it owns, orphaning a harness that keeps billing. This first moved the crate's floor to oneharness
 0.6.9, the release whose `run` answers a signal by tearing that tree down; the
-floor is now **0.6.14** (see turn control, below). Two e2e tests gate the pair, one per rung; see
+floor is now **0.8.0** (the pinned `oneharness-core`, which since 0.7 releases in
+lockstep with the CLI). Two e2e tests gate the pair, one per rung; see
 `docs/oneharness-library.md` before touching the order.
 
 **Turn control is an address, not a lever onejudge pulls.** `provider.control:
@@ -211,8 +212,9 @@ so a fallback chain names the candidate that *ran*. `control` is serialized even
 when null; a refused ask is `null` **plus** `control_unavailable`, because "never
 asked" and "asked and refused" are different facts. A refusal costs no model
 tokens (oneharness validates before spawning), so the call is retried without the
-flag rather than failing the run. This is why the crate advertises oneharness
-**0.6.14+**. `docs/control.md` is the contract; the e2e that matters drives a real
+flag rather than failing the run. `--control` arrived in oneharness 0.6.14, under
+the **0.8.0+** floor the crate advertises.
+`docs/control.md` is the contract; the e2e that matters drives a real
 socket and asserts the reported address *redirects the live turn*, not that it
 merely exists.
 

@@ -74,9 +74,10 @@
 //! prompt inlines the task, so one run can steer both parties. See
 //! `docs/spawn-hook.md`.
 //!
-//! **Turn control.** `--control` opens a real unix socket through oneharness's own
-//! `io::control` listener, writes the session record `oneharness interrupt` reads
-//! before it dials, and reports the `control` block — so the address onejudge
+//! **Turn control.** `--control` opens a real unix socket at the path
+//! `oneharness_core`'s own `socket_path` names, writes the session record
+//! `oneharness interrupt` reads before it dials, and reports the `control` block
+//! — so the address onejudge
 //! publishes is one an interrupt can actually resolve. `[[control-store:DIR]]` is
 //! required for a controlled run (the double refuses to touch the platform session
 //! store, which is the developer's own), `[[control-linger:SINK]]` hands the socket
@@ -1033,11 +1034,18 @@ fn parse_scale(prompt: &str) -> (f64, f64) {
     }
 }
 
-/// Out-of-band turn control, modelled with **oneharness's own** control code:
-/// the same `io::control` listener a real run binds, the same registry-declared
-/// mechanism, the same session record `oneharness interrupt` reads before it
-/// dials. Nothing about the address is invented here, which is what makes the
-/// e2e's "the reported address is the turn's address" claim mean something.
+/// Out-of-band turn control, modelled with **oneharness's own** control values:
+/// the same socket path, the same registry-declared mechanism, the same request
+/// and response frames, and the same session record `oneharness interrupt` reads
+/// before it dials. Nothing about the address is invented here, which is what
+/// makes the e2e's "the reported address is the turn's address" claim mean
+/// something.
+///
+/// What is *not* oneharness's own any more is the listener's state machine. Its
+/// `ControlHandle::bind` — the late binding that puts a mechanism behind the
+/// socket — went `pub(crate)` in 0.8.0, so a listener this crate binds refuses
+/// every interrupt `no_active_turn`. `run_server` therefore serves the frames
+/// itself; see the note there and in `docs/oneharness-library.md`.
 ///
 /// The store lives wherever `ONEJUDGE_FAKE_SESSION_DIR` says. A real oneharness
 /// falls back to the platform state dir; the double refuses to, because a test
@@ -1145,7 +1153,7 @@ mod control {
 
     #[cfg(unix)]
     fn bind_here(socket: &std::path::Path) {
-        let listener = oneharness_core::io::control::bind(socket, shape(), None)
+        let listener = oneharness_core::io::control::bind(socket, shape())
             .unwrap_or_else(|e| emit_error(&format!("could not bind {}: {e}", socket.display())));
         // The socket has to stay addressable for as long as this process is the
         // run: dropping the listener unlinks it, and a report naming a socket that
@@ -1188,15 +1196,32 @@ mod control {
         );
     }
 
-    /// The lingering control server: oneharness's own listener over a live turn,
-    /// serving one request and then leaving.
+    /// The lingering control server: a live turn behind the run's socket, serving
+    /// one request and then leaving.
     ///
     /// The "turn" is a child holding an open stdin, because that is what the
-    /// stdin-borne mechanism aborts — with no turn in flight the handle correctly
-    /// answers `no_active_turn`, and the e2e would prove nothing.
+    /// stdin-borne mechanism aborts — with no turn in flight a real run answers
+    /// `no_active_turn`, and the e2e would prove nothing.
+    ///
+    /// **Why this serves the socket itself.** It used to hand the whole exchange to
+    /// `oneharness_core::io::control::bind` and let oneharness's own listener answer.
+    /// oneharness 0.8.0 made the mechanism *late-bound* — `ControlHandle::bind` and
+    /// its `Binding` are `pub(crate)`, set only as a candidate takes the turn — so a
+    /// listener an external crate binds has no mechanism and refuses every interrupt
+    /// `no_active_turn`. Until that binding is reachable from outside the crate (see
+    /// `docs/oneharness-library.md`), a stand-in for `oneharness run --control` has
+    /// to answer for itself. Every value on the wire is still oneharness's own
+    /// declaration — `parse_request`, `ControlResponse`, `interrupt_frame`,
+    /// `prompt_frame` — so only the state machine is local, never the protocol.
     #[cfg(unix)]
     pub fn run_server(socket: &str, sink: &str) -> ! {
+        use std::io::{BufRead, Write};
+        use std::os::unix::net::UnixListener;
         use std::time::{Duration, Instant};
+
+        use oneharness_core::domain::control::{
+            interrupt_frame, parse_request, prompt_frame, ControlResponse,
+        };
 
         let exe =
             std::env::current_exe().unwrap_or_else(|e| emit_error(&format!("current exe: {e}")));
@@ -1209,34 +1234,84 @@ mod control {
             .envs(detached_profile())
             .spawn()
             .unwrap_or_else(|e| emit_error(&format!("could not spawn the turn stand-in: {e}")));
-        let stdin = turn
+        let mut stdin = turn
             .stdin
             .take()
             .unwrap_or_else(|| emit_error("the turn stand-in has no stdin"));
 
-        let listener =
-            oneharness_core::io::control::bind(std::path::Path::new(socket), shape(), None)
-                .unwrap_or_else(|e| emit_error(&format!("could not bind {socket}: {e}")));
-        listener.handle_ref().begin_turn(stdin);
+        let listener = UnixListener::bind(socket)
+            .unwrap_or_else(|e| emit_error(&format!("could not bind {socket}: {e}")));
+        // Non-blocking accept against a deadline: a supervisor that never dials must
+        // leave this process exiting rather than holding the address forever.
+        listener
+            .set_nonblocking(true)
+            .unwrap_or_else(|e| emit_error(&format!("could not poll {socket}: {e}")));
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let mut client = loop {
+            match listener.accept() {
+                Ok((stream, _)) => break stream,
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    if Instant::now() >= deadline {
+                        // Nobody came. Leave the turn as it was.
+                        let _ = turn.kill();
+                        let _ = std::fs::remove_file(socket);
+                        std::process::exit(0);
+                    }
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(e) => emit_error(&format!("could not accept on {socket}: {e}")),
+            }
+        };
+        client
+            .set_nonblocking(false)
+            .unwrap_or_else(|e| emit_error(&format!("could not read {socket}: {e}")));
+
+        let mut line = String::new();
+        let _ = std::io::BufReader::new(
+            client
+                .try_clone()
+                .unwrap_or_else(|e| emit_error(&format!("could not read {socket}: {e}"))),
+        )
+        .read_line(&mut line);
+        // The abort lands first and the redirection rides it, exactly the order the
+        // run's own driver writes them in: a message written before the abort would
+        // join the turn being cancelled instead of replacing it.
+        let response = match parse_request(&line) {
+            Ok(request) => {
+                if let Some(frame) = interrupt_frame(shape(), "1") {
+                    let _ = writeln!(stdin, "{}", frame.trim_end());
+                }
+                match request.input() {
+                    Some(input) => {
+                        if let Some(frame) = prompt_frame(shape(), input.as_str()) {
+                            let _ = writeln!(stdin, "{}", frame.trim_end());
+                        }
+                        let _ = stdin.flush();
+                        ControlResponse::redirected(shape())
+                    }
+                    None => {
+                        let _ = stdin.flush();
+                        ControlResponse::served(shape())
+                    }
+                }
+            }
+            // A frame this version cannot parse is refused loudly rather than
+            // being mistaken for an interrupt — `serve_connection`'s own answer.
+            Err(error) => ControlResponse::refused(
+                error,
+                oneharness_core::domain::control::ControlReason::Unsupported,
+            ),
+        };
+        let _ = client.write_all(response.to_line().as_bytes());
+        let _ = client.flush();
 
         // One request, then leave — a supervisor's correction is the whole point,
         // and a server that outlived it would hold the address against the next run.
-        let deadline = Instant::now() + Duration::from_secs(30);
-        while Instant::now() < deadline && listener.handle_ref().events().is_empty() {
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        // Deliver the redirection into the live turn the way the run's own driver
-        // does: the abort frame has landed, so the message it committed is now the
-        // next turn's prompt frame on the same stdin.
-        if let Some(input) = listener.handle_ref().take_redirect() {
-            if let Some(frame) =
-                oneharness_core::domain::control::prompt_frame(shape(), input.as_str())
-            {
-                let _ = listener.handle_ref().write_line(&frame);
-            }
-        }
-        listener.handle_ref().end_turn();
+        drop(client);
         drop(listener);
+        let _ = std::fs::remove_file(socket);
+        // Closing the turn's stdin is what lets the stand-in reach EOF and exit.
+        drop(stdin);
         let _ = turn.wait();
         std::process::exit(0);
     }

@@ -41,11 +41,13 @@ pub const STARTER_CONFIG: &str = include_str!("starter.yaml");
 /// against the prose that repeats it — so bumping the pin without bumping what an
 /// operator is told to install fails the gate instead of shipping a wrong number.
 ///
-/// It is a *lower bound on* the core pin rather than equal to it, because the two
-/// crates version independently: there is no `oneharness` 0.6.13, and the 0.6.14
-/// CLI is the one that carries `oneharness-core` 0.6.13. Naming the core version
-/// here would tell an operator to install a CLI that was never published.
-const MIN_ONEHARNESS: &str = "0.6.14";
+/// It is a *lower bound on* the core pin rather than equal to it. The two crates
+/// have not always released together — there is no `oneharness` 0.6.13, and the
+/// 0.6.14 CLI is the one that carried `oneharness-core` 0.6.13 — so naming the
+/// core version here could tell an operator to install a CLI that was never
+/// published. Since 0.7 the workspace releases in lockstep, which is why this is
+/// now the same number as the pin.
+const MIN_ONEHARNESS: &str = "0.8.0";
 
 /// Errors surfaced by the CLI. Config/validation problems are separated from IO
 /// and engine failures so the entrypoint can exit with a fitting code.

@@ -18,7 +18,7 @@ description = "A simulated interaction and evaluation loop over oneharness: driv
 # of the boundary it drives — `RunReport` / `RunResult` / `FailureKind` /
 # `RunStreamEnvelope` — instead of re-declaring shadow serde structs that drift.
 # A published registry version, never a git rev.
-oneharness-core = "0.6.13"
+oneharness-core = "0.8.0"
 # Unix only, and for exactly one call: `kill(pid, SIGTERM)` to ask a cancelled
 # `oneharness run` to tear down the harness tree it owns (`oneharness/mod.rs`).
 # A safe wrapper, because this crate forbids `unsafe_code`; already in the tree

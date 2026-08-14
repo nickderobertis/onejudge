@@ -9,12 +9,13 @@
 //! separately-configured harness/model — again without `--harness`/`--model`.
 //! Scaffold both with `onejudge init` (which shells out to `oneharness init`).
 //!
-//! It targets **oneharness v0.6.14+** — the release carrying the report contract
-//! it compiles against (`oneharness-core`, pinned in the workspace manifest) and
-//! the `run --control` / `interrupt` pair it reports the address of; v0.6.9 was
-//! the first whose `run`
-//! verb answers a cancellation signal by tearing its harness tree down instead of
-//! dying and orphaning it. It always threads the uniform `--session
+//! It targets **oneharness v0.8.0+** — the release carrying the report contract
+//! it compiles against (`oneharness-core`, pinned in the workspace manifest).
+//! v0.6.9 was the first whose `run` verb answers a cancellation signal by tearing
+//! its harness tree down instead of dying and orphaning it, and v0.6.14 added the
+//! `run --control` / `interrupt` pair it reports the address of; since 0.7 the
+//! CLI and the engine crate release in lockstep, so the advertised floor and the
+//! pin are one number. It always threads the uniform `--session
 //! <name>` handle (the engine's caller-owned name, mapped to the harness's native
 //! session in oneharness's on-disk store), and if a run fails because the harness
 //! does not support `--session`, it retries the same call once **without**
