@@ -1604,3 +1604,176 @@ fn no_control_ask_reports_neither_an_address_nor_a_reason() {
     let json = serde_json::to_string(&report).unwrap();
     assert!(json.contains("\"control\":null"));
 }
+
+// --- The in-process seam ---------------------------------------------------
+
+/// A project whose oneharness config pins the harness to the built fake-harness
+/// double — ordinary `[harness.<id>] bin` config, so this is the seam a real
+/// deployment uses and not a test-only hook.
+fn harness_project(name: &str) -> std::path::PathBuf {
+    let dir = scratch_path(name);
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("oneharness.toml"),
+        format!(
+            "harnesses = [\"claude-code\"]\nhistory_dir = {:?}\n\n[harness.claude-code]\nbin = {:?}\n",
+            dir.join("history").display().to_string(),
+            env!("CARGO_BIN_EXE_onejudge-fake-harness"),
+        ),
+    )
+    .unwrap();
+    dir
+}
+
+#[test]
+fn an_in_process_turn_runs_the_real_engine_over_a_deterministic_harness() {
+    // The happy path of the seam a default provider uses: nothing is spawned by
+    // onejudge, the engine is the linked `oneharness-core`, and the only faked
+    // thing is the harness — one level deeper than the other doubles fake.
+    let dir = harness_project("in-process-turn");
+    let provider = OneharnessProvider::new();
+    let engine = Engine::new(&provider, settings());
+    let skill = Skill::new("demo", dir.to_str().unwrap(), "[[reply:in-process reply]]");
+    let outcome = engine
+        .run(&Conversation::single_turn(skill, "do it"))
+        .unwrap();
+
+    assert_eq!(outcome.transcript.messages[1].content, "in-process reply");
+    // The report still attributes the turn to the candidate that ran, read off
+    // oneharness's own report rather than a parsed stdout document.
+    let telemetry = outcome.telemetry.as_ref().expect("the run is measured");
+    let attempt = &telemetry.attribution[0].candidates[0];
+    assert_eq!(attempt.harness, "claude-code");
+    assert!(attempt.ran);
+    // Nothing was spawned *by onejudge*, so it reports no processes — the seam's
+    // one caller-visible consequence, and the reason `with_spawn_hook` selects
+    // the spawning seam instead.
+    assert!(outcome.processes.is_empty());
+}
+
+#[test]
+fn an_in_process_turn_that_cannot_select_a_harness_fails_loudly() {
+    // The recovery path: a config naming a harness whose binary is not there is
+    // oneharness refusing before any model call, and it must reach the caller as
+    // a classified provider error rather than a vacuously empty turn.
+    let dir = scratch_path("in-process-missing-harness");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("oneharness.toml"),
+        format!(
+            "harnesses = [\"claude-code\"]\nrequire_available = true\nhistory_dir = {:?}\n\n\
+             [harness.claude-code]\nbin = {:?}\n",
+            dir.join("history").display().to_string(),
+            dir.join("not-installed").display().to_string(),
+        ),
+    )
+    .unwrap();
+    let provider = OneharnessProvider::new();
+    let engine = Engine::new(&provider, settings());
+    let skill = Skill::new("demo", dir.to_str().unwrap(), "[[reply:never]]");
+    let err = engine
+        .run(&Conversation::single_turn(skill, "do it"))
+        .expect_err("an unavailable harness is a failure, not an empty turn");
+    let text = err.to_string();
+    assert!(
+        text.contains("claude-code"),
+        "the failure names the candidate: {text}"
+    );
+}
+
+#[test]
+fn an_in_process_streamed_turn_delivers_events_while_it_is_still_running() {
+    // The double publishes its event, then blocks until the file this sink
+    // creates exists — so the run can only finish if the event really reached the
+    // sink *during* the turn. A build that collected events off the finished
+    // report instead would never release the double, which fails loudly on its
+    // own timeout rather than hanging.
+    let dir = harness_project("in-process-streaming");
+    let release = dir.join("release.marker");
+    let provider = OneharnessProvider::new().with_streaming(true);
+    let engine = Engine::new(&provider, settings());
+    let skill = Skill::new(
+        "demo",
+        dir.to_str().unwrap(),
+        format!(
+            "[[reply:streamed in process]][[event:git commit -m fix]][[stream-wait:{}]]",
+            release.display()
+        ),
+    );
+    let mut seen = Vec::new();
+    let outcome = engine
+        .run_streaming(
+            &Conversation::single_turn(skill, "commit it"),
+            &mut |event| {
+                seen.push(event.event.summary());
+                std::fs::write(&release, b"go").unwrap();
+                ControlFlow::Continue(())
+            },
+        )
+        .unwrap();
+
+    assert_eq!(seen.len(), 1, "the event was delivered live");
+    assert!(seen[0].contains("git commit -m fix"));
+    // And the finished turn is the same one a buffered run would have produced.
+    assert_eq!(
+        outcome.transcript.messages[1].content,
+        "streamed in process"
+    );
+    // `Bash`, capitalised, because oneharness reports the harness's own tool
+    // name verbatim and that is what a claude-code transcript carries.
+    assert_eq!(
+        outcome
+            .transcript
+            .count_tool_events(&ToolQuery::tool("Bash")),
+        1
+    );
+    assert!(!outcome.stopped_early);
+}
+
+#[test]
+fn cancelling_an_in_process_turn_terminates_the_harness_tree_oneharness_owns() {
+    // The failure this seam exists to not have: a cancelled turn that leaves a
+    // paid harness running. The double spawns a descendant in its own tree and
+    // then goes SILENT forever — the case a closed pipe can never reach, since a
+    // producer that never writes never observes one. Only `RunControls::cancel`,
+    // which oneharness's runner polls on its own time slice, reaps it.
+    //
+    // `signal_cancel` stays false throughout: onejudge is an embedder, so it must
+    // never install process-global handlers in its host. Nothing here signals
+    // anything — the sink's break is the whole cancellation.
+    let dir = harness_project("in-process-cancel");
+    let handle = dir.join("descendant.handle");
+    let provider = OneharnessProvider::new().with_streaming(true);
+    let engine = Engine::new(&provider, settings());
+    let skill = Skill::new(
+        "demo",
+        dir.to_str().unwrap(),
+        format!(
+            "[[reply:never arrives]][[descendant:{}]][[event:sleep 600]]",
+            handle.display()
+        ),
+    );
+    let outcome = engine
+        .run_streaming(
+            &Conversation::single_turn(skill, "start it"),
+            // Break on the first event: the turn is abandoned from here.
+            &mut |_| ControlFlow::Break(()),
+        )
+        .unwrap();
+    assert!(outcome.stopped_early, "the sink short-circuited the run");
+
+    await_path(&handle, "the harness stand-in never published its handle");
+    let (pid, port) = descendant_handle(&handle);
+    // Asked from OUTSIDE the tree, which is the only vantage point from which
+    // "the harness oneharness spawned is really gone" can be asserted.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    while descendant_is_running(port) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the harness stand-in (pid {pid}) outlived the cancelled turn and is still billing"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+}

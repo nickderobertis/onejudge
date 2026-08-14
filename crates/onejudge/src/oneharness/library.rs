@@ -16,13 +16,22 @@
 //! **Cancelling is the token, not a signal.** onejudge can never signal a harness:
 //! oneharness makes each one its own process-group leader precisely so a signal
 //! aimed at the runner does not race it. In process there is no longer even an
-//! `oneharness` pid to signal — the runner *is* this thread — so the token is both
-//! the cheapest and the only rung, and it reaches the case the old escalation
-//! needed three rungs for: a harness that has gone **silent** never observes a
-//! closed pipe, but `run`'s runner polls the token on its own time slice and still
-//! ends in `Finish::Terminate`. A sink that breaks therefore trips the token as
-//! well as returning [`SinkStep::Stop`]: `Stop` ends the stream at the next event,
-//! and for a silent harness there is no next event.
+//! `oneharness` pid to signal — the runner *is* this thread — so the three-rung
+//! escalation the spawning seam needs (close stdout, SIGTERM, kill) collapses to
+//! one thing oneharness offers directly, and it reaches the case that escalation
+//! existed for: a harness that has gone **silent** never observes a closed pipe,
+//! but `run` tears its tree down through `Finish::Terminate` regardless.
+//!
+//! A sink that breaks both trips the token and returns [`SinkStep::Stop`].
+//! **Either alone is sufficient** — that is measured, not assumed: reverting
+//! each in turn leaves `cancelling_an_in_process_turn_terminates_the_harness_tree_oneharness_owns`
+//! green, because they are independent paths into the same teardown (`Stop` ends
+//! the stream reader; the token is polled by the runner). Both are set because
+//! neither costs anything and onejudge's own break always arrives *on* an event,
+//! where which path is consulted first is oneharness's business, not this
+//! crate's. What that test does gate is the teardown itself: a build that
+//! cancelled through neither leaves a paid harness running, which is the failure
+//! this seam exists to not have.
 
 use std::ops::ControlFlow;
 
@@ -127,7 +136,8 @@ impl EventSink for TurnEvents<'_> {
         self.seen.push(event);
         if step.is_break() {
             self.aborted = true;
-            // Both, and for different cases — see this module's header.
+            // Both paths into the same teardown; see this module's header for why
+            // neither is claimed to reach a case the other cannot.
             self.cancel.cancel();
             return SinkStep::Stop;
         }

@@ -99,6 +99,14 @@ name = "onejudge-fake-oneharness"
 path = "src/bin/fake_oneharness.rs"
 required-features = ["fake-provider"]
 
+# `onejudge-fake-harness` stands in one level deeper: a *harness* CLI, so a turn
+# run through the linked `oneharness-core` engine has something deterministic to
+# spawn. See its module doc.
+[[bin]]
+name = "onejudge-fake-harness"
+path = "src/bin/fake_harness.rs"
+required-features = ["fake-provider"]
+
 [lints.rust]
 missing_docs = "warn"
 unsafe_code = "forbid"
