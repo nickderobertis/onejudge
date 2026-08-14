@@ -43,15 +43,23 @@
 //! fake `oneharness` binary in the e2e suite and against a real one in the live
 //! tier (`docs/live-tier.md`).
 //!
-//! **Why this hop is still a subprocess.** oneharness's library surface
-//! (`oneharness::commands::run::run`) writes its report to the *process's* stdout
-//! and returns only an exit code: it neither returns a `RunReport` nor accepts an
-//! event sink, so an in-process call could not deliver streamed events to a caller
-//! and would collide with onejudge's own stdout contract (`--format json`,
-//! `--stream`). Spawning also keeps oneharness's per-turn timeout, its cancellation
-//! path, and its termination of the harness's descendants inside the process that
-//! owns them — and keeps that process in *onejudge's* process group, where a
-//! terminal Ctrl-C or a parent's group signal still reaches it.
+//! **Why this hop is still a subprocess.** Not for want of a library entrypoint:
+//! since oneharness 0.7 the whole verb is
+//! [`oneharness_core::io::run::run`], which returns the `RunReport`, publishes
+//! events to a caller's sink as they occur, and takes a cancel token — and every
+//! argv built below has a `RunRequest` field (the mapping is tabulated in
+//! `docs/oneharness-library.md`). What it has no field for is the *process*:
+//! `RunControls` cannot offer a spawned harness to the caller, and each harness is
+//! its own process-group leader inside `run`, so an in-process call would leave
+//! [`SpawnHook`](crate::SpawnHook) nothing to place and `Report::processes` empty —
+//! removing the very seam an embedder uses to reap an orphaned paid harness. That,
+//! and the absence of a harness fixture an embedder can drive deterministically,
+//! are the two upstream gaps that still hold the hop open; both are written up,
+//! with proposals, in `docs/oneharness-library.md`. Spawning meanwhile keeps
+//! oneharness's per-turn timeout, its cancellation path, and its termination of the
+//! harness's descendants inside the process that owns them — and keeps that process
+//! in *onejudge's* process group, where a terminal Ctrl-C or a parent's group
+//! signal still reaches it.
 //!
 //! It can also ask for a **controllable** agent turn (`with_control`): the
 //! agent-side call adds `--control`, oneharness opens an out-of-band socket for the
@@ -1165,6 +1173,89 @@ mod tests {
         // own default).
         let no_config = judge_side_args(None, None, None);
         assert!(!no_config.iter().any(|a| a == "--config"));
+    }
+
+    /// Every flag either builder emits, and the `RunRequest` field it maps onto.
+    /// `None` is the one flag with no field, and deliberately so: `RunRequest`'s
+    /// own docs exclude `--compact` because it is about how the CLI *prints* a
+    /// report, not how the engine produces one, and an in-process caller is handed
+    /// the report as a value.
+    const MAPPED_FLAGS: &[(&str, Option<&str>)] = &[
+        ("--compact", None),
+        ("--events", Some("events")),
+        ("--history", Some("history")),
+        ("--history-name", Some("history_name")),
+        ("--system", Some("system")),
+        ("--cwd", Some("cwd")),
+        ("--config", Some("config")),
+        ("--session", Some("session")),
+        ("--stream", Some("stream")),
+        ("--control", Some("control")),
+        ("--prompt-file", Some("prompt")),
+    ];
+
+    #[test]
+    fn every_argv_the_provider_builds_maps_onto_a_run_request_field() {
+        // The mapping tabulated in `docs/oneharness-library.md`, enforced. This is
+        // a drift gate, not a second execution path: turn execution still spawns,
+        // because `RunControls` cannot offer a spawned harness to an embedder's
+        // `SpawnHook` and there is no harness fixture an embedder can drive
+        // deterministically (both written up, with proposals, in that file).
+        //
+        // What it buys is that adding a flag to either builder fails here until it
+        // is mapped — or named, as `--compact` is, as deliberately fieldless — so
+        // the table cannot quietly go stale the way the prose above it did.
+        use oneharness_core::io::run::RunRequest;
+
+        // Both builders together, so neither side can grow an unmapped flag.
+        let argv: Vec<String> =
+            respond_args("do x", "/work", Some("sess"), Some("hist"), true, true)
+                .into_iter()
+                .chain(judge_side_args(
+                    Some(Path::new("oneharness.judge.toml")),
+                    Some("sess"),
+                    Some("/work"),
+                ))
+                .collect();
+        for flag in argv.iter().filter(|a| a.starts_with("--")) {
+            assert!(
+                MAPPED_FLAGS.iter().any(|(name, _)| name == flag),
+                "`{flag}` has no entry in the RunRequest mapping"
+            );
+        }
+
+        // The load-bearing half: the field names above are prose, but this literal
+        // is checked by the compiler, so a field oneharness renames or drops fails
+        // the build here rather than leaving the table describing a shape that no
+        // longer exists.
+        let request = RunRequest {
+            events: true,
+            history: Some(true),
+            history_name: Some("hist".into()),
+            system: Some("do x".into()),
+            cwd: Some(PathBuf::from("/work")),
+            config: Some(PathBuf::from("oneharness.judge.toml")),
+            session: Some("sess".into()),
+            stream: Some(true),
+            control: true,
+            // `--prompt-file -` exists only to keep a long transcript off the argv;
+            // an owned field needs no such hop.
+            prompt: vec!["the whole transcript".into()],
+            ..RunRequest::default()
+        };
+        assert!(request.events);
+        assert!(request.control);
+        assert_eq!(request.history, Some(true));
+        assert_eq!(request.stream, Some(true));
+        assert_eq!(request.history_name.as_deref(), Some("hist"));
+        assert_eq!(request.system.as_deref(), Some("do x"));
+        assert_eq!(request.session.as_deref(), Some("sess"));
+        assert_eq!(request.cwd.as_deref(), Some(Path::new("/work")));
+        assert_eq!(
+            request.config.as_deref(),
+            Some(Path::new("oneharness.judge.toml"))
+        );
+        assert_eq!(request.prompt, vec!["the whole transcript".to_string()]);
     }
 
     #[test]
