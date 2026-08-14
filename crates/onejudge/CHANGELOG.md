@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.9](https://github.com/nickderobertis/onejudge/compare/v0.3.8...v0.3.9) - 2026-08-14
+
+### Other
+
+- drive oneharness as a library instead of spawning its CLI ([#49](https://github.com/nickderobertis/onejudge/pull/49))
+- keep the detached control server out of the coverage merge ([#47](https://github.com/nickderobertis/onejudge/pull/47))
+
 ## [0.3.8](https://github.com/nickderobertis/onejudge/compare/v0.3.7...v0.3.8) - 2026-08-12
 
 ### Added
