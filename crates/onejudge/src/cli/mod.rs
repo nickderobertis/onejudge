@@ -32,9 +32,8 @@ const DEFAULT_CONFIG: &str = "onejudge.yaml";
 pub const STARTER_CONFIG: &str = include_str!("starter.yaml");
 
 /// The oldest `oneharness` **CLI** this build works against, as told to an
-/// operator: the first release whose `run --control` opens a turn-control socket
-/// and whose `interrupt --input` can redirect the turn onejudge reports the
-/// address of (`docs/control.md`).
+/// operator: the release carrying the `oneharness-core` this crate compiles
+/// against, so the report it parses is one that CLI can produce.
 ///
 /// One source for every message the CLI prints, and drift-gated in this module's
 /// tests against the `oneharness-core` requirement in the workspace manifest and

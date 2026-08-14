@@ -40,9 +40,10 @@ embedder with its own signal handling leaves it `false` and cancels
 **Every argv onejudge builds is accounted for on `RunRequest`.** The `run` verb
 itself becomes the `io::run::run` call; each flag either builder emits
 (`respond_args`, `judge_side_args`, in `crates/onejudge/src/oneharness/mod.rs`)
-maps as below. The table is rendered from `MAPPED_FLAGS` beside those builders,
-which is the one source; `every_argv_the_provider_builds_is_accounted_for_in_the_run_request_mapping`
-reconciles the three — the builders, the const, and this table.
+maps as below. `MAPPED_FLAGS`, beside those builders, is the one source, and
+`every_argv_the_provider_builds_is_accounted_for_in_the_run_request_mapping`
+reconciles the three: the flags the builders emit against the const, and **both
+columns** of the const against the rows below.
 
 | argv | `RunRequest` field |
 | --- | --- |
@@ -130,7 +131,8 @@ every cancel. oneharness **v0.6.9** closed it — `commands::run` calls
 `io::cancel::install_signal_cancel`, and `run_job_streaming_cancellable` polls
 `cancellation_requested` on its own `CANCEL_POLL_SLICE` rather than only on
 `PipeEvent::Data`, so the cancellation is noticed while the harness says nothing
-and still ends in `Finish::Terminate`. That is why onejudge floors at 0.6.9.
+and still ends in `Finish::Terminate`. That is what first moved onejudge's floor
+off 0.6.8; the floor today is the pinned `oneharness-core` (`MIN_ONEHARNESS`).
 
 Rung 1 is kept, and kept first, precisely because rung 2 is not free: SIGTERM's
 *default* disposition is to terminate, so signalling a producer that would have

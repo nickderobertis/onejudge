@@ -1218,15 +1218,22 @@ mod tests {
             );
         }
 
-        // `docs/oneharness-library.md` renders the same mapping for a reader, so it
-        // is reconciled against the const rather than left as a second copy — the
-        // row is matched whole, so `--history` cannot be satisfied by
-        // `--history-name`.
+        // `docs/oneharness-library.md` renders the same mapping for a reader, so
+        // both columns are reconciled against the const rather than left as a
+        // second copy: the flag *and* the field it pairs with, matched as one row,
+        // so neither `--history` can be satisfied by `--history-name` nor a field
+        // name drift between the two.
         let doc = include_str!("../../../../docs/oneharness-library.md");
-        for (flag, _) in MAPPED_FLAGS {
+        for (flag, field) in MAPPED_FLAGS {
+            let row = match field {
+                Some(name) => format!("| `{flag}` | `{name}"),
+                // The fieldless one has to say so where the mapping is read, or it
+                // looks like an omission rather than a decision.
+                None => format!("| `{flag}` | **none"),
+            };
             assert!(
-                doc.contains(&format!("| `{flag}` |")),
-                "docs/oneharness-library.md's mapping table has no row for `{flag}`"
+                doc.contains(&row),
+                "docs/oneharness-library.md's mapping table has no row `{row}…`"
             );
         }
 
