@@ -1548,3 +1548,48 @@ fn binary_run_publishes_the_control_address_in_the_json_report() {
 
     let _ = std::fs::remove_dir_all(&store);
 }
+
+/// A skill directory that is also a oneharness project: its `SKILL.md` seeds the
+/// system prompt, and its `oneharness.toml` is what the in-process engine
+/// discovers from `--cwd` to pin the harness to the fake-harness double.
+fn in_process_project(name: &str, instructions: &str) -> std::path::PathBuf {
+    let dir = scratch_path(name);
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("SKILL.md"), instructions).unwrap();
+    std::fs::write(
+        dir.join("oneharness.toml"),
+        format!(
+            "harnesses = [\"claude-code\"]\nhistory_dir = {:?}\n\n[harness.claude-code]\nbin = {:?}\n",
+            dir.join("history").display().to_string(),
+            env!("CARGO_BIN_EXE_onejudge-fake-harness"),
+        ),
+    )
+    .unwrap();
+    dir
+}
+
+#[test]
+fn an_oneharness_config_that_names_no_bin_runs_the_turn_in_process() {
+    // The CLI's default once the seam moved: `kind: oneharness` with no `bin`
+    // spawns nothing and needs no `oneharness` on PATH. Driven through the real
+    // run driver, so this is what a consumer's config actually does — the unit
+    // test on `ProviderSpec` only proves the parse.
+    let dir = in_process_project("cli-in-process", "[[reply:done in process]]");
+    let yaml = format!(
+        "provider:\n  kind: oneharness\nskill: {}\ntask: go\n",
+        serde_json::to_string(&dir.display().to_string()).unwrap()
+    );
+    let plan = Config::from_yaml(&yaml).unwrap().into_plan().unwrap();
+    let mut sink = |_: &str| {};
+    let summary = run_plan(plan, Format::Human, &mut sink).unwrap();
+
+    assert_eq!(summary.report.transcript.assistant_turns(), 1);
+    assert_eq!(
+        summary.report.transcript.messages[1].content,
+        "done in process"
+    );
+    // Nothing was spawned by onejudge, which is the whole point of the default.
+    assert!(summary.report.processes.is_empty());
+    assert_eq!(exit_code(&summary), 0);
+}

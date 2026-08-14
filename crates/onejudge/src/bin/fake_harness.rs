@@ -60,7 +60,11 @@ fn main() {
     // The re-exec of this binary as the idle descendant: publish the handle the
     // test reads and then answer until something reaps us.
     if args.first().map(String::as_str) == Some("--descendant") {
-        descendant(&args[1]);
+        let Some(handle) = args.get(1) else {
+            eprintln!("onejudge-fake-harness: --descendant needs a handle path");
+            std::process::exit(2);
+        };
+        descendant(handle);
         return;
     }
     let prompt = steering(&args);

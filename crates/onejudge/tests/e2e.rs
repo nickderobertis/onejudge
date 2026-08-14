@@ -1777,3 +1777,51 @@ fn cancelling_an_in_process_turn_terminates_the_harness_tree_oneharness_owns() {
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
 }
+
+#[test]
+fn installing_a_spawn_hook_moves_a_default_provider_onto_the_seam_that_has_a_process() {
+    // A hook offers a *process*, and an in-process turn has none — so installing
+    // one must move the provider onto the spawning seam rather than silently
+    // never firing, which would leave an embedder believing it owns a group that
+    // is empty.
+    //
+    // Proven by a hook that REFUSES: the refusal can only reach the caller if a
+    // process was really about to be spawned. That makes the assertion
+    // independent of whether an `oneharness` happens to be on this host's PATH,
+    // which a "the spawn failed" assertion would not be.
+    struct Refuses;
+
+    impl onejudge::SpawnHook for Refuses {
+        fn spawning(
+            &self,
+            _: &mut std::process::Command,
+            context: &onejudge::SpawnContext<'_>,
+        ) -> std::io::Result<()> {
+            Err(std::io::Error::other(format!(
+                "refused `{}`",
+                context.program
+            )))
+        }
+    }
+
+    let dir = harness_project("hook-selects-the-spawning-seam");
+    let skill = Skill::new("demo", dir.to_str().unwrap(), "[[reply:never runs]]");
+
+    // Without a hook the same provider runs the turn in process, and succeeds.
+    let bare = OneharnessProvider::new();
+    Engine::new(&bare, settings())
+        .run(&Conversation::single_turn(skill.clone(), "do it"))
+        .expect("a default provider runs in process");
+
+    // With one, the hook is consulted — which it can only be for a process.
+    let hooked = OneharnessProvider::new().with_spawn_hook(std::sync::Arc::new(Refuses));
+    let err = Engine::new(&hooked, settings())
+        .run(&Conversation::single_turn(skill, "do it"))
+        .expect_err("the hook refused the process, so the turn fails");
+    let text = err.to_string();
+    assert!(
+        text.contains("refused `oneharness`"),
+        "the hook was offered the `oneharness` process it exists to place: {text}"
+    );
+    assert_eq!(err.kind(), Some(ProviderErrorKind::Spawn));
+}
