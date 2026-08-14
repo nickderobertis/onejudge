@@ -985,6 +985,10 @@ mod tests {
                 "docs/live-tier.md",
                 include_str!("../../../../docs/live-tier.md"),
             ),
+            (
+                "docs/oneharness-library.md",
+                include_str!("../../../../docs/oneharness-library.md"),
+            ),
             ("oneharness/mod.rs", include_str!("../oneharness/mod.rs")),
         ] {
             assert!(

@@ -1175,7 +1175,9 @@ mod tests {
         assert!(!no_config.iter().any(|a| a == "--config"));
     }
 
-    /// Every flag either builder emits, and the `RunRequest` field it maps onto.
+    /// Every flag either builder emits, and the `RunRequest` field it maps onto —
+    /// the one source for the mapping `docs/oneharness-library.md` renders.
+    ///
     /// `None` is the one flag with no field, and deliberately so: `RunRequest`'s
     /// own docs exclude `--compact` because it is about how the CLI *prints* a
     /// report, not how the engine produces one, and an in-process caller is handed
@@ -1195,16 +1197,8 @@ mod tests {
     ];
 
     #[test]
-    fn every_argv_the_provider_builds_maps_onto_a_run_request_field() {
-        // The mapping tabulated in `docs/oneharness-library.md`, enforced. This is
-        // a drift gate, not a second execution path: turn execution still spawns,
-        // because `RunControls` cannot offer a spawned harness to an embedder's
-        // `SpawnHook` and there is no harness fixture an embedder can drive
-        // deterministically (both written up, with proposals, in that file).
-        //
-        // What it buys is that adding a flag to either builder fails here until it
-        // is mapped — or named, as `--compact` is, as deliberately fieldless — so
-        // the table cannot quietly go stale the way the prose above it did.
+    fn every_argv_the_provider_builds_is_accounted_for_in_the_run_request_mapping() {
+        // A drift gate, not a second execution path — nothing here runs a turn.
         use oneharness_core::io::run::RunRequest;
 
         // Both builders together, so neither side can grow an unmapped flag.
@@ -1221,6 +1215,18 @@ mod tests {
             assert!(
                 MAPPED_FLAGS.iter().any(|(name, _)| name == flag),
                 "`{flag}` has no entry in the RunRequest mapping"
+            );
+        }
+
+        // `docs/oneharness-library.md` renders the same mapping for a reader, so it
+        // is reconciled against the const rather than left as a second copy — the
+        // row is matched whole, so `--history` cannot be satisfied by
+        // `--history-name`.
+        let doc = include_str!("../../../../docs/oneharness-library.md");
+        for (flag, _) in MAPPED_FLAGS {
+            assert!(
+                doc.contains(&format!("| `{flag}` |")),
+                "docs/oneharness-library.md's mapping table has no row for `{flag}`"
             );
         }
 

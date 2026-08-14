@@ -189,16 +189,10 @@ follow only from reading it typed, and both have tests: under `run_mode =
 "fallback"` the turn is the candidate that **ran** (not `results[0]`, which is the
 one the chain routed around), and a candidate that timed out / could not spawn /
 was skipped carries no `failure_kind` — its `Status` is the signal, and ignoring it
-banks a vacuously empty turn. `docs/oneharness-library.md` records what is a typed
-call, what is still a subprocess, and the two upstream gaps that still hold the
-invocation out of process. **The run verb itself is no longer one of them**: since
-oneharness 0.7 it is `oneharness_core::io::run::run`, returning the report and
-streaming to a caller's sink, and every argv onejudge builds maps onto a
-`RunRequest` field — enforced by
-`every_argv_the_provider_builds_maps_onto_a_run_request_field`, so a new flag
-cannot land unmapped. What blocks the hop is that `RunControls` cannot offer a
-spawned harness to an embedder's `SpawnHook` (below), and that no harness fixture
-an embedder can drive deterministically is published. The measurements onejudge's `telemetry`
+banks a vacuously empty turn. The *invocation* is still a subprocess, but no
+longer for want of a library entrypoint; `docs/oneharness-library.md` records what
+is a typed call, the argv↔`RunRequest` mapping, and the upstream gaps that hold
+the hop open. The measurements onejudge's `telemetry`
 reports come from `RunResult::telemetry` on the **run report** (oneharness report
 schema `0.5`); the history file is still read, but only for `history_id`.
 

@@ -1041,11 +1041,8 @@ fn parse_scale(prompt: &str) -> (f64, f64) {
 /// makes the e2e's "the reported address is the turn's address" claim mean
 /// something.
 ///
-/// What is *not* oneharness's own any more is the listener's state machine. Its
-/// `ControlHandle::bind` — the late binding that puts a mechanism behind the
-/// socket — went `pub(crate)` in 0.8.0, so a listener this crate binds refuses
-/// every interrupt `no_active_turn`. `run_server` therefore serves the frames
-/// itself; see the note there and in `docs/oneharness-library.md`.
+/// What is *not* oneharness's own any more is the listener's state machine; see
+/// `run_server`.
 ///
 /// The store lives wherever `ONEJUDGE_FAKE_SESSION_DIR` says. A real oneharness
 /// falls back to the platform state dir; the double refuses to, because a test

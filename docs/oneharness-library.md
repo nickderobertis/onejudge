@@ -37,28 +37,26 @@ the ordinary `Finish::Terminate` path. All three of the old objections are gone.
 embedder with its own signal handling leaves it `false` and cancels
 `RunControls::cancel` itself".
 
-**Every argv onejudge builds has a field on `RunRequest`.** Verified against
-0.8.0, for both `respond_args` and `judge_side_args`
-(`crates/onejudge/src/oneharness/mod.rs`):
+**Every argv onejudge builds is accounted for on `RunRequest`.** The `run` verb
+itself becomes the `io::run::run` call; each flag either builder emits
+(`respond_args`, `judge_side_args`, in `crates/onejudge/src/oneharness/mod.rs`)
+maps as below. The table is rendered from `MAPPED_FLAGS` beside those builders,
+which is the one source; `every_argv_the_provider_builds_is_accounted_for_in_the_run_request_mapping`
+reconciles the three — the builders, the const, and this table.
 
 | argv | `RunRequest` field |
 | --- | --- |
-| the `run` verb | `io::run::run` itself |
 | `--events` | `events: bool` |
 | `--history` | `history: Option<bool>` |
-| `--history-name NAME` | `history_name: Option<String>` |
-| `--system TEXT` | `system: Option<String>` |
-| `--cwd DIR` | `cwd: Option<PathBuf>` |
-| `--config PATH` | `config: Option<PathBuf>` |
-| `--session NAME` | `session: Option<String>` |
+| `--history-name` | `history_name: Option<String>` |
+| `--system` | `system: Option<String>` |
+| `--cwd` | `cwd: Option<PathBuf>` |
+| `--config` | `config: Option<PathBuf>` |
+| `--session` | `session: Option<String>` |
 | `--stream` | `stream: Option<bool>` |
 | `--control` | `control: bool` |
-| `--prompt-file -` + the prompt on stdin | `prompt: Vec<String>` — an owned value, so the stdin hop that exists only to dodge the OS argv ceiling disappears; oneharness's own `LARGE_INPUT_THRESHOLD` moves a large prompt off-argv for the harness |
-
-`--compact` is the one flag with no field, and deliberately so: `RunRequest`'s own
-docs call it out as "about how the shell *prints* the report, not how the engine
-produces it". An in-process caller is handed the `RunReport` value, so there is
-nothing to compact. That is not a gap.
+| `--prompt-file` | `prompt: Vec<String>` — an owned value, so the `-`/stdin hop that exists only to dodge the OS argv ceiling disappears; oneharness's own `LARGE_INPUT_THRESHOLD` moves a large prompt off-argv for the harness |
+| `--compact` | **none, deliberately** — `RunRequest`'s own docs exclude it as "about how the shell *prints* the report, not how the engine produces it". An in-process caller is handed the `RunReport` value, so there is nothing to compact. Not a gap. |
 
 ## What still blocks the hop
 
