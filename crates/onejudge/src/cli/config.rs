@@ -392,7 +392,10 @@ impl ProviderConfig {
                 reject(skill.is_some(), "skill")?;
                 reject(judge.is_some(), "judge")?;
                 Ok(ProviderSpec::Oneharness {
-                    bin: bin.unwrap_or_else(|| "oneharness".into()),
+                    // Unset means the in-process engine, which is the default and
+                    // needs nothing on PATH. Naming one is the explicit opt-in to
+                    // spawning it — see `OneharnessProvider::with_bin`.
+                    bin,
                     judge_config: judge_config.map(PathBuf::from),
                     stream: stream.unwrap_or(false),
                     control: control.unwrap_or(false),
@@ -484,8 +487,9 @@ impl EvalConfig {
 pub enum ProviderSpec {
     /// Shell out to `oneharness`.
     Oneharness {
-        /// The `oneharness` binary path.
-        bin: String,
+        /// An `oneharness` binary to **spawn** instead of running the linked
+        /// engine in process. `None` — the default — runs it in process.
+        bin: Option<String>,
         /// The judge / simulated-user oneharness config file (`--config <path>`);
         /// `None` leaves the provider's own default (`oneharness.judge.toml`).
         judge_config: Option<PathBuf>,
@@ -1122,6 +1126,21 @@ provider:
     }
 
     #[test]
+    fn an_unnamed_binary_leaves_the_turn_in_process() {
+        // The default, and the one a config that says nothing about `bin` gets:
+        // no `oneharness` process, and nothing needed on PATH. Naming one is the
+        // opt-in to spawning, which is the only way to keep `Report::processes`.
+        let plan = Config::from_yaml("task: x\nprovider:\n  kind: oneharness\n")
+            .unwrap()
+            .into_plan()
+            .unwrap();
+        assert!(matches!(
+            plan.provider,
+            ProviderSpec::Oneharness { bin: None, .. }
+        ));
+    }
+
+    #[test]
     fn provider_override_changes_only_the_kind() {
         let mut cfg =
             Config::from_yaml("task: x\nprovider:\n  kind: oneharness\n  bin: custom\n").unwrap();
@@ -1130,7 +1149,9 @@ provider:
             ..Overrides::default()
         });
         let plan = cfg.into_plan().unwrap();
-        assert!(matches!(plan.provider, ProviderSpec::Oneharness { bin, .. } if bin == "custom"));
+        assert!(
+            matches!(plan.provider, ProviderSpec::Oneharness { bin, .. } if bin.as_deref() == Some("custom"))
+        );
     }
 
     #[test]

@@ -161,8 +161,7 @@ Use the `just` recipes; do not hand-roll equivalents. `just --list` is the index
 `onejudge` never talks to a model directly, and every model call goes through
 `oneharness`; a `Provider` (`provider.rs`) runs the skill, plays the simulated
 user, and judges the transcript. Three backends: `OneharnessProvider` (default;
-spawns `oneharness run` but reads its report through the **`oneharness-core`
-library** — see below); `CommandProvider` (a small JSON-lines subprocess
+runs each turn through the **`oneharness-core` engine in process** — see below); `CommandProvider` (a small JSON-lines subprocess
 protocol — see `docs/protocol.md` — backing the deterministic test doubles and any
 custom provider, which itself shells out to oneharness or an equivalent harness);
 and `SplitProvider` (`split.rs`; compose a skill-runner with a separate
@@ -172,8 +171,8 @@ backends feed tool `events` into the transcript the judge sees, and thread a
 (claude-code, codex, opencode, cursor, qwen) rather than extracting and re-passing
 a native id; the rest fall back to re-prompting the inlined transcript.
 
-An `oneharness` provider can also **stream** (`provider.stream: true` → `oneharness
-run --stream`): NDJSON tool events as they occur, then a terminal report line, so a
+An `oneharness` provider can also **stream** (`provider.stream: true`): tool events
+reach the caller's sink as oneharness observes them, then the finished report, so a
 600–2000s turn is visible while it runs. `onejudge run --stream` republishes the
 same two envelopes outward for the SDKs. `docs/streaming.md` is the contract; the
 rule that keeps it safe is that a *declared*-streaming provider's unmodelled line is
@@ -184,24 +183,35 @@ is not a failed one).
 boundary's types, not just its bytes**: the report, the failure taxonomy, the
 fallback block, the streamed envelope, the normalized events, and the
 per-candidate history record are all oneharness's own declarations, so an upstream
-change is a compile error here rather than a silently-null field. Two behaviours
+change is a compile error here rather than a silently-null field. **The invocation
+is a library call too**: `oneharness_core::io::run::run`, with `RunControls::events`
+for streaming and `RunControls::cancel` for teardown, and `signal_cancel` left
+`false` because onejudge is an embedder and those handlers are process-global. Two behaviours
 follow only from reading it typed, and both have tests: under `run_mode =
 "fallback"` the turn is the candidate that **ran** (not `results[0]`, which is the
 one the chain routed around), and a candidate that timed out / could not spawn /
 was skipped carries no `failure_kind` — its `Status` is the signal, and ignoring it
-banks a vacuously empty turn. `docs/oneharness-library.md` records what is a typed
-call, what is still a subprocess, and the three upstream changes that would let
-the invocation move in-process too. The measurements onejudge's `telemetry`
+banks a vacuously empty turn. One seam still spawns — `Execution::Process`, reached only by naming a binary
+(`with_bin`) or installing a `SpawnHook`, because `RunControls` cannot offer a
+spawned harness and an in-process turn would empty `Report::processes`.
+`docs/oneharness-library.md` records the argv↔`RunRequest` mapping (one `TurnSpec`,
+two renderings, reconciled by a gate) and that gap's proposal against oneharness.
+The e2e double for the in-process seam is `onejudge-fake-harness`, a *harness*
+stand-in reached through ordinary `[harness.<id>] bin` config — so the whole of
+oneharness is the real code under test and only the model is faked. The measurements onejudge's `telemetry`
 reports come from `RunResult::telemetry` on the **run report** (oneharness report
 schema `0.5`); the history file is still read, but only for `history_id`.
 
-**Cancelling a turn escalates: close oneharness's stdout, then SIGTERM it, then
-kill.** Each rung reaches a case the one before cannot — a silent harness never
-observes a broken pipe, and an uncatchable kill denies oneharness the teardown of
-the tree it owns, orphaning a harness that keeps billing. This first moved the crate's floor to oneharness
-0.6.9, the release whose `run` answers a signal by tearing that tree down; the
-floor is now **0.6.14** (see turn control, below). Two e2e tests gate the pair, one per rung; see
-`docs/oneharness-library.md` before touching the order.
+**Cancelling a turn must terminate the harness tree, not just the party onejudge
+talks to** — an orphaned harness keeps billing. In process that is
+`RunControls::cancel` plus the sink's `SinkStep::Stop`; either alone suffices
+(measured by reverting each), and one e2e proves the teardown from outside the
+tree. The **spawning** seam still escalates through three rungs — close stdout,
+SIGTERM, kill — because a spawned producer has to be reached through the OS, and
+each rung reaches a case the one before cannot; two e2e tests gate that pair, one
+per rung. The crate's floor is **0.8.0** (the pinned `oneharness-core`, which since
+0.7 releases in lockstep with the CLI). See `docs/oneharness-library.md` before
+touching either.
 
 **Turn control is an address, not a lever onejudge pulls.** `provider.control:
 true` (default off) adds `--control` to the **agent-side** `oneharness run`, and
@@ -211,8 +221,9 @@ so a fallback chain names the candidate that *ran*. `control` is serialized even
 when null; a refused ask is `null` **plus** `control_unavailable`, because "never
 asked" and "asked and refused" are different facts. A refusal costs no model
 tokens (oneharness validates before spawning), so the call is retried without the
-flag rather than failing the run. This is why the crate advertises oneharness
-**0.6.14+**. `docs/control.md` is the contract; the e2e that matters drives a real
+flag rather than failing the run. `--control` arrived in oneharness 0.6.14, under
+the **0.8.0+** floor the crate advertises.
+`docs/control.md` is the contract; the e2e that matters drives a real
 socket and asserts the reported address *redirects the live turn*, not that it
 merely exists.
 

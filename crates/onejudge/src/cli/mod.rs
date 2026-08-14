@@ -32,20 +32,21 @@ const DEFAULT_CONFIG: &str = "onejudge.yaml";
 pub const STARTER_CONFIG: &str = include_str!("starter.yaml");
 
 /// The oldest `oneharness` **CLI** this build works against, as told to an
-/// operator: the first release whose `run --control` opens a turn-control socket
-/// and whose `interrupt --input` can redirect the turn onejudge reports the
-/// address of (`docs/control.md`).
+/// operator: the release carrying the `oneharness-core` this crate compiles
+/// against, so the report it parses is one that CLI can produce.
 ///
 /// One source for every message the CLI prints, and drift-gated in this module's
 /// tests against the `oneharness-core` requirement in the workspace manifest and
 /// against the prose that repeats it — so bumping the pin without bumping what an
 /// operator is told to install fails the gate instead of shipping a wrong number.
 ///
-/// It is a *lower bound on* the core pin rather than equal to it, because the two
-/// crates version independently: there is no `oneharness` 0.6.13, and the 0.6.14
-/// CLI is the one that carries `oneharness-core` 0.6.13. Naming the core version
-/// here would tell an operator to install a CLI that was never published.
-const MIN_ONEHARNESS: &str = "0.6.14";
+/// It is a *lower bound on* the core pin rather than equal to it. The two crates
+/// have not always released together — there is no `oneharness` 0.6.13, and the
+/// 0.6.14 CLI is the one that carried `oneharness-core` 0.6.13 — so naming the
+/// core version here could tell an operator to install a CLI that was never
+/// published. Since 0.7 the workspace releases in lockstep, which is why this is
+/// now the same number as the pin.
+const MIN_ONEHARNESS: &str = "0.8.0";
 
 /// Errors surfaced by the CLI. Config/validation problems are separated from IO
 /// and engine failures so the entrypoint can exit with a fitting code.
@@ -982,6 +983,10 @@ mod tests {
             (
                 "docs/live-tier.md",
                 include_str!("../../../../docs/live-tier.md"),
+            ),
+            (
+                "docs/oneharness-library.md",
+                include_str!("../../../../docs/oneharness-library.md"),
             ),
             ("oneharness/mod.rs", include_str!("../oneharness/mod.rs")),
         ] {

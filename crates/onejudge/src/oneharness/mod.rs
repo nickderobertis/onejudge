@@ -1,6 +1,9 @@
 //! [`OneharnessProvider`]: the default [`Provider`], which runs each prompt on a
 //! real harness through the [`oneharness`](https://github.com/nickderobertis/oneharness)
-//! CLI (`oneharness run`, whose report is JSON by default) and parses its report.
+//! **engine, in process** — `oneharness_core::io::run::run`, the linked
+//! `oneharness-core` this crate already compiles its report contract against.
+//! Nothing is spawned and nothing needs to be on `PATH`; see [`library`] for the
+//! call and [`Execution`] for the one seam that still spawns.
 //!
 //! **Harness/model selection lives in oneharness's config, not onejudge.** The
 //! agent side passes no `--harness`/`--model`, so it uses oneharness's discovered
@@ -9,12 +12,13 @@
 //! separately-configured harness/model — again without `--harness`/`--model`.
 //! Scaffold both with `onejudge init` (which shells out to `oneharness init`).
 //!
-//! It targets **oneharness v0.6.14+** — the release carrying the report contract
-//! it compiles against (`oneharness-core`, pinned in the workspace manifest) and
-//! the `run --control` / `interrupt` pair it reports the address of; v0.6.9 was
-//! the first whose `run`
-//! verb answers a cancellation signal by tearing its harness tree down instead of
-//! dying and orphaning it. It always threads the uniform `--session
+//! It targets **oneharness v0.8.0+** — the release carrying the report contract
+//! it compiles against (`oneharness-core`, pinned in the workspace manifest).
+//! v0.6.9 was the first whose `run` verb answers a cancellation signal by tearing
+//! its harness tree down instead of dying and orphaning it, and v0.6.14 added the
+//! `run --control` / `interrupt` pair it reports the address of; since 0.7 the
+//! CLI and the engine crate release in lockstep, so the advertised floor and the
+//! pin are one number. It always threads the uniform `--session
 //! <name>` handle (the engine's caller-owned name, mapped to the harness's native
 //! session in oneharness's on-disk store), and if a run fails because the harness
 //! does not support `--session`, it retries the same call once **without**
@@ -22,12 +26,13 @@
 //! replaces the old up-front capability table. It also depends on `oneharness init`
 //! for scaffolding.
 //!
-//! It can also drive a **streamed** provider (`with_streaming`): the agent-side
-//! call adds `--stream`, and the child's stdout is read as the NDJSON protocol in
-//! `stream.rs` (`docs/streaming.md`) so each tool event reaches the caller the
-//! instant it is observed instead of only when the turn ends. The terminal line's
-//! report is parsed exactly as a bare report is, so a streamed run and a buffered
-//! one produce the same turn.
+//! It can also drive a **streamed** provider (`with_streaming`): the turn asks
+//! `run` to publish incrementally and hands it an `EventSink`, so each tool event
+//! reaches the caller the instant oneharness observes it instead of only when the
+//! turn ends. The finished report is read exactly as a buffered one is, so a
+//! streamed run and a buffered one produce the same turn. On the spawning seam the
+//! same contract arrives as the NDJSON protocol in `stream.rs`
+//! (`docs/streaming.md`).
 //!
 //! The **report** it reads back is oneharness's own typed contract
 //! (`oneharness_core::domain::report`), not a shadow struct declared here — see
@@ -36,21 +41,21 @@
 //! history record oneharness writes for every attempt is read back through
 //! oneharness's own reader; see [`history`].
 //!
-//! The pure pieces — argument construction, report parsing, error classification —
-//! are separated from the one thin `spawn + wait` shell so they are
-//! deterministically unit-tested; the whole path is proven end-to-end against a
-//! fake `oneharness` binary in the e2e suite and against a real one in the live
-//! tier (`docs/live-tier.md`).
+//! The pure pieces — turn description, report parsing, error classification — are
+//! separated from the thin execution shells so they are deterministically
+//! unit-tested. Both seams are proven end-to-end in the e2e suite: the in-process
+//! one against `onejudge-fake-harness` (a *harness* stand-in, so the whole of
+//! oneharness is real), the spawning one against `onejudge-fake-oneharness`. The
+//! live tier drives a real oneharness and a real harness (`docs/live-tier.md`).
 //!
-//! **Why this hop is still a subprocess.** oneharness's library surface
-//! (`oneharness::commands::run::run`) writes its report to the *process's* stdout
-//! and returns only an exit code: it neither returns a `RunReport` nor accepts an
-//! event sink, so an in-process call could not deliver streamed events to a caller
-//! and would collide with onejudge's own stdout contract (`--format json`,
-//! `--stream`). Spawning also keeps oneharness's per-turn timeout, its cancellation
-//! path, and its termination of the harness's descendants inside the process that
-//! owns them — and keeps that process in *onejudge's* process group, where a
-//! terminal Ctrl-C or a parent's group signal still reaches it.
+//! **What the one remaining subprocess is for.** [`Execution::Process`] spawns an
+//! `oneharness` executable, and exists for a single upstream gap: `RunControls`
+//! cannot offer a spawned harness to the caller, and each harness is its own
+//! process-group leader inside `run`, so an in-process turn leaves
+//! [`SpawnHook`](crate::SpawnHook) nothing to place and `Report::processes` empty —
+//! removing the very seam an embedder uses to reap an orphaned paid harness. It is
+//! reached only by naming a binary or installing such a hook. The gap is written
+//! up, with a proposal against oneharness, in `docs/oneharness-library.md`.
 //!
 //! It can also ask for a **controllable** agent turn (`with_control`): the
 //! agent-side call adds `--control`, oneharness opens an out-of-band socket for the
@@ -60,18 +65,19 @@
 //! spawning a harness, so the call is retried once without the flag and the refusal
 //! becomes a stated reason rather than a failed run. See `docs/control.md`.
 //!
-//! **Cancelling a turn tears oneharness down by escalation, never by kill alone.**
-//! A harness is its own process-group leader, so onejudge can never signal it; every
-//! rung is addressed to oneharness, which owns the tree. Closing its stdout reaches a
-//! producer that is still writing; SIGTERM reaches one whose harness has gone
-//! *silent*, which since v0.6.9 is a cancellation its runner polls for and turns into
-//! a `Finish::Terminate`; the kill is only the backstop. See [`terminate`] for why
-//! all three rungs earn their place, and `docs/oneharness-library.md`.
+//! **Cancelling a turn always terminates the harness tree, never just the party
+//! onejudge is talking to.** A harness is its own process-group leader, so onejudge
+//! can never signal one; only oneharness owns the tree. In process that is
+//! `RunControls::cancel` plus the sink's `SinkStep::Stop` (see [`library`]). On the
+//! spawning seam it is the three-rung escalation in [`terminate`] — closed stdout,
+//! SIGTERM, kill — because a spawned producer has to be reached through the OS.
 
 #[cfg(test)]
 pub(crate) mod fixture;
 mod history;
+mod library;
 mod report;
+mod turn;
 
 use std::cell::RefCell;
 use std::io::{Read as _, Write};
@@ -94,6 +100,7 @@ use crate::transcript::{Message, ToolEvent};
 
 pub(crate) use report::tool_event;
 use report::{parse_report, parse_report_value, ControlSocket, Invocation};
+use turn::TurnSpec;
 
 /// The default judge/simulated-user oneharness config filename.
 const DEFAULT_JUDGE_CONFIG: &str = "oneharness.judge.toml";
@@ -265,9 +272,33 @@ fn exited_within(child: &mut std::process::Child, grace: Duration) -> bool {
     }
 }
 
-/// The default [`Provider`]: shells out to the `oneharness` CLI.
+/// How a turn is executed — the one seam, and the only place a harness turn can
+/// become a subprocess.
+///
+/// [`Execution::Library`] is the default and what every ordinary run uses.
+/// [`Execution::Process`] exists for exactly one thing the library cannot do:
+/// offer a spawned process to an embedder's [`SpawnHook`](crate::SpawnHook).
+/// `RunControls`' whole surface is `events`, `cancel`, `signal_cancel` and
+/// `version`, and every harness is spawned *inside* `run` through a `pub(crate)`
+/// `Process::spawn` — so an in-process turn has no process to offer, leaving
+/// [`Report::processes`](crate::Report::processes) empty and an embedder's group
+/// with nothing in it. That is a documented contract on a versioned wire, so the
+/// seam stays until oneharness can offer the process (the proposal is written up
+/// in `docs/oneharness-library.md`) rather than being silently dropped.
+///
+/// It is never reached by accident: it is selected only by naming an `oneharness`
+/// binary ([`OneharnessProvider::with_bin`]) or by installing a hook that needs
+/// one ([`OneharnessProvider::with_spawn_hook`]).
+enum Execution {
+    /// In process, through `oneharness_core::io::run::run`. See [`library`].
+    Library,
+    /// Spawn this `oneharness` executable and parse its stdout.
+    Process(String),
+}
+
+/// The default [`Provider`]: runs each turn through the `oneharness` engine.
 pub struct OneharnessProvider {
-    bin: String,
+    execution: Execution,
     judge_config: Option<PathBuf>,
     stream: bool,
     control: bool,
@@ -292,12 +323,20 @@ impl Default for OneharnessProvider {
 }
 
 impl OneharnessProvider {
-    /// A provider that invokes `oneharness` on `PATH`, running the judge and
-    /// simulated user under `oneharness.judge.toml` (its default config file).
+    /// A provider that runs each turn through the **`oneharness` engine in
+    /// process**, running the judge and simulated user under
+    /// `oneharness.judge.toml` (its default config file).
+    ///
+    /// Nothing is spawned and nothing needs to be on `PATH`: the engine is the
+    /// linked `oneharness-core`, so the version onejudge compiles its report
+    /// contract against is the version that runs the turn.
+    ///
+    /// [`with_bin`](Self::with_bin) and [`with_spawn_hook`](Self::with_spawn_hook)
+    /// are the only two ways to opt back into spawning one.
     #[must_use]
     pub fn new() -> Self {
         Self {
-            bin: "oneharness".into(),
+            execution: Execution::Library,
             judge_config: Some(PathBuf::from(DEFAULT_JUDGE_CONFIG)),
             stream: false,
             control: false,
@@ -313,19 +352,37 @@ impl OneharnessProvider {
     /// harness tree oneharness goes on to own — in a group the embedder can later
     /// terminate. See [`SpawnHook`](crate::SpawnHook).
     ///
+    /// **This selects the spawning seam** (`oneharness` from `PATH` unless
+    /// [`with_bin`](Self::with_bin) named one): a hook offers a *process*, and an
+    /// in-process turn has none to offer. Installing one and
+    /// silently having it never fire would be the failure the hook exists to
+    /// prevent — an embedder believing it owns a group that is empty.
+    ///
     /// Install the *same* hook on both backends of a
     /// [`SplitProvider`](crate::SplitProvider) to cover the whole two-party tree.
     #[must_use]
     pub fn with_spawn_hook(mut self, hook: SharedSpawnHook) -> Self {
+        if matches!(self.execution, Execution::Library) {
+            self.execution = Execution::Process("oneharness".into());
+        }
         self.spawner.install(hook);
         self
     }
 
-    /// Override the `oneharness` binary path (e.g. a pinned install, or the fake
-    /// binary the e2e suite drives).
+    /// Run each turn by **spawning** this `oneharness` executable instead of the
+    /// linked engine (e.g. a pinned install, or the fake binary the e2e suite
+    /// drives).
+    ///
+    /// Naming a binary is the explicit opt-in to spawning, which exists for one
+    /// contract: `RunControls` cannot offer a spawned harness to an embedder, so
+    /// an in-process turn leaves [`SpawnHook`](crate::SpawnHook) nothing to place
+    /// and [`Report::processes`](crate::Report::processes) empty. An ordinary
+    /// caller wants [`new`](Self::new), whose engine is the `oneharness-core` this
+    /// crate compiles its report contract against, so the two can never be
+    /// different versions. See `docs/oneharness-library.md`.
     #[must_use]
     pub fn with_bin(mut self, bin: impl Into<String>) -> Self {
-        self.bin = bin.into();
+        self.execution = Execution::Process(bin.into());
         self
     }
 
@@ -339,11 +396,12 @@ impl OneharnessProvider {
         self
     }
 
-    /// Declare that the agent side speaks the **streamed provider protocol**
-    /// (`docs/streaming.md`): the call adds `oneharness run --stream`, and its
-    /// stdout is read as NDJSON — an `{"type":"event",…}` line per tool event as it
-    /// happens, then a terminal `{"type":"result","report":{…}}` line whose report
-    /// is parsed exactly as a bare report is.
+    /// Declare that the agent side **streams**: the turn asks oneharness to
+    /// publish incrementally, so a tool event reaches the caller's sink the
+    /// instant it is observed and the finished report is read exactly as a
+    /// buffered one is. On the spawning seam the same contract arrives as the
+    /// NDJSON provider protocol (`docs/streaming.md`) — an `{"type":"event",…}`
+    /// line per tool event, then a terminal `{"type":"result","report":{…}}`.
     ///
     /// Off by default. Turn it on only for a binary that really streams: a
     /// declared-streaming provider that writes a line the protocol does not model
@@ -435,15 +493,16 @@ impl OneharnessProvider {
             // A continued session only needs the latest user turn.
             let prompt = latest_or_inline(messages, true);
             if self.wants_control() {
-                let args = respond_args(
+                let spec = respond_spec(
                     instructions,
                     worktree,
                     Some(name),
                     Some(name),
                     self.stream,
                     true,
+                    &prompt,
                 );
-                match self.respond_once(&args, &prompt, on_event) {
+                match self.respond_once(&spec, on_event) {
                     Ok(turn) => {
                         self.control_address(worktree);
                         return Ok(turn);
@@ -464,15 +523,16 @@ impl OneharnessProvider {
                 }
             }
             if let Some(name) = session {
-                let args = respond_args(
+                let spec = respond_spec(
                     instructions,
                     worktree,
                     Some(name),
                     Some(name),
                     self.stream,
                     false,
+                    &prompt,
                 );
-                match self.respond_once(&args, &prompt, on_event) {
+                match self.respond_once(&spec, on_event) {
                     Ok(turn) => return Ok(turn),
                     Err(e) if is_session_unsupported(&e) => {
                         eprintln!(
@@ -485,9 +545,17 @@ impl OneharnessProvider {
             }
         }
         // Fresh or fallback call: inline the whole conversation, no `--session`.
-        let args = respond_args(instructions, worktree, None, session, self.stream, false);
         let prompt = latest_or_inline(messages, false);
-        self.respond_once(&args, &prompt, on_event)
+        let spec = respond_spec(
+            instructions,
+            worktree,
+            None,
+            session,
+            self.stream,
+            false,
+            &prompt,
+        );
+        self.respond_once(&spec, on_event)
     }
 
     /// Whether this call should ask for a controllable turn.
@@ -512,14 +580,13 @@ impl OneharnessProvider {
     /// otherwise the buffered call with the finished turn's events replayed.
     fn respond_once(
         &self,
-        args: &[String],
-        prompt: &str,
+        spec: &TurnSpec,
         on_event: &mut dyn FnMut(&ToolEvent) -> ControlFlow<()>,
     ) -> Result<AssistantTurn> {
         if self.stream {
-            return self.run_streamed("respond", args, prompt, on_event);
+            return self.run_streamed("respond", spec, on_event);
         }
-        let turn = assistant_turn(&self.run("respond", args, prompt)?);
+        let turn = assistant_turn(&self.run("respond", spec)?);
         for event in &turn.events {
             if on_event(event).is_break() {
                 break;
@@ -576,8 +643,8 @@ impl OneharnessProvider {
         cwd: Option<&str>,
     ) -> Result<Invocation> {
         if let Some(name) = session {
-            let args = judge_side_args(self.judge_config.as_deref(), Some(name), cwd);
-            match self.run(op, &args, prompt) {
+            let spec = judge_side_spec(self.judge_config.as_deref(), Some(name), cwd, prompt);
+            match self.run(op, &spec) {
                 Ok(result) => return Ok(result),
                 Err(e) if is_session_unsupported(&e) => {
                     eprintln!(
@@ -588,16 +655,26 @@ impl OneharnessProvider {
                 Err(e) => return Err(e),
             }
         }
-        let args = judge_side_args(self.judge_config.as_deref(), None, cwd);
-        self.run(op, &args, prompt)
+        let spec = judge_side_spec(self.judge_config.as_deref(), None, cwd, prompt);
+        self.run(op, &spec)
     }
 
-    /// Spawn `oneharness run` with `args` and `prompt`, and return the parsed
-    /// single-result report. The prompt is passed via stdin (`--prompt-file -`)
-    /// so an arbitrarily long transcript never trips the OS argv limit.
-    fn run(&self, op: &str, args: &[String], prompt: &str) -> Result<Invocation> {
-        let mut child = self.spawn(op, args)?;
-        write_prompt(op, child.stdin.as_mut(), prompt)?;
+    /// Run one buffered turn and return its parsed single-result report.
+    ///
+    /// In process this is one `oneharness_core::io::run::run` call. On the
+    /// spawning seam the prompt goes over stdin (`--prompt-file -`), so an
+    /// arbitrarily long transcript never trips the OS argv limit.
+    fn run(&self, op: &str, spec: &TurnSpec) -> Result<Invocation> {
+        let Execution::Process(bin) = &self.execution else {
+            let invocation = library::run_buffered(op, spec)?;
+            // Recorded before the failure is surfaced, exactly as the spawning
+            // seam does: a failed invocation is the one whose per-candidate
+            // attribution a caller reads.
+            self.record(op, &invocation);
+            return invocation.into_ok();
+        };
+        let mut child = self.spawn(op, bin, &turn::argv(spec))?;
+        write_prompt(op, child.stdin.as_mut(), &spec.prompt)?;
         let output = child.wait_with_output().map_err(|e| {
             Error::provider(op.to_string(), format!("oneharness did not complete: {e}"))
         })?;
@@ -609,8 +686,11 @@ impl OneharnessProvider {
         )
     }
 
-    /// Spawn `oneharness run --stream` and consume its NDJSON stdout, delivering
-    /// each tool event to `on_event` the instant the child writes it.
+    /// Run one streamed turn, delivering each tool event to `on_event` the
+    /// instant it is observed.
+    ///
+    /// In process that is an `EventSink` handed to `run`. On the spawning seam it
+    /// is `oneharness run --stream`, whose NDJSON stdout is consumed line by line.
     ///
     /// The child's stderr is drained on its own thread: this reader holds stdout
     /// open for the whole turn, and a chatty child that filled the stderr pipe
@@ -618,14 +698,26 @@ impl OneharnessProvider {
     fn run_streamed(
         &self,
         op: &str,
-        args: &[String],
-        prompt: &str,
+        spec: &TurnSpec,
         on_event: &mut dyn FnMut(&ToolEvent) -> ControlFlow<()>,
     ) -> Result<AssistantTurn> {
-        let mut child = self.spawn(op, args)?;
+        let Execution::Process(bin) = &self.execution else {
+            return match library::run_streaming(op, spec, on_event)? {
+                // The sink asked to stop mid-turn: return what the stream produced.
+                library::Streamed::Aborted(events) => Ok(AssistantTurn {
+                    events,
+                    ..AssistantTurn::default()
+                }),
+                library::Streamed::Finished(invocation) => {
+                    self.record(op, &invocation);
+                    Ok(assistant_turn(&(*invocation).into_ok()?))
+                }
+            };
+        };
+        let mut child = self.spawn(op, bin, &turn::argv(spec))?;
         // Take stdin rather than borrow it: closing it here is what lets a child
         // reading `--prompt-file -` see EOF and start work.
-        write_prompt(op, child.stdin.take().as_mut(), prompt)?;
+        write_prompt(op, child.stdin.take().as_mut(), &spec.prompt)?;
         let mut errors = child
             .stderr
             .take()
@@ -698,8 +790,8 @@ impl OneharnessProvider {
     /// Routed through the [`Spawner`] so an embedder's [`SpawnHook`](crate::SpawnHook)
     /// can place the process in a group it owns *before* the prompt is written —
     /// which is what starts the turn, since `--prompt-file -` blocks on stdin.
-    fn spawn(&self, op: &str, args: &[String]) -> Result<std::process::Child> {
-        let mut command = Command::new(&self.bin);
+    fn spawn(&self, op: &str, bin: &str, args: &[String]) -> Result<std::process::Child> {
+        let mut command = Command::new(bin);
         command
             .args(args)
             .stdin(Stdio::piped())
@@ -710,15 +802,12 @@ impl OneharnessProvider {
             &SpawnContext {
                 role: role_of(op),
                 op,
-                program: &self.bin,
+                program: bin,
             },
             |e| {
                 Error::provider_classified(
                     op.to_string(),
-                    format!(
-                        "could not run `{}`: {e}. Is oneharness installed and on PATH?",
-                        self.bin
-                    ),
+                    format!("could not run `{bin}`: {e}. Is oneharness installed and on PATH?"),
                     ProviderErrorKind::Spawn,
                 )
             },
@@ -886,87 +975,59 @@ fn assistant_turn(invocation: &Invocation) -> AssistantTurn {
     }
 }
 
-/// Build the `oneharness run` args (before the trailing `--prompt-file -`) for a
-/// skill turn. Pure and total, so it is unit-tested directly.
+/// Describe a skill turn. Pure and total, so it is unit-tested directly.
 ///
-/// No `--harness`/`--model`: the agent side relies on oneharness's own discovered
-/// config (`oneharness.toml`) for harness/model selection.
+/// No harness/model selection: the agent side relies on oneharness's own
+/// discovered config (`oneharness.toml`) for it.
 #[must_use]
-fn respond_args(
+fn respond_spec(
     instructions: &str,
     worktree: &str,
     session: Option<&str>,
     history_name: Option<&str>,
     stream: bool,
     control: bool,
-) -> Vec<String> {
-    // `oneharness run` emits a JSON report by default; `--compact` makes it a
-    // single line. There is no `--format` flag on `run`.
-    let mut args = vec![
-        "run".into(),
-        "--compact".into(),
-        "--events".into(),
-        "--history".into(),
-        "--system".into(),
-        instructions.into(),
-        "--cwd".into(),
-        worktree.into(),
-        "--prompt-file".into(),
-        "-".into(),
-    ];
-    // `--stream` republishes the same normalized events as they occur and ends with
-    // a terminal result line; it implies `--events`' format selection upstream.
-    if stream {
-        args.push("--stream".into());
+    prompt: &str,
+) -> TurnSpec {
+    TurnSpec {
+        system: Some(instructions.to_string()),
+        cwd: Some(worktree.to_string()),
+        config: None,
+        // Always thread the caller-owned session name; the caller retries without
+        // it if oneharness reports the harness cannot bind a session.
+        session: session.map(str::to_string),
+        history_name: history_name.map(str::to_string),
+        events: true,
+        stream,
+        // Turn control is addressed by the `--session` name, which is why it only
+        // ever rides alongside one and is dropped when the session is.
+        control: control && session.is_some(),
+        prompt: prompt.to_string(),
     }
-    // Always thread the caller-owned session name; the caller retries without it if
-    // oneharness reports the harness cannot bind a session.
-    if let Some(name) = history_name {
-        args.push("--history-name".into());
-        args.push(name.into());
-    }
-    if let Some(name) = session {
-        args.push("--session".into());
-        args.push(name.into());
-    }
-    // `--control` opens the out-of-band turn-control socket, addressed by the
-    // `--session` name above — which is why it is pushed only alongside one, and
-    // why the caller drops it when it drops the session.
-    if control && session.is_some() {
-        args.push("--control".into());
-    }
-    args
 }
 
-/// Build the `oneharness run` args for a judge or simulated-user turn (no
-/// `--system`, no `--events`). Harness/model selection comes from `--config
-/// <judge_config>`, not from `--harness`/`--model`.
+/// Describe a judge or simulated-user turn (no system prompt, no events).
+/// Harness/model selection comes from the judge config, not from a harness/model
+/// selection onejudge makes.
 #[must_use]
-fn judge_side_args(
+fn judge_side_spec(
     judge_config: Option<&Path>,
     session: Option<&str>,
     cwd: Option<&str>,
-) -> Vec<String> {
-    let mut args = vec![
-        "run".into(),
-        "--compact".into(),
-        "--history".into(),
-        "--prompt-file".into(),
-        "-".into(),
-    ];
-    if let Some(config) = judge_config {
-        args.push("--config".into());
-        args.push(config.display().to_string());
+    prompt: &str,
+) -> TurnSpec {
+    TurnSpec {
+        system: None,
+        cwd: cwd.map(str::to_string),
+        config: judge_config.map(Path::to_path_buf),
+        session: session.map(str::to_string),
+        history_name: None,
+        events: false,
+        // Streaming is about the long agent turn, not the short judgement calls.
+        stream: false,
+        control: false,
+        prompt: prompt.to_string(),
     }
-    if let Some(dir) = cwd {
-        args.push("--cwd".into());
-        args.push(dir.into());
-    }
-    if let Some(name) = session {
-        args.push("--session".into());
-        args.push(name.into());
-    }
-    args
 }
 
 impl Provider for OneharnessProvider {
@@ -1078,23 +1139,62 @@ mod tests {
     use crate::provider::JudgeKind;
     use oneharness_core::errors::OneharnessError;
 
+    /// The argv a spec renders on the spawning seam, for the assertions below that
+    /// are about flags rather than about the spec.
+    fn argv_of(spec: &TurnSpec) -> Vec<String> {
+        turn::argv(spec)
+    }
+
     #[test]
     fn builders_configure_bin_and_judge_config() {
         let provider = OneharnessProvider::default()
             .with_bin("my-oneharness")
             .with_judge_config("custom.judge.toml");
-        assert_eq!(provider.bin, "my-oneharness");
+        // Naming a binary is the opt-in to the spawning seam.
+        assert!(matches!(&provider.execution, Execution::Process(bin) if bin == "my-oneharness"));
         assert_eq!(
             provider.judge_config.as_deref(),
             Some(Path::new("custom.judge.toml"))
         );
         // The judge/user side passes the configured file via --config.
-        let args = judge_side_args(provider.judge_config.as_deref(), Some("s"), None);
+        let args = argv_of(&judge_side_spec(
+            provider.judge_config.as_deref(),
+            Some("s"),
+            None,
+            "p",
+        ));
         assert!(args
             .windows(2)
             .any(|w| w == ["--config", "custom.judge.toml"]));
         assert!(args.windows(2).any(|w| w == ["--session", "s"]));
     }
+
+    #[test]
+    fn a_default_provider_runs_the_turn_in_process() {
+        assert!(matches!(
+            OneharnessProvider::new().execution,
+            Execution::Library
+        ));
+    }
+
+    #[test]
+    fn installing_a_spawn_hook_selects_the_seam_that_has_a_process_to_offer_it() {
+        // A hook offers a *process*; the in-process seam has none, so installing
+        // one must not leave the embedder believing it owns an empty group.
+        let hooked = OneharnessProvider::new().with_spawn_hook(std::sync::Arc::new(Inert));
+        assert!(matches!(&hooked.execution, Execution::Process(bin) if bin == "oneharness"));
+        // An explicitly named binary is not clobbered by installing a hook.
+        let pinned = OneharnessProvider::new()
+            .with_bin("/opt/oneharness")
+            .with_spawn_hook(std::sync::Arc::new(Inert));
+        assert!(matches!(&pinned.execution, Execution::Process(bin) if bin == "/opt/oneharness"));
+    }
+
+    /// A hook that records nothing and refuses nothing — this is about which seam
+    /// installing one selects, not about what a hook does.
+    struct Inert;
+
+    impl crate::spawn::SpawnHook for Inert {}
 
     #[test]
     fn default_judge_config_is_the_judge_toml() {
@@ -1106,15 +1206,16 @@ mod tests {
     }
 
     #[test]
-    fn respond_args_thread_session_and_carry_no_harness_or_model() {
-        let args = respond_args(
+    fn a_respond_spec_threads_the_session_and_selects_no_harness_or_model() {
+        let args = argv_of(&respond_spec(
             "do x",
             "/work",
             Some("run-1-skill"),
             Some("run-1-skill"),
             false,
             false,
-        );
+            "p",
+        ));
         assert!(args.windows(2).any(|w| w == ["--session", "run-1-skill"]));
         assert!(args.iter().any(|a| a == "--events"));
         // Harness/model selection is oneharness's config's job now.
@@ -1126,33 +1227,52 @@ mod tests {
         assert!(!args.iter().any(|a| a == "--stream"));
 
         // No session supplied: no `--session`.
-        let none = respond_args("do x", "/work", None, None, false, false);
+        let none = argv_of(&respond_spec(
+            "do x", "/work", None, None, false, false, "p",
+        ));
         assert!(!none.iter().any(|a| a == "--session"));
     }
 
     #[test]
-    fn streaming_adds_the_stream_flag_to_the_agent_side_only() {
+    fn control_needs_a_session_to_be_addressed_by() {
+        // Asked for without one, the spec drops it rather than asking for a socket
+        // nothing can address.
+        let spec = respond_spec("do x", "/work", None, None, false, true, "p");
+        assert!(!spec.control);
+        let spec = respond_spec("do x", "/work", Some("s"), Some("s"), false, true, "p");
+        assert!(spec.control);
+    }
+
+    #[test]
+    fn streaming_is_asked_for_on_the_agent_side_only() {
         let provider = OneharnessProvider::new().with_streaming(true);
         assert!(provider.stream);
-        let args = respond_args(
+        let agent = respond_spec(
             "do x",
             "/work",
             Some("s"),
             Some("s"),
             provider.stream,
             false,
+            "p",
         );
-        assert!(args.iter().any(|a| a == "--stream"));
+        assert!(agent.stream);
+        assert!(argv_of(&agent).iter().any(|a| a == "--stream"));
         // The judge / simulated-user side stays buffered: streaming is about the
         // long agent turn, not the short judgement calls.
-        assert!(!judge_side_args(None, Some("s"), None)
-            .iter()
-            .any(|a| a == "--stream"));
+        let judge = judge_side_spec(None, Some("s"), None, "p");
+        assert!(!judge.stream);
+        assert!(!argv_of(&judge).iter().any(|a| a == "--stream"));
     }
 
     #[test]
-    fn judge_side_args_use_config_not_harness_or_model() {
-        let args = judge_side_args(Some(Path::new("oneharness.judge.toml")), None, None);
+    fn a_judge_side_spec_selects_by_config_not_by_harness_or_model() {
+        let args = argv_of(&judge_side_spec(
+            Some(Path::new("oneharness.judge.toml")),
+            None,
+            None,
+            "p",
+        ));
         assert!(!args.iter().any(|a| a == "--system"));
         assert!(!args.iter().any(|a| a == "--events"));
         assert!(!args.iter().any(|a| a == "--harness"));
@@ -1162,7 +1282,7 @@ mod tests {
             .any(|w| w == ["--config", "oneharness.judge.toml"]));
         // With no judge config, no `--config` is passed (oneharness discovers its
         // own default).
-        let no_config = judge_side_args(None, None, None);
+        let no_config = argv_of(&judge_side_spec(None, None, None, "p"));
         assert!(!no_config.iter().any(|a| a == "--config"));
     }
 
@@ -1262,17 +1382,41 @@ mod tests {
 
     #[test]
     fn control_rides_the_agent_argv_only_alongside_a_session() {
-        let with = respond_args("do x", "/work", Some("s"), Some("s"), false, true);
+        let with = argv_of(&respond_spec(
+            "do x",
+            "/work",
+            Some("s"),
+            Some("s"),
+            false,
+            true,
+            "p",
+        ));
         assert!(with.iter().any(|a| a == "--control"));
         // Off by default: the argv is byte-identical to a run that never asked.
-        let without = respond_args("do x", "/work", Some("s"), Some("s"), false, false);
+        let without = argv_of(&respond_spec(
+            "do x",
+            "/work",
+            Some("s"),
+            Some("s"),
+            false,
+            false,
+            "p",
+        ));
         assert!(!without.iter().any(|a| a == "--control"));
         // `--control` is addressed by the session name, so dropping the session
         // drops it too rather than sending oneharness an unaddressable ask.
-        let sessionless = respond_args("do x", "/work", None, Some("s"), false, true);
+        let sessionless = argv_of(&respond_spec(
+            "do x",
+            "/work",
+            None,
+            Some("s"),
+            false,
+            true,
+            "p",
+        ));
         assert!(!sessionless.iter().any(|a| a == "--control"));
         // The judge side is never controlled.
-        assert!(!judge_side_args(None, Some("s"), None)
+        assert!(!argv_of(&judge_side_spec(None, Some("s"), None, "p"))
             .iter()
             .any(|a| a == "--control"));
     }

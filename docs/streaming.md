@@ -29,7 +29,9 @@ so a consumer never has to guess a line's meaning from its position — but the
 
 Set `provider.stream: true` under `kind: oneharness` (or
 [`OneharnessProvider::with_streaming`] in Rust). The agent-side call then adds
-`oneharness run --stream`, and onejudge reads that process's stdout line by line
+`RunRequest::stream`, and onejudge receives each event on its `EventSink` as
+oneharness observes it (on the spawning seam, `oneharness run --stream`, whose
+stdout onejudge reads line by line)
 instead of as one document.
 
 ```yaml
