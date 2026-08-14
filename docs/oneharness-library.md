@@ -2,8 +2,10 @@
 
 onejudge depends on **`oneharness-core`** (a published registry version, never a
 git ref) and uses it for everything about the oneharness boundary that can be
-expressed as a typed call. The one thing that is still a subprocess is the
-*invocation* itself, and this file records exactly why — so the decision is
+expressed as a typed call — **including the invocation itself**. A turn is
+`oneharness_core::io::run::run`, not a spawned `oneharness` process.
+
+One seam still spawns, and this file records exactly why — so the decision is
 revisitable when oneharness's library surface changes, rather than rediscovered.
 
 ## Through the library
@@ -24,26 +26,28 @@ The e2e double (`onejudge-fake-oneharness`) **builds its report and its history
 lines from those same types and serializes them**, so the suite feeds the real
 reader the document oneharness's own contract produces.
 
-## Still a subprocess, and why
+## The invocation: one engine, two renderings
 
-`oneharness run` is still spawned — but **not** for the reasons this file used to
-give. oneharness **0.7** moved the whole `run` verb into the library as
+oneharness **0.7** moved the whole `run` verb into the library as
 `oneharness_core::io::run::run(&RunRequest, RunControls<'_>) -> Result<RunOutcome,
 OneharnessError>`, which returns the `RunReport` instead of printing it, publishes
 normalized events to a caller-supplied `RunControls::events` sink *as they occur*,
 and takes a `RunControls::cancel` token that tears each harness tree down through
-the ordinary `Finish::Terminate` path. All three of the old objections are gone.
-`RunControls::signal_cancel` even names this exact split: the CLI sets it, "an
-embedder with its own signal handling leaves it `false` and cancels
-`RunControls::cancel` itself".
+the ordinary `Finish::Terminate` path. That is what onejudge now calls.
 
-**Every argv onejudge builds is accounted for on `RunRequest`.** The `run` verb
-itself becomes the `io::run::run` call; each flag either builder emits
-(`respond_args`, `judge_side_args`, in `crates/onejudge/src/oneharness/mod.rs`)
-maps as below. `MAPPED_FLAGS`, beside those builders, is the one source, and
-`every_argv_the_provider_builds_is_accounted_for_in_the_run_request_mapping`
-reconciles the three: the flags the builders emit against the const, and **both
-columns** of the const against the rows below.
+`RunControls::signal_cancel` stays **false**, and oneharness's own docs name this
+exact split: the CLI sets it, "an embedder with its own signal handling leaves it
+`false` and cancels `RunControls::cancel` itself". onejudge is an embedder — its
+host owns the process's signal disposition.
+
+**Every argv onejudge builds is accounted for on `RunRequest`.** One `TurnSpec`
+(`crates/onejudge/src/oneharness/turn.rs`) describes a turn, and the two seams are
+two renderings of it: `turn::request` for the in-process call, `turn::argv` for the
+spawned one. `MAPPED_FLAGS`, in that module's tests, is the one source, and
+`every_argv_flag_sets_the_run_request_field_the_mapping_pairs_it_with` reconciles
+the three — the flags `argv` emits against the const, the const's fields against a
+rendered `RunRequest` (by a predicate compiled against it, so a renamed or dropped
+field fails the build), and both columns against the rows below.
 
 | argv | `RunRequest` field |
 | --- | --- |
@@ -59,60 +63,92 @@ columns** of the const against the rows below.
 | `--prompt-file` | `prompt: Vec<String>` — an owned value, so the `-`/stdin hop that exists only to dodge the OS argv ceiling disappears; oneharness's own `LARGE_INPUT_THRESHOLD` moves a large prompt off-argv for the harness |
 | `--compact` | **none, deliberately** — `RunRequest`'s own docs exclude it as "about how the shell *prints* the report, not how the engine produces it". An in-process caller is handed the `RunReport` value, so there is nothing to compact. Not a gap. |
 
-## What still blocks the hop
+## The one seam that still spawns, and why
 
-Two upstream gaps, both verified against 0.8.0. Neither is worked around here —
-a residual subprocess that nothing exercises is how the two versions drifted
-apart in the first place.
+`Execution::Process` (`crates/onejudge/src/oneharness/mod.rs`) spawns an
+`oneharness` executable, and is reached **only** by naming one
+(`OneharnessProvider::with_bin`) or by installing a `SpawnHook`. It exists for a
+single upstream gap, verified against 0.8.0:
 
-1. **`RunControls` cannot offer a spawned harness to the embedder.** Its whole
-   surface is `events`, `cancel`, `signal_cancel`, `version`. Every harness child
-   is spawned *inside* `run` through `oneharness_core::io::process::Process::spawn`
-   (`pub(crate)`), whose Unix path calls `setpgid(0, 0)` in `pre_exec` — each
-   harness is its own process-group leader by design. Moving the invocation
-   in-process therefore removes the last process onejudge can hand to an
-   embedder's `SpawnHook`, and with it `Report::processes`, `Plan::with_spawn_hook`
-   and the group an embedder terminates (`docs/spawn-hook.md`). That is a
-   documented public contract on a versioned wire (`SCHEMA_VERSION`), and the
-   thing four e2e journeys exist to prove — including
-   `an_embedder_group_reaps_the_whole_two_party_harness_tree_on_a_kill_cancel`,
-   which is precisely the orphaned-paid-harness failure the seam was added for.
-   **Proposal:** a spawn observer on `RunControls`, offered each harness's
-   `Command` before it starts and its live `Child`/pid after, mirroring what
-   `io::process::Tree::prepare` already does internally.
+**`RunControls` cannot offer a spawned harness to the embedder.** Its whole
+surface is `events`, `cancel`, `signal_cancel`, `version`. Every harness child is
+spawned *inside* `run` through `oneharness_core::io::process::Process::spawn`
+(`pub(crate)`), whose Unix path calls `setpgid(0, 0)` in `pre_exec` — each harness
+is its own process-group leader by design. An in-process turn therefore has no
+process to hand to an embedder's `SpawnHook`, which empties `Report::processes`,
+`Plan::with_spawn_hook` and the group an embedder terminates
+(`docs/spawn-hook.md`). That is a documented public contract on a versioned wire
+(`SCHEMA_VERSION`), and the thing four e2e journeys exist to prove — including
+`an_embedder_group_reaps_the_whole_two_party_harness_tree_on_a_kill_cancel`, which
+is precisely the orphaned-paid-harness failure the seam was added for. So
+installing a hook **selects the spawning seam** rather than silently doing
+nothing, which would leave an embedder believing it owns an empty group.
 
-2. **There is no deterministic harness seam an embedder can reach.** oneharness's
-   own `tests/library.rs` drives `run` hermetically by pointing `RunRequest::bin`
-   (`ID=PATH`) at `oneharness-mock-harness` — a `[[bin]]` behind oneharness's
-   `mock-harness` feature that is never published. The other candidate,
-   `RunRequest::mock_harness`, is unusable from outside: `io/run.rs` resolves the
-   responder with `std::env::current_exe()`, which for an embedder is the
-   *embedder's* binary, not `oneharness`. So an embedder either re-implements a
-   per-harness fake CLI or spends a paid harness turn.
-   **Proposal:** publish the fixture (or expose the responder from `oneharness-core`
-   behind the existing `mock-harness` feature), and/or let `RunRequest::mock_harness`
-   name an explicit responder path instead of `current_exe()`.
+**Proposal (oneharness):** a spawn observer on
+`oneharness_core::io::run::RunControls`, offered each harness's `Command` before
+it starts and its live `Child`/pid after, mirroring what
+`oneharness_core::io::process::Tree::prepare` already does internally. With it,
+this seam deletes and `Report::processes` is served in process.
 
-A third gap is already load-bearing here, though it blocks the test double rather
-than the hop: **`io::control::bind` is public but its result cannot be made to
-serve.** 0.8.0 late-binds a controlled turn's mechanism to the candidate serving
-it, and both `ControlHandle::bind` and its `Binding` are `pub(crate)` — so a
-listener an external crate binds has no mechanism behind it and refuses every
-interrupt `no_active_turn`. `onejudge-fake-oneharness` therefore serves the frames
-itself, still using oneharness's own `parse_request` / `ControlResponse` /
+## Driving the in-process seam deterministically
+
+An earlier revision of this file claimed there was "no deterministic harness seam
+an embedder can reach". **That was wrong**, and it is worth recording why, because
+it is what kept the invocation a subprocess for two releases.
+
+`RunRequest::mock_harness` is indeed unusable from outside — `io/run.rs` resolves
+its responder with `std::env::current_exe()`, which for an embedder is the
+*embedder's* binary. But that is not the only route. `RunRequest::bin` takes
+`ID=PATH` overrides, and `[harness.<id>] bin` in an ordinary `oneharness.toml`
+does the same through config discovery. Either points a harness id at any
+executable, which is exactly a deterministic seam — the same one oneharness's own
+`tests/library.rs` uses. What is not published is oneharness's *fixture*
+(`oneharness-mock-harness`, behind its unpublished `mock-harness` feature), not
+the mechanism.
+
+So onejudge ships its own: `onejudge-fake-harness` (`src/bin/fake_harness.rs`), a
+claude-code stand-in reached through `[harness.claude-code] bin`. Faking a
+*harness* rather than faking `oneharness` means the whole of oneharness — harness
+selection, argv construction, event normalization, streaming, cancellation,
+teardown — is the real code under test, and only the model is faked. That is the
+same discipline the other doubles follow, one layer deeper.
+
+**Proposal (oneharness), still worth having:** publish the fixture (or expose the
+responder from `oneharness-core` behind the existing `mock-harness` feature),
+and/or let `RunRequest::mock_harness` name an explicit responder path instead of
+`current_exe()`. It would save every embedder writing a per-harness fake.
+
+A third gap is load-bearing for the *other* double rather than for the hop:
+**`io::control::bind` is public but its result cannot be made to serve.** 0.8.0
+late-binds a controlled turn's mechanism to the candidate serving it, and both
+`ControlHandle::bind` and its `Binding` are `pub(crate)` — so a listener an
+external crate binds has no mechanism behind it and refuses every interrupt
+`no_active_turn`. `onejudge-fake-oneharness` therefore serves the frames itself,
+still using oneharness's own `parse_request` / `ControlResponse` /
 `interrupt_frame` / `prompt_frame`, so only the state machine is local.
 **Proposal:** make the binding reachable (`pub fn bind(&self, Binding)` with a
 `pub Binding`), or give `io::control::bind` a variant that starts bound.
 
-## Cancellation: close the stream, then signal, then kill
+## Cancelling a turn
 
 A cancelled or malformed streamed turn must terminate the **harness**, not just
-the `oneharness` process onejudge spawned. onejudge cannot signal the harness
-directly: every harness is its own process-group leader (below), so nothing
-onejudge sends reaches it. Every rung below is therefore addressed to oneharness,
-which owns the tree and is the only party that can reap it. `terminate`
-(`crates/onejudge/src/oneharness/mod.rs`) escalates through three, because each
-reaches a case the one before it cannot.
+the party onejudge is talking to. onejudge can never signal a harness: every one
+is its own process-group leader, so nothing onejudge sends reaches it. Only
+oneharness owns the tree and can reap it.
+
+**In process this is one thing, not three.** The sink's break returns
+`SinkStep::Stop` and trips `RunControls::cancel`, and `run` tears each harness
+tree down through `Finish::Terminate`. Either alone is sufficient — that is
+measured, not assumed: reverting each in turn leaves
+`cancelling_an_in_process_turn_terminates_the_harness_tree_oneharness_owns`
+green, because they are independent paths into the same teardown. That e2e proves
+the teardown itself, from outside the tree: the double spawns a descendant, goes
+silent forever, and the test asserts the descendant stopped answering.
+
+**The spawning seam still escalates through three rungs**, and each reaches a case
+the one before it cannot. `terminate`
+(`crates/onejudge/src/oneharness/mod.rs`) is that ladder, and it applies only
+when `Execution::Process` is selected.
 
 **1 — close stdout.** `oneharness run --stream` writes each event to stdout, and a
 failed write is its documented short-circuit: `stream_one_harness` returns

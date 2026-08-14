@@ -1,6 +1,9 @@
 //! [`OneharnessProvider`]: the default [`Provider`], which runs each prompt on a
 //! real harness through the [`oneharness`](https://github.com/nickderobertis/oneharness)
-//! CLI (`oneharness run`, whose report is JSON by default) and parses its report.
+//! **engine, in process** — `oneharness_core::io::run::run`, the linked
+//! `oneharness-core` this crate already compiles its report contract against.
+//! Nothing is spawned and nothing needs to be on `PATH`; see [`library`] for the
+//! call and [`Execution`] for the one seam that still spawns.
 //!
 //! **Harness/model selection lives in oneharness's config, not onejudge.** The
 //! agent side passes no `--harness`/`--model`, so it uses oneharness's discovered
@@ -23,12 +26,13 @@
 //! replaces the old up-front capability table. It also depends on `oneharness init`
 //! for scaffolding.
 //!
-//! It can also drive a **streamed** provider (`with_streaming`): the agent-side
-//! call adds `--stream`, and the child's stdout is read as the NDJSON protocol in
-//! `stream.rs` (`docs/streaming.md`) so each tool event reaches the caller the
-//! instant it is observed instead of only when the turn ends. The terminal line's
-//! report is parsed exactly as a bare report is, so a streamed run and a buffered
-//! one produce the same turn.
+//! It can also drive a **streamed** provider (`with_streaming`): the turn asks
+//! `run` to publish incrementally and hands it an `EventSink`, so each tool event
+//! reaches the caller the instant oneharness observes it instead of only when the
+//! turn ends. The finished report is read exactly as a buffered one is, so a
+//! streamed run and a buffered one produce the same turn. On the spawning seam the
+//! same contract arrives as the NDJSON protocol in `stream.rs`
+//! (`docs/streaming.md`).
 //!
 //! The **report** it reads back is oneharness's own typed contract
 //! (`oneharness_core::domain::report`), not a shadow struct declared here — see
@@ -37,29 +41,21 @@
 //! history record oneharness writes for every attempt is read back through
 //! oneharness's own reader; see [`history`].
 //!
-//! The pure pieces — argument construction, report parsing, error classification —
-//! are separated from the one thin `spawn + wait` shell so they are
-//! deterministically unit-tested; the whole path is proven end-to-end against a
-//! fake `oneharness` binary in the e2e suite and against a real one in the live
-//! tier (`docs/live-tier.md`).
+//! The pure pieces — turn description, report parsing, error classification — are
+//! separated from the thin execution shells so they are deterministically
+//! unit-tested. Both seams are proven end-to-end in the e2e suite: the in-process
+//! one against `onejudge-fake-harness` (a *harness* stand-in, so the whole of
+//! oneharness is real), the spawning one against `onejudge-fake-oneharness`. The
+//! live tier drives a real oneharness and a real harness (`docs/live-tier.md`).
 //!
-//! **Why this hop is still a subprocess.** Not for want of a library entrypoint:
-//! since oneharness 0.7 the whole verb is
-//! [`oneharness_core::io::run::run`], which returns the `RunReport`, publishes
-//! events to a caller's sink as they occur, and takes a cancel token — and every
-//! argv built below has a `RunRequest` field (the mapping is tabulated in
-//! `docs/oneharness-library.md`). What it has no field for is the *process*:
-//! `RunControls` cannot offer a spawned harness to the caller, and each harness is
-//! its own process-group leader inside `run`, so an in-process call would leave
+//! **What the one remaining subprocess is for.** [`Execution::Process`] spawns an
+//! `oneharness` executable, and exists for a single upstream gap: `RunControls`
+//! cannot offer a spawned harness to the caller, and each harness is its own
+//! process-group leader inside `run`, so an in-process turn leaves
 //! [`SpawnHook`](crate::SpawnHook) nothing to place and `Report::processes` empty —
-//! removing the very seam an embedder uses to reap an orphaned paid harness. That,
-//! and the absence of a harness fixture an embedder can drive deterministically,
-//! are the two upstream gaps that still hold the hop open; both are written up,
-//! with proposals, in `docs/oneharness-library.md`. Spawning meanwhile keeps
-//! oneharness's per-turn timeout, its cancellation path, and its termination of the
-//! harness's descendants inside the process that owns them — and keeps that process
-//! in *onejudge's* process group, where a terminal Ctrl-C or a parent's group
-//! signal still reaches it.
+//! removing the very seam an embedder uses to reap an orphaned paid harness. It is
+//! reached only by naming a binary or installing such a hook. The gap is written
+//! up, with a proposal against oneharness, in `docs/oneharness-library.md`.
 //!
 //! It can also ask for a **controllable** agent turn (`with_control`): the
 //! agent-side call adds `--control`, oneharness opens an out-of-band socket for the
@@ -69,13 +65,12 @@
 //! spawning a harness, so the call is retried once without the flag and the refusal
 //! becomes a stated reason rather than a failed run. See `docs/control.md`.
 //!
-//! **Cancelling a turn tears oneharness down by escalation, never by kill alone.**
-//! A harness is its own process-group leader, so onejudge can never signal it; every
-//! rung is addressed to oneharness, which owns the tree. Closing its stdout reaches a
-//! producer that is still writing; SIGTERM reaches one whose harness has gone
-//! *silent*, which since v0.6.9 is a cancellation its runner polls for and turns into
-//! a `Finish::Terminate`; the kill is only the backstop. See [`terminate`] for why
-//! all three rungs earn their place, and `docs/oneharness-library.md`.
+//! **Cancelling a turn always terminates the harness tree, never just the party
+//! onejudge is talking to.** A harness is its own process-group leader, so onejudge
+//! can never signal one; only oneharness owns the tree. In process that is
+//! `RunControls::cancel` plus the sink's `SinkStep::Stop` (see [`library`]). On the
+//! spawning seam it is the three-rung escalation in [`terminate`] — closed stdout,
+//! SIGTERM, kill — because a spawned producer has to be reached through the OS.
 
 #[cfg(test)]
 pub(crate) mod fixture;
@@ -334,8 +329,10 @@ impl OneharnessProvider {
     ///
     /// Nothing is spawned and nothing needs to be on `PATH`: the engine is the
     /// linked `oneharness-core`, so the version onejudge compiles its report
-    /// contract against is the version that runs the turn. See [`Execution`] for
-    /// the one case that still spawns.
+    /// contract against is the version that runs the turn.
+    ///
+    /// [`with_bin`](Self::with_bin) and [`with_spawn_hook`](Self::with_spawn_hook)
+    /// are the only two ways to opt back into spawning one.
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -355,9 +352,9 @@ impl OneharnessProvider {
     /// harness tree oneharness goes on to own — in a group the embedder can later
     /// terminate. See [`SpawnHook`](crate::SpawnHook).
     ///
-    /// **This selects the spawning seam** ([`Execution::Process`], on `oneharness`
-    /// from `PATH` unless [`with_bin`](Self::with_bin) named one): a hook offers a
-    /// *process*, and an in-process turn has none to offer. Installing one and
+    /// **This selects the spawning seam** (`oneharness` from `PATH` unless
+    /// [`with_bin`](Self::with_bin) named one): a hook offers a *process*, and an
+    /// in-process turn has none to offer. Installing one and
     /// silently having it never fire would be the failure the hook exists to
     /// prevent — an embedder believing it owns a group that is empty.
     ///
@@ -376,11 +373,13 @@ impl OneharnessProvider {
     /// linked engine (e.g. a pinned install, or the fake binary the e2e suite
     /// drives).
     ///
-    /// Naming a binary is the explicit opt-in to [`Execution::Process`] — see
-    /// there for the one contract that still needs it. An ordinary caller wants
-    /// [`new`](Self::new), whose engine is the `oneharness-core` this crate
-    /// compiles its report contract against, so the two can never be different
-    /// versions.
+    /// Naming a binary is the explicit opt-in to spawning, which exists for one
+    /// contract: `RunControls` cannot offer a spawned harness to an embedder, so
+    /// an in-process turn leaves [`SpawnHook`](crate::SpawnHook) nothing to place
+    /// and [`Report::processes`](crate::Report::processes) empty. An ordinary
+    /// caller wants [`new`](Self::new), whose engine is the `oneharness-core` this
+    /// crate compiles its report contract against, so the two can never be
+    /// different versions. See `docs/oneharness-library.md`.
     #[must_use]
     pub fn with_bin(mut self, bin: impl Into<String>) -> Self {
         self.execution = Execution::Process(bin.into());
@@ -397,11 +396,12 @@ impl OneharnessProvider {
         self
     }
 
-    /// Declare that the agent side speaks the **streamed provider protocol**
-    /// (`docs/streaming.md`): the call adds `oneharness run --stream`, and its
-    /// stdout is read as NDJSON — an `{"type":"event",…}` line per tool event as it
-    /// happens, then a terminal `{"type":"result","report":{…}}` line whose report
-    /// is parsed exactly as a bare report is.
+    /// Declare that the agent side **streams**: the turn asks oneharness to
+    /// publish incrementally, so a tool event reaches the caller's sink the
+    /// instant it is observed and the finished report is read exactly as a
+    /// buffered one is. On the spawning seam the same contract arrives as the
+    /// NDJSON provider protocol (`docs/streaming.md`) — an `{"type":"event",…}`
+    /// line per tool event, then a terminal `{"type":"result","report":{…}}`.
     ///
     /// Off by default. Turn it on only for a binary that really streams: a
     /// declared-streaming provider that writes a line the protocol does not model
@@ -686,8 +686,11 @@ impl OneharnessProvider {
         )
     }
 
-    /// Spawn `oneharness run --stream` and consume its NDJSON stdout, delivering
-    /// each tool event to `on_event` the instant the child writes it.
+    /// Run one streamed turn, delivering each tool event to `on_event` the
+    /// instant it is observed.
+    ///
+    /// In process that is an `EventSink` handed to `run`. On the spawning seam it
+    /// is `oneharness run --stream`, whose NDJSON stdout is consumed line by line.
     ///
     /// The child's stderr is drained on its own thread: this reader holds stdout
     /// open for the whole turn, and a chatty child that filled the stderr pipe

@@ -47,9 +47,13 @@ impl AnyProvider {
                 control,
             } => {
                 let mut provider = OneharnessProvider::new()
-                    .with_bin(bin)
                     .with_streaming(*stream)
                     .with_control(*control);
+                // Only when the config named one: an unset `bin` is the
+                // in-process engine, and `with_bin` would opt out of it.
+                if let Some(bin) = bin {
+                    provider = provider.with_bin(bin);
+                }
                 if let Some(config) = judge_config {
                     provider = provider.with_judge_config(config.clone());
                 }
@@ -213,7 +217,7 @@ mod tests {
     #[test]
     fn builds_oneharness_and_command_backends() {
         let oh = AnyProvider::build(&ProviderSpec::Oneharness {
-            bin: "oneharness".into(),
+            bin: Some("oneharness".into()),
             judge_config: Some("oneharness.judge.toml".into()),
             stream: false,
             control: false,
@@ -238,7 +242,7 @@ mod tests {
     fn build_split_composes_children() {
         let spec = ProviderSpec::Split {
             skill: Box::new(ProviderSpec::Oneharness {
-                bin: "oneharness".into(),
+                bin: Some("oneharness".into()),
                 judge_config: None,
                 stream: true,
                 control: false,
