@@ -309,6 +309,30 @@ pub(crate) fn parse_report(op: &str, stdout: &str) -> Result<Invocation> {
     parse_report_value(op, value)
 }
 
+/// Classify a report oneharness handed back **as a value** — the in-process
+/// [`run`](oneharness_core::io::run::run) seam, which never serializes it.
+///
+/// The selection and failure classification are the same code a spawned run's
+/// stdout goes through, so an in-process turn and a spawned one read a fallback
+/// chain, a timed-out candidate and an exhausted chain identically.
+///
+/// [`Supplemental`] is empty here, and correctly so: those are *history*-record
+/// fields that a real `RunResult` does not carry (its measurements are on
+/// `RunResult::telemetry`, which [`measured`] reads). They exist only for a
+/// producer standing in for oneharness on the JSON protocol, which by definition
+/// is not this path.
+pub(crate) fn parse_report_typed(op: &str, report: RunReport) -> Result<Invocation> {
+    let (ran, chain_failure) = select(op, &report)?;
+    let failure =
+        chain_failure.or_else(|| ran.and_then(|index| self::failure(op, &report.results[index])));
+    Ok(Invocation {
+        report,
+        ran,
+        supplemental: Supplemental::default(),
+        failure,
+    })
+}
+
 /// Parse an already-decoded oneharness report document. The streamed protocol's
 /// terminal `result` line carries the report as JSON, so both paths land here and
 /// a streamed report is read exactly as a bare one is.
