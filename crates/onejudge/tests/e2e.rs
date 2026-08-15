@@ -20,7 +20,9 @@ use onejudge::{
 
 mod support;
 
-use support::{await_path, descendant_handle, descendant_is_running, scratch_path};
+use support::{
+    assert_profile_is_detached, await_path, descendant_handle, descendant_is_running, scratch_path,
+};
 #[cfg(unix)]
 use support::{kill_group, process_exists, OwnedProcessGroups};
 
@@ -835,6 +837,9 @@ fn cancelling_a_streamed_turn_terminates_the_harness_oneharness_spawned() {
         );
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
+    // A stand-in that outlives its turn also outlives the test, and can be writing
+    // its `.profraw` while `cargo llvm-cov` merges. It must not write into that set.
+    assert_profile_is_detached(&handle);
     let _ = std::fs::remove_file(&handle);
 }
 
@@ -888,6 +893,7 @@ fn cancelling_a_turn_terminates_a_harness_that_produces_no_output() {
         );
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
+    assert_profile_is_detached(&handle);
     let _ = std::fs::remove_file(&handle);
 }
 
@@ -1362,6 +1368,10 @@ fn an_embedder_group_reaps_the_whole_two_party_harness_tree_on_a_kill_cancel() {
         descendant_is_running(agent_port) && descendant_is_running(judge_port),
         "both harness stand-ins were running when the run was cancelled"
     );
+    // Orphaned stand-ins outlive the test either way, so neither may write into
+    // the profile set `cargo llvm-cov` merges.
+    assert_profile_is_detached(&agent_handle);
+    assert_profile_is_detached(&judge_handle);
 
     // Cancel with kill semantics: terminate every group the embedder was handed.
     // Nothing else is signalled — the harness stand-ins are reached only because
@@ -1522,6 +1532,14 @@ fn the_reported_control_address_is_one_oneharness_interrupt_can_redirect_the_tur
         delivered.contains("control_request"),
         "the interrupt frame never reached the turn: {delivered}"
     );
+
+    // The lingering server and the turn it holds both outlive the run by design,
+    // so both are spawned out of the profile set `cargo llvm-cov` merges.
+    assert_profile_is_detached(&oneharness_core::domain::control::socket_path(
+        std::path::Path::new(&address.session_dir),
+        &address.session,
+    ));
+    assert_profile_is_detached(&sink);
 
     let _ = std::fs::remove_file(&sink);
     let _ = std::fs::remove_dir_all(&store);
@@ -1852,6 +1870,10 @@ fn cancelling_an_in_process_turn_terminates_the_harness_tree_oneharness_owns() {
         );
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
+    // The harness double spawns this one, a level deeper than the oneharness
+    // double, and it is detached for the same reason — so it needs the same
+    // redirect, out of the profile set `cargo llvm-cov` merges.
+    assert_profile_is_detached(&handle);
 }
 
 #[test]

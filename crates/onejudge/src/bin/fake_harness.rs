@@ -43,6 +43,13 @@ use std::io::Write as _;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
+/// Shared with the other doubles, because the detached children that must stay
+/// out of the coverage merge are spawned from more than one binary.
+#[path = "support/coverage.rs"]
+mod coverage;
+
+use coverage::{detached_profile, publish_profile};
+
 /// How long a marker that waits for the world is given before failing loudly.
 /// Generous against a loaded CI box, and far short of a test-runner timeout, so a
 /// build that broke incremental delivery reports *why* instead of hanging.
@@ -210,6 +217,9 @@ fn spawn_descendant(handle: &str) {
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
+        // It outlives this harness by design, so it must not write into the
+        // profile set `cargo llvm-cov` merges when the suite ends.
+        .envs(detached_profile())
         .spawn()
         .expect("the descendant spawns");
     wait_for(Path::new(handle));
@@ -221,6 +231,9 @@ fn spawn_descendant(handle: &str) {
 /// which is the only vantage point from which "the harness oneharness spawned is
 /// really gone" can be asserted.
 fn descendant(handle: &str) {
+    // Before the handle, so a test that waits on the handle can read this without
+    // racing it.
+    publish_profile(handle);
     let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a liveness port");
     let port = listener.local_addr().expect("the bound address").port();
     // Written whole, then renamed, so a reader never sees a half-written handle.
