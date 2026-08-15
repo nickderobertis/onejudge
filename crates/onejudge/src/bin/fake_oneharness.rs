@@ -20,6 +20,9 @@
 //! `failure_kind` at all (`timeout`, `spawn-error`, `skipped`), and
 //! `[[reject-session]]` makes a `--session` run exit non-zero with oneharness's
 //! `does not support --session` text (the graceful-retry path).
+//! `[[echo-mock-harness]]` replies with the `--mock-harness` ids the run was
+//! spawned with (`none` for an unmocked one), so the deterministic-harness
+//! passthrough is asserted against the real argv.
 //!
 //! **Fallback chains.** `[[fallback:ID|REASON,…]]` reports the run the way
 //! `run_mode = "fallback"` does: one result per *attempted* candidate — the listed
@@ -229,7 +232,12 @@ fn main() {
         };
         ok_result(text, &prompt)
     } else {
-        respond_result(system, session.as_deref(), &prompt)
+        respond_result(
+            system,
+            session.as_deref(),
+            flags.get("--mock-harness").map(String::as_str),
+            &prompt,
+        )
     };
     if let Some(native) = session
         .as_deref()
@@ -880,6 +888,8 @@ fn parse_flags() -> HashMap<String, String> {
         "--output-format",
         "--cwd",
         "--history-name",
+        // Repeatable on the real CLI, and accumulated as such below.
+        "--mock-harness",
     ];
     const TOGGLES: &[&str] = &[
         "--events",
@@ -899,7 +909,15 @@ fn parse_flags() -> HashMap<String, String> {
                 .get(i + 1)
                 .cloned()
                 .unwrap_or_else(|| emit_error(&format!("{arg} needs a value")));
-            flags.insert(arg.to_string(), value);
+            // A repeatable flag accumulates comma-joined, so a marker can echo back
+            // every value it was given rather than only the last.
+            flags
+                .entry(arg.to_string())
+                .and_modify(|seen: &mut String| {
+                    seen.push(',');
+                    seen.push_str(&value);
+                })
+                .or_insert(value);
             i += 2;
             continue;
         }
@@ -953,7 +971,12 @@ fn marker<'a>(text: &'a str, name: &str) -> Option<&'a str> {
     rest.find("]]").map(|end| &rest[..end])
 }
 
-fn respond_result(system: &str, session: Option<&str>, prompt: &str) -> RunResult {
+fn respond_result(
+    system: &str,
+    session: Option<&str>,
+    mock: Option<&str>,
+    prompt: &str,
+) -> RunResult {
     if let Some(kind) = marker(system, "fail") {
         let mut result = base_result(HARNESS);
         result.status = Status::Nonzero;
@@ -976,6 +999,12 @@ fn respond_result(system: &str, session: Option<&str>, prompt: &str) -> RunResul
     // observe that the engine threaded one name across the real subprocess.
     if system.contains("[[echo-session]]") {
         return ok_result(session.unwrap_or("no-session").to_string(), prompt);
+    }
+    // Same trick for the deterministic-harness passthrough: reply with the
+    // `--mock-harness` ids this process was actually spawned with, so the e2e
+    // asserts against the real argv of a real subprocess.
+    if system.contains("[[echo-mock-harness]]") {
+        return ok_result(mock.unwrap_or("none").to_string(), prompt);
     }
     let reply = marker(system, "reply")
         .map(str::to_string)

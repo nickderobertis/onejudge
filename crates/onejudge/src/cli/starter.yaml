@@ -24,6 +24,13 @@ provider:
   #                                      # that cannot be controlled degrades to a
   #                                      # `control_unavailable` reason rather than
   #                                      # failing the run (see docs/control.md)
+  # mock_harness: [claude-code]          # oneharness: run these harness ids against
+  #                                      # oneharness's own deterministic MOCK_*
+  #                                      # responder instead of a paid model, on BOTH
+  #                                      # sides. For a free acceptance proof: only
+  #                                      # the model is scripted. Each id must be
+  #                                      # selected by that side's config, and the run
+  #                                      # spawns `bin` (see docs/cli.md)
   # kind: command  ->  command: ["my-provider", "--flag"]
   # kind: split    ->  skill: {..provider..}, judge: {..provider..}
 

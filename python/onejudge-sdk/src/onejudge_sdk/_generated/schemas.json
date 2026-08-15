@@ -1380,6 +1380,17 @@
             "$ref": "#/$defs/ProviderKind",
             "description": "`oneharness` (default) | `command` | `split`."
           },
+          "mock_harness": {
+            "default": null,
+            "description": "`oneharness`: harness ids to run against **oneharness's own deterministic\n`MOCK_*` responder** instead of a paid model (`oneharness run --mock-harness\n<id>`, repeatable). Empty \u2014 the default \u2014 bills the real model.\n\nThis is how an acceptance proof that needs a real multi-turn chain runs for\nfree: only the model is scripted, everything else is the real oneharness. It\napplies to the agent side *and* the judge side, so each id must be one the\nconfig for that side selects (use `kind: split` when the two sides need\ndifferent ids), and it makes the run **spawn** `oneharness` \u2014 the responder is\noneharness's own binary re-executed, which an in-process run cannot be. See\n`docs/cli.md`.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "skill": {
             "anyOf": [
               {

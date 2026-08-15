@@ -40,6 +40,7 @@ class ProviderConfig(TypedDict, total=False):
     judge: Optional[ProviderConfig]
     judge_config: Optional[str]
     kind: ProviderKind
+    mock_harness: Optional[Sequence[str]]
     skill: Optional[ProviderConfig]
     stream: Optional[bool]
 

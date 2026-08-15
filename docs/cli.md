@@ -147,7 +147,7 @@ Top-level keys:
 
 | key | purpose |
 |-----|---------|
-| `provider` | which backend runs the harness: `kind` is `oneharness` (`bin`, `judge_config`, `stream`), `command` (`command: [...]`), or `split` (a `skill:` + `judge:` **sub-provider** pair — distinct from the top-level `skill:` below) |
+| `provider` | which backend runs the harness: `kind` is `oneharness` (`bin`, `judge_config`, `stream`, `control`, `mock_harness`), `command` (`command: [...]`), or `split` (a `skill:` + `judge:` **sub-provider** pair — distinct from the top-level `skill:` below) |
 | `skill` | a skill directory (containing `SKILL.md`) whose body seeds the system prompt, resolved relative to the config file; optional |
 | `system_prompt` | extra system-prompt text; used alone, or prepended before a `skill` body when both are set; optional |
 | `task` | the task to drive to completion (or supply via `--task`) |
@@ -177,6 +177,16 @@ call goes through oneharness:
   [streamed protocol](streaming.md), and `control: true` to open the out-of-band
   [turn-control socket](control.md) an `oneharness interrupt` can redirect the
   agent turn through. See [live-tier.md](live-tier.md).
+
+  `mock_harness: [<id>, …]` runs those harness ids against **oneharness's own
+  deterministic `MOCK_*` responder** instead of a paid model — the free way to
+  prove a real multi-turn, multi-identity chain, since everything but the model is
+  the real oneharness. It applies to both sides of the conversation, so each id
+  must be one that side's config selects (`kind: split` when they differ), and it
+  makes the run **spawn** `bin`: the responder is oneharness's own binary
+  re-executed, which an in-process run has none of
+  ([oneharness-library.md](oneharness-library.md)). Script it with the `MOCK_*`
+  variables in the environment the run inherits.
 - **`command`** — a custom backend speaking the [JSON-lines protocol](protocol.md).
 - **`split`** — compose a skill-runner with a separate judge / simulated-user
   backend (e.g. drive the agent on one harness, judge on another).

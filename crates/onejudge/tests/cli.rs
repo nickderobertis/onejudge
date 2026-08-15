@@ -258,6 +258,26 @@ fn oneharness_provider_kind_drives_the_loop() {
 }
 
 #[test]
+fn mock_harness_config_reaches_the_spawned_oneharness() {
+    // A consumer reaching oneharness *through* onejudge selects the free
+    // deterministic harness in the config, and the id lands on the argv of the real
+    // subprocess the run spawns — the double replies with what it was given.
+    let bin = serde_json::to_string(&fake_oneharness_bin()).unwrap();
+    let yaml = format!(
+        "provider:\n  kind: oneharness\n  bin: {bin}\n  mock_harness: [claude-code]\n\
+         task: go\n\
+         system_prompt: '[[echo-mock-harness]]'\n",
+    );
+    let plan = Config::from_yaml(&yaml).unwrap().into_plan().unwrap();
+    let mut sink = |_: &str| {};
+    let summary = run_plan(plan, Format::Json, &mut sink).unwrap();
+    assert_eq!(
+        summary.report.transcript.messages[1].content, "claude-code",
+        "the configured mock harness reached the spawned argv"
+    );
+}
+
+#[test]
 fn split_provider_kind_composes_two_backends() {
     // `split`: the agent runs on the fake oneharness, the judge / simulated user on
     // the echo command double. No `done_when`, so the loop runs to the cap — which

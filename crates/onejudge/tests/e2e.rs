@@ -477,6 +477,44 @@ fn a_re_asked_supervisor_recovers_the_run_on_the_prompt_seam() {
 }
 
 #[test]
+fn a_mock_harness_selection_reaches_the_spawned_oneharness_argv() {
+    // The deterministic-harness passthrough, asserted against the argv a real
+    // subprocess was really spawned with: the double mirrors `oneharness run`'s flag
+    // contract (an unrecognized flag exits non-zero) and replies with the
+    // `--mock-harness` ids it was given. This is what makes an acceptance proof free
+    // instead of billing a model or being skipped.
+    let provider = fake_oneharness().with_mock_harness("claude-code");
+    let outcome = Engine::new(&provider, settings())
+        .run(&Conversation::single_turn(
+            skill_with("[[echo-mock-harness]]"),
+            "go",
+        ))
+        .unwrap();
+    assert_eq!(outcome.transcript.messages[1].content, "claude-code");
+
+    // Repeatable, in order, one flag per id.
+    let both = fake_oneharness()
+        .with_mock_harness("claude-code")
+        .with_mock_harness("codex");
+    let outcome = Engine::new(&both, settings())
+        .run(&Conversation::single_turn(
+            skill_with("[[echo-mock-harness]]"),
+            "go",
+        ))
+        .unwrap();
+    assert_eq!(outcome.transcript.messages[1].content, "claude-code,codex");
+
+    // And an ordinary run still passes none, so nothing about it changes.
+    let outcome = Engine::new(&fake_oneharness(), settings())
+        .run(&Conversation::single_turn(
+            skill_with("[[echo-mock-harness]]"),
+            "go",
+        ))
+        .unwrap();
+    assert_eq!(outcome.transcript.messages[1].content, "none");
+}
+
+#[test]
 fn a_supervisor_that_stays_silent_settles_the_run_on_the_prompt_seam() {
     // Same defect, same policy, the other seam: a judge that never names a next
     // instruction ends the run on the work it has instead of destroying it.

@@ -18,6 +18,12 @@ use super::config::ProviderSpec;
 use super::CliError;
 
 /// A [`Provider`] whose backend is chosen at runtime from a [`ProviderSpec`].
+#[allow(
+    clippy::large_enum_variant,
+    reason = "exactly one of these exists per run (two for a `split`), and it lives for the whole \
+              run — so the unused bytes of a smaller variant are a few hundred on the stack, once. \
+              Boxing the oneharness backend would change a public variant's shape to buy that."
+)]
 pub enum AnyProvider {
     /// The default oneharness backend.
     Oneharness(OneharnessProvider),
@@ -45,6 +51,7 @@ impl AnyProvider {
                 judge_config,
                 stream,
                 control,
+                mock_harness,
             } => {
                 let mut provider = OneharnessProvider::new()
                     .with_streaming(*stream)
@@ -53,6 +60,11 @@ impl AnyProvider {
                 // in-process engine, and `with_bin` would opt out of it.
                 if let Some(bin) = bin {
                     provider = provider.with_bin(bin);
+                }
+                // After `bin`, so a named binary is the one the mocked run spawns
+                // (naming a mock harness only falls back to `oneharness` on PATH).
+                for id in mock_harness {
+                    provider = provider.with_mock_harness(id);
                 }
                 if let Some(config) = judge_config {
                     provider = provider.with_judge_config(config.clone());
@@ -221,6 +233,7 @@ mod tests {
             judge_config: Some("oneharness.judge.toml".into()),
             stream: false,
             control: false,
+            mock_harness: Vec::new(),
         })
         .unwrap();
         assert!(matches!(oh, AnyProvider::Oneharness(_)));
@@ -246,6 +259,7 @@ mod tests {
                 judge_config: None,
                 stream: true,
                 control: false,
+                mock_harness: Vec::new(),
             }),
             judge: Box::new(ProviderSpec::Command {
                 command: vec!["judge".into()],

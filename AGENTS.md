@@ -213,6 +213,13 @@ per rung. The crate's floor is **0.8.0** (the pinned `oneharness-core`, which si
 0.7 releases in lockstep with the CLI). See `docs/oneharness-library.md` before
 touching either.
 
+The **free deterministic harness** is reachable through this layer:
+`provider.mock_harness` / `OneharnessProvider::with_mock_harness` forwards
+`oneharness run --mock-harness <id>` on both sides, so an acceptance proof that
+needs a real multi-identity chain costs nothing. It selects the *spawning* seam,
+because oneharness delivers that responder by re-executing its own binary and in
+process that binary is the embedder (`docs/oneharness-library.md`).
+
 **Turn control is an address, not a lever onejudge pulls.** `provider.control:
 true` (default off) adds `--control` to the **agent-side** `oneharness run`, and
 `Report::control` reports the three values `oneharness interrupt` addresses that
