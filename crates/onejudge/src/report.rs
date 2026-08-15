@@ -28,8 +28,10 @@ use crate::usage::Usage;
 /// `7` added `processes` — the processes the run spawned and the embedder-owned
 /// group a [`SpawnHook`](crate::SpawnHook) placed each in; `8` added `control` —
 /// the address of the out-of-band turn-control channel a `provider.control: true`
-/// run opened — and its companion `control_unavailable`.
-pub const SCHEMA_VERSION: u32 = 8;
+/// run opened — and its companion `control_unavailable`; `9` added
+/// `settled_reason` — why a run ended without a completion decision because its
+/// supervisor gave no next instruction.
+pub const SCHEMA_VERSION: u32 = 9;
 
 /// The skip predicate for a field that is always serialized but must not be
 /// *required* of a document being read. Used by [`Report::control`]; see the
@@ -85,6 +87,16 @@ pub struct Report {
     /// Why the per-turn supervisor declared the task complete, if it did.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub completion_reason: Option<String>,
+    /// Why the run ended *without* a completion decision, when it ended because the
+    /// supervisor judged the work incomplete and then named no next instruction —
+    /// even asked again.
+    ///
+    /// Absent on every other run, so its presence is the one signal that separates
+    /// "the agent could not do it" from "the supervisor had nothing to say". The
+    /// transcript, verdicts, and usage beside it are the work the run really did:
+    /// this settles a run, it does not fail one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub settled_reason: Option<String>,
     /// Aggregated usage across every provider call (`None` if nothing reported).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub usage: Option<Usage>,
@@ -143,6 +155,7 @@ impl Report {
             verdicts,
             assessment: None,
             completion_reason: None,
+            settled_reason: None,
             usage,
             telemetry: None,
             processes: Vec::new(),
@@ -232,7 +245,10 @@ mod tests {
         assert!(!json.contains("verdicts"));
         assert!(!json.contains("usage"));
         assert!(!json.contains("assessment"));
-        assert!(json.contains("\"schema_version\":8"));
+        assert!(json.contains("\"schema_version\":9"));
+        // The run neither completed nor settled, so it claims neither.
+        assert!(!json.contains("completion_reason"));
+        assert!(!json.contains("settled_reason"));
         assert!(!json.contains("telemetry"));
         // A run that spawned nothing reports no processes, rather than an empty
         // claim about grouping.
@@ -241,6 +257,20 @@ mod tests {
         // reads "no controllable turn" rather than "an older onejudge".
         assert!(json.contains("\"control\":null"));
         assert!(!json.contains("control_unavailable"));
+    }
+
+    #[test]
+    fn a_settled_run_round_trips_its_reason() {
+        // The v9 addition: a run the supervisor left without a next instruction
+        // carries why on the wire, and an older reader that has never heard of the
+        // key still reads everything else (the field is optional, and omitted when
+        // there is nothing to say — see `empty_verdicts_and_usage_are_omitted`).
+        let mut report = Report::new(Transcript::from_input("hi"), vec![], None, false);
+        report.settled_reason = Some("the supervisor gave no next instruction".into());
+        let json = serde_json::to_string(&report).unwrap();
+        assert!(json.contains("\"settled_reason\":\"the supervisor gave no next instruction\""));
+        let back: Report = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, report);
     }
 
     #[test]

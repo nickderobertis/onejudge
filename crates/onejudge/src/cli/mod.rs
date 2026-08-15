@@ -780,6 +780,10 @@ pub fn render_human(summary: &RunSummary) -> String {
 
     let status = if summary.completed {
         "completed".to_string()
+    } else if let Some(settled) = &summary.report.settled_reason {
+        // Said before the turn cap, because it is the more specific fact and the
+        // one an operator would otherwise have to guess at.
+        format!("incomplete — {settled}")
     } else if summary.hit_max_turns {
         format!("incomplete — hit the turn cap ({})", summary.max_turns)
     } else {
@@ -1055,6 +1059,20 @@ mod tests {
     }
 
     #[test]
+    fn human_render_says_why_a_settled_run_is_incomplete() {
+        // "incomplete" alone reads as "the agent could not do it". A run the
+        // supervisor left without a next instruction has to say so.
+        let mut s = summary(false, true, vec![]);
+        s.report.settled_reason = Some("the supervisor gave no next instruction".into());
+        let out = render_human(&s);
+        assert!(
+            out.contains("Status: incomplete — the supervisor gave no next instruction"),
+            "{out}"
+        );
+        assert!(!out.contains("hit the turn cap"));
+    }
+
+    #[test]
     fn human_render_shows_completion_line() {
         let mut s = summary(true, false, vec![]);
         s.done_when = Some(DoneWhen {
@@ -1100,7 +1118,7 @@ mod tests {
     fn json_render_is_the_versioned_report() {
         let report = Report::new(Transcript::from_input("hi"), vec![], None, false);
         let json = render_json(&report).unwrap();
-        assert!(json.contains("\"schema_version\": 8"));
+        assert!(json.contains("\"schema_version\": 9"));
     }
 
     #[test]

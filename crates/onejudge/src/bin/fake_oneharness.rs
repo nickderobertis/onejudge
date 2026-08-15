@@ -86,6 +86,13 @@
 //! into the live turn's stdin at SINK, and `[[control-unsupported:ID]]` refuses the
 //! ask the way a harness with no control mechanism does. See `docs/control.md`.
 //!
+//! **A supervisor with nothing to say.** In a *persona* (which the supervisor
+//! prompt inlines), `[[supervisor-silent]]` answers `completion:false` with no
+//! `message` every time it is asked, and `[[supervisor-silent-once]]` answers that
+//! way until the re-ask arrives carrying its correction and then names a real next
+//! instruction — the two halves of the bounded re-ask, driven through the real
+//! judge-side seam.
+//!
 //! `[[stream-silent-descendant:HANDLE]]` (Unix) models the same contract for a
 //! harness that produces **no output**, which is the case a broken pipe cannot
 //! reach: it writes one event and then goes silent forever, tearing the stand-in
@@ -997,6 +1004,20 @@ fn judge_text(prompt: &str) -> String {
 }
 
 fn supervisor_text(prompt: &str) -> String {
+    // The supervisor that judges the work incomplete and then says nothing about
+    // what to do next — the answer that used to abort the whole run.
+    // `[[supervisor-silent-once]]` answers that way until the re-ask arrives
+    // carrying its correction, so a build that re-asked without saying what was
+    // wrong (or did not re-ask at all) never gets the usable answer.
+    let corrected = prompt.contains("previous answer said the work was NOT complete");
+    if prompt.contains("[[supervisor-silent]]")
+        || (prompt.contains("[[supervisor-silent-once]]") && !corrected)
+    {
+        return "{\"completion\":false,\"reason\":\"cannot say what comes next\"}".into();
+    }
+    if prompt.contains("[[supervisor-silent-once]]") {
+        return "{\"completion\":false,\"message\":\"Run the integration suite too.\",\"reason\":\"corrected\"}".into();
+    }
     let criterion = prompt
         .split("Completion criterion:\n")
         .nth(1)

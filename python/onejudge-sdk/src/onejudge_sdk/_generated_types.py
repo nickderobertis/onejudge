@@ -215,6 +215,7 @@ class RunReport(_RunReportRequired, total=False):
     control: Optional[ControlAddress]
     control_unavailable: Optional[str]
     processes: Sequence[SpawnedProcess]
+    settled_reason: Optional[str]
     telemetry: Optional[Telemetry]
     usage: Optional[Usage]
     verdicts: Sequence[NamedVerdict]

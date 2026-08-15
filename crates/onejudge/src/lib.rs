@@ -90,8 +90,9 @@ pub use oneharness::OneharnessProvider;
 pub use provider::{
     build_assessment_prompt, build_judge_prompt, build_respond_prompt, build_supervisor_prompt,
     build_user_prompt, latest_or_inline, latest_user_message, parse_supervisor, parse_verdict,
-    render_transcript, Assessment, AssistantTurn, JudgeKind, JudgeQuery, JudgeValue, JudgeVerdict,
-    Provider, SkillRef, SupervisorOutcome, SupervisorQuery, SupervisorTurn, UserTurn,
+    render_transcript, supervise_with_reask, Assessment, AssistantTurn, JudgeKind, JudgeQuery,
+    JudgeValue, JudgeVerdict, Provider, SkillRef, SupervisorOutcome, SupervisorQuery,
+    SupervisorTurn, UserTurn, SUPERVISOR_REASK_LIMIT, SUPERVISOR_REASK_NOTE,
 };
 pub use report::{NamedVerdict, Report, SCHEMA_VERSION};
 #[cfg(feature = "sdk-schema")]

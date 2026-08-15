@@ -15,8 +15,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, ProviderErrorKind, Result};
 use crate::provider::{
-    Assessment, AssistantTurn, JudgeKind, JudgeQuery, JudgeValue, JudgeVerdict, Provider, SkillRef,
-    SupervisorOutcome, SupervisorQuery, SupervisorTurn, UserTurn,
+    supervise_with_reask, Assessment, AssistantTurn, JudgeKind, JudgeQuery, JudgeValue,
+    JudgeVerdict, Provider, SkillRef, SupervisorOutcome, SupervisorQuery, SupervisorTurn, UserTurn,
 };
 use crate::spawn::{role_of, SharedSpawnHook, SpawnContext, SpawnedProcess, Spawner};
 use crate::transcript::{Message, ToolEvent};
@@ -289,48 +289,50 @@ impl Provider for CommandProvider {
         messages: &[Message],
         session: Option<&str>,
     ) -> Result<SupervisorTurn> {
-        let payload: SupervisorPayload = self.call(
-            &Request::Supervisor {
-                task: query.task,
-                persona: query.persona,
-                done_when: query.done_when,
-                worktree: query.worktree,
-                history_name: query.history_name,
-                messages,
-                session,
-            },
-            "supervisor",
-        )?;
-        let outcome = if payload.completion {
-            if payload.reason.trim().is_empty() || payload.message.is_some() {
-                return Err(Error::provider_classified(
-                    "supervisor",
-                    "completed response requires non-empty `reason` and forbids `message`",
-                    ProviderErrorKind::Protocol,
-                ));
-            }
-            SupervisorOutcome::Completed {
-                reason: payload.reason,
-            }
-        } else {
-            let message = payload
-                .message
-                .filter(|m| !m.trim().is_empty())
-                .ok_or_else(|| {
-                    Error::provider_classified(
+        // The same bounded re-ask, and the same settle on exhaustion, as the
+        // prompt-building seam: the protocol carries no correction field, so the
+        // re-ask is the identical request rather than a nudged one.
+        supervise_with_reask(|_attempt| {
+            let payload: SupervisorPayload = self.call(
+                &Request::Supervisor {
+                    task: query.task,
+                    persona: query.persona,
+                    done_when: query.done_when,
+                    worktree: query.worktree,
+                    history_name: query.history_name,
+                    messages,
+                    session,
+                },
+                "supervisor",
+            )?;
+            let outcome = if payload.completion {
+                if payload.reason.trim().is_empty() || payload.message.is_some() {
+                    return Err(Error::provider_classified(
                         "supervisor",
-                        "continue response requires non-empty `message`",
+                        "completed response requires non-empty `reason` and forbids `message`",
                         ProviderErrorKind::Protocol,
-                    )
-                })?;
-            SupervisorOutcome::Continue {
-                message,
-                reason: payload.reason,
-            }
-        };
-        Ok(SupervisorTurn {
-            outcome,
-            usage: payload.usage,
+                    ));
+                }
+                SupervisorOutcome::Completed {
+                    reason: payload.reason,
+                }
+            } else {
+                // Never an error, and never a blank next user turn: see
+                // `parse_supervisor`, which this mirrors on the other seam.
+                match payload.message.filter(|m| !m.trim().is_empty()) {
+                    Some(message) => SupervisorOutcome::Continue {
+                        message,
+                        reason: payload.reason,
+                    },
+                    None => SupervisorOutcome::NoInstruction {
+                        reason: payload.reason,
+                    },
+                }
+            };
+            Ok(SupervisorTurn {
+                outcome,
+                usage: payload.usage,
+            })
         })
     }
 

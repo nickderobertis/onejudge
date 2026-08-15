@@ -1222,6 +1222,13 @@
         "minimum": 0,
         "type": "integer"
       },
+      "settled_reason": {
+        "description": "Why the run ended *without* a completion decision, when it ended because the\nsupervisor judged the work incomplete and then named no next instruction \u2014\neven asked again.\n\nAbsent on every other run, so its presence is the one signal that separates\n\"the agent could not do it\" from \"the supervisor had nothing to say\". The\ntranscript, verdicts, and usage beside it are the work the run really did:\nthis settles a run, it does not fail one.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
       "stopped_early": {
         "default": false,
         "description": "Whether a streaming sink asked to short-circuit the run.",

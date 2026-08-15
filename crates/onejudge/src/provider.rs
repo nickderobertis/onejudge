@@ -127,7 +127,41 @@ pub enum SupervisorOutcome {
         /// Optional concise decision justification.
         reason: String,
     },
+    /// The supervisor judged the work incomplete but gave no next instruction to
+    /// act on (`completion:false` with an absent or blank `message`), and said so
+    /// again when it was asked again (see [`supervise_with_reask`]).
+    ///
+    /// Not an error, deliberately: a run reaching here has already produced real
+    /// work, and aborting it would destroy that work along with every commit of
+    /// context behind it. The engine settles the run on what it has and records why
+    /// ([`Outcome::settled_reason`](crate::Outcome::settled_reason)), which is also
+    /// what keeps "the agent could not do it" distinguishable from "the supervisor
+    /// had nothing to say".
+    NoInstruction {
+        /// Whatever justification the supervisor did give, possibly empty.
+        reason: String,
+    },
 }
+
+/// How many times a supervisor that answered `completion:false` with no usable
+/// `message` is asked again before the run settles on the work it has.
+///
+/// Two, for three attempts in all. An omitted `message` is nearly always a
+/// formatting slip that a fresh sample corrects, and two extra samples make a
+/// *persistent* refusal decisive rather than unlucky. Each attempt is a full
+/// judge-side invocation — a real turn's worth of latency and tokens — so a higher
+/// bound buys very little and charges every run that hits it.
+pub const SUPERVISOR_REASK_LIMIT: u32 = 2;
+
+/// The correction appended to the supervisor prompt when the previous answer was
+/// `completion:false` with no usable `message`. Naming what was unusable is what
+/// makes the re-ask worth its cost — a verbatim repeat of the question invites a
+/// verbatim repeat of the answer.
+pub const SUPERVISOR_REASK_NOTE: &str = "\n\n\
+     Your previous answer said the work was NOT complete but carried no usable `message`, so \
+     the agent was handed nothing to act on and the decision could not be used. Answer again, \
+     in exactly one of the two shapes above: `completion:true` with a `reason`, or \
+     `completion:false` with a concrete, actionable next instruction in `message`.";
 
 /// A supervisor decision and its provider usage.
 #[derive(Debug, Clone, PartialEq)]
@@ -261,6 +295,15 @@ pub trait Provider {
 
     /// Decide completion and, when continuing, produce the exact next user turn
     /// in one judge-side invocation.
+    ///
+    /// The default composes the two legacy calls (`judge`, then `simulate_user`)
+    /// under the same empty-continue policy the real seams use: a simulated user
+    /// with nothing to say is re-asked up to [`SUPERVISOR_REASK_LIMIT`] times and
+    /// then reported as [`SupervisorOutcome::NoInstruction`], never delivered to
+    /// the agent as a blank user turn.
+    ///
+    /// # Errors
+    /// Propagates a failure of the underlying `judge` / `simulate_user` call.
     fn supervise(
         &self,
         query: &SupervisorQuery<'_>,
@@ -268,29 +311,38 @@ pub trait Provider {
         session: Option<&str>,
     ) -> Result<SupervisorTurn> {
         let criterion = query.done_when.unwrap_or("the original task is complete");
-        let verdict = self.judge(
-            &JudgeQuery {
-                kind: JudgeKind::Boolean,
-                criterion,
-                scale: None,
-            },
-            messages,
-        )?;
-        if matches!(verdict.value, JudgeValue::Bool(true)) {
-            return Ok(SupervisorTurn {
-                outcome: SupervisorOutcome::Completed {
-                    reason: verdict.reason,
+        supervise_with_reask(|_attempt| {
+            let verdict = self.judge(
+                &JudgeQuery {
+                    kind: JudgeKind::Boolean,
+                    criterion,
+                    scale: None,
                 },
-                usage: verdict.usage,
-            });
-        }
-        let user = self.simulate_user(query.persona, messages, session)?;
-        Ok(SupervisorTurn {
-            outcome: SupervisorOutcome::Continue {
-                message: user.message,
-                reason: verdict.reason,
-            },
-            usage: user.usage,
+                messages,
+            )?;
+            if matches!(verdict.value, JudgeValue::Bool(true)) {
+                return Ok(SupervisorTurn {
+                    outcome: SupervisorOutcome::Completed {
+                        reason: verdict.reason,
+                    },
+                    usage: verdict.usage,
+                });
+            }
+            let user = self.simulate_user(query.persona, messages, session)?;
+            let outcome = if user.message.trim().is_empty() {
+                SupervisorOutcome::NoInstruction {
+                    reason: verdict.reason,
+                }
+            } else {
+                SupervisorOutcome::Continue {
+                    message: user.message,
+                    reason: verdict.reason,
+                }
+            };
+            Ok(SupervisorTurn {
+                outcome,
+                usage: user.usage,
+            })
         })
     }
 
@@ -383,7 +435,15 @@ pub fn build_supervisor_prompt(query: &SupervisorQuery<'_>, messages: &[Message]
          oneharness history show {history} --project {worktree} --format text\n\n\
          Return ONLY one JSON object. Exactly one of these shapes is valid:\n\
          {{\"completion\":true,\"reason\":\"<concise reason>\"}}\n\
-         {{\"completion\":false,\"message\":\"<exact next user message>\",\"reason\":\"<optional concise reason>\"}}",
+         {{\"completion\":false,\"message\":\"<concrete, actionable next instruction>\",\"reason\":\"<optional concise reason>\"}}\n\n\
+         `message` is handed to the agent VERBATIM as its next user turn, and it is the only \
+         thing the agent receives: it cannot see this decision, your reason, or anything else \
+         you were shown. So `completion:false` obliges you to say what to do next — name the \
+         concrete next action in the imperative, with enough detail to act on it without \
+         further context. \"Not done\" with no message leaves the agent no path forward, since \
+         there is no default next turn to fall back on, so an empty or missing `message` is \
+         not a valid answer. If you cannot name a next action, the work is done: answer \
+         `completion:true` with the reason instead.",
         task = query.task,
         persona = query.persona,
         transcript = render_transcript(messages, true),
@@ -393,6 +453,17 @@ pub fn build_supervisor_prompt(query: &SupervisorQuery<'_>, messages: &[Message]
 }
 
 /// Parse and strictly validate the supervisor's discriminated JSON response.
+///
+/// Everything malformed is a [`Protocol`](crate::ProviderErrorKind::Protocol)
+/// error, with one deliberate exception: `completion:false` carrying no usable
+/// `message` parses to [`SupervisorOutcome::NoInstruction`] instead. That case is
+/// the supervisor having nothing to say, not the transport being broken, and it
+/// must never cost the caller the work the run has already produced — see
+/// [`supervise_with_reask`].
+///
+/// # Errors
+/// [`Error::Provider`](crate::Error::Provider) if the response is not one JSON
+/// object in one of the two documented shapes.
 pub fn parse_supervisor(context: &str, text: &str) -> Result<SupervisorOutcome> {
     use crate::error::ProviderErrorKind::Protocol;
     let json = extract_json_object(text).ok_or_else(|| {
@@ -436,18 +507,62 @@ pub fn parse_supervisor(context: &str, text: &str) -> Result<SupervisorOutcome> 
         }
         Ok(SupervisorOutcome::Completed { reason })
     } else {
-        let message = message.filter(|m| !m.trim().is_empty()).ok_or_else(|| {
-            Error::provider_classified(
-                context,
-                "continue supervisor response requires non-empty `message`",
-                Protocol,
-            )
-        })?;
-        Ok(SupervisorOutcome::Continue {
-            message: message.to_string(),
-            reason,
-        })
+        // A `continue` with nothing in it used to be refused here, which killed the
+        // whole run: a `Protocol` error aborts the dispatch and takes every commit
+        // of context with it, however much finished work the agent had produced.
+        // The supervisor having nothing to say is not the same failure as a broken
+        // transport, so it is reported rather than raised. The blank `message` is
+        // still never delivered to the agent as a user turn.
+        match message.filter(|m| !m.trim().is_empty()) {
+            Some(message) => Ok(SupervisorOutcome::Continue {
+                message: message.to_string(),
+                reason,
+            }),
+            None => Ok(SupervisorOutcome::NoInstruction { reason }),
+        }
     }
+}
+
+/// Ask for one supervisor decision, re-asking while the supervisor judges the work
+/// incomplete but names no next instruction to act on.
+///
+/// `ask` is given the zero-based attempt number, so a seam that builds its own
+/// prompt can append [`SUPERVISOR_REASK_NOTE`] on a retry. Usage is accumulated
+/// across every attempt, so a re-asked decision still reports what it cost.
+///
+/// On exhaustion ([`SUPERVISOR_REASK_LIMIT`] re-asks) this returns the last
+/// [`SupervisorOutcome::NoInstruction`] rather than an error, and the engine
+/// settles the run on the work it has. A dispatch that produced real work must
+/// never be destroyed because its supervisor had nothing to say.
+///
+/// # Errors
+/// Whatever `ask` returns: a transport or protocol failure is still fatal.
+pub fn supervise_with_reask(
+    mut ask: impl FnMut(u32) -> Result<SupervisorTurn>,
+) -> Result<SupervisorTurn> {
+    let mut usage = Usage::default();
+    let mut unusable = SupervisorOutcome::NoInstruction {
+        reason: String::new(),
+    };
+    for attempt in 0..=SUPERVISOR_REASK_LIMIT {
+        let turn = ask(attempt)?;
+        if let Some(u) = &turn.usage {
+            usage.add(u);
+        }
+        match turn.outcome {
+            SupervisorOutcome::NoInstruction { .. } => unusable = turn.outcome,
+            decided => {
+                return Ok(SupervisorTurn {
+                    outcome: decided,
+                    usage: (!usage.is_empty()).then_some(usage),
+                })
+            }
+        }
+    }
+    Ok(SupervisorTurn {
+        outcome: unusable,
+        usage: (!usage.is_empty()).then_some(usage),
+    })
 }
 
 /// The prompt that asks the judge to evaluate `query` against the transcript.
@@ -599,8 +714,12 @@ mod tests {
     use crate::transcript::{ToolEvent, Transcript};
     use serde_json::json;
 
+    #[derive(Default)]
     struct DefaultSupervisor {
         complete: bool,
+        /// The simulated user has nothing to say — the legacy shape of the same
+        /// defect, since a blank next turn is as useless to the agent as none.
+        blank_user: bool,
     }
 
     impl Provider for DefaultSupervisor {
@@ -614,7 +733,11 @@ mod tests {
         }
         fn simulate_user(&self, _: &str, _: &[Message], _: Option<&str>) -> Result<UserTurn> {
             Ok(UserTurn {
-                message: "next".into(),
+                message: if self.blank_user {
+                    "  ".into()
+                } else {
+                    "next".into()
+                },
                 stop: false,
                 usage: Some(Usage {
                     output_tokens: Some(2),
@@ -725,6 +848,33 @@ mod tests {
     }
 
     #[test]
+    fn supervisor_prompt_states_what_message_is_for_and_that_it_is_required() {
+        // The whole defect starts here: a supervisor that is never told what
+        // `message` does has no reason to write one, and "not done" with nothing
+        // in it leaves the agent — which receives that string and nothing else —
+        // with no path forward.
+        let prompt = build_supervisor_prompt(
+            &SupervisorQuery {
+                task: "ship the fix",
+                persona: "a strict reviewer",
+                done_when: None,
+                worktree: "/repo",
+                history_name: "run-skill",
+            },
+            &[],
+        );
+        for expected in [
+            "handed to the agent VERBATIM as its next user turn",
+            "the only thing the agent receives",
+            "concrete next action",
+            "not a valid answer",
+            "answer `completion:true` with the reason instead",
+        ] {
+            assert!(prompt.contains(expected), "missing {expected}");
+        }
+    }
+
+    #[test]
     fn supervisor_parser_enforces_discriminated_shapes() {
         assert!(matches!(
             parse_supervisor("c", "{\"completion\":true,\"reason\":\"done\"}").unwrap(),
@@ -740,13 +890,120 @@ mod tests {
             "{}",
             "{\"completion\":true}",
             "{\"completion\":true,\"reason\":\"done\",\"message\":\"x\"}",
-            "{\"completion\":false}",
         ] {
             assert_eq!(
                 parse_supervisor("c", bad).unwrap_err().kind(),
                 Some(ProviderErrorKind::Protocol)
             );
         }
+    }
+
+    #[test]
+    fn a_continue_with_nothing_to_say_is_reported_not_raised() {
+        // It used to be a `Protocol` error, which aborted the run and destroyed
+        // every turn of work behind it. It is now a decision the caller can act on
+        // — and the blank message is still never handed on as a user turn.
+        for empty in [
+            "{\"completion\":false}",
+            "{\"completion\":false,\"message\":\"\"}",
+            "{\"completion\":false,\"message\":\"   \",\"reason\":\"still failing\"}",
+        ] {
+            assert!(
+                matches!(
+                    parse_supervisor("c", empty).unwrap(),
+                    SupervisorOutcome::NoInstruction { .. }
+                ),
+                "{empty} should parse to NoInstruction"
+            );
+        }
+        assert!(
+            matches!(
+                parse_supervisor("c", "{\"completion\":false,\"reason\":\"still failing\"}")
+                    .unwrap(),
+                SupervisorOutcome::NoInstruction { reason } if reason == "still failing"
+            ),
+            "the supervisor's own reason is carried through"
+        );
+    }
+
+    /// A supervisor that answers `completion:false` with no `message` for its first
+    /// `blank` attempts, then a usable continue.
+    fn blank_then_continue(blank: u32) -> impl FnMut(u32) -> Result<SupervisorTurn> {
+        move |attempt| {
+            let outcome = if attempt < blank {
+                SupervisorOutcome::NoInstruction {
+                    reason: "not yet".into(),
+                }
+            } else {
+                SupervisorOutcome::Continue {
+                    message: "run the integration suite".into(),
+                    reason: "unit tests alone are insufficient".into(),
+                }
+            };
+            Ok(SupervisorTurn {
+                outcome,
+                usage: Some(Usage {
+                    output_tokens: Some(1),
+                    ..Usage::default()
+                }),
+            })
+        }
+    }
+
+    #[test]
+    fn a_supervisor_with_nothing_to_say_is_asked_again() {
+        let turn = supervise_with_reask(blank_then_continue(SUPERVISOR_REASK_LIMIT)).unwrap();
+        assert!(matches!(
+            turn.outcome,
+            SupervisorOutcome::Continue { ref message, .. } if message == "run the integration suite"
+        ));
+        // Every attempt is a real judge-side call, so every attempt is billed.
+        assert_eq!(
+            turn.usage.unwrap().output_tokens,
+            Some(u64::from(SUPERVISOR_REASK_LIMIT) + 1)
+        );
+    }
+
+    #[test]
+    fn a_supervisor_that_never_says_anything_settles_instead_of_erroring() {
+        let mut attempts = 0;
+        let turn = supervise_with_reask(|_| {
+            attempts += 1;
+            Ok(SupervisorTurn {
+                outcome: SupervisorOutcome::NoInstruction {
+                    reason: "nothing to add".into(),
+                },
+                usage: None,
+            })
+        })
+        .unwrap();
+        assert_eq!(
+            attempts,
+            SUPERVISOR_REASK_LIMIT + 1,
+            "the bound is honoured"
+        );
+        assert!(matches!(
+            turn.outcome,
+            SupervisorOutcome::NoInstruction { reason } if reason == "nothing to add"
+        ));
+    }
+
+    #[test]
+    fn a_failing_supervisor_call_is_still_fatal() {
+        // The re-ask is for a supervisor with nothing to say, not for a broken
+        // transport: retrying that would only multiply the failure.
+        let mut attempts = 0;
+        let err = supervise_with_reask(|_| {
+            attempts += 1;
+            Err(Error::provider_classified(
+                "c",
+                "the judge exited non-zero",
+                ProviderErrorKind::Protocol,
+            ))
+        })
+        .unwrap_err();
+        assert_eq!(attempts, 1);
+        assert_eq!(err.kind(), Some(ProviderErrorKind::Protocol));
     }
 
     #[test]
@@ -758,19 +1015,43 @@ mod tests {
             worktree: "/repo",
             history_name: "run",
         };
-        let completed = DefaultSupervisor { complete: true }
-            .supervise(&query, &[], Some("user"))
-            .unwrap();
+        let completed = DefaultSupervisor {
+            complete: true,
+            ..DefaultSupervisor::default()
+        }
+        .supervise(&query, &[], Some("user"))
+        .unwrap();
         assert!(
             matches!(completed.outcome, SupervisorOutcome::Completed { reason } if reason == "because")
         );
-        let continued = DefaultSupervisor { complete: false }
+        let continued = DefaultSupervisor::default()
             .supervise(&query, &[], Some("user"))
             .unwrap();
         assert!(
             matches!(continued.outcome, SupervisorOutcome::Continue { message, reason } if message == "next" && reason == "because")
         );
         assert_eq!(continued.usage.unwrap().output_tokens, Some(2));
+    }
+
+    #[test]
+    fn the_default_supervisor_never_hands_on_a_blank_next_turn() {
+        let query = SupervisorQuery {
+            task: "task",
+            persona: "persona",
+            done_when: None,
+            worktree: "/repo",
+            history_name: "run",
+        };
+        let turn = DefaultSupervisor {
+            complete: false,
+            blank_user: true,
+        }
+        .supervise(&query, &[], Some("user"))
+        .unwrap();
+        assert!(
+            matches!(turn.outcome, SupervisorOutcome::NoInstruction { .. }),
+            "a whitespace-only simulated user turn is no instruction at all"
+        );
     }
 
     #[test]
