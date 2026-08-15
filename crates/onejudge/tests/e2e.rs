@@ -20,7 +20,9 @@ use onejudge::{
 
 mod support;
 
-use support::{await_path, descendant_handle, descendant_is_running, scratch_path};
+use support::{
+    assert_profile_is_detached, await_path, descendant_handle, descendant_is_running, scratch_path,
+};
 #[cfg(unix)]
 use support::{kill_group, process_exists, OwnedProcessGroups};
 
@@ -106,24 +108,51 @@ fn unified_supervisor_is_one_subprocess_invocation_per_nonterminal_turn() {
 }
 
 #[test]
-fn malformed_unified_supervisor_response_is_a_protocol_error() {
-    let err = Engine::new(&echo(), settings())
+fn a_supervisor_with_no_next_instruction_settles_the_run_instead_of_killing_it() {
+    // A supervisor that judges the work incomplete and then produces no message
+    // used to abort the dispatch through the `CommandProvider` seam, destroying
+    // every turn of finished work with it. It is now re-asked, and — since this
+    // double answers the same way every time — the run settles on what it has.
+    let count = std::env::temp_dir().join(format!(
+        "onejudge-settled-supervisor-count-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_file(&count);
+    let persona = format!("[[malformed-supervisor]] [[count:{}]]", count.display());
+    let outcome = Engine::new(&echo(), settings())
         .run(&Conversation::multi_turn(
             skill_with("Be helpful."),
             "start",
-            SimulatedUser::new("[[malformed-supervisor]]").max_turns(2),
+            SimulatedUser::new(persona).max_turns(4),
         ))
-        .unwrap_err();
-    assert!(matches!(
-        err,
-        onejudge::Error::Provider {
-            kind: Some(ProviderErrorKind::Protocol),
-            ..
-        }
-    ));
-    assert!(err
-        .to_string()
-        .contains("continue response requires non-empty `message`"));
+        .expect("the run settles rather than failing");
+
+    assert_eq!(
+        outcome.transcript.assistant_turns(),
+        1,
+        "the work the run did is kept"
+    );
+    assert_eq!(outcome.transcript.messages[1].content, "echo: start");
+    assert!(
+        outcome.completion_reason.is_none(),
+        "settling is not completing"
+    );
+    let settled = outcome.settled_reason.clone().expect("a settle reason");
+    assert!(settled.contains("no next instruction"), "{settled}");
+    // Bounded, and every attempt is a real subprocess: one ask plus the re-asks.
+    let attempts = std::fs::read_to_string(&count).unwrap();
+    assert_eq!(
+        attempts.lines().count() as u32,
+        onejudge::SUPERVISOR_REASK_LIMIT + 1,
+        "the supervisor is re-asked a bounded number of times"
+    );
+    // A blank `message` never reaches the agent as a user turn.
+    assert!(outcome
+        .transcript
+        .messages
+        .iter()
+        .all(|m| !m.content.trim().is_empty()));
+    std::fs::remove_file(&count).unwrap();
 }
 
 #[test]
@@ -373,6 +402,55 @@ fn oneharness_multi_turn_drives_the_simulated_user() {
         ))
         .unwrap();
     assert_eq!(outcome.transcript.assistant_turns(), 2);
+}
+
+#[test]
+fn a_re_asked_supervisor_recovers_the_run_on_the_prompt_seam() {
+    // The judge side is a real subprocess here, so this proves the *prompt* the
+    // re-ask sends: the double withholds its next instruction until the ask
+    // carries the correction naming what was unusable about the last answer.
+    let provider = fake_oneharness();
+    let outcome = Engine::new(&provider, settings().with_session_name("reask"))
+        .run(&Conversation::multi_turn(
+            skill_with("[[reply:on it]]"),
+            "start",
+            SimulatedUser::new("A strict reviewer. [[supervisor-silent-once]]").max_turns(2),
+        ))
+        .unwrap();
+    assert_eq!(
+        outcome.transcript.assistant_turns(),
+        2,
+        "the corrected instruction drove another turn"
+    );
+    assert!(outcome.settled_reason.is_none(), "the run did not settle");
+    assert!(outcome
+        .transcript
+        .messages
+        .iter()
+        .any(|m| m.content == "Run the integration suite too."));
+}
+
+#[test]
+fn a_supervisor_that_stays_silent_settles_the_run_on_the_prompt_seam() {
+    // Same defect, same policy, the other seam: a judge that never names a next
+    // instruction ends the run on the work it has instead of destroying it.
+    let provider = fake_oneharness();
+    let outcome = Engine::new(&provider, settings().with_session_name("settle"))
+        .run(&Conversation::multi_turn(
+            skill_with("[[reply:committed the fix]]"),
+            "start",
+            SimulatedUser::new("A strict reviewer. [[supervisor-silent]]").max_turns(4),
+        ))
+        .expect("the run settles rather than failing");
+    assert_eq!(outcome.transcript.assistant_turns(), 1);
+    assert_eq!(
+        outcome.transcript.messages[1].content, "committed the fix",
+        "the work the agent did is kept"
+    );
+    assert!(outcome.completion_reason.is_none());
+    let settled = outcome.settled_reason.expect("a settle reason");
+    assert!(settled.contains("no next instruction"), "{settled}");
+    assert!(settled.contains("cannot say what comes next"), "{settled}");
 }
 
 #[test]
@@ -759,6 +837,9 @@ fn cancelling_a_streamed_turn_terminates_the_harness_oneharness_spawned() {
         );
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
+    // A stand-in that outlives its turn also outlives the test, and can be writing
+    // its `.profraw` while `cargo llvm-cov` merges. It must not write into that set.
+    assert_profile_is_detached(&handle);
     let _ = std::fs::remove_file(&handle);
 }
 
@@ -812,6 +893,7 @@ fn cancelling_a_turn_terminates_a_harness_that_produces_no_output() {
         );
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
+    assert_profile_is_detached(&handle);
     let _ = std::fs::remove_file(&handle);
 }
 
@@ -1286,6 +1368,10 @@ fn an_embedder_group_reaps_the_whole_two_party_harness_tree_on_a_kill_cancel() {
         descendant_is_running(agent_port) && descendant_is_running(judge_port),
         "both harness stand-ins were running when the run was cancelled"
     );
+    // Orphaned stand-ins outlive the test either way, so neither may write into
+    // the profile set `cargo llvm-cov` merges.
+    assert_profile_is_detached(&agent_handle);
+    assert_profile_is_detached(&judge_handle);
 
     // Cancel with kill semantics: terminate every group the embedder was handed.
     // Nothing else is signalled — the harness stand-ins are reached only because
@@ -1446,6 +1532,14 @@ fn the_reported_control_address_is_one_oneharness_interrupt_can_redirect_the_tur
         delivered.contains("control_request"),
         "the interrupt frame never reached the turn: {delivered}"
     );
+
+    // The lingering server and the turn it holds both outlive the run by design,
+    // so both are spawned out of the profile set `cargo llvm-cov` merges.
+    assert_profile_is_detached(&oneharness_core::domain::control::socket_path(
+        std::path::Path::new(&address.session_dir),
+        &address.session,
+    ));
+    assert_profile_is_detached(&sink);
 
     let _ = std::fs::remove_file(&sink);
     let _ = std::fs::remove_dir_all(&store);
@@ -1776,6 +1870,10 @@ fn cancelling_an_in_process_turn_terminates_the_harness_tree_oneharness_owns() {
         );
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
+    // The harness double spawns this one, a level deeper than the oneharness
+    // double, and it is detached for the same reason — so it needs the same
+    // redirect, out of the profile set `cargo llvm-cov` merges.
+    assert_profile_is_detached(&handle);
 }
 
 #[test]

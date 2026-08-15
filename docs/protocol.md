@@ -99,6 +99,16 @@ forbids `message`; continue requires the exact non-empty next user message:
 {"completion":false,"message":"Run the integration suite too.","reason":"unit tests alone are insufficient","usage":{...}}
 ```
 
+`message` reaches the agent **verbatim** as its next user turn and is the only
+thing it receives, so `completion:false` obliges you to name a concrete, actionable
+next instruction. A continue with an absent or blank `message` is not a protocol
+error — onejudge repeats the identical request up to `SUPERVISOR_REASK_LIMIT`
+times, and if the answer is still unusable the run *settles* on the work it has
+(`settled_reason` in the report, see [contract.md](contract.md)) rather than
+failing. What it never does is hand the agent an empty user turn. A malformed
+response — not one JSON object, a missing `completion`, or a `completed` one
+without a `reason` or carrying a `message` — is still a hard protocol error.
+
 The transcript carries compact normalized event summaries, not raw tool dumps.
 `worktree` and `history_name` let a backend inspect the full oneharness recording
 when needed with `oneharness history show <history_name> --project <worktree>

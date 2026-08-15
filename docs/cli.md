@@ -87,7 +87,8 @@ simulated user even if the config had none.
 ## Output and exit code
 
 - **Human (default):** the conversation (with each turn's tool actions), the
-  completion status (completed / hit the turn cap), usage, and any eval verdicts.
+  completion status (completed / hit the turn cap / settled — see below), usage,
+  and any eval verdicts.
   Live tool events stream to **stderr** so a redirected stdout stays clean.
 - **`--format json`:** the versioned [`Report`](contract.md) — transcript +
   verdicts + usage, stamped with `schema_version`. This reuses onejudge's existing
@@ -127,7 +128,11 @@ Completion is decided by **re-judging `done_when` against the final transcript**
 (the loop's own mid-run check can be preempted by the turn cap), so the exit code
 reflects whether the task actually finished. Without a `done_when`, a run is
 "completed" when the loop ended before the cap (the agent declared done, the user
-stopped, or a single-turn run answered once).
+stopped, or a single-turn run answered once) — with one exception: a **settled**
+run. That is a run whose supervisor judged the work incomplete and then named no
+next instruction to act on, even asked again; it keeps the work it produced but is
+reported `incomplete — <reason>` and exits `1`, and the reason is on the report as
+`settled_reason` ([contract.md](contract.md)).
 
 ## Config
 

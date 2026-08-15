@@ -188,6 +188,13 @@ pub struct Outcome {
     pub stopped_early: bool,
     /// The unified supervisor's completion reason, when it ended the loop.
     pub completion_reason: Option<String>,
+    /// Why the loop ended *without* a completion decision, when the supervisor
+    /// judged the work incomplete and then gave no next instruction to act on.
+    ///
+    /// Mutually exclusive with [`Outcome::completion_reason`], and the difference
+    /// matters to whoever reads the run: an incomplete outcome with this set is the
+    /// supervisor having nothing to say, not the agent failing the task.
+    pub settled_reason: Option<String>,
     /// Timing, per-party usage, and native session linkage, when provided.
     pub telemetry: Option<Telemetry>,
     /// Every process the provider spawned for this run, with the group an
@@ -218,6 +225,7 @@ impl Outcome {
     ) -> Report {
         let mut report = Report::new(self.transcript, verdicts, self.usage, self.stopped_early);
         report.completion_reason = self.completion_reason;
+        report.settled_reason = self.settled_reason;
         report.telemetry = self.telemetry;
         report.processes = self.processes;
         report = report.with_control(&self.control);
@@ -304,6 +312,7 @@ impl<'a> Engine<'a> {
         let mut transcript = Transcript::from_input(&conversation.input);
         let mut totals = Usage::default();
         let mut completion_reason = None;
+        let mut settled_reason = None;
 
         loop {
             let turn_index = transcript.assistant_turns() + 1;
@@ -338,7 +347,7 @@ impl<'a> Engine<'a> {
             transcript.push(Message::assistant(message).with_events(events));
 
             if broke {
-                return Ok(self.finish(transcript, totals, true, None));
+                return Ok(self.finish(transcript, totals, true, None, None));
             }
 
             // Single-turn conversations stop after the first assistant turn.
@@ -371,10 +380,25 @@ impl<'a> Engine<'a> {
                 SupervisorOutcome::Continue { message, .. } => {
                     transcript.push(Message::user(message))
                 }
+                // The supervisor judged the work incomplete and had no next
+                // instruction to give, even asked again. Settle the run on the work
+                // it already has rather than raising: the alternative destroyed
+                // finished dispatches, and left the operator unable to tell that
+                // from the agent failing the task.
+                SupervisorOutcome::NoInstruction { reason } => {
+                    let mut why = "the supervisor judged the work incomplete but gave no next \
+                                   instruction, even asked again; settled on the work already done"
+                        .to_string();
+                    if !reason.trim().is_empty() {
+                        why.push_str(&format!(" (supervisor's reason: {})", reason.trim()));
+                    }
+                    settled_reason = Some(why);
+                    break;
+                }
             }
         }
 
-        Ok(self.finish(transcript, totals, false, completion_reason))
+        Ok(self.finish(transcript, totals, false, completion_reason, settled_reason))
     }
 
     fn finish(
@@ -383,12 +407,14 @@ impl<'a> Engine<'a> {
         totals: Usage,
         stopped_early: bool,
         completion_reason: Option<String>,
+        settled_reason: Option<String>,
     ) -> Outcome {
         Outcome {
             transcript,
             usage: (!totals.is_empty()).then_some(totals),
             stopped_early,
             completion_reason,
+            settled_reason,
             telemetry: self.telemetry(),
             processes: self.spawned_processes(),
             control: self.provider.control(),
@@ -703,6 +729,72 @@ mod tests {
             .unwrap();
         assert_eq!(outcome.transcript.assistant_turns(), 2);
         assert_eq!(provider.seen.borrow().judge, 2);
+    }
+
+    #[test]
+    fn a_supervisor_with_no_instruction_settles_the_run_on_the_work_it_has() {
+        // The run this exists for: real work already done, and a supervisor that
+        // will not say what comes next. Ending the run keeps that work; raising
+        // would have thrown it away, and left the caller unable to tell this apart
+        // from the agent simply failing.
+        struct Speechless;
+
+        impl Provider for Speechless {
+            fn respond(
+                &self,
+                _: &SkillRef<'_>,
+                _: &[Message],
+                _: Option<&str>,
+            ) -> Result<AssistantTurn> {
+                Ok(assistant("committed the fix", false))
+            }
+            fn simulate_user(&self, _: &str, _: &[Message], _: Option<&str>) -> Result<UserTurn> {
+                unreachable!("the supervisor answers for the simulated user")
+            }
+            fn supervise(
+                &self,
+                _: &SupervisorQuery<'_>,
+                _: &[Message],
+                _: Option<&str>,
+            ) -> Result<SupervisorTurn> {
+                Ok(SupervisorTurn {
+                    outcome: SupervisorOutcome::NoInstruction {
+                        reason: "the tests still fail".into(),
+                    },
+                    usage: None,
+                })
+            }
+            fn judge(&self, _: &JudgeQuery<'_>, _: &[Message]) -> Result<JudgeVerdict> {
+                unreachable!()
+            }
+            fn assess(&self, _: &str, _: &[Message]) -> Result<Assessment> {
+                unreachable!()
+            }
+        }
+
+        let provider = Speechless;
+        let outcome = Engine::new(&provider, settings())
+            .run(&Conversation::multi_turn(
+                skill(),
+                "fix it",
+                SimulatedUser::new("a strict reviewer").max_turns(8),
+            ))
+            .expect("a speechless supervisor settles the run, it does not fail it");
+        assert_eq!(outcome.transcript.assistant_turns(), 1);
+        assert_eq!(
+            outcome.transcript.messages.last().unwrap().content,
+            "committed the fix",
+            "the work is kept"
+        );
+        assert!(
+            outcome.completion_reason.is_none(),
+            "settling is not completing"
+        );
+        let settled = outcome.settled_reason.clone().expect("a settle reason");
+        assert!(settled.contains("no next instruction"), "{settled}");
+        assert!(settled.contains("the tests still fail"), "{settled}");
+        // And it reaches the artifact the operator actually reads.
+        assert_eq!(outcome.into_report(vec![]).settled_reason, Some(settled));
     }
 
     #[test]

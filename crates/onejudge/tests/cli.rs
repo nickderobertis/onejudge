@@ -126,6 +126,83 @@ user:
 }
 
 #[test]
+fn settled_run_is_reported_incomplete_with_its_reason_and_exits_one() {
+    // The supervisor judges the work incomplete and then names no next instruction,
+    // however often it is asked. The run keeps the turn it produced — this used to
+    // be a hard failure that destroyed it — but it is *not* a completion: without a
+    // `done_when` the loop merely ending early would otherwise read as one, which
+    // would hide the very case the reason exists to surface.
+    let body = "\
+task: start
+system_prompt: Be helpful.
+user:
+  persona: '[[malformed-supervisor]]'
+  max_turns: 4
+";
+    let summary = plan_from(body);
+    assert_eq!(summary.report.transcript.assistant_turns(), 1);
+    assert!(!summary.hit_max_turns, "it settled well before the cap");
+    assert!(
+        !summary.completed,
+        "a settled run did not complete the task"
+    );
+    assert_eq!(exit_code(&summary), 1);
+    let settled = summary
+        .report
+        .settled_reason
+        .clone()
+        .expect("the report says why the run settled");
+    assert!(settled.contains("no next instruction"), "{settled}");
+    let rendered = render_human(&summary);
+    assert!(
+        rendered.contains(&format!("Status: incomplete — {settled}")),
+        "the operator is told which kind of incomplete this is: {rendered}"
+    );
+}
+
+#[test]
+fn binary_reports_a_settled_run_in_both_formats() {
+    // The same journey through the shipped binary: the reason reaches the JSON
+    // report a consumer parses *and* the human status line, and the exit code says
+    // the task did not complete.
+    let config = write_config(
+        "settled.yaml",
+        "\
+task: start
+system_prompt: Be helpful.
+user:
+  persona: '[[malformed-supervisor]]'
+  max_turns: 4
+",
+    );
+    let json = Command::new(onejudge_bin())
+        .args(["run", config.to_str().unwrap(), "--format", "json"])
+        .output()
+        .unwrap();
+    assert_eq!(json.status.code(), Some(1));
+    let report: onejudge::Report = serde_json::from_slice(&json.stdout).unwrap();
+    let settled = report.settled_reason.expect("the wire form carries it");
+    assert!(settled.contains("no next instruction"), "{settled}");
+    assert_eq!(
+        report.transcript.assistant_turns(),
+        1,
+        "the work the run did survived"
+    );
+    assert!(report.completion_reason.is_none());
+
+    let human = Command::new(onejudge_bin())
+        .args(["run", config.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert_eq!(human.status.code(), Some(1));
+    let stdout = String::from_utf8(human.stdout).unwrap();
+    assert!(
+        stdout.contains(&format!("Status: incomplete — {settled}")),
+        "{stdout}"
+    );
+}
+
+#[test]
 fn failing_boolean_eval_fails_an_otherwise_complete_run() {
     // The task completes, but a boolean eval that cannot match the transcript
     // fails — so the run exits non-zero (evals gate the exit code).

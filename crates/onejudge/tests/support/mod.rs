@@ -19,6 +19,9 @@
 pub fn scratch_path(name: &str) -> std::path::PathBuf {
     let path = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(name);
     let _ = std::fs::remove_file(&path);
+    // …and the coverage marker published beside it, so an earlier run's marker can
+    // never satisfy this run's `assert_profile_is_detached`.
+    let _ = std::fs::remove_file(format!("{}.profile", path.display()));
     path
 }
 
@@ -66,6 +69,41 @@ pub fn await_path(path: &std::path::Path, why: &str) {
     while !path.exists() {
         assert!(std::time::Instant::now() < deadline, "{why}");
         std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+}
+
+/// Assert the detached process that published `artifact` was started with its
+/// coverage profile redirected **out of this run's merge set**.
+///
+/// Every such process records the `LLVM_PROFILE_FILE` it really inherited beside
+/// the handle, socket, or sink it publishes (`<artifact>.profile`), written before
+/// that artifact so reading it is never a race. A spawn site that forgot the
+/// redirect therefore fails here — instead of corrupting a release gate's profile
+/// merge weeks later, on a run where every test passed.
+pub fn assert_profile_is_detached(artifact: &std::path::Path) {
+    let marker = std::path::PathBuf::from(format!("{}.profile", artifact.display()));
+    await_path(
+        &marker,
+        "the detached process never recorded the coverage profile it inherited",
+    );
+    let recorded = std::fs::read_to_string(&marker).expect("the profile marker is readable");
+    let recorded = std::path::PathBuf::from(recorded.trim());
+    assert!(
+        recorded.parent() == Some(std::env::temp_dir().as_path()),
+        "the detached process inherited `{}`, not the temp path it must write to: \
+         its spawn site is missing `detached_profile()`",
+        recorded.display()
+    );
+    // Under `cargo llvm-cov` the test process names the merge set itself, so the
+    // check can be made against the real directory rather than only the intent.
+    if let Ok(ours) = std::env::var("LLVM_PROFILE_FILE") {
+        let merge_set = std::path::PathBuf::from(&ours);
+        assert_ne!(
+            recorded.parent(),
+            merge_set.parent(),
+            "the detached process writes its profile into the very set `cargo \
+             llvm-cov` merges ({ours}), which is the race that fails releases"
+        );
     }
 }
 

@@ -9,7 +9,7 @@ and re-export, so onejudge — not its consumers — owns the shape of a judged 
 
 ```jsonc
 {
-  "schema_version": 8,                 // bump on any wire change
+  "schema_version": 9,                 // bump on any wire change
   "transcript": {
     "messages": [
       { "role": "user", "content": "commit the fix" },
@@ -32,6 +32,7 @@ and re-export, so onejudge — not its consumers — owns the shape of a judged 
   ],
   "assessment": "No follow-up work remains.", // omitted when not requested
   "completion_reason": "all required tests passed", // omitted unless the supervisor completed the run
+  "settled_reason": "…gave no next instruction…",   // omitted unless the run settled instead (see below)
   "usage": {                            // omitted when nothing reported
     "input_tokens": 12, "output_tokens": 3,
     "cache_read_tokens": 9, "cache_write_tokens": 4   // prompt-cache reads/writes, when the harness reports them
@@ -99,6 +100,19 @@ let report = outcome.into_report(vec![
 assert_eq!(report.schema_version, onejudge::SCHEMA_VERSION);
 ```
 
+## `completion_reason` vs `settled_reason` — how the loop ended
+
+At most one of the two is present, and they say different things. A
+`completion_reason` is the supervisor deciding the task is done. A
+`settled_reason` is the supervisor judging the work **incomplete** and then giving
+no next instruction to act on — even when asked again — so the run ended on the
+work it already had. Neither is a failure, and a run that simply hit `max_turns`
+carries neither.
+
+The distinction is the point: without it, a supervisor with nothing to say is
+indistinguishable from an agent that could not do the task, and an operator acts
+on the wrong one. See [protocol.md](protocol.md#supervisor--decide-completion-or-produce-the-next-user-turn).
+
 ## `control` — where a controllable turn is addressed
 
 Present on every report, so a supervisor keys on the value rather than on whether
@@ -119,8 +133,8 @@ its records carry pids and no group.
 ## Versioning and the drift gate
 
 The wire form is pinned by a canonical serialized example
-(`crates/onejudge/tests/golden/report.example-v8.json`) and its generated JSON
-Schema (`crates/onejudge/tests/golden/report.schema-v8.json`), both checked by
+(`crates/onejudge/tests/golden/report.example-v9.json`) and its generated JSON
+Schema (`crates/onejudge/tests/golden/report.schema-v9.json`), both checked by
 `tests/contract.rs`. Any change to the serialized shape — a renamed field, a new
 key, a changed default — fails that test, so it can only land as a **deliberate**
 edit that also bumps `SCHEMA_VERSION` and updates both goldens. Downstream SDKs

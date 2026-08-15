@@ -90,8 +90,9 @@ use crate::control::{ControlAddress, ControlOutcome};
 use crate::error::{Error, ProviderErrorKind, Result};
 use crate::provider::{
     build_assessment_prompt, build_judge_prompt, build_supervisor_prompt, build_user_prompt,
-    latest_or_inline, parse_supervisor, parse_verdict, Assessment, AssistantTurn, JudgeQuery,
-    JudgeVerdict, Provider, SkillRef, SupervisorQuery, SupervisorTurn, UserTurn,
+    latest_or_inline, parse_supervisor, parse_verdict, supervise_with_reask, Assessment,
+    AssistantTurn, JudgeQuery, JudgeVerdict, Provider, SkillRef, SupervisorQuery, SupervisorTurn,
+    UserTurn, SUPERVISOR_REASK_NOTE,
 };
 use crate::spawn::{role_of, SharedSpawnHook, SpawnContext, SpawnedProcess, Spawner};
 use crate::stream::{read_stream, StreamOutcome};
@@ -1099,11 +1100,21 @@ impl Provider for OneharnessProvider {
         messages: &[Message],
         session: Option<&str>,
     ) -> Result<SupervisorTurn> {
-        let prompt = build_supervisor_prompt(query, messages);
-        let result = self.run_judge_side("supervisor", &prompt, session, Some(query.worktree))?;
-        Ok(SupervisorTurn {
-            outcome: parse_supervisor("oneharness:supervisor", &result.reply())?,
-            usage: result.usage(),
+        let base = build_supervisor_prompt(query, messages);
+        supervise_with_reask(|attempt| {
+            // The re-ask says what was unusable about the last answer; asking the
+            // identical question again mostly buys the identical answer.
+            let prompt = if attempt == 0 {
+                base.clone()
+            } else {
+                format!("{base}{SUPERVISOR_REASK_NOTE}")
+            };
+            let result =
+                self.run_judge_side("supervisor", &prompt, session, Some(query.worktree))?;
+            Ok(SupervisorTurn {
+                outcome: parse_supervisor("oneharness:supervisor", &result.reply())?,
+                usage: result.usage(),
+            })
         })
     }
 

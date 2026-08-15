@@ -86,6 +86,13 @@
 //! into the live turn's stdin at SINK, and `[[control-unsupported:ID]]` refuses the
 //! ask the way a harness with no control mechanism does. See `docs/control.md`.
 //!
+//! **A supervisor with nothing to say.** In a *persona* (which the supervisor
+//! prompt inlines), `[[supervisor-silent]]` answers `completion:false` with no
+//! `message` every time it is asked, and `[[supervisor-silent-once]]` answers that
+//! way until the re-ask arrives carrying its correction and then names a real next
+//! instruction — the two halves of the bounded re-ask, driven through the real
+//! judge-side seam.
+//!
 //! `[[stream-silent-descendant:HANDLE]]` (Unix) models the same contract for a
 //! harness that produces **no output**, which is the case a broken pipe cannot
 //! reach: it writes one event and then goes silent forever, tearing the stand-in
@@ -98,6 +105,13 @@
 use std::collections::HashMap;
 use std::io::{Read as _, Write as _};
 use std::time::{Duration, Instant};
+
+/// Shared with the other doubles, because the detached children that must stay
+/// out of the coverage merge are spawned from more than one binary.
+#[path = "support/coverage.rs"]
+mod coverage;
+
+use coverage::{detached_profile, publish_profile};
 
 use oneharness_core::domain::events::ActionEvent;
 use oneharness_core::domain::history::{
@@ -727,6 +741,9 @@ fn orphan_harness(handle: &str) {
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
+        // It outlives this process by design, so it must not write into the
+        // profile set `cargo llvm-cov` merges when the suite ends.
+        .envs(detached_profile())
         .spawn()
         .unwrap_or_else(|e| emit_error(&format!("could not spawn the harness stand-in: {e}")));
     wait_for_path(handle, "the harness stand-in never published its handle");
@@ -744,7 +761,10 @@ fn spawn_harness(handle: &str) -> std::process::Child {
         .arg(handle)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null());
+        .stderr(std::process::Stdio::null())
+        // Detached and expected to outlive a cancelled turn, so its profile goes
+        // out of the set `cargo llvm-cov` merges.
+        .envs(detached_profile());
     detach(&mut command);
     let child = command
         .spawn()
@@ -776,6 +796,9 @@ fn detach(command: &mut std::process::Command) {
 /// test must not leak an immortal process onto a CI runner. It is far longer than
 /// any assertion window, so it can never make a failing test pass.
 fn run_descendant(handle: &str) -> ! {
+    // Before the handle, so a test that waits on the handle can read this without
+    // racing it.
+    publish_profile(handle);
     let listener =
         std::net::TcpListener::bind("127.0.0.1:0").unwrap_or_else(|e| emit_error(&format!("{e}")));
     let port = listener
@@ -997,6 +1020,20 @@ fn judge_text(prompt: &str) -> String {
 }
 
 fn supervisor_text(prompt: &str) -> String {
+    // The supervisor that judges the work incomplete and then says nothing about
+    // what to do next — the answer that used to abort the whole run.
+    // `[[supervisor-silent-once]]` answers that way until the re-ask arrives
+    // carrying its correction, so a build that re-asked without saying what was
+    // wrong (or did not re-ask at all) never gets the usable answer.
+    let corrected = prompt.contains("previous answer said the work was NOT complete");
+    if prompt.contains("[[supervisor-silent]]")
+        || (prompt.contains("[[supervisor-silent-once]]") && !corrected)
+    {
+        return "{\"completion\":false,\"reason\":\"cannot say what comes next\"}".into();
+    }
+    if prompt.contains("[[supervisor-silent-once]]") {
+        return "{\"completion\":false,\"message\":\"Run the integration suite too.\",\"reason\":\"corrected\"}".into();
+    }
     let criterion = prompt
         .split("Completion criterion:\n")
         .nth(1)
@@ -1060,7 +1097,7 @@ mod control {
     use oneharness_core::errors::OneharnessError;
     use oneharness_core::io::session as session_io;
 
-    use super::{emit_error, marker, wait_for_path, HARNESS};
+    use super::{detached_profile, emit_error, marker, publish_profile, wait_for_path, HARNESS};
 
     /// Refuse a control ask the way `oneharness run` refuses one — a usage error
     /// on stderr before anything spawns, in oneharness's own words, so onejudge's
@@ -1216,6 +1253,10 @@ mod control {
         use std::os::unix::net::UnixListener;
         use std::time::{Duration, Instant};
 
+        // Before the socket it publishes, so a test that waits on the socket can
+        // read this without racing it.
+        publish_profile(socket);
+
         use oneharness_core::domain::control::{
             interrupt_frame, parse_request, prompt_frame, ControlResponse,
         };
@@ -1228,6 +1269,10 @@ mod control {
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
+            // Said explicitly even though this process already runs under the
+            // redirect it would inherit: the rule is "every detached spawn", and a
+            // site that relies on its parent's environment is one refactor away
+            // from being the next site that leaks a profile into the merge.
             .envs(detached_profile())
             .spawn()
             .unwrap_or_else(|e| emit_error(&format!("could not spawn the turn stand-in: {e}")));
@@ -1319,6 +1364,9 @@ mod control {
     pub fn run_harness(sink: &str) -> ! {
         use std::io::{BufRead, Write};
 
+        // Before the first frame it appends, so a test that waits on the sink's
+        // contents can read this without racing it.
+        publish_profile(sink);
         let mut file = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
@@ -1330,19 +1378,6 @@ mod control {
             let _ = file.flush();
         }
         std::process::exit(0);
-    }
-
-    /// Redirect a detached child's coverage profile out of the run's merge set.
-    ///
-    /// These two outlive the test that started them by a fraction of a second —
-    /// long enough to be writing their `.profraw` while `cargo llvm-cov` is
-    /// merging, which surfaces as a corrupt profile and fails the gate on a run
-    /// where every test passed. `src/bin/` is excluded from coverage anyway, so
-    /// the profile has nothing to contribute; sending it to a temp path keeps the
-    /// race from existing rather than making it rarer.
-    fn detached_profile() -> [(String, String); 1] {
-        let path = std::env::temp_dir().join("onejudge-detached-%p.profraw");
-        [("LLVM_PROFILE_FILE".to_string(), path.display().to_string())]
     }
 
     /// oneharness's own rendering of a refusal, on stderr, with its usage exit code.
