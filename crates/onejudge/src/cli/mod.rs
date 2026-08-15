@@ -671,8 +671,15 @@ fn execute(
         let hit_max_turns =
             multi_turn && outcome.transcript.assistant_turns() >= max_turns as usize;
         let completed = match &done {
+            // A configured criterion is the authority on completion, whatever ended
+            // the loop — a satisfied one is satisfied however the run got there.
             Some(d) => d.satisfied,
-            None => !hit_max_turns,
+            // Without one, "the loop ended before the cap" is the completion signal.
+            // A run that *settled* is the exception: it ended because the supervisor
+            // judged the work incomplete and then named no next instruction, which
+            // is the opposite of the task being done, and reporting it as completed
+            // would hide exactly the case `settled_reason` exists to surface.
+            None => !hit_max_turns && outcome.settled_reason.is_none(),
         };
 
         let mut eval_results = Vec::with_capacity(evals.len());
