@@ -108,6 +108,52 @@ fn unified_supervisor_is_one_subprocess_invocation_per_nonterminal_turn() {
 }
 
 #[test]
+fn a_no_op_supervisor_loop_settles_the_run_on_the_work_it_has() {
+    // The other half of the same defect, and the one that cost whole turn budgets:
+    // the supervisor's answer is a perfectly valid `continue` every time, so
+    // nothing here is malformed — but it asks for nothing, the agent does nothing,
+    // and the pair repeats. One measured dispatch was re-prompted 137 times to its
+    // cap this way, delivering nothing after the work was already done.
+    let count = std::env::temp_dir().join(format!(
+        "onejudge-noop-supervisor-count-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_file(&count);
+    let persona = format!("[[supervisor-noop]] [[count:{}]]", count.display());
+    // The event marker rides the *task*, not the instructions, so exactly the first
+    // turn records a command — the released dispatch whose work must survive.
+    let outcome = Engine::new(&echo(), settings())
+        .run(&Conversation::multi_turn(
+            skill_with("Be helpful."),
+            "release the dispatch [[event:git push]]",
+            SimulatedUser::new(persona).max_turns(40),
+        ))
+        .expect("the run settles rather than failing");
+
+    assert_eq!(
+        outcome.transcript.assistant_turns(),
+        1 + onejudge::NOOP_SETTLE_LIMIT as usize,
+        "the work turn, then exactly the no-ops it takes to decide — not the cap"
+    );
+    // The completed work, and the command that did it, are still in the transcript.
+    assert_eq!(
+        outcome.transcript.messages[1].content,
+        "echo: release the dispatch [[event:git push]]"
+    );
+    assert_eq!(outcome.transcript.messages[1].events.len(), 1);
+    assert!(
+        outcome.completion_reason.is_none(),
+        "settling is not completing"
+    );
+    let settled = outcome.settled_reason.clone().expect("a settle reason");
+    assert!(settled.contains("no-op exchanges"), "{settled}");
+    // Every attempt is a real subprocess, and the settling turn pays for no more.
+    let asked = std::fs::read_to_string(&count).unwrap();
+    assert_eq!(asked.lines().count() as u32, onejudge::NOOP_SETTLE_LIMIT);
+    std::fs::remove_file(&count).unwrap();
+}
+
+#[test]
 fn a_supervisor_with_no_next_instruction_settles_the_run_instead_of_killing_it() {
     // A supervisor that judges the work incomplete and then produces no message
     // used to abort the dispatch through the `CommandProvider` seam, destroying

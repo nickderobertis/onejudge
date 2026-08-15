@@ -19,6 +19,90 @@ use crate::telemetry::{aggregate, Telemetry};
 use crate::transcript::{Message, ToolEvent, Transcript};
 use crate::usage::Usage;
 
+/// How many consecutive **no-op exchanges** settle the loop on the work it has.
+///
+/// Two, matching [`SUPERVISOR_REASK_LIMIT`](crate::SUPERVISOR_REASK_LIMIT), and for
+/// the same reason: one repetition is a slip a fresh turn routinely corrects, while
+/// a second identical, empty-handed exchange is a decision the loop has made. Each
+/// one costs a full agent turn *and* a full supervisor turn, so a higher bound buys
+/// nothing but the bill it was raised to avoid — the loops this exists for ran to
+/// their caps (137 turns in the measured case) doing exactly this.
+pub const NOOP_SETTLE_LIMIT: u32 = 2;
+
+/// The longest either message of an exchange may be and still count toward a no-op
+/// streak.
+///
+/// Characters, deliberately, and never token counts: the measured loops report 1–5
+/// input tokens a turn — and so does a perfectly healthy prompt-cached turn, so
+/// tokens cannot tell the two apart. The measured pair is about fifty characters
+/// each way (`No further action; keep this dispatch released.` /
+/// `Dispatch remains released; no action taken.`); this leaves several times that
+/// in headroom while staying far below anything that could carry a real report or
+/// a real instruction.
+const NOOP_EXCHANGE_CHARS: usize = 240;
+
+/// Tracks how many consecutive **no-op exchanges** the loop has just produced, so a
+/// run that has stopped doing work can be settled instead of re-prompted to its cap.
+///
+/// One *exchange* is the user/supervisor message that opened a turn plus the
+/// assistant turn it produced. It is a no-op only when the whole measured signature
+/// holds at once:
+///
+/// * the turn recorded **no tool events** — no commands, no edits, nothing that
+///   could have changed the worktree;
+/// * **both** messages are tiny ([`NOOP_EXCHANGE_CHARS`]); and
+/// * the reply is effectively the one the previous no-op exchange already gave.
+///
+/// Keying on the *pair* is what makes this safe. Any leg alone is ordinary: healthy
+/// turns are often toolless, healthy replies are sometimes short, and a healthy
+/// agent may well repeat itself once. Only all three together describe a loop that
+/// has nothing left to add — and a real next instruction, being neither tiny nor
+/// answered identically, breaks the streak on the very next turn.
+#[derive(Default)]
+struct NoopStreak {
+    /// The normalized reply the current streak keeps repeating.
+    repeated: Option<String>,
+    /// How many consecutive exchanges have repeated it.
+    count: u32,
+}
+
+impl NoopStreak {
+    /// Fold one finished exchange in, and report whether the loop has now repeated
+    /// [`NOOP_SETTLE_LIMIT`] no-op exchanges.
+    fn observe(&mut self, instruction: &str, reply: &str, events: &[ToolEvent]) -> bool {
+        let quiet = events.is_empty() && is_tiny(instruction) && is_tiny(reply);
+        if !quiet {
+            *self = Self::default();
+            return false;
+        }
+        let normalized = normalize(reply);
+        if self.repeated.as_deref() == Some(normalized.as_str()) {
+            self.count += 1;
+        } else {
+            self.repeated = Some(normalized);
+            self.count = 1;
+        }
+        self.count >= NOOP_SETTLE_LIMIT
+    }
+}
+
+/// Whether `text` is short enough to be one half of a no-op exchange.
+fn is_tiny(text: &str) -> bool {
+    text.chars().count() <= NOOP_EXCHANGE_CHARS
+}
+
+/// Reduce a reply to what it *said*: lowercase alphanumeric words, single-spaced.
+/// "Dispatch remains released; no action taken." and "Dispatch remains released, no
+/// action taken" are the same answer given twice, and a loop must not be able to
+/// hide behind the punctuation.
+fn normalize(text: &str) -> String {
+    text.split(|c: char| !c.is_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .map(str::to_lowercase)
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// The skill / agent under test.
 #[derive(Debug, Clone)]
 pub struct Skill {
@@ -313,9 +397,18 @@ impl<'a> Engine<'a> {
         let mut totals = Usage::default();
         let mut completion_reason = None;
         let mut settled_reason = None;
+        let mut noop = NoopStreak::default();
 
         loop {
             let turn_index = transcript.assistant_turns() + 1;
+            // The message this turn is answering — the original task on the first
+            // pass, the supervisor's last instruction afterwards. Half of the pair a
+            // no-op exchange is measured on, and read before the reply is appended.
+            let instruction = transcript
+                .messages
+                .last()
+                .map(|m| m.content.clone())
+                .unwrap_or_default();
             let mut broke = false;
             let turn = if streaming {
                 self.provider.respond_streaming(
@@ -344,6 +437,7 @@ impl<'a> Engine<'a> {
             if let Some(u) = &usage {
                 totals.add(u);
             }
+            let looping = noop.observe(&instruction, &message, &events);
             transcript.push(Message::assistant(message).with_events(events));
 
             if broke {
@@ -355,6 +449,20 @@ impl<'a> Engine<'a> {
                 break;
             };
             if skill_done || transcript.assistant_turns() >= max_turns {
+                break;
+            }
+            // The work is done and the conversation has stopped moving: the agent
+            // recorded nothing and gave the same answer again, to an instruction
+            // that asked for nothing. Every further turn is a paid re-prompt of a
+            // finished dispatch — one measured run spent 137 of them — so settle on
+            // the work already there. Checked before the supervisor is asked again,
+            // because that call is one of the two this loop keeps paying for.
+            if looping {
+                settled_reason = Some(format!(
+                    "the agent and the supervisor repeated {NOOP_SETTLE_LIMIT} no-op exchanges \
+                     (no tool activity, and the same agent reply each time); settled on the work \
+                     already done"
+                ));
                 break;
             }
             let decision = self.provider.supervise(
@@ -679,7 +787,15 @@ mod tests {
     #[test]
     fn multi_turn_runs_to_max_turns_without_done_when() {
         let provider = Scripted {
-            assistant: vec![assistant("a", false)],
+            // A distinct reply per turn: a conversation that keeps moving is what
+            // the turn cap is meant to bound here, not the no-op loop that
+            // `a_released_dispatch_whose_exchanges_are_no_ops_settles_with_its_work_intact`
+            // settles.
+            assistant: vec![
+                assistant("a", false),
+                assistant("b", false),
+                assistant("c", false),
+            ],
             user: vec![UserTurn {
                 message: "more".into(),
                 stop: false,
@@ -699,7 +815,12 @@ mod tests {
     #[test]
     fn done_when_ends_the_loop_early() {
         let provider = Scripted {
-            assistant: vec![assistant("working", false)],
+            // Distinct per turn, so the `done_when` verdict is what ends this loop
+            // and not the no-op streak two identical toolless replies would be.
+            assistant: vec![
+                assistant("working", false),
+                assistant("still working", false),
+            ],
             user: vec![UserTurn {
                 message: "ok".into(),
                 stop: false,
@@ -795,6 +916,214 @@ mod tests {
         assert!(settled.contains("the tests still fail"), "{settled}");
         // And it reaches the artifact the operator actually reads.
         assert_eq!(outcome.into_report(vec![]).settled_reason, Some(settled));
+    }
+
+    /// A supervisor/agent pair scripted from the measured loop: the agent releases
+    /// the dispatch (recording a real command), and from then on the supervisor and
+    /// the agent trade the two verbatim sentences the runs actually produced.
+    ///
+    /// `instruction` is what the supervisor keeps saying; a caller passes a real
+    /// next instruction to prove the loop is *not* settled on one.
+    struct Released {
+        instruction: String,
+        /// Every instruction this supervisor was asked to produce, in order.
+        asked: RefCell<Vec<String>>,
+    }
+
+    impl Released {
+        fn new(instruction: &str) -> Self {
+            Self {
+                instruction: instruction.into(),
+                asked: RefCell::default(),
+            }
+        }
+    }
+
+    impl Provider for Released {
+        fn respond(
+            &self,
+            _: &SkillRef<'_>,
+            messages: &[Message],
+            _: Option<&str>,
+        ) -> Result<AssistantTurn> {
+            // Turn one does the work and records the command that did it.
+            if messages.len() == 1 {
+                return Ok(AssistantTurn {
+                    message: "Released dispatch #42.".into(),
+                    events: vec![ToolEvent {
+                        kind: "tool_call".into(),
+                        name: Some("bash".into()),
+                        input: Some(serde_json::json!({ "command": "git push" })),
+                        output: None,
+                        index: 0,
+                    }],
+                    ..AssistantTurn::default()
+                });
+            }
+            // A real instruction gets real work; the no-op one gets the measured
+            // no-op answer, verbatim, with nothing recorded.
+            let latest = messages.last().map(|m| m.content.as_str()).unwrap_or("");
+            if latest == NO_OP_INSTRUCTION {
+                return Ok(assistant(
+                    "Dispatch remains released; no action taken.",
+                    false,
+                ));
+            }
+            Ok(AssistantTurn {
+                message: format!("Done: {latest}"),
+                events: vec![ToolEvent {
+                    kind: "tool_call".into(),
+                    name: Some("bash".into()),
+                    input: Some(serde_json::json!({ "command": "cargo test" })),
+                    output: None,
+                    index: 0,
+                }],
+                ..AssistantTurn::default()
+            })
+        }
+        fn simulate_user(&self, _: &str, _: &[Message], _: Option<&str>) -> Result<UserTurn> {
+            unreachable!("the supervisor answers for the simulated user")
+        }
+        fn supervise(
+            &self,
+            _: &SupervisorQuery<'_>,
+            _: &[Message],
+            _: Option<&str>,
+        ) -> Result<SupervisorTurn> {
+            self.asked.borrow_mut().push(self.instruction.clone());
+            Ok(SupervisorTurn {
+                outcome: SupervisorOutcome::Continue {
+                    message: self.instruction.clone(),
+                    reason: String::new(),
+                },
+                usage: None,
+            })
+        }
+        fn judge(&self, _: &JudgeQuery<'_>, _: &[Message]) -> Result<JudgeVerdict> {
+            unreachable!()
+        }
+        fn assess(&self, _: &str, _: &[Message]) -> Result<Assessment> {
+            unreachable!()
+        }
+    }
+
+    /// The verbatim no-op instruction one measured run repeated to its cap.
+    const NO_OP_INSTRUCTION: &str = "No further action; keep this dispatch released.";
+
+    #[test]
+    fn a_released_dispatch_whose_exchanges_are_no_ops_settles_with_its_work_intact() {
+        // The run this exists for: the dispatch was released on turn one, and every
+        // exchange after it is the same nothing — no commands, no diff, the same
+        // sentence back. One measured run spent 137 turns here.
+        let provider = Released::new(NO_OP_INSTRUCTION);
+        let outcome = Engine::new(&provider, settings())
+            .run(&Conversation::multi_turn(
+                skill(),
+                "release the dispatch",
+                SimulatedUser::new("a release supervisor").max_turns(40),
+            ))
+            .expect("a no-op loop settles the run, it does not fail it");
+
+        assert_eq!(
+            outcome.transcript.assistant_turns(),
+            1 + NOOP_SETTLE_LIMIT as usize,
+            "the work turn, then exactly the two no-ops it takes to decide"
+        );
+        assert_eq!(
+            provider.asked.borrow().len(),
+            NOOP_SETTLE_LIMIT as usize,
+            "the settling turn does not pay for another supervisor call"
+        );
+        // The completed work — and the command that did it — is still there.
+        assert_eq!(
+            outcome.transcript.messages[1].content,
+            "Released dispatch #42."
+        );
+        assert_eq!(outcome.transcript.messages[1].events.len(), 1);
+        assert!(
+            outcome.completion_reason.is_none(),
+            "settling is not completing"
+        );
+        let settled = outcome.settled_reason.clone().expect("a settle reason");
+        assert!(settled.contains("no-op exchanges"), "{settled}");
+        assert!(settled.contains("same agent reply"), "{settled}");
+        // And it reaches the artifact the operator actually reads.
+        assert_eq!(outcome.into_report(vec![]).settled_reason, Some(settled));
+    }
+
+    #[test]
+    fn a_released_dispatch_whose_supervisor_gives_a_real_instruction_keeps_going() {
+        // Same released dispatch, same toolless-and-short shape available — but the
+        // supervisor names a concrete next action, so there is no loop to settle and
+        // the run keeps working until the cap.
+        let provider = Released::new(
+            "Now back-fill the changelog entry for the released dispatch and push the tag, then \
+             report the resulting version.",
+        );
+        let outcome = Engine::new(&provider, settings())
+            .run(&Conversation::multi_turn(
+                skill(),
+                "release the dispatch",
+                SimulatedUser::new("a release supervisor").max_turns(5),
+            ))
+            .unwrap();
+        assert_eq!(outcome.transcript.assistant_turns(), 5);
+        assert!(
+            outcome.settled_reason.is_none(),
+            "a real instruction is not a no-op exchange: {:?}",
+            outcome.settled_reason
+        );
+    }
+
+    #[test]
+    fn the_turn_budget_still_bounds_a_no_op_loop() {
+        // No exchange shape is exempt from `max_turns` accounting: a cap reached
+        // before the streak decides still ends the run, and still ends it as a run
+        // that hit its cap rather than one that settled.
+        let provider = Released::new(NO_OP_INSTRUCTION);
+        let outcome = Engine::new(&provider, settings())
+            .run(&Conversation::multi_turn(
+                skill(),
+                "release the dispatch",
+                SimulatedUser::new("a release supervisor").max_turns(2),
+            ))
+            .unwrap();
+        assert_eq!(outcome.transcript.assistant_turns(), 2);
+        assert!(outcome.settled_reason.is_none(), "the cap ended this run");
+    }
+
+    #[test]
+    fn a_no_op_streak_needs_the_whole_signature_and_survives_only_rephrasing() {
+        let mut streak = NoopStreak::default();
+        let command = [ToolEvent {
+            kind: "tool_call".into(),
+            name: Some("bash".into()),
+            input: None,
+            output: None,
+            index: 0,
+        }];
+        let long = "x".repeat(NOOP_EXCHANGE_CHARS + 1);
+
+        // A turn that ran a command is never a no-op, however tiny and repetitive.
+        for _ in 0..5 {
+            assert!(!streak.observe("go on", "same answer", &command));
+        }
+        // Neither is one whose instruction — or whose reply — is substantial.
+        for _ in 0..5 {
+            assert!(!streak.observe(&long, "same answer", &[]));
+        }
+        for _ in 0..5 {
+            assert!(!streak.observe("go on", &long, &[]));
+        }
+        // Nor a toolless, tiny exchange whose reply keeps changing.
+        assert!(!streak.observe("go on", "first", &[]));
+        assert!(!streak.observe("go on", "second", &[]));
+        // The whole signature, twice over: punctuation and case are not new answers.
+        assert!(!streak.observe("go on", "Dispatch remains released.", &[]));
+        assert!(streak.observe("go on", "dispatch remains released", &[]));
+        // And a turn that does work again clears the streak.
+        assert!(!streak.observe("go on", "dispatch remains released", &command));
+        assert!(!streak.observe("go on", "dispatch remains released", &[]));
     }
 
     #[test]
