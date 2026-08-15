@@ -127,6 +127,19 @@ pub struct ProviderConfig {
     /// itself. See `docs/control.md`.
     #[serde(default)]
     pub control: Option<bool>,
+    /// `oneharness`: harness ids to run against **oneharness's own deterministic
+    /// `MOCK_*` responder** instead of a paid model (`oneharness run --mock-harness
+    /// <id>`, repeatable). Empty — the default — bills the real model.
+    ///
+    /// This is how an acceptance proof that needs a real multi-turn chain runs for
+    /// free: only the model is scripted, everything else is the real oneharness. It
+    /// applies to the agent side *and* the judge side, so each id must be one the
+    /// config for that side selects (use `kind: split` when the two sides need
+    /// different ids), and it makes the run **spawn** `oneharness` — the responder is
+    /// oneharness's own binary re-executed, which an in-process run cannot be. See
+    /// `docs/cli.md`.
+    #[serde(default)]
+    pub mock_harness: Option<Vec<String>>,
     /// `command`: the provider argv (program + args).
     #[serde(default)]
     pub command: Option<Vec<String>>,
@@ -369,6 +382,7 @@ impl ProviderConfig {
             judge_config,
             stream,
             control,
+            mock_harness,
             command,
             skill,
             judge,
@@ -399,6 +413,7 @@ impl ProviderConfig {
                     judge_config: judge_config.map(PathBuf::from),
                     stream: stream.unwrap_or(false),
                     control: control.unwrap_or(false),
+                    mock_harness: mock_harness.unwrap_or_default(),
                 })
             }
             ProviderKind::Command => {
@@ -406,6 +421,7 @@ impl ProviderConfig {
                 reject(judge_config.is_some(), "judge_config")?;
                 reject(stream.is_some(), "stream")?;
                 reject(control.is_some(), "control")?;
+                reject(mock_harness.is_some(), "mock_harness")?;
                 reject(skill.is_some(), "skill")?;
                 reject(judge.is_some(), "judge")?;
                 let command = command.filter(|c| !c.is_empty()).ok_or_else(|| {
@@ -421,6 +437,10 @@ impl ProviderConfig {
                 // nothing about which turn it addresses. Set it on the `skill:`
                 // child, which is the side that runs the controllable turn.
                 reject(control.is_some(), "control")?;
+                // Same reasoning for the deterministic harness: each side selects
+                // its own harnesses under its own config, so the ids belong on the
+                // child that runs them.
+                reject(mock_harness.is_some(), "mock_harness")?;
                 reject(command.is_some(), "command")?;
                 let skill = skill.ok_or_else(|| {
                     CliError::Config("provider kind `split` needs a `skill` provider".into())
@@ -497,6 +517,10 @@ pub enum ProviderSpec {
         stream: bool,
         /// Ask for a controllable agent turn (`oneharness run --control`).
         control: bool,
+        /// Harness ids run against oneharness's deterministic responder
+        /// (`oneharness run --mock-harness <id>`) instead of a paid model. Empty
+        /// for an ordinary run.
+        mock_harness: Vec<String>,
     },
     /// A custom command speaking the JSON-lines protocol.
     Command {
@@ -864,6 +888,62 @@ mod tests {
             plain.provider,
             ProviderSpec::Oneharness { control: false, .. }
         ));
+    }
+
+    #[test]
+    fn mock_harness_resolves_onto_the_oneharness_spec_and_defaults_to_none() {
+        let mocked = Config::from_yaml(
+            "task: x\nprovider:\n  kind: oneharness\n  mock_harness: [claude-code, codex]\n",
+        )
+        .unwrap()
+        .into_plan()
+        .unwrap();
+        match mocked.provider {
+            ProviderSpec::Oneharness { mock_harness, .. } => {
+                assert_eq!(mock_harness, ["claude-code", "codex"]);
+            }
+            other => panic!("expected oneharness, got {other:?}"),
+        }
+
+        // Omitted: no flag, and a run that bills the model exactly as before.
+        let plain = Config::from_yaml("task: x\n").unwrap().into_plan().unwrap();
+        assert!(matches!(
+            plain.provider,
+            ProviderSpec::Oneharness { ref mock_harness, .. } if mock_harness.is_empty()
+        ));
+    }
+
+    #[test]
+    fn mock_harness_is_rejected_under_a_kind_that_cannot_honor_it() {
+        // A `command` backend is not oneharness, and a `split`'s two sides select
+        // their harnesses under two different configs — so the ids belong on the
+        // child that runs them.
+        for yaml in [
+            "task: x\nprovider:\n  kind: command\n  command: [p]\n  mock_harness: [claude-code]\n",
+            "task: x\nprovider:\n  kind: split\n  mock_harness: [claude-code]\n  skill:\n    kind: oneharness\n  judge:\n    kind: oneharness\n",
+        ] {
+            let err = Config::from_yaml(yaml).unwrap().into_plan().unwrap_err();
+            assert!(
+                matches!(err, CliError::Config(m) if m.contains("mock_harness")),
+                "{yaml}"
+            );
+        }
+
+        // On a split's own child it is valid, and reaches that child.
+        let plan = Config::from_yaml(
+            "task: x\nprovider:\n  kind: split\n  skill:\n    kind: oneharness\n    \
+             mock_harness: [claude-code]\n  judge:\n    kind: command\n    command: [j]\n",
+        )
+        .unwrap()
+        .into_plan()
+        .unwrap();
+        match plan.provider {
+            ProviderSpec::Split { skill, .. } => assert!(matches!(
+                *skill,
+                ProviderSpec::Oneharness { ref mock_harness, .. } if *mock_harness == ["claude-code"]
+            )),
+            other => panic!("expected split, got {other:?}"),
+        }
     }
 
     #[test]

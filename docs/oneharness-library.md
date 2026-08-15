@@ -57,6 +57,7 @@ field fails the build), and both columns against the rows below.
 | `--system` | `system: Option<String>` |
 | `--cwd` | `cwd: Option<PathBuf>` |
 | `--config` | `config: Option<PathBuf>` |
+| `--mock-harness` | `mock_harness: Vec<String>` — repeatable; runs the named harness against oneharness's own deterministic `MOCK_*` responder instead of a paid model. Rendered on both seams so the mapping stays total, but reachable only on the spawning one (see below) |
 | `--session` | `session: Option<String>` |
 | `--stream` | `stream: Option<bool>` |
 | `--control` | `control: bool` |
@@ -117,6 +118,20 @@ same discipline the other doubles follow, one layer deeper.
 responder from `oneharness-core` behind the existing `mock-harness` feature),
 and/or let `RunRequest::mock_harness` name an explicit responder path instead of
 `current_exe()`. It would save every embedder writing a per-harness fake.
+
+### Forwarding `--mock-harness` to a *spawned* oneharness
+
+`current_exe()` is only the wrong binary in process. When onejudge **spawns**
+`oneharness`, it is oneharness's own binary again, and the responder works exactly
+as it does on the command line — which is what a consumer reaching oneharness
+*through* onejudge needs to make an acceptance proof free instead of billing a
+model or skipping it. So `OneharnessProvider::with_mock_harness(id)` (config
+`provider.mock_harness`, `docs/cli.md`) forwards `--mock-harness <id>` on both
+sides of the conversation, and — like `with_spawn_hook` — **selects the spawning
+seam**, because in process it could only ever re-exec the embedder. The `MOCK_*`
+variables that script the responder are inherited from the caller's environment;
+onejudge passes them through by not touching it. If the above proposal lands, this
+becomes a plain field on both renderings and the seam selection goes away.
 
 A third gap is load-bearing for the *other* double rather than for the hop:
 **`io::control::bind` is public but its result cannot be made to serve.** 0.8.0

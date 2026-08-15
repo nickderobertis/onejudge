@@ -32,6 +32,10 @@ pub(crate) struct TurnSpec {
     /// The oneharness config file this side's harness/model selection lives in.
     /// Judge side only — the agent side uses oneharness's discovered default.
     pub(crate) config: Option<PathBuf>,
+    /// Harness ids whose provider process oneharness replaces with its own
+    /// deterministic `MOCK_*`-scripted responder. Empty for an ordinary turn; see
+    /// [`OneharnessProvider::with_mock_harness`](crate::OneharnessProvider::with_mock_harness).
+    pub(crate) mock_harness: Vec<String>,
     /// The caller-owned session name threaded across turns.
     pub(crate) session: Option<String>,
     /// The human-meaningful name for the history session.
@@ -54,6 +58,7 @@ pub(crate) struct TurnSpec {
 pub(crate) fn request(spec: &TurnSpec) -> RunRequest {
     RunRequest {
         events: spec.events,
+        mock_harness: spec.mock_harness.clone(),
         // Always on, exactly as `--history` is: the per-candidate record is where
         // `history_id` comes from, and it is the one signal the report has no
         // counterpart for.
@@ -92,6 +97,12 @@ pub(crate) fn argv(spec: &TurnSpec) -> Vec<String> {
     if let Some(config) = &spec.config {
         args.push("--config".into());
         args.push(config.display().to_string());
+    }
+    // Repeatable: one flag per harness id whose provider process is replaced with
+    // oneharness's deterministic responder.
+    for id in &spec.mock_harness {
+        args.push("--mock-harness".into());
+        args.push(id.clone());
     }
     if let Some(cwd) = &spec.cwd {
         args.push("--cwd".into());
@@ -146,6 +157,10 @@ mod tests {
             "--history-name",
             Some(("history_name", |r| r.history_name.is_some())),
         ),
+        (
+            "--mock-harness",
+            Some(("mock_harness", |r| !r.mock_harness.is_empty())),
+        ),
         ("--system", Some(("system", |r| r.system.is_some()))),
         ("--cwd", Some(("cwd", |r| r.cwd.is_some()))),
         ("--config", Some(("config", |r| r.config.is_some()))),
@@ -166,6 +181,7 @@ mod tests {
             system: Some("do x".into()),
             cwd: Some("/work".into()),
             config: Some(PathBuf::from("oneharness.judge.toml")),
+            mock_harness: vec!["claude-code".into()],
             session: Some("sess".into()),
             history_name: Some("hist".into()),
             events: true,

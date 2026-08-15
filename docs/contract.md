@@ -104,10 +104,17 @@ assert_eq!(report.schema_version, onejudge::SCHEMA_VERSION);
 
 At most one of the two is present, and they say different things. A
 `completion_reason` is the supervisor deciding the task is done. A
-`settled_reason` is the supervisor judging the work **incomplete** and then giving
-no next instruction to act on — even when asked again — so the run ended on the
-work it already had. Neither is a failure, and a run that simply hit `max_turns`
-carries neither.
+`settled_reason` is the loop ending on the work it already had, **without** a
+completion decision, and it has two causes — the text says which:
+
+* the supervisor judged the work incomplete and then named no next instruction to
+  act on, even when asked again; or
+* the exchanges themselves stopped moving — `NOOP_SETTLE_LIMIT` consecutive turns
+  that recorded no tool activity and gave the same tiny answer to the same tiny
+  instruction. Every turn is still counted against `max_turns`; settling only ends
+  the run *earlier* than the cap would.
+
+Neither is a failure, and a run that simply hit `max_turns` carries neither.
 
 The distinction is the point: without it, a supervisor with nothing to say is
 indistinguishable from an agent that could not do the task, and an operator acts

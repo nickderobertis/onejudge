@@ -11,6 +11,7 @@
     "judge_config": "judge_config",
     "kind": "kind",
     "max_turns": "max_turns",
+    "mock_harness": "mock_harness",
     "persona": "persona",
     "provider": "provider",
     "scale": "scale",

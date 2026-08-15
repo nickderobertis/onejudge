@@ -10,6 +10,9 @@
 
 [[package]]
 name = "onejudge"
-# Review + Conventional Commits are the semver gate here, not an automated API
-# diff; flip this on once the public API stabilizes if you want the extra check.
-semver_check = false
+# Check the public API against the published version with cargo-semver-checks, so
+# an accidental break bumps the version even when the commit type does not say so
+# — review and a Conventional-Commits `!` are what this used to rely on, and
+# neither sees a field quietly added to a public enum variant. The release-pr job
+# installs the tool; without it on PATH release-plz cannot honor this.
+semver_check = true

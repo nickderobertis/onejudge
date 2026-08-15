@@ -105,7 +105,11 @@ next instruction. A continue with an absent or blank `message` is not a protocol
 error — onejudge repeats the identical request up to `SUPERVISOR_REASK_LIMIT`
 times, and if the answer is still unusable the run *settles* on the work it has
 (`settled_reason` in the report, see [contract.md](contract.md)) rather than
-failing. What it never does is hand the agent an empty user turn. A malformed
+failing. A `message` that is *present* but keeps asking for nothing settles the run
+too: `NOOP_SETTLE_LIMIT` consecutive exchanges that record no tool activity and
+return the same tiny answer to the same tiny instruction end the loop on the work
+it has, rather than re-prompting a finished task to the turn cap. What onejudge
+never does is hand the agent an empty user turn. A malformed
 response — not one JSON object, a missing `completion`, or a `completed` one
 without a `reason` or carrying a `message` — is still a hard protocol error.
 

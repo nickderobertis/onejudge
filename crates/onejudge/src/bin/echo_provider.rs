@@ -10,6 +10,9 @@
 //! * `user` replies with a canned continuation; `[[stop]]` in the persona ends it.
 //! * `supervisor` completes when `done_when` occurs in the normalized transcript,
 //!   otherwise returns one canned next-user message in the same response.
+//!   `[[supervisor-noop]]` in the persona instead returns the same valid-looking
+//!   instruction that asks for nothing, every time it is asked — the loop the
+//!   engine settles after `NOOP_SETTLE_LIMIT` exchanges.
 //! * `judge` returns `true` (or the numeric high) iff the criterion text appears
 //!   in the transcript it is given — **including the rendered tool events** — so an
 //!   events-backed criterion is genuinely decided by what the skill did.
@@ -141,6 +144,17 @@ fn supervisor(request: &Value) -> Value {
     }
     if persona.contains("[[malformed-supervisor]]") {
         return json!({"completion": false});
+    }
+    // The supervisor that is never done and never asks for anything: a valid,
+    // substantive-looking `continue` whose instruction is the verbatim sentence one
+    // measured run re-prompted a released dispatch with 137 times.
+    if persona.contains("[[supervisor-noop]]") {
+        return json!({
+            "completion": false,
+            "message": "No further action; keep this dispatch released.",
+            "reason": "the dispatch is released; nothing further is required",
+            "usage": {"input_tokens": 1, "output_tokens": 1},
+        });
     }
     let criterion = request
         .get("done_when")

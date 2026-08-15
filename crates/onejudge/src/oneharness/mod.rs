@@ -301,6 +301,9 @@ enum Execution {
 pub struct OneharnessProvider {
     execution: Execution,
     judge_config: Option<PathBuf>,
+    /// Harness ids run against oneharness's deterministic responder instead of a
+    /// paid model. Empty for an ordinary run.
+    mock_harness: Vec<String>,
     stream: bool,
     control: bool,
     /// What the agent side could say about turn control on the last run: the
@@ -339,6 +342,7 @@ impl OneharnessProvider {
         Self {
             execution: Execution::Library,
             judge_config: Some(PathBuf::from(DEFAULT_JUDGE_CONFIG)),
+            mock_harness: Vec::new(),
             stream: false,
             control: false,
             control_outcome: RefCell::new(ControlOutcome::NotRequested),
@@ -385,6 +389,49 @@ impl OneharnessProvider {
     pub fn with_bin(mut self, bin: impl Into<String>) -> Self {
         self.execution = Execution::Process(bin.into());
         self
+    }
+
+    /// Run this harness id against **oneharness's own deterministic responder**
+    /// instead of a paid model, by passing `oneharness run --mock-harness <id>`.
+    /// Repeatable; every id must be one the config for that side selects.
+    ///
+    /// This is what makes an acceptance proof that needs a real multi-turn,
+    /// multi-identity chain free: oneharness swaps the selected harness's provider
+    /// process for its own `MOCK_*`-scripted responder, so the whole chain — config
+    /// discovery, fallback routing, session threading, events, the report — is the
+    /// real code, and only the model is scripted. The `MOCK_*` variables that script
+    /// it are read from the environment the run inherits, so a caller exports them
+    /// exactly as it would for a bare `oneharness run`; onejudge passes them through
+    /// by not touching the environment.
+    ///
+    /// **This selects the spawning seam**, for the same reason
+    /// [`with_spawn_hook`](Self::with_spawn_hook) does: oneharness delivers the
+    /// responder by re-executing *its own binary* as the harness, and in process
+    /// that binary is the embedder, which knows nothing about the contract. Naming
+    /// a mock harness therefore runs `oneharness` from `PATH` unless
+    /// [`with_bin`](Self::with_bin) named one.
+    ///
+    /// It applies to **both sides** of the conversation — the agent turn and the
+    /// judge / simulated-user turn — since either one otherwise bills a model. The
+    /// two sides run under different oneharness configs, so an id one config selects
+    /// and the other does not is oneharness's own loud `--mock-harness` error rather
+    /// than a silent paid turn; compose a [`SplitProvider`](crate::SplitProvider) of
+    /// two providers when each side needs a different id.
+    #[must_use]
+    pub fn with_mock_harness(mut self, id: impl Into<String>) -> Self {
+        if matches!(self.execution, Execution::Library) {
+            self.execution = Execution::Process("oneharness".into());
+        }
+        self.mock_harness.push(id.into());
+        self
+    }
+
+    /// Fold this provider's mock-harness selection into a freshly-described turn.
+    /// One place, so neither side of the conversation can be left billing a model
+    /// while the other is mocked.
+    fn mocked(&self, mut spec: TurnSpec) -> TurnSpec {
+        spec.mock_harness.clone_from(&self.mock_harness);
+        spec
     }
 
     /// Override the oneharness config file the judge and simulated user run under
@@ -494,7 +541,7 @@ impl OneharnessProvider {
             // A continued session only needs the latest user turn.
             let prompt = latest_or_inline(messages, true);
             if self.wants_control() {
-                let spec = respond_spec(
+                let spec = self.mocked(respond_spec(
                     instructions,
                     worktree,
                     Some(name),
@@ -502,7 +549,7 @@ impl OneharnessProvider {
                     self.stream,
                     true,
                     &prompt,
-                );
+                ));
                 match self.respond_once(&spec, on_event) {
                     Ok(turn) => {
                         self.control_address(worktree);
@@ -524,7 +571,7 @@ impl OneharnessProvider {
                 }
             }
             if let Some(name) = session {
-                let spec = respond_spec(
+                let spec = self.mocked(respond_spec(
                     instructions,
                     worktree,
                     Some(name),
@@ -532,7 +579,7 @@ impl OneharnessProvider {
                     self.stream,
                     false,
                     &prompt,
-                );
+                ));
                 match self.respond_once(&spec, on_event) {
                     Ok(turn) => return Ok(turn),
                     Err(e) if is_session_unsupported(&e) => {
@@ -547,7 +594,7 @@ impl OneharnessProvider {
         }
         // Fresh or fallback call: inline the whole conversation, no `--session`.
         let prompt = latest_or_inline(messages, false);
-        let spec = respond_spec(
+        let spec = self.mocked(respond_spec(
             instructions,
             worktree,
             None,
@@ -555,7 +602,7 @@ impl OneharnessProvider {
             self.stream,
             false,
             &prompt,
-        );
+        ));
         self.respond_once(&spec, on_event)
     }
 
@@ -644,7 +691,12 @@ impl OneharnessProvider {
         cwd: Option<&str>,
     ) -> Result<Invocation> {
         if let Some(name) = session {
-            let spec = judge_side_spec(self.judge_config.as_deref(), Some(name), cwd, prompt);
+            let spec = self.mocked(judge_side_spec(
+                self.judge_config.as_deref(),
+                Some(name),
+                cwd,
+                prompt,
+            ));
             match self.run(op, &spec) {
                 Ok(result) => return Ok(result),
                 Err(e) if is_session_unsupported(&e) => {
@@ -656,7 +708,12 @@ impl OneharnessProvider {
                 Err(e) => return Err(e),
             }
         }
-        let spec = judge_side_spec(self.judge_config.as_deref(), None, cwd, prompt);
+        let spec = self.mocked(judge_side_spec(
+            self.judge_config.as_deref(),
+            None,
+            cwd,
+            prompt,
+        ));
         self.run(op, &spec)
     }
 
@@ -994,6 +1051,9 @@ fn respond_spec(
         system: Some(instructions.to_string()),
         cwd: Some(worktree.to_string()),
         config: None,
+        // Folded in by `OneharnessProvider::mocked`, which is the one place that
+        // knows whether this run is mocked at all.
+        mock_harness: Vec::new(),
         // Always thread the caller-owned session name; the caller retries without
         // it if oneharness reports the harness cannot bind a session.
         session: session.map(str::to_string),
@@ -1021,6 +1081,8 @@ fn judge_side_spec(
         system: None,
         cwd: cwd.map(str::to_string),
         config: judge_config.map(Path::to_path_buf),
+        // As on the agent side: `OneharnessProvider::mocked` folds it in.
+        mock_harness: Vec::new(),
         session: session.map(str::to_string),
         history_name: None,
         events: false,
@@ -1199,6 +1261,51 @@ mod tests {
             .with_bin("/opt/oneharness")
             .with_spawn_hook(std::sync::Arc::new(Inert));
         assert!(matches!(&pinned.execution, Execution::Process(bin) if bin == "/opt/oneharness"));
+    }
+
+    #[test]
+    fn a_mock_harness_rides_both_sides_of_the_turn_and_selects_the_spawning_seam() {
+        let provider = OneharnessProvider::new().with_mock_harness("claude-code");
+        // oneharness delivers the responder by re-executing its own binary, which an
+        // in-process run does not have — so naming one selects the spawning seam
+        // rather than silently running against a paid model.
+        assert!(matches!(&provider.execution, Execution::Process(bin) if bin == "oneharness"));
+        // An explicitly named binary is kept.
+        let pinned = OneharnessProvider::new()
+            .with_bin("/opt/oneharness")
+            .with_mock_harness("codex");
+        assert!(matches!(&pinned.execution, Execution::Process(bin) if bin == "/opt/oneharness"));
+
+        // Both parties are mocked: either one alone still bills a model.
+        let agent = argv_of(&provider.mocked(respond_spec(
+            "do x",
+            "/work",
+            Some("s"),
+            Some("s"),
+            false,
+            false,
+            "p",
+        )));
+        assert!(agent
+            .windows(2)
+            .any(|w| w == ["--mock-harness", "claude-code"]));
+        let judge = argv_of(&provider.mocked(judge_side_spec(
+            provider.judge_config.as_deref(),
+            Some("s"),
+            None,
+            "p",
+        )));
+        assert!(judge
+            .windows(2)
+            .any(|w| w == ["--mock-harness", "claude-code"]));
+
+        // And an ordinary provider asks for no responder at all.
+        let plain = OneharnessProvider::new();
+        assert!(
+            !argv_of(&plain.mocked(judge_side_spec(None, None, None, "p")))
+                .iter()
+                .any(|arg| arg == "--mock-harness")
+        );
     }
 
     /// A hook that records nothing and refuses nothing — this is about which seam

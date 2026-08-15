@@ -99,8 +99,12 @@ Use the `just` recipes; do not hand-roll equivalents. `just --list` is the index
   it becomes the squash body.
 - **Releases: fully automated, no manual deploy step.** `release-plz` opens a
   release PR from the merged Conventional-Commits history; merging it writes the
-  version + `CHANGELOG.md`, tags `vX.Y.Z`, and publishes to crates.io. The only
-  human action is merging that PR. The release job authenticates with a PAT
+  version + `CHANGELOG.md`, tags `vX.Y.Z`, and publishes to crates.io. Nobody has
+  to merge it: the workflow arms **auto-merge** on the release PR, so it merges
+  itself once the required checks are green (one green release PR sat 20 hours
+  otherwise, with every consumer waiting). `semver_check = true` picks the bump
+  from the real API diff, so cargo-semver-checks must stay on the release-pr job's
+  PATH. The release job authenticates with a PAT
   (`RELEASE_PLZ_TOKEN`), not the default `GITHUB_TOKEN`, so the tag fires publish
   **and** the `release-binaries` workflow, which builds the `onejudge` CLI for
   each platform (linux/macos-x64+arm64/windows) and attaches the archives to the
@@ -212,6 +216,13 @@ each rung reaches a case the one before cannot; two e2e tests gate that pair, on
 per rung. The crate's floor is **0.8.0** (the pinned `oneharness-core`, which since
 0.7 releases in lockstep with the CLI). See `docs/oneharness-library.md` before
 touching either.
+
+The **free deterministic harness** is reachable through this layer:
+`provider.mock_harness` / `OneharnessProvider::with_mock_harness` forwards
+`oneharness run --mock-harness <id>` on both sides, so an acceptance proof that
+needs a real multi-identity chain costs nothing. It selects the *spawning* seam,
+because oneharness delivers that responder by re-executing its own binary and in
+process that binary is the embedder (`docs/oneharness-library.md`).
 
 **Turn control is an address, not a lever onejudge pulls.** `provider.control:
 true` (default off) adds `--control` to the **agent-side** `oneharness run`, and
