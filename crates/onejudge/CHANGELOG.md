@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0](https://github.com/nickderobertis/onejudge/compare/v0.3.10...v0.4.0) - 2026-08-15
+
+### Fixed
+
+- settle no-op release loops, forward mock harness, arm releases ([#52](https://github.com/nickderobertis/onejudge/pull/52))
+
 ## [0.3.10](https://github.com/nickderobertis/onejudge/compare/v0.3.9...v0.3.10) - 2026-08-15
 
 ### Fixed
