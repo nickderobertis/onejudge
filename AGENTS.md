@@ -99,8 +99,12 @@ Use the `just` recipes; do not hand-roll equivalents. `just --list` is the index
   it becomes the squash body.
 - **Releases: fully automated, no manual deploy step.** `release-plz` opens a
   release PR from the merged Conventional-Commits history; merging it writes the
-  version + `CHANGELOG.md`, tags `vX.Y.Z`, and publishes to crates.io. The only
-  human action is merging that PR. The release job authenticates with a PAT
+  version + `CHANGELOG.md`, tags `vX.Y.Z`, and publishes to crates.io. Nobody has
+  to merge it: the workflow arms **auto-merge** on the release PR, so it merges
+  itself once the required checks are green (one green release PR sat 20 hours
+  otherwise, with every consumer waiting). `semver_check = true` picks the bump
+  from the real API diff, so cargo-semver-checks must stay on the release-pr job's
+  PATH. The release job authenticates with a PAT
   (`RELEASE_PLZ_TOKEN`), not the default `GITHUB_TOKEN`, so the tag fires publish
   **and** the `release-binaries` workflow, which builds the `onejudge` CLI for
   each platform (linux/macos-x64+arm64/windows) and attaches the archives to the

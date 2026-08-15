@@ -1,8 +1,10 @@
 # Fully automated releases (no manual deploy step): release-plz reads the merged
 # Conventional-Commits history, opens a release PR that bumps the version and
 # writes CHANGELOG.md, and — when that PR merges — tags `vX.Y.Z` and publishes to
-# crates.io. The only human action is merging the release PR. See references/
-# releasing.md and the "Commits, releases, and merging" section of AGENTS.md.
+# crates.io. Nobody has to merge that PR either: the release-pr job arms
+# auto-merge on it, so it merges itself once the required checks are green. See
+# references/releasing.md and the "Commits, releases, and merging" section of
+# AGENTS.md.
 
 name: release-plz
 
@@ -34,7 +36,10 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
-  # On merge to main: open/update the release PR (version bump + changelog).
+  # On merge to main: open/update the release PR (version bump + changelog), then
+  # arm auto-merge on it. Without that last step a green release PR sits until a
+  # human notices — one here sat 20 hours while every consumer waited — and merging
+  # it is the only manual action a release has.
   release-pr:
     runs-on: ubuntu-latest
     permissions:
@@ -47,9 +52,34 @@ jobs:
           token: ${{ secrets.RELEASE_PLZ_TOKEN }}
       - name: Install pinned toolchain (from rust-toolchain.toml)
         run: rustup show
+      # `semver_check = true` in release-plz.toml runs cargo-semver-checks to pick
+      # the bump, so the tool has to be on PATH for the version-bumping command.
+      # Installed by checksum-verifying action rather than `cargo install`, so the
+      # release path does not wait on a source build.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-semver-checks
       - uses: release-plz/action@v0.5
         with:
           command: release-pr
         env:
           GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+      # Auto-merge, not a merge: the PR still waits for every required check, and
+      # branch protection still decides. A PR that is already armed (or already
+      # merging) warns rather than failing the workflow — the arming is idempotent,
+      # and a failure here would look like a broken release.
+      - name: Auto-merge the release PR when the gate is green
+        env:
+          GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
+        run: |
+          pr=$(gh pr list --repo "$GITHUB_REPOSITORY" --state open --json number,headRefName \
+                 --jq 'map(select(.headRefName | startswith("release-plz-"))) | .[0].number // empty')
+          if [ -n "$pr" ]; then
+            echo "Enabling auto-merge on release PR #$pr"
+            gh pr merge "$pr" --repo "$GITHUB_REPOSITORY" --auto --squash --delete-branch \
+              || echo "::warning::could not enable auto-merge on #$pr (already enabled, or already merging)"
+          else
+            echo "No open release PR to auto-merge."
+          fi
