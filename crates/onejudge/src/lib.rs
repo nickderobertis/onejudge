@@ -85,7 +85,8 @@ mod usage;
 pub use command::CommandProvider;
 pub use control::{ControlAddress, ControlOutcome};
 pub use engine::{
-    Conversation, Engine, Outcome, Settings, SimulatedUser, Skill, StreamEvent, NOOP_SETTLE_LIMIT,
+    Conversation, Engine, Observation, Outcome, Settings, SimulatedUser, Skill, StreamEvent,
+    TurnClosed, TurnMessage, TurnOpened, NOOP_SETTLE_LIMIT,
 };
 pub use error::{Error, ProviderErrorKind, Result};
 pub use oneharness::OneharnessProvider;

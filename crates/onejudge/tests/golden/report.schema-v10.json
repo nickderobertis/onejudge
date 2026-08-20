@@ -656,6 +656,13 @@
             "string",
             "null"
           ]
+        },
+        "tool_call_id": {
+          "description": "The harness's own stable identity for this call, joining a `tool_call` to\nits `tool_result`. `None` means the harness exposed no identity \u2014 never an\nempty string, which would read as an id that happens to be blank.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [

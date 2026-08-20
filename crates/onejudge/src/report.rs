@@ -31,7 +31,7 @@ use crate::usage::Usage;
 /// run opened — and its companion `control_unavailable`; `9` added
 /// `settled_reason` — why a run ended without a completion decision because its
 /// supervisor gave no next instruction.
-pub const SCHEMA_VERSION: u32 = 9;
+pub const SCHEMA_VERSION: u32 = 10;
 
 /// The skip predicate for a field that is always serialized but must not be
 /// *required* of a document being read. Used by [`Report::control`]; see the
@@ -200,6 +200,7 @@ mod tests {
                 input: Some(json!({"command": "git commit -m fix"})),
                 output: None,
                 index: 0,
+                tool_call_id: None,
             }]),
         );
         Report::new(
@@ -245,7 +246,7 @@ mod tests {
         assert!(!json.contains("verdicts"));
         assert!(!json.contains("usage"));
         assert!(!json.contains("assessment"));
-        assert!(json.contains("\"schema_version\":9"));
+        assert!(json.contains("\"schema_version\":10"));
         // The run neither completed nor settled, so it claims neither.
         assert!(!json.contains("completion_reason"));
         assert!(!json.contains("settled_reason"));

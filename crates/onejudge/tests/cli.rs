@@ -14,10 +14,15 @@
 //! `fake-provider`. The Linux `check` gate enables both, so these always run.
 #![cfg(all(feature = "cli", feature = "fake-provider"))]
 
+use std::ops::ControlFlow;
 use std::path::Path;
 use std::process::Command;
 
-use onejudge::cli::{exit_code, render_human, run_plan, Config, EvalOutcome, Format};
+use onejudge::cli::{
+    exit_code, render_human, run_plan, run_plan_observing_reporting_failure, Config, EvalOutcome,
+    Format,
+};
+use onejudge::Observation;
 
 mod support;
 
@@ -1689,4 +1694,86 @@ fn an_oneharness_config_that_names_no_bin_runs_the_turn_in_process() {
     // Nothing was spawned by onejudge, which is the whole point of the default.
     assert!(summary.report.processes.is_empty());
     assert_eq!(exit_code(&summary), 0);
+}
+
+#[test]
+fn an_observing_plan_run_reports_the_conversation_and_still_returns_its_report() {
+    // The entry point an embedder that drives a `Plan` — rather than building
+    // providers itself — watches a dispatch through. The whole run driver still
+    // runs: the loop, the `done_when` re-judge, the evals, the report.
+    let body = "\
+task: please commit
+system_prompt: 'Commit it. [[event:git commit -m fix]]'
+user:
+  persona: A tester.
+  done_when: git commit
+  max_turns: 5
+";
+    let plan = Config::from_yaml(&config_yaml(body))
+        .unwrap()
+        .into_plan()
+        .unwrap();
+
+    let mut seen: Vec<String> = Vec::new();
+    let summary = run_plan_observing_reporting_failure(plan, &mut |observation| {
+        seen.push(match observation {
+            Observation::TurnOpened(o) => format!("opened/{:?}/{}", o.role, o.instruction),
+            Observation::Tool(e) => format!("tool/{}", e.event.summary()),
+            Observation::Message(m) => format!("said/{:?}/{}", m.role, m.text),
+            Observation::TurnClosed(c) => format!("closed/{:?}/{}", c.role, c.usage.is_some()),
+        });
+        ControlFlow::Continue(())
+    })
+    .unwrap();
+
+    assert!(summary.completed);
+    assert_eq!(summary.report.transcript.assistant_turns(), 1);
+    assert_eq!(
+        seen,
+        vec![
+            "opened/Assistant/please commit".to_string(),
+            r#"tool/bash({"command":"git commit -m fix"})"#.to_string(),
+            "said/Assistant/echo: please commit".to_string(),
+            "closed/Assistant/true".to_string(),
+            // The supervisor completed the run, so it appended nothing to the
+            // transcript: its turn is bounds and cost with no message between.
+            "opened/User/echo: please commit".to_string(),
+            "closed/User/true".to_string(),
+        ],
+        "the whole conversation reached the observer, not just its tool calls"
+    );
+    // The judge calls that follow the loop are not part of the conversation, so
+    // they are not observed as turns of it.
+    assert_eq!(summary.report.verdicts.len(), 1);
+}
+
+#[test]
+fn an_observing_plan_run_that_fails_reports_the_failure_after_the_turn_it_opened() {
+    // A provider that cannot even spawn: the observer still learns the turn opened
+    // and what it was asked to do, and the failure comes back attributable rather
+    // than as a silent empty run.
+    let missing = serde_json::to_string("onejudge-no-such-binary-zzz").unwrap();
+    let yaml = format!(
+        "provider:\n  kind: command\n  command: [{missing}]\n\
+         task: please commit\nsystem_prompt: Commit it.\n"
+    );
+    let plan = Config::from_yaml(&yaml).unwrap().into_plan().unwrap();
+
+    let mut seen = Vec::new();
+    let Err(failure) = run_plan_observing_reporting_failure(plan, &mut |observation| {
+        seen.push(matches!(observation, Observation::TurnOpened(_)));
+        ControlFlow::Continue(())
+    }) else {
+        panic!("the provider cannot be spawned")
+    };
+
+    assert_eq!(seen, vec![true], "the turn was observed opening");
+    assert!(
+        failure
+            .error
+            .to_string()
+            .contains("onejudge-no-such-binary"),
+        "{}",
+        failure.error
+    );
 }

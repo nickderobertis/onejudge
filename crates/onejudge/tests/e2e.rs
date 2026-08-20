@@ -14,8 +14,9 @@
 use std::ops::ControlFlow;
 
 use onejudge::{
-    CommandProvider, Conversation, Engine, JudgeKind, JudgeValue, NamedVerdict, OneharnessProvider,
-    ProviderErrorKind, Settings, SimulatedUser, Skill, SplitProvider, ToolQuery, SCHEMA_VERSION,
+    CommandProvider, Conversation, Engine, JudgeKind, JudgeValue, NamedVerdict, Observation,
+    OneharnessProvider, ProviderErrorKind, Role, Settings, SimulatedUser, Skill, SplitProvider,
+    ToolQuery, Usage, SCHEMA_VERSION,
 };
 
 mod support;
@@ -2006,4 +2007,351 @@ fn installing_a_spawn_hook_moves_a_default_provider_onto_the_seam_that_has_a_pro
         "the hook was offered the `oneharness` process it exists to place: {text}"
     );
     assert_eq!(err.kind(), Some(ProviderErrorKind::Spawn));
+}
+
+// --- Observing journeys ----------------------------------------------------
+
+/// One observation copied out of the borrowed sink, so a journey can assert on
+/// the whole sequence once the run has finished.
+#[derive(Debug, Clone, PartialEq)]
+enum Seen {
+    Opened {
+        turn: usize,
+        role: Role,
+        instruction: String,
+        started_at: String,
+    },
+    Tool {
+        turn: usize,
+        name: Option<String>,
+        tool_call_id: Option<String>,
+    },
+    Said {
+        turn: usize,
+        role: Role,
+        text: String,
+    },
+    Closed {
+        turn: usize,
+        role: Role,
+        usage: Option<Usage>,
+        started_at: String,
+        finished_at: String,
+    },
+}
+
+/// Copy one borrowed [`Observation`] into an owned record.
+fn observed(observation: &Observation<'_>) -> Seen {
+    match observation {
+        Observation::TurnOpened(opened) => Seen::Opened {
+            turn: opened.turn,
+            role: opened.role,
+            instruction: opened.instruction.to_string(),
+            started_at: opened.started_at.clone(),
+        },
+        Observation::Tool(event) => Seen::Tool {
+            turn: event.turn,
+            name: event.event.name.clone(),
+            tool_call_id: event.event.tool_call_id.clone(),
+        },
+        Observation::Message(message) => Seen::Said {
+            turn: message.turn,
+            role: message.role,
+            text: message.text.to_string(),
+        },
+        Observation::TurnClosed(closed) => Seen::Closed {
+            turn: closed.turn,
+            role: closed.role,
+            usage: closed.usage.cloned(),
+            started_at: closed.started_at.clone(),
+            finished_at: closed.finished_at.clone(),
+        },
+    }
+}
+
+/// Every tool observation in `seen`, in order — the sub-sequence the streaming
+/// sink is promised.
+fn tools(seen: &[Seen]) -> Vec<Seen> {
+    seen.iter()
+        .filter(|s| matches!(s, Seen::Tool { .. }))
+        .cloned()
+        .collect()
+}
+
+/// Assert `text` is the spelling every observation timestamp promises: RFC 3339
+/// with millisecond precision, in UTC.
+///
+/// Validity is decided by oneharness's own `UtcInstant`, which refuses anything
+/// that is not an RFC 3339 *UTC* instant, so the two layers cannot disagree about
+/// what the field means; the fraction is then checked here, because that parser
+/// accepts (and truncates) any sub-second precision.
+fn assert_utc_millis(text: &str) {
+    text.parse::<oneharness_core::domain::usage::UtcInstant>()
+        .unwrap_or_else(|e| panic!("`{text}` is not an RFC 3339 UTC instant: {e}"));
+    let (seconds, fraction) = text
+        .split_once('.')
+        .unwrap_or_else(|| panic!("`{text}` carries no sub-second fraction"));
+    assert_eq!(seconds.len(), 19, "`{text}` is not `YYYY-MM-DDThh:mm:ss`");
+    assert!(
+        fraction.len() == 4
+            && fraction.ends_with('Z')
+            && fraction[..3].chars().all(|c| c.is_ascii_digit()),
+        "`{text}` is not millisecond precision in UTC"
+    );
+}
+
+#[test]
+fn an_observing_turn_reports_its_instruction_reply_identity_and_bounds() {
+    // The seam a default provider uses: the real `oneharness-core` engine over the
+    // deterministic harness double. The call identity an observation carries is
+    // therefore the one the *harness* published in its own stream-json and
+    // oneharness normalized — never a value this test handed the engine.
+    let dir = harness_project("observing-turn");
+    let provider = OneharnessProvider::new().with_streaming(true);
+    let engine = Engine::new(&provider, settings());
+    let skill = Skill::new(
+        "demo",
+        dir.to_str().unwrap(),
+        "[[reply:committed the fix]][[event:git commit -m fix]]",
+    );
+    let mut seen = Vec::new();
+    let outcome = engine
+        .run_observing(
+            &Conversation::single_turn(skill, "commit the fix"),
+            &mut |observation| {
+                seen.push(observed(observation));
+                ControlFlow::Continue(())
+            },
+        )
+        .unwrap();
+    assert!(!outcome.stopped_early);
+
+    assert_eq!(seen.len(), 4, "{seen:#?}");
+    let Seen::Opened {
+        turn,
+        role,
+        instruction,
+        started_at,
+    } = &seen[0]
+    else {
+        panic!("the turn opens first: {seen:#?}")
+    };
+    assert_eq!((*turn, *role), (1, Role::Assistant));
+    // The conversation's opening input is never a message observation — it is in
+    // the transcript before the loop runs — so this is where an observer reads it.
+    assert_eq!(instruction, "commit the fix");
+    assert_utc_millis(started_at);
+
+    assert_eq!(
+        seen[1],
+        Seen::Tool {
+            turn: 1,
+            // Capitalised: oneharness reports the harness's own tool name verbatim.
+            name: Some("Bash".into()),
+            // Published by the harness as the `tool_use` block's `id`.
+            tool_call_id: Some("t0".into()),
+        },
+        "the call identity the harness exposed reached the observer: {seen:#?}"
+    );
+
+    assert_eq!(
+        seen[2],
+        Seen::Said {
+            turn: 1,
+            role: Role::Assistant,
+            text: "committed the fix".into(),
+        }
+    );
+
+    let Seen::Closed {
+        turn,
+        role,
+        usage,
+        started_at: opened_at,
+        finished_at,
+    } = &seen[3]
+    else {
+        panic!("the turn closes last: {seen:#?}")
+    };
+    assert_eq!((*turn, *role), (1, Role::Assistant));
+    // This harness reports no accounting at all, so the turn is observed as having
+    // reported none — never as a zero-filled `Usage`, which would claim the turn
+    // was free.
+    assert_eq!(*usage, None);
+    assert_eq!(opened_at, started_at, "the turn's own opening instant");
+    assert_utc_millis(finished_at);
+    assert!(finished_at >= opened_at, "{opened_at} .. {finished_at}");
+}
+
+#[test]
+fn an_observing_multi_turn_run_reports_both_parties_without_disturbing_the_streaming_seam() {
+    // The echo double publishes no call identity, which is the other half of the
+    // contract: absence is reported as absence, not as an empty string.
+    let provider = echo();
+    let engine = Engine::new(&provider, settings());
+    let conversation = || {
+        Conversation::multi_turn(
+            skill_with("Commit it. [[event:git commit -m fix]]"),
+            "start",
+            SimulatedUser::new("A patient tester.").max_turns(2),
+        )
+    };
+
+    let mut seen = Vec::new();
+    engine
+        .run_observing(&conversation(), &mut |observation| {
+            seen.push(observed(observation));
+            ControlFlow::Continue(())
+        })
+        .unwrap();
+
+    // Two assistant turns with a supervisor turn between them, each opened, spoken
+    // and closed in order.
+    let shape: Vec<(&str, usize, Option<Role>)> = seen
+        .iter()
+        .map(|s| match s {
+            Seen::Opened { turn, role, .. } => ("opened", *turn, Some(*role)),
+            Seen::Tool { turn, .. } => ("tool", *turn, None),
+            Seen::Said { turn, role, .. } => ("said", *turn, Some(*role)),
+            Seen::Closed { turn, role, .. } => ("closed", *turn, Some(*role)),
+        })
+        .collect();
+    assert_eq!(
+        shape,
+        vec![
+            ("opened", 1, Some(Role::Assistant)),
+            ("tool", 1, None),
+            ("said", 1, Some(Role::Assistant)),
+            ("closed", 1, Some(Role::Assistant)),
+            ("opened", 1, Some(Role::User)),
+            ("said", 1, Some(Role::User)),
+            ("closed", 1, Some(Role::User)),
+            ("opened", 2, Some(Role::Assistant)),
+            ("tool", 2, None),
+            ("said", 2, Some(Role::Assistant)),
+            ("closed", 2, Some(Role::Assistant)),
+        ],
+        "{seen:#?}"
+    );
+
+    // The supervisor answers the agent's reply, and its own words become the next
+    // assistant turn's instruction — the chain an operator reads the dispatch by.
+    let Seen::Said { text: reply, .. } = &seen[2] else {
+        unreachable!()
+    };
+    let Seen::Opened {
+        instruction: answering,
+        ..
+    } = &seen[4]
+    else {
+        unreachable!()
+    };
+    assert_eq!(answering, reply);
+    let Seen::Said {
+        text: instruction, ..
+    } = &seen[5]
+    else {
+        unreachable!()
+    };
+    let Seen::Opened {
+        instruction: next, ..
+    } = &seen[7]
+    else {
+        unreachable!()
+    };
+    assert_eq!(next, instruction);
+
+    // This provider does report accounting, so the turn's own cost is observed.
+    let Seen::Closed { usage, .. } = &seen[3] else {
+        unreachable!()
+    };
+    assert!(
+        usage.as_ref().and_then(|u| u.output_tokens).is_some(),
+        "the turn's own usage: {usage:?}"
+    );
+
+    // This harness exposed no identity, and that is what the observation says.
+    assert_eq!(
+        tools(&seen),
+        vec![
+            Seen::Tool {
+                turn: 1,
+                name: Some("bash".into()),
+                tool_call_id: None
+            },
+            Seen::Tool {
+                turn: 2,
+                name: Some("bash".into()),
+                tool_call_id: None
+            },
+        ]
+    );
+
+    // The narrower seam is untouched: the same conversation through
+    // `run_streaming` delivers exactly those tool events, in that order.
+    let mut streamed = Vec::new();
+    engine
+        .run_streaming(&conversation(), &mut |event| {
+            streamed.push(Seen::Tool {
+                turn: event.turn,
+                name: event.event.name.clone(),
+                tool_call_id: event.event.tool_call_id.clone(),
+            });
+            ControlFlow::Continue(())
+        })
+        .unwrap();
+    assert_eq!(streamed, tools(&seen));
+}
+
+#[test]
+fn breaking_an_observation_stops_the_run_and_delivers_nothing_after_it() {
+    let provider = echo();
+    let engine = Engine::new(&provider, settings());
+    let conversation = || {
+        Conversation::multi_turn(
+            skill_with("Commit it. [[event:git commit -m fix]]"),
+            "start",
+            SimulatedUser::new("A patient tester.").max_turns(5),
+        )
+    };
+
+    // Breaking on the very first observation stops the run before the provider is
+    // ever asked, so the transcript holds nothing but the task.
+    let mut seen = Vec::new();
+    let outcome = engine
+        .run_observing(&conversation(), &mut |observation| {
+            seen.push(observed(observation));
+            ControlFlow::Break(())
+        })
+        .unwrap();
+    assert!(outcome.stopped_early);
+    assert_eq!(seen.len(), 1);
+    assert!(matches!(seen[0], Seen::Opened { .. }));
+    assert_eq!(outcome.transcript.assistant_turns(), 0);
+
+    // Breaking mid-conversation stops it there, and nothing is delivered after the
+    // observation that asked to stop.
+    let mut seen = Vec::new();
+    let outcome = engine
+        .run_observing(&conversation(), &mut |observation| {
+            let record = observed(observation);
+            let stop = matches!(
+                record,
+                Seen::Said {
+                    role: Role::Assistant,
+                    ..
+                }
+            );
+            seen.push(record);
+            if stop {
+                ControlFlow::Break(())
+            } else {
+                ControlFlow::Continue(())
+            }
+        })
+        .unwrap();
+    assert!(outcome.stopped_early);
+    assert_eq!(seen.len(), 3, "{seen:#?}");
+    assert!(matches!(seen[2], Seen::Said { .. }));
+    assert_eq!(outcome.transcript.assistant_turns(), 1);
 }

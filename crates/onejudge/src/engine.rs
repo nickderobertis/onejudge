@@ -16,7 +16,7 @@ use crate::provider::{
 use crate::report::{NamedVerdict, Report};
 use crate::spawn::SpawnedProcess;
 use crate::telemetry::{aggregate, Telemetry};
-use crate::transcript::{Message, ToolEvent, Transcript};
+use crate::transcript::{Message, Role, ToolEvent, Transcript};
 use crate::usage::Usage;
 
 /// How many consecutive **no-op exchanges** settle the loop on the work it has.
@@ -350,7 +350,7 @@ impl<'a> Engine<'a> {
     /// # Errors
     /// Propagates the first provider failure.
     pub fn run(&self, conversation: &Conversation) -> Result<Outcome> {
-        let mut discard = |_: &StreamEvent| ControlFlow::Continue(());
+        let mut discard = |_: &Observation<'_>| ControlFlow::Continue(());
         self.converse(conversation, false, &mut discard)
     }
 
@@ -359,6 +359,11 @@ impl<'a> Engine<'a> {
     /// the instant it is observed. Returning [`ControlFlow::Break`] short-circuits:
     /// the current turn is torn down and [`Outcome::stopped_early`] is `true`.
     ///
+    /// This is the tool half of [`Engine::run_observing`]'s seam: the events it
+    /// delivers, and their order, are exactly the [`Observation::Tool`]s the wider
+    /// sink sees, so an embedder written against this signature is untouched by the
+    /// wider one existing.
+    ///
     /// # Errors
     /// As [`Engine::run`].
     pub fn run_streaming(
@@ -366,14 +371,41 @@ impl<'a> Engine<'a> {
         conversation: &Conversation,
         on_event: &mut dyn FnMut(&StreamEvent) -> ControlFlow<()>,
     ) -> Result<Outcome> {
-        self.converse(conversation, true, on_event)
+        let mut tools_only = |observation: &Observation<'_>| match observation {
+            Observation::Tool(event) => on_event(event),
+            _ => ControlFlow::Continue(()),
+        };
+        self.converse(conversation, true, &mut tools_only)
+    }
+
+    /// Like [`Engine::run_streaming`], but delivers the *whole* of each turn as it
+    /// happens: the turn's opening and the instruction it answers, its tool events,
+    /// each party's own reply text, and the turn's usage and bounds. See
+    /// [`Observation`].
+    ///
+    /// This is what an operator supervising work they cannot watch directly reads a
+    /// live dispatch by — the streaming sink alone shows them tool calls with no
+    /// prose around them, and a member that never settles never yields the rest.
+    ///
+    /// Returning [`ControlFlow::Break`] from any observation short-circuits the run
+    /// exactly as it does on the streaming sink, and no further observation is
+    /// delivered.
+    ///
+    /// # Errors
+    /// As [`Engine::run`].
+    pub fn run_observing(
+        &self,
+        conversation: &Conversation,
+        on_observation: &mut dyn FnMut(&Observation<'_>) -> ControlFlow<()>,
+    ) -> Result<Outcome> {
+        self.converse(conversation, true, on_observation)
     }
 
     fn converse(
         &self,
         conversation: &Conversation,
         streaming: bool,
-        on_event: &mut dyn FnMut(&StreamEvent) -> ControlFlow<()>,
+        on_observation: &mut dyn FnMut(&Observation<'_>) -> ControlFlow<()>,
     ) -> Result<Outcome> {
         self.provider.reset_telemetry();
         *self.started.borrow_mut() = Some(Instant::now());
@@ -409,6 +441,17 @@ impl<'a> Engine<'a> {
                 .last()
                 .map(|m| m.content.clone())
                 .unwrap_or_default();
+            let started_at = observed_at();
+            if on_observation(&Observation::TurnOpened(TurnOpened {
+                turn: turn_index,
+                role: Role::Assistant,
+                instruction: &instruction,
+                started_at: started_at.clone(),
+            }))
+            .is_break()
+            {
+                return Ok(self.finish(transcript, totals, true, None, None));
+            }
             let mut broke = false;
             let turn = if streaming {
                 self.provider.respond_streaming(
@@ -416,10 +459,10 @@ impl<'a> Engine<'a> {
                     &transcript.messages,
                     Some(skill_session.as_str()),
                     &mut |event| {
-                        let flow = on_event(&StreamEvent {
+                        let flow = on_observation(&Observation::Tool(StreamEvent {
                             turn: turn_index,
                             event,
-                        });
+                        }));
                         broke |= flow.is_break();
                         flow
                     },
@@ -438,6 +481,27 @@ impl<'a> Engine<'a> {
                 totals.add(u);
             }
             let looping = noop.observe(&instruction, &message, &events);
+            let finished_at = observed_at();
+            // Nothing follows the observation that asked to stop — a sink that broke
+            // mid-turn is not handed the reply it declined to wait for.
+            if !broke {
+                broke = on_observation(&Observation::Message(TurnMessage {
+                    turn: turn_index,
+                    role: Role::Assistant,
+                    text: &message,
+                }))
+                .is_break();
+            }
+            if !broke {
+                broke = on_observation(&Observation::TurnClosed(TurnClosed {
+                    turn: turn_index,
+                    role: Role::Assistant,
+                    usage: usage.as_ref(),
+                    started_at,
+                    finished_at,
+                }))
+                .is_break();
+            }
             transcript.push(Message::assistant(message).with_events(events));
 
             if broke {
@@ -465,6 +529,22 @@ impl<'a> Engine<'a> {
                 ));
                 break;
             }
+            let started_at = observed_at();
+            // The supervisor answers the reply the agent just gave, so that reply is
+            // this turn's instruction — the same relation the agent's own turn has
+            // to the instruction it was handed.
+            let opened = on_observation(&Observation::TurnOpened(TurnOpened {
+                turn: turn_index,
+                role: Role::User,
+                instruction: transcript
+                    .messages
+                    .last()
+                    .map_or("", |m| m.content.as_str()),
+                started_at: started_at.clone(),
+            }));
+            if opened.is_break() {
+                return Ok(self.finish(transcript, totals, true, None, None));
+            }
             let decision = self.provider.supervise(
                 &SupervisorQuery {
                     task: &conversation.input,
@@ -479,6 +559,36 @@ impl<'a> Engine<'a> {
             let usage = decision.usage;
             if let Some(u) = &usage {
                 totals.add(u);
+            }
+            let finished_at = observed_at();
+            // The supervisor's own words are the next instruction, when it gave one.
+            // A completion or a settled decision appends nothing to the transcript,
+            // so the turn is observed as bounds and cost with no message between.
+            let mut broke = match &decision.outcome {
+                SupervisorOutcome::Continue { message, .. } => {
+                    on_observation(&Observation::Message(TurnMessage {
+                        turn: turn_index,
+                        role: Role::User,
+                        text: message,
+                    }))
+                    .is_break()
+                }
+                SupervisorOutcome::Completed { .. } | SupervisorOutcome::NoInstruction { .. } => {
+                    false
+                }
+            };
+            if !broke {
+                broke = on_observation(&Observation::TurnClosed(TurnClosed {
+                    turn: turn_index,
+                    role: Role::User,
+                    usage: usage.as_ref(),
+                    started_at,
+                    finished_at,
+                }))
+                .is_break();
+            }
+            if broke {
+                return Ok(self.finish(transcript, totals, true, None, None));
             }
             match decision.outcome {
                 SupervisorOutcome::Completed { reason } => {
@@ -620,6 +730,108 @@ pub struct StreamEvent<'a> {
     pub turn: usize,
     /// The normalized tool event.
     pub event: &'a ToolEvent,
+}
+
+/// One live observation of the conversation as the engine produces it, delivered
+/// to an [`Engine::run_observing`] sink.
+///
+/// The wider seam beside [`StreamEvent`], not a replacement for it: a tool event
+/// still reaches a sink as [`Observation::Tool`] carrying exactly the same
+/// payload, and [`Engine::run_streaming`] still delivers only those. What the
+/// wider sink adds is the prose an operator watching a dispatch they cannot see
+/// otherwise reads it by — the instruction each turn is answering, each party's
+/// own reply, and the turn's own cost and bounds.
+///
+/// The engine bounds nothing it hands over. `instruction` and `text` are borrows
+/// of the whole message; where a payload has to be bounded, that bound belongs to
+/// whatever journal or transport the embedder writes it to, which is the only
+/// layer that knows what its own limit is.
+///
+/// Returning [`ControlFlow::Break`] means here exactly what it means on the
+/// streaming sink: the run stops, [`Outcome::stopped_early`] is `true`, and no
+/// further observation is delivered.
+#[derive(serde::Serialize)]
+#[cfg_attr(feature = "sdk-schema", derive(schemars::JsonSchema))]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum Observation<'a> {
+    /// A turn began, naming the message it is answering.
+    TurnOpened(TurnOpened<'a>),
+    /// A tool event, exactly as [`Engine::run_streaming`] delivers it.
+    Tool(StreamEvent<'a>),
+    /// A party's own words for a turn, as they are appended to the transcript.
+    Message(TurnMessage<'a>),
+    /// A turn ended, with what it cost and when it ran.
+    TurnClosed(TurnClosed<'a>),
+}
+
+/// A turn beginning, and the message it was given to answer.
+///
+/// The conversation's opening input is never a [`TurnMessage`] — it is already in
+/// the transcript before the loop runs — so it reaches an observer here, as the
+/// `instruction` of the first assistant turn.
+#[derive(serde::Serialize)]
+#[cfg_attr(feature = "sdk-schema", derive(schemars::JsonSchema))]
+pub struct TurnOpened<'a> {
+    /// 1-based assistant-turn index within this run, as [`StreamEvent::turn`]. A
+    /// user turn carries the index of the assistant turn it is reacting to.
+    pub turn: usize,
+    /// Which party is about to speak.
+    pub role: Role,
+    /// The message this turn answers, whole and unbounded — the original task on
+    /// the first assistant turn, the supervisor's last instruction afterwards, and
+    /// the agent's last reply for a user turn.
+    pub instruction: &'a str,
+    /// When the turn began, RFC 3339 with millisecond precision in UTC.
+    pub started_at: String,
+}
+
+/// A party's own words for one turn, observed as they are appended to the
+/// transcript.
+///
+/// A supervisor turn that completes or settles the run appends nothing, so it is
+/// observed as an opening and a closing with no message between them.
+#[derive(serde::Serialize)]
+#[cfg_attr(feature = "sdk-schema", derive(schemars::JsonSchema))]
+pub struct TurnMessage<'a> {
+    /// 1-based assistant-turn index within this run, as [`TurnOpened::turn`].
+    pub turn: usize,
+    /// Who is speaking.
+    pub role: Role,
+    /// That party's own words for this turn, whole and unbounded.
+    pub text: &'a str,
+}
+
+/// A turn ending, with what it cost and the interval it ran over.
+#[derive(serde::Serialize)]
+#[cfg_attr(feature = "sdk-schema", derive(schemars::JsonSchema))]
+pub struct TurnClosed<'a> {
+    /// 1-based assistant-turn index within this run, as [`TurnOpened::turn`].
+    pub turn: usize,
+    /// Who spoke.
+    pub role: Role,
+    /// This one turn's usage. Absent means the provider reported none, which is a
+    /// different fact from a turn that cost nothing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub usage: Option<&'a Usage>,
+    /// When the turn began, RFC 3339 with millisecond precision in UTC — the same
+    /// value the matching [`TurnOpened`] carried.
+    pub started_at: String,
+    /// When the turn ended, RFC 3339 with millisecond precision in UTC.
+    pub finished_at: String,
+}
+
+/// The clock read every observation is stamped with: RFC 3339, millisecond
+/// precision, UTC, `Z`-suffixed.
+///
+/// Rendered by oneharness's own formatter, so an instant onejudge mints and one it
+/// reads off a run report are the same spelling rather than two dialects a
+/// consumer has to reconcile. A pre-epoch clock falls back to the epoch rather
+/// than panicking: an observation is a side channel and never takes a run down.
+fn observed_at() -> String {
+    let millis = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| since.as_millis());
+    oneharness_core::domain::history::format_rfc3339_millis(millis)
 }
 
 #[cfg(test)]
@@ -956,6 +1168,7 @@ mod tests {
                         input: Some(serde_json::json!({ "command": "git push" })),
                         output: None,
                         index: 0,
+                        tool_call_id: None,
                     }],
                     ..AssistantTurn::default()
                 });
@@ -977,6 +1190,7 @@ mod tests {
                     input: Some(serde_json::json!({ "command": "cargo test" })),
                     output: None,
                     index: 0,
+                    tool_call_id: None,
                 }],
                 ..AssistantTurn::default()
             })
@@ -1101,6 +1315,7 @@ mod tests {
             input: None,
             output: None,
             index: 0,
+            tool_call_id: None,
         }];
         let long = "x".repeat(NOOP_EXCHANGE_CHARS + 1);
 
@@ -1255,6 +1470,7 @@ mod tests {
                     input: None,
                     output: None,
                     index: 0,
+                    tool_call_id: None,
                 }],
             }],
             user: vec![],
