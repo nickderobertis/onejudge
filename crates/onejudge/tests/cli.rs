@@ -23,7 +23,7 @@ use onejudge::cli::{
     run_plan_streaming_reporting_failure, Config, EvalOutcome, Format, Plan, RunFailure,
     RunSummary,
 };
-use onejudge::{Conversation, Engine, Observation, Outcome, StreamEvent};
+use onejudge::{Conversation, Engine, Observation, Outcome, StreamEvent, Telemetry};
 
 /// The public shape of the observing and streaming entry points, pinned at compile
 /// time from a consumer's vantage point: each coercion below names the exact
@@ -31,10 +31,11 @@ use onejudge::{Conversation, Engine, Observation, Outcome, StreamEvent};
 /// a compile error in this file rather than a silent break in a consumer's build.
 ///
 /// The observing failure comes back **by value** — `RunFailure`, not
-/// `Box<RunFailure>` — which holds only because the type itself is small (its one
-/// large element is boxed inside it, see `RunFailure::telemetry`). The two
-/// streaming pins are the other half: they are what proves that widening the seam
-/// left the narrower one exactly where it was.
+/// `Box<RunFailure>` — while `RunFailure::telemetry` keeps the unboxed
+/// `Option<Telemetry>` it has always been published as, which the last pin below
+/// holds to. Widening the seam is not licence to reshape a type consumers already
+/// read. The two streaming pins are the other half: they are what proves the
+/// narrower entry point stayed exactly where it was.
 ///
 /// Spelled as aliases because the bare `fn` types trip `clippy::type_complexity`;
 /// an alias is transparent, so the coercion still checks the real signature.
@@ -63,6 +64,7 @@ const _: ObservingPlanFn = run_plan_observing_reporting_failure;
 const _: ObservingEngineFn = Engine::run_observing;
 const _: StreamingPlanFn = run_plan_streaming_reporting_failure;
 const _: StreamingEngineFn = Engine::run_streaming;
+const _: fn(&RunFailure) -> &Option<Telemetry> = |failure| &failure.telemetry;
 
 mod support;
 

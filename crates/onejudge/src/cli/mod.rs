@@ -501,8 +501,11 @@ pub struct EvalResult {
 /// A run that did not produce a report, with whatever the provider had already
 /// recorded when it failed.
 ///
-/// Returned boxed (`Result<_, Box<RunFailure>>`) because the telemetry it carries
+/// [`run_plan_reporting_failure`] and [`run_plan_streaming_reporting_failure`]
+/// return it boxed (`Result<_, Box<RunFailure>>`) because the telemetry it carries
 /// is far larger than a summary, and every success would otherwise pay for it.
+/// [`run_plan_observing_reporting_failure`] returns it by value; the field below
+/// keeps its published unboxed shape either way.
 ///
 /// A failure is exactly the case a caller most needs attribution for — *which*
 /// harness identity refused, on *which* side of the conversation — and a failed
@@ -515,13 +518,7 @@ pub struct RunFailure {
     pub error: CliError,
     /// Timing, usage, and per-invocation harness attribution recorded before the
     /// failure; `None` when nothing ran at all (a config or provider-build error).
-    ///
-    /// Boxed because this is an *error* type: unboxed it is 448 bytes, nearly all
-    /// of it this field, and every `Result` carrying it pays that on the success
-    /// path too. Boxing the one large element keeps the whole failure at 88 bytes,
-    /// so [`run_plan_observing_reporting_failure`] can hand it back by value. Read
-    /// it with `as_deref()`; do not inline it back.
-    pub telemetry: Option<Box<crate::Telemetry>>,
+    pub telemetry: Option<crate::Telemetry>,
     /// The processes the failed run had already spawned, and the embedder-owned
     /// group each was placed in — what a caller cleaning up after the failure needs
     /// to name. Empty when nothing was spawned.
@@ -629,8 +626,20 @@ pub fn run_plan_streaming_reporting_failure(
 /// building providers itself, and needs to show an operator a dispatch they cannot
 /// otherwise watch. Returning [`ControlFlow::Break`] short-circuits the run.
 ///
+/// The failure comes back **unboxed**, unlike
+/// [`run_plan_streaming_reporting_failure`]: see [`RunFailure`] for why the older
+/// entry point boxes it, and the suppression below for why this one does not.
+///
 /// # Errors
 /// As [`run_plan_streaming_reporting_failure`], unboxed.
+#[allow(
+    clippy::result_large_err,
+    reason = "one of these is produced at most once per run — at the end of a dispatch measured in \
+              minutes — so the bytes it costs to move are not a cost anything can notice. The two \
+              ways to satisfy the lint both change a *published* public shape to buy that: boxing \
+              `RunFailure::telemetry` breaks every existing reader of that field, and boxing the \
+              return type deviates from the signature this entry point is contracted to have."
+)]
 pub fn run_plan_observing_reporting_failure(
     plan: Plan,
     on_observation: &mut dyn FnMut(&Observation<'_>) -> ControlFlow<()>,
@@ -787,7 +796,7 @@ fn execute(
     drive().map_err(|error| {
         Box::new(RunFailure {
             error,
-            telemetry: engine.telemetry().map(Box::new),
+            telemetry: engine.telemetry(),
             processes: engine.spawned_processes(),
         })
     })
@@ -962,7 +971,7 @@ impl FailureReport {
                     CliError::Config(_) | CliError::Io(_) => None,
                 },
             },
-            telemetry: failure.telemetry.as_deref().cloned(),
+            telemetry: failure.telemetry.clone(),
             processes: failure.processes.clone(),
         }
     }
