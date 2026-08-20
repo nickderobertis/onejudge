@@ -22,6 +22,10 @@ fn canonical_report() -> Report {
             input: Some(serde_json::json!({"command": "git commit -m fix"})),
             output: None,
             index: 0,
+            // The v10 addition: the harness's own call identity, on the wire so a
+            // consumer can join a call to its result. Optional and omitted when the
+            // harness exposed none — pinned by `transcript::tests`.
+            tool_call_id: Some("toolu_01A".into()),
         }]),
     );
     let mut report = Report::new(
@@ -164,19 +168,19 @@ fn canonical_report() -> Report {
     report
 }
 
-const EXAMPLE_GOLDEN: &str = include_str!("golden/report.example-v9.json");
+const EXAMPLE_GOLDEN: &str = include_str!("golden/report.example-v10.json");
 #[cfg(feature = "sdk-schema")]
-const SCHEMA_GOLDEN: &str = include_str!("golden/report.schema-v9.json");
+const SCHEMA_GOLDEN: &str = include_str!("golden/report.schema-v10.json");
 
 #[test]
-fn report_matches_the_golden_example_v9() {
-    assert_eq!(SCHEMA_VERSION, 9, "golden is for schema v9");
+fn report_matches_the_golden_example_v10() {
+    assert_eq!(SCHEMA_VERSION, 10, "golden is for schema v10");
     let actual = serde_json::to_string_pretty(&canonical_report()).unwrap();
     assert_eq!(
         actual.trim(),
         EXAMPLE_GOLDEN.trim(),
         "the Report wire form changed. If this is intentional, bump SCHEMA_VERSION \
-         and update the v9 contract goldens. Actual serialization:\n{actual}"
+         and update the v10 contract goldens. Actual serialization:\n{actual}"
     );
 }
 
@@ -186,9 +190,43 @@ fn golden_deserializes_back_to_the_canonical_report() {
     assert_eq!(back, canonical_report());
 }
 
+/// Every `"schema_version": N` the contract doc spells out, in order.
+fn documented_schema_versions() -> Vec<u32> {
+    include_str!("../../../docs/contract.md")
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix("\"schema_version\":"))
+        .filter_map(|rest| {
+            rest.trim_start()
+                .trim_end_matches(',')
+                .split_whitespace()
+                .next()?
+                .trim_end_matches(',')
+                .parse()
+                .ok()
+        })
+        .collect()
+}
+
+#[test]
+fn the_contract_doc_states_the_version_this_build_stamps() {
+    // `docs/contract.md` hand-copies the version into every example it shows, and
+    // an ungated copy drifts: the `FailureReport` example sat at 7 for three bumps
+    // because nothing reconciled it with what `FailureReport::new` actually stamps.
+    let documented = documented_schema_versions();
+    assert!(!documented.is_empty(), "the doc shows no versioned example");
+    for version in &documented {
+        assert_eq!(
+            *version, SCHEMA_VERSION,
+            "docs/contract.md shows schema_version {version}, but this build \
+             stamps {SCHEMA_VERSION}; every example in that doc is the same \
+             contract and must say so"
+        );
+    }
+}
+
 #[cfg(feature = "sdk-schema")]
 #[test]
-fn generated_report_schema_matches_the_schema_v9_golden() {
+fn generated_report_schema_matches_the_schema_v10_golden() {
     let actual = serde_json::to_value(onejudge::sdk_schema::bundle().report).unwrap();
     let golden: serde_json::Value = serde_json::from_str(SCHEMA_GOLDEN).unwrap();
     assert_eq!(

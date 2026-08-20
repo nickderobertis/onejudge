@@ -9,7 +9,7 @@ and re-export, so onejudge — not its consumers — owns the shape of a judged 
 
 ```jsonc
 {
-  "schema_version": 9,                 // bump on any wire change
+  "schema_version": 10,                 // bump on any wire change
   "transcript": {
     "messages": [
       { "role": "user", "content": "commit the fix" },
@@ -18,7 +18,8 @@ and re-export, so onejudge — not its consumers — owns the shape of a judged 
         "content": "Committed.",
         "events": [                     // normalized ToolEvents (omitted when empty)
           { "kind": "tool_call", "name": "bash",
-            "input": { "command": "git commit -m fix" }, "index": 0 }
+            "input": { "command": "git commit -m fix" }, "index": 0,
+            "tool_call_id": "toolu_01A" }  // omitted when the harness exposed none
         ]
       }
     ]
@@ -140,12 +141,16 @@ its records carry pids and no group.
 ## Versioning and the drift gate
 
 The wire form is pinned by a canonical serialized example
-(`crates/onejudge/tests/golden/report.example-v9.json`) and its generated JSON
-Schema (`crates/onejudge/tests/golden/report.schema-v9.json`), both checked by
+(`crates/onejudge/tests/golden/report.example-v10.json`) and its generated JSON
+Schema (`crates/onejudge/tests/golden/report.schema-v10.json`), both checked by
 `tests/contract.rs`. Any change to the serialized shape — a renamed field, a new
 key, a changed default — fails that test, so it can only land as a **deliberate**
 edit that also bumps `SCHEMA_VERSION` and updates both goldens. Downstream SDKs
 that re-export these types therefore never drift silently.
+
+Every `"schema_version"` this page spells out is checked against the constant by
+the same test — the `FailureReport` example below sat three bumps behind before
+that gate existed, and an ungated copy of a contract is a copy that will drift.
 
 ## SDK schema bundle
 
@@ -155,6 +160,9 @@ named JSON Schema roots:
 - `run_config`: the YAML config object accepted by `onejudge run`;
 - `report`: the versioned JSON output emitted by `--format json`;
 - `stream_event`: the `{ turn, event }` envelope delivered by streaming runs;
+- `observation`: one live observation of a run in progress — a turn opening, a
+  tool event, a party's reply, or a turn closing — as an in-process embedder
+  receives it (`Engine::run_observing`);
 - `failure_report`: the document `--format json` writes **instead of** a report
   when the run fails (see below).
 
@@ -167,7 +175,7 @@ attribution for. So `onejudge run --format json` writes a versioned
 
 ```jsonc
 {
-  "schema_version": 7,
+  "schema_version": 10,
   "error": { "message": "run failed: provider error (respond): …", "kind": "auth" },
   "telemetry": { /* as above, including `attribution` */ },
   "processes": [ /* what the failed run had already spawned, as below */ ]

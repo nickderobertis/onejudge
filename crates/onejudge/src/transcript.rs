@@ -56,6 +56,11 @@ pub struct ToolEvent {
     /// Position within the run, so ordering ("did X before Y") is expressible.
     #[serde(default)]
     pub index: usize,
+    /// The harness's own stable identity for this call, joining a `tool_call` to
+    /// its `tool_result`. `None` means the harness exposed no identity — never an
+    /// empty string, which would read as an id that happens to be blank.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
 }
 
 impl ToolEvent {
@@ -252,6 +257,7 @@ mod tests {
             input: Some(input),
             output: None,
             index: 0,
+            tool_call_id: None,
         }
     }
 
@@ -291,6 +297,7 @@ mod tests {
             input: None,
             output: Some("ok".into()),
             index: 1,
+            tool_call_id: None,
         };
         let mut t = Transcript::default();
         t.push(Message::assistant("x").with_events(vec![result]));
@@ -320,8 +327,26 @@ mod tests {
             input: None,
             output: None,
             index: 0,
+            tool_call_id: None,
         };
         assert_eq!(no_input.summary(), "tool_result");
+    }
+
+    #[test]
+    fn a_call_identity_round_trips_and_is_omitted_when_the_harness_exposed_none() {
+        let mut event = call("bash", json!({"command": "ls"}));
+        let quiet = serde_json::to_string(&event).unwrap();
+        assert!(
+            !quiet.contains("tool_call_id"),
+            "no identity is no key, never a blank one: {quiet}"
+        );
+        event.tool_call_id = Some("toolu_01A".into());
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains(r#""tool_call_id":"toolu_01A""#), "{json}");
+        assert_eq!(serde_json::from_str::<ToolEvent>(&json).unwrap(), event);
+        // The field is additive: a document written before it existed still reads.
+        let older: ToolEvent = serde_json::from_str(r#"{"kind":"tool_call","index":0}"#).unwrap();
+        assert_eq!(older.tool_call_id, None);
     }
 
     #[test]

@@ -186,7 +186,8 @@ pub(crate) fn millis(value: Option<u128>) -> Option<u64> {
 
 /// Lift one of oneharness's normalized actions into onejudge's transcript event.
 /// oneharness's [`ActionEvent`] carries history-only lifecycle fields on top of
-/// these; the transcript keeps the four a consumer asserts on plus the ordering.
+/// these; the transcript keeps what a consumer asserts on — the four content
+/// fields, the ordering, and the call identity that joins a call to its result.
 pub(crate) fn tool_event(event: &ActionEvent) -> ToolEvent {
     ToolEvent {
         kind: event.kind.clone(),
@@ -194,6 +195,7 @@ pub(crate) fn tool_event(event: &ActionEvent) -> ToolEvent {
         input: event.input.clone(),
         output: event.output.clone(),
         index: event.index,
+        tool_call_id: event.tool_call_id.clone(),
     }
 }
 

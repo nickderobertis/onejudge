@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 
 use clap::{Parser, Subcommand, ValueEnum};
 
-use crate::{Engine, JudgeKind, JudgeValue, NamedVerdict, Report, StreamEvent, Usage};
+use crate::{Engine, JudgeKind, JudgeValue, NamedVerdict, Observation, Report, StreamEvent, Usage};
 
 pub use config::{Config, Eval, EvalKind, Overrides, Plan, ProviderKind, ProviderSpec};
 pub use provider::AnyProvider;
@@ -501,8 +501,11 @@ pub struct EvalResult {
 /// A run that did not produce a report, with whatever the provider had already
 /// recorded when it failed.
 ///
-/// Returned boxed (`Result<_, Box<RunFailure>>`) because the telemetry it carries
+/// [`run_plan_reporting_failure`] and [`run_plan_streaming_reporting_failure`]
+/// return it boxed (`Result<_, Box<RunFailure>>`) because the telemetry it carries
 /// is far larger than a summary, and every success would otherwise pay for it.
+/// [`run_plan_observing_reporting_failure`] returns it by value; the field below
+/// keeps its published unboxed shape either way.
 ///
 /// A failure is exactly the case a caller most needs attribution for — *which*
 /// harness identity refused, on *which* side of the conversation — and a failed
@@ -561,13 +564,13 @@ pub fn run_plan_reporting_failure(
     progress: &mut dyn FnMut(&str),
 ) -> Result<RunSummary, Box<RunFailure>> {
     match format {
-        Format::Human => execute(
-            plan,
-            Some(&mut |ev: &StreamEvent<'_>| {
+        Format::Human => {
+            let mut lines = |ev: &StreamEvent<'_>| {
                 progress(&format!("· turn {} — {}", ev.turn, ev.event.summary()));
                 ControlFlow::Continue(())
-            }),
-        ),
+            };
+            run_plan_streaming_reporting_failure(plan, &mut lines)
+        }
         Format::Json => execute(plan, None),
     }
 }
@@ -575,6 +578,10 @@ pub fn run_plan_reporting_failure(
 /// The sink a streaming run delivers each live [`StreamEvent`] to. Returning
 /// [`ControlFlow::Break`] short-circuits the run.
 pub type EventSink<'a> = dyn FnMut(&StreamEvent<'_>) -> ControlFlow<()> + 'a;
+
+/// The sink an observing run delivers each live [`Observation`] to. Returning
+/// [`ControlFlow::Break`] short-circuits the run.
+pub type ObservationSink<'a> = dyn FnMut(&Observation<'_>) -> ControlFlow<()> + 'a;
 
 /// Drive `plan` exactly as [`run_plan`] does, delivering each live tool event to
 /// `on_event` as a typed [`StreamEvent`] instead of a rendered line. Returning
@@ -588,7 +595,7 @@ pub fn run_plan_streaming(
     plan: Plan,
     on_event: &mut EventSink<'_>,
 ) -> Result<RunSummary, CliError> {
-    execute(plan, Some(on_event)).map_err(|failure| failure.error)
+    run_plan_streaming_reporting_failure(plan, on_event).map_err(|failure| failure.error)
 }
 
 /// [`run_plan_streaming`], additionally returning the telemetry a *failed* run had
@@ -600,17 +607,55 @@ pub fn run_plan_streaming_reporting_failure(
     plan: Plan,
     on_event: &mut EventSink<'_>,
 ) -> Result<RunSummary, Box<RunFailure>> {
-    execute(plan, Some(on_event))
+    // Narrowed to the tool half of the wider seam, so a streaming caller keeps
+    // receiving exactly the observations it always did — same kind, same shape,
+    // same order — while one run driver serves both entry points.
+    let mut tools_only = |observation: &Observation<'_>| match observation {
+        Observation::Tool(event) => on_event(event),
+        _ => ControlFlow::Continue(()),
+    };
+    execute(plan, Some(&mut tools_only))
 }
 
-/// The one run driver both entry points share: `None` runs the buffered engine
-/// loop, `Some(sink)` the streaming one.
+/// Drive `plan` exactly as [`run_plan_streaming_reporting_failure`] does, but
+/// deliver the *whole* of each turn to `on_observation` as it happens — the turn's
+/// opening and the instruction it answers, its tool events, each party's own reply
+/// text, and the turn's usage and bounds. See [`Observation`].
+///
+/// This is the entry point for an embedder that drives a [`Plan`] rather than
+/// building providers itself, and needs to show an operator a dispatch they cannot
+/// otherwise watch. Returning [`ControlFlow::Break`] short-circuits the run.
+///
+/// The failure comes back **unboxed**, unlike
+/// [`run_plan_streaming_reporting_failure`]: see [`RunFailure`] for why the older
+/// entry point boxes it, and the suppression below for why this one does not.
+///
+/// # Errors
+/// As [`run_plan_streaming_reporting_failure`], unboxed.
+#[allow(
+    clippy::result_large_err,
+    reason = "one of these is produced at most once per run — at the end of a dispatch measured in \
+              minutes — so the bytes it costs to move are not a cost anything can notice. The two \
+              ways to satisfy the lint both change a *published* public shape to buy that: boxing \
+              `RunFailure::telemetry` breaks every existing reader of that field, and boxing the \
+              return type deviates from the signature this entry point is contracted to have."
+)]
+pub fn run_plan_observing_reporting_failure(
+    plan: Plan,
+    on_observation: &mut dyn FnMut(&Observation<'_>) -> ControlFlow<()>,
+) -> std::result::Result<RunSummary, RunFailure> {
+    execute(plan, Some(on_observation)).map_err(|failure| *failure)
+}
+
+/// The one run driver every entry point shares: `None` runs the buffered engine
+/// loop, `Some(sink)` the observing one (which a streaming caller reaches through
+/// [`tools_only`]).
 ///
 /// The engine's telemetry is read once the loop has finished **either way**, so a
 /// failure carries the same per-invocation harness attribution a success does.
 fn execute(
     plan: Plan,
-    on_event: Option<&mut EventSink<'_>>,
+    on_observation: Option<&mut ObservationSink<'_>>,
 ) -> Result<RunSummary, Box<RunFailure>> {
     let Plan {
         provider,
@@ -641,8 +686,8 @@ fn execute(
     // Read the engine's telemetry once the loop is done, whichever way it ended, so
     // a failure still carries which harness identities the run attempted.
     let drive = || -> Result<RunSummary, CliError> {
-        let mut outcome = match on_event {
-            Some(sink) => engine.run_streaming(&conversation, sink)?,
+        let mut outcome = match on_observation {
+            Some(sink) => engine.run_observing(&conversation, sink)?,
             None => engine.run(&conversation)?,
         };
 
@@ -1125,7 +1170,7 @@ mod tests {
     fn json_render_is_the_versioned_report() {
         let report = Report::new(Transcript::from_input("hi"), vec![], None, false);
         let json = render_json(&report).unwrap();
-        assert!(json.contains("\"schema_version\": 9"));
+        assert!(json.contains("\"schema_version\": 10"));
     }
 
     #[test]

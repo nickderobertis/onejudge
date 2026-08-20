@@ -182,6 +182,7 @@ mod tests {
                 input: None,
                 output: None,
                 index: 0,
+                tool_call_id: None,
             };
             let _ = on_event(&event);
             Ok(AssistantTurn {

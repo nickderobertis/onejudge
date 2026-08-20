@@ -68,7 +68,7 @@ class OneJudgeTests(unittest.IsolatedAsyncioTestCase):
         input_tokens = complete.usage["input_tokens"]
         self.assertIsNotNone(input_tokens)
         self.assertGreater(input_tokens or 0, 0)
-        self.assertEqual(complete.raw["schema_version"], 9)
+        self.assertEqual(complete.raw["schema_version"], 10)
         # A run that never asked for turn control reports neither an address nor
         # a reason — the two states `control` alone would collapse.
         self.assertIsNone(complete.control)
@@ -241,7 +241,7 @@ class OneJudgeTests(unittest.IsolatedAsyncioTestCase):
         # The terminal line carries the ordinary, validated result.
         self.assertEqual(result.exit_code, 0)
         self.assertTrue(result.completed)
-        self.assertEqual(result.raw["schema_version"], 9)
+        self.assertEqual(result.raw["schema_version"], 10)
         self.assertEqual(result.assistant_turns, 1)
         self.assertEqual(result.verdicts[0]["verdict"]["value"], True)
 

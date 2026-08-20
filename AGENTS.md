@@ -183,6 +183,17 @@ rule that keeps it safe is that a *declared*-streaming provider's unmodelled lin
 a loud `Protocol` error, while a typeless bare report stays accepted (a degraded run
 is not a failed one).
 
+An **in-process** embedder can watch more than the tool calls: `run_observing`
+(`Engine`, and `run_plan_observing_reporting_failure` for a `Plan`) delivers an
+`Observation` per turn opening, reply and close — the prose an operator reads a
+live dispatch by, which otherwise reaches them only once the dispatch settles, and
+never at all if it dies first. Two rules keep it honest. `run_streaming` and
+`EventSink` are the *tool half* of the same sink and must keep delivering exactly
+that, in the same order, so an embedder written against them is untouched — one
+run driver serves both, which is what makes that provable rather than promised.
+And **this crate bounds nothing** it hands an observer: the payload bound belongs
+to the consumer's journal, the only layer that knows its own limit.
+
 **onejudge depends on `oneharness-core` (published registry version) for the
 boundary's types, not just its bytes**: the report, the failure taxonomy, the
 fallback block, the streamed envelope, the normalized events, and the

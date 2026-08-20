@@ -1,5 +1,5 @@
 {
-  "schema_version": 9,
+  "schema_version": 10,
   "transcript": {
     "messages": [
       {
@@ -16,7 +16,8 @@
             "input": {
               "command": "git commit -m fix"
             },
-            "index": 0
+            "index": 0,
+            "tool_call_id": "toolu_01A"
           }
         ]
       }

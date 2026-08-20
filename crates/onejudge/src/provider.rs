@@ -765,6 +765,7 @@ mod tests {
             input: Some(json!({"command": "git commit -m x"})),
             output: Some("SECRET_RAW_TOOL_DUMP".into()),
             index: 0,
+            tool_call_id: None,
         }]));
         t
     }
