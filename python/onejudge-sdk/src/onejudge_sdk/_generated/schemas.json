@@ -543,6 +543,302 @@
     "title": "FailureReport",
     "type": "object"
   },
+  "observation": {
+    "$defs": {
+      "Role": {
+        "description": "Who produced a message.",
+        "oneOf": [
+          {
+            "const": "user",
+            "description": "The (real or simulated) user driving the skill.",
+            "type": "string"
+          },
+          {
+            "const": "assistant",
+            "description": "The skill / assistant under test.",
+            "type": "string"
+          },
+          {
+            "const": "system",
+            "description": "System-level framing, if a provider surfaces it.",
+            "type": "string"
+          }
+        ]
+      },
+      "StreamEvent": {
+        "description": "One streamed tool event delivered live to an [`Engine::run_streaming`] sink,\ntagged with the turn it belongs to.\n\nIt is also the payload of an `event` line in the **streamed protocol**\n(`docs/streaming.md`) that `onejudge run --stream` publishes \u2014 the line adds\nthe `\"type\": \"event\"` discriminator around exactly these fields, so an SDK\nhands this type straight to its own event callback.",
+        "properties": {
+          "event": {
+            "$ref": "#/$defs/ToolEvent",
+            "description": "The normalized tool event."
+          },
+          "turn": {
+            "description": "1-based assistant-turn index within this run.",
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "turn",
+          "event"
+        ],
+        "type": "object"
+      },
+      "ToolEvent": {
+        "description": "One normalized tool-call / action event the skill took during a turn, lifted\nfrom `oneharness`'s `events` array (its `--events` output). Harness-agnostic,\nso a consumer can inspect shell commands, file edits, and tool uses across any\nharness, not just the final text. `input` is the structured, tool-shaped args\nso a consumer can match on the command string or file path without re-parsing.\n\n`input` is free-form JSON, so `Message`/`Transcript` are `PartialEq` but not\n`Eq`.",
+        "properties": {
+          "index": {
+            "default": 0,
+            "description": "Position within the run, so ordering (\"did X before Y\") is expressible.",
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "input": {
+            "description": "Structured tool arguments (the command, the file path); `None` when none."
+          },
+          "kind": {
+            "description": "`tool_call` (the skill invoked a tool) or `tool_result` (the observation).",
+            "type": "string"
+          },
+          "name": {
+            "description": "Normalized tool name where knowable (e.g. `bash`, `edit_file`); `None` for\na `tool_result` or when the harness did not name it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "output": {
+            "description": "The result/observation text, when the transcript exposed it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tool_call_id": {
+            "description": "The harness's own stable identity for this call, joining a `tool_call` to\nits `tool_result`. `None` means the harness exposed no identity \u2014 never an\nempty string, which would read as an id that happens to be blank.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "kind",
+          "index"
+        ],
+        "type": "object"
+      },
+      "TurnClosed": {
+        "description": "A turn ending, with what it cost and the interval it ran over.",
+        "properties": {
+          "finished_at": {
+            "description": "When the turn ended, RFC 3339 with millisecond precision in UTC.",
+            "type": "string"
+          },
+          "role": {
+            "$ref": "#/$defs/Role",
+            "description": "Who spoke."
+          },
+          "started_at": {
+            "description": "When the turn began, RFC 3339 with millisecond precision in UTC \u2014 the same\nvalue the matching [`TurnOpened`] carried.",
+            "type": "string"
+          },
+          "turn": {
+            "description": "1-based assistant-turn index within this run, as [`TurnOpened::turn`].",
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "usage": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Usage"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "This one turn's usage. Absent means the provider reported none, which is a\ndifferent fact from a turn that cost nothing."
+          }
+        },
+        "required": [
+          "turn",
+          "role",
+          "started_at",
+          "finished_at"
+        ],
+        "type": "object"
+      },
+      "TurnMessage": {
+        "description": "A party's own words for one turn, observed as they are appended to the\ntranscript.\n\nA supervisor turn that completes or settles the run appends nothing, so it is\nobserved as an opening and a closing with no message between them.",
+        "properties": {
+          "role": {
+            "$ref": "#/$defs/Role",
+            "description": "Who is speaking."
+          },
+          "text": {
+            "description": "That party's own words for this turn, whole and unbounded.",
+            "type": "string"
+          },
+          "turn": {
+            "description": "1-based assistant-turn index within this run, as [`TurnOpened::turn`].",
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "turn",
+          "role",
+          "text"
+        ],
+        "type": "object"
+      },
+      "TurnOpened": {
+        "description": "A turn beginning, and the message it was given to answer.\n\nThe conversation's opening input is never a [`TurnMessage`] \u2014 it is already in\nthe transcript before the loop runs \u2014 so it reaches an observer here, as the\n`instruction` of the first assistant turn.",
+        "properties": {
+          "instruction": {
+            "description": "The message this turn answers, whole and unbounded \u2014 the original task on\nthe first assistant turn, the supervisor's last instruction afterwards, and\nthe agent's last reply for a user turn.",
+            "type": "string"
+          },
+          "role": {
+            "$ref": "#/$defs/Role",
+            "description": "Which party is about to speak."
+          },
+          "started_at": {
+            "description": "When the turn began, RFC 3339 with millisecond precision in UTC.",
+            "type": "string"
+          },
+          "turn": {
+            "description": "1-based assistant-turn index within this run, as [`StreamEvent::turn`]. A\nuser turn carries the index of the assistant turn it is reacting to.",
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "turn",
+          "role",
+          "instruction",
+          "started_at"
+        ],
+        "type": "object"
+      },
+      "Usage": {
+        "description": "Token / cost usage for one provider call, or a running total.\n\nEach field is independently optional because not every harness reports every\nsignal (cost is commonly absent on subscription auth, and cache counts only\nwhen the harness surfaces prompt-cache reads/writes). `None` means \"no\nsignal\", never \"zero\" \u2014 so a total stays `None` until something reports a real\nnumber, then accumulates.",
+        "properties": {
+          "cache_read_tokens": {
+            "description": "Prompt tokens served from the provider's prompt cache \u2014 a cheap read of a\npreviously-written prefix \u2014 when the harness reports them. `None` when the\nharness does not surface cache counts, never `0` as a guess.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "cache_write_tokens": {
+            "description": "Prompt tokens written to the provider's prompt cache (a.k.a. cache\ncreation), when the harness reports them. `None` when not surfaced.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "cost_usd": {
+            "description": "Total cost in USD, when reported.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "input_tokens": {
+            "description": "Prompt/input tokens billed, when reported.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "output_tokens": {
+            "description": "Completion/output tokens billed, when reported.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "One live observation of the conversation as the engine produces it, delivered\nto an [`Engine::run_observing`] sink.\n\nThe wider seam beside [`StreamEvent`], not a replacement for it: a tool event\nstill reaches a sink as [`Observation::Tool`] carrying exactly the same\npayload, and [`Engine::run_streaming`] still delivers only those. What the\nwider sink adds is the prose an operator watching a dispatch they cannot see\notherwise reads it by \u2014 the instruction each turn is answering, each party's\nown reply, and the turn's own cost and bounds.\n\nThe engine bounds nothing it hands over. `instruction` and `text` are borrows\nof the whole message; where a payload has to be bounded, that bound belongs to\nwhatever journal or transport the embedder writes it to, which is the only\nlayer that knows what its own limit is.\n\nReturning [`ControlFlow::Break`] means here exactly what it means on the\nstreaming sink: the run stops, [`Outcome::stopped_early`] is `true`, and no\nfurther observation is delivered.",
+    "oneOf": [
+      {
+        "$ref": "#/$defs/TurnOpened",
+        "description": "A turn began, naming the message it is answering.",
+        "properties": {
+          "type": {
+            "const": "turn_opened",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "type": "object"
+      },
+      {
+        "$ref": "#/$defs/StreamEvent",
+        "description": "A tool event, exactly as [`Engine::run_streaming`] delivers it.",
+        "properties": {
+          "type": {
+            "const": "tool",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "type": "object"
+      },
+      {
+        "$ref": "#/$defs/TurnMessage",
+        "description": "A party's own words for a turn, as they are appended to the transcript.",
+        "properties": {
+          "type": {
+            "const": "message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "type": "object"
+      },
+      {
+        "$ref": "#/$defs/TurnClosed",
+        "description": "A turn ended, with what it cost and when it ran.",
+        "properties": {
+          "type": {
+            "const": "turn_closed",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "type": "object"
+      }
+    ],
+    "title": "Observation"
+  },
   "report": {
     "$defs": {
       "CandidateAttempt": {
@@ -1098,6 +1394,13 @@
               "string",
               "null"
             ]
+          },
+          "tool_call_id": {
+            "description": "The harness's own stable identity for this call, joining a `tool_call` to\nits `tool_result`. `None` means the harness exposed no identity \u2014 never an\nempty string, which would read as an id that happens to be blank.",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
@@ -1562,6 +1865,13 @@
           },
           "output": {
             "description": "The result/observation text, when the transcript exposed it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tool_call_id": {
+            "description": "The harness's own stable identity for this call, joining a `tool_call` to\nits `tool_result`. `None` means the harness exposed no identity \u2014 never an\nempty string, which would read as an id that happens to be blank.",
             "type": [
               "string",
               "null"

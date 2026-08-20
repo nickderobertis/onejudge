@@ -171,6 +171,7 @@ class ToolEvent(_ToolEventRequired, total=False):
     input: Any
     name: Optional[str]
     output: Optional[str]
+    tool_call_id: Optional[str]
 
 
 class Transcript(TypedDict):
