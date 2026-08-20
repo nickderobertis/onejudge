@@ -190,6 +190,40 @@ fn golden_deserializes_back_to_the_canonical_report() {
     assert_eq!(back, canonical_report());
 }
 
+/// Every `"schema_version": N` the contract doc spells out, in order.
+fn documented_schema_versions() -> Vec<u32> {
+    include_str!("../../../docs/contract.md")
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix("\"schema_version\":"))
+        .filter_map(|rest| {
+            rest.trim_start()
+                .trim_end_matches(',')
+                .split_whitespace()
+                .next()?
+                .trim_end_matches(',')
+                .parse()
+                .ok()
+        })
+        .collect()
+}
+
+#[test]
+fn the_contract_doc_states_the_version_this_build_stamps() {
+    // `docs/contract.md` hand-copies the version into every example it shows, and
+    // an ungated copy drifts: the `FailureReport` example sat at 7 for three bumps
+    // because nothing reconciled it with what `FailureReport::new` actually stamps.
+    let documented = documented_schema_versions();
+    assert!(!documented.is_empty(), "the doc shows no versioned example");
+    for version in &documented {
+        assert_eq!(
+            *version, SCHEMA_VERSION,
+            "docs/contract.md shows schema_version {version}, but this build \
+             stamps {SCHEMA_VERSION}; every example in that doc is the same \
+             contract and must say so"
+        );
+    }
+}
+
 #[cfg(feature = "sdk-schema")]
 #[test]
 fn generated_report_schema_matches_the_schema_v10_golden() {

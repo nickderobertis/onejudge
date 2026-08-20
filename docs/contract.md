@@ -148,6 +148,10 @@ key, a changed default — fails that test, so it can only land as a **deliberat
 edit that also bumps `SCHEMA_VERSION` and updates both goldens. Downstream SDKs
 that re-export these types therefore never drift silently.
 
+Every `"schema_version"` this page spells out is checked against the constant by
+the same test — the `FailureReport` example below sat three bumps behind before
+that gate existed, and an ungated copy of a contract is a copy that will drift.
+
 ## SDK schema bundle
 
 With the opt-in `sdk-schema` feature, onejudge exposes a deterministic bundle of
@@ -171,7 +175,7 @@ attribution for. So `onejudge run --format json` writes a versioned
 
 ```jsonc
 {
-  "schema_version": 7,
+  "schema_version": 10,
   "error": { "message": "run failed: provider error (respond): …", "kind": "auth" },
   "telemetry": { /* as above, including `attribution` */ },
   "processes": [ /* what the failed run had already spawned, as below */ ]
