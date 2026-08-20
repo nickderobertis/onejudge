@@ -19,10 +19,50 @@ use std::path::Path;
 use std::process::Command;
 
 use onejudge::cli::{
-    exit_code, render_human, run_plan, run_plan_observing_reporting_failure, Config, EvalOutcome,
-    Format,
+    exit_code, render_human, run_plan, run_plan_observing_reporting_failure,
+    run_plan_streaming_reporting_failure, Config, EvalOutcome, Format, Plan, RunFailure,
+    RunSummary,
 };
-use onejudge::Observation;
+use onejudge::{Conversation, Engine, Observation, Outcome, StreamEvent};
+
+/// The public shape of the observing and streaming entry points, pinned at compile
+/// time from a consumer's vantage point: each coercion below names the exact
+/// signature the contract mandates, so a drift in any parameter or return type is
+/// a compile error in this file rather than a silent break in a consumer's build.
+///
+/// The observing failure comes back **by value** — `RunFailure`, not
+/// `Box<RunFailure>` — which holds only because the type itself is small (its one
+/// large element is boxed inside it, see `RunFailure::telemetry`). The two
+/// streaming pins are the other half: they are what proves that widening the seam
+/// left the narrower one exactly where it was.
+///
+/// Spelled as aliases because the bare `fn` types trip `clippy::type_complexity`;
+/// an alias is transparent, so the coercion still checks the real signature.
+/// `Engine<'static>` instantiates the engine's own early-bound lifetime, which a
+/// `fn` pointer cannot leave higher-ranked; it is not part of what is being pinned.
+type ObservingPlanFn = fn(
+    Plan,
+    &mut dyn FnMut(&Observation<'_>) -> ControlFlow<()>,
+) -> std::result::Result<RunSummary, RunFailure>;
+type ObservingEngineFn = fn(
+    &Engine<'static>,
+    &Conversation,
+    &mut dyn FnMut(&Observation<'_>) -> ControlFlow<()>,
+) -> onejudge::Result<Outcome>;
+type StreamingPlanFn = fn(
+    Plan,
+    &mut dyn FnMut(&StreamEvent<'_>) -> ControlFlow<()>,
+) -> std::result::Result<RunSummary, Box<RunFailure>>;
+type StreamingEngineFn = fn(
+    &Engine<'static>,
+    &Conversation,
+    &mut dyn FnMut(&StreamEvent<'_>) -> ControlFlow<()>,
+) -> onejudge::Result<Outcome>;
+
+const _: ObservingPlanFn = run_plan_observing_reporting_failure;
+const _: ObservingEngineFn = Engine::run_observing;
+const _: StreamingPlanFn = run_plan_streaming_reporting_failure;
+const _: StreamingEngineFn = Engine::run_streaming;
 
 mod support;
 

@@ -515,7 +515,13 @@ pub struct RunFailure {
     pub error: CliError,
     /// Timing, usage, and per-invocation harness attribution recorded before the
     /// failure; `None` when nothing ran at all (a config or provider-build error).
-    pub telemetry: Option<crate::Telemetry>,
+    ///
+    /// Boxed because this is an *error* type: unboxed it is 448 bytes, nearly all
+    /// of it this field, and every `Result` carrying it pays that on the success
+    /// path too. Boxing the one large element keeps the whole failure at 88 bytes,
+    /// so [`run_plan_observing_reporting_failure`] can hand it back by value. Read
+    /// it with `as_deref()`; do not inline it back.
+    pub telemetry: Option<Box<crate::Telemetry>>,
     /// The processes the failed run had already spawned, and the embedder-owned
     /// group each was placed in — what a caller cleaning up after the failure needs
     /// to name. Empty when nothing was spawned.
@@ -623,16 +629,13 @@ pub fn run_plan_streaming_reporting_failure(
 /// building providers itself, and needs to show an operator a dispatch they cannot
 /// otherwise watch. Returning [`ControlFlow::Break`] short-circuits the run.
 ///
-/// Boxed error for the same reason as [`run_plan_streaming_reporting_failure`]:
-/// see [`RunFailure`].
-///
 /// # Errors
-/// As [`run_plan_streaming_reporting_failure`].
+/// As [`run_plan_streaming_reporting_failure`], unboxed.
 pub fn run_plan_observing_reporting_failure(
     plan: Plan,
-    on_observation: &mut ObservationSink<'_>,
-) -> Result<RunSummary, Box<RunFailure>> {
-    execute(plan, Some(on_observation))
+    on_observation: &mut dyn FnMut(&Observation<'_>) -> ControlFlow<()>,
+) -> std::result::Result<RunSummary, RunFailure> {
+    execute(plan, Some(on_observation)).map_err(|failure| *failure)
 }
 
 /// The one run driver every entry point shares: `None` runs the buffered engine
@@ -784,7 +787,7 @@ fn execute(
     drive().map_err(|error| {
         Box::new(RunFailure {
             error,
-            telemetry: engine.telemetry(),
+            telemetry: engine.telemetry().map(Box::new),
             processes: engine.spawned_processes(),
         })
     })
@@ -959,7 +962,7 @@ impl FailureReport {
                     CliError::Config(_) | CliError::Io(_) => None,
                 },
             },
-            telemetry: failure.telemetry.clone(),
+            telemetry: failure.telemetry.as_deref().cloned(),
             processes: failure.processes.clone(),
         }
     }
