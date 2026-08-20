@@ -2355,3 +2355,143 @@ fn breaking_an_observation_stops_the_run_and_delivers_nothing_after_it() {
     assert!(matches!(seen[2], Seen::Said { .. }));
     assert_eq!(outcome.transcript.assistant_turns(), 1);
 }
+
+#[test]
+fn breaking_a_supervisor_observation_keeps_its_instruction_out_of_the_transcript() {
+    // The supervisor's half of the same contract, and the half an operator reaches
+    // first: they read the agent's reply, decide the dispatch has gone wrong, and
+    // stop it — which lands on one of the supervisor's own three observations, not
+    // the agent's. Each case below counts the supervisor *processes* the run
+    // actually spawned, so "never asked" is measured at the subprocess boundary
+    // rather than inferred.
+    let engine_provider = echo();
+    let engine = Engine::new(&engine_provider, settings());
+    let conversation = |count: &std::path::Path| {
+        Conversation::multi_turn(
+            skill_with("Commit it. [[event:git commit -m fix]]"),
+            "start",
+            SimulatedUser::new(format!("A patient tester. [[count:{}]]", count.display()))
+                .max_turns(5),
+        )
+    };
+    // Stop at `stop_at`, recording everything delivered up to and including it.
+    let run_until = |stop_at: fn(&Seen) -> bool, count: &std::path::Path| {
+        let mut seen = Vec::new();
+        let outcome = engine
+            .run_observing(&conversation(count), &mut |observation| {
+                let record = observed(observation);
+                let stop = stop_at(&record);
+                seen.push(record);
+                if stop {
+                    ControlFlow::Break(())
+                } else {
+                    ControlFlow::Continue(())
+                }
+            })
+            .unwrap();
+        assert!(outcome.stopped_early);
+        // Whichever observation stopped it, the agent's one finished turn is kept
+        // and the supervisor's next instruction never joins the transcript — so the
+        // run settles on the work already done, never on a half-delivered ask.
+        assert_eq!(outcome.transcript.assistant_turns(), 1);
+        assert_eq!(
+            outcome.transcript.messages.last().map(|m| m.role),
+            Some(Role::Assistant),
+            "the supervisor's words must not reach the transcript: {:#?}",
+            outcome.transcript.messages
+        );
+        let calls = std::fs::read_to_string(count).map_or(0, |log| log.lines().count());
+        (seen, outcome, calls)
+    };
+
+    // Breaking on the supervisor's *opening* stops before it is ever asked, so the
+    // run costs nothing beyond the agent turn already paid for.
+    let opening = scratch_path("observing-break-supervisor-opening");
+    let (seen, outcome, calls) = run_until(
+        |s| {
+            matches!(
+                s,
+                Seen::Opened {
+                    role: Role::User,
+                    ..
+                }
+            )
+        },
+        &opening,
+    );
+    assert_eq!(seen.len(), 5, "{seen:#?}");
+    assert!(matches!(
+        seen[4],
+        Seen::Opened {
+            role: Role::User,
+            ..
+        }
+    ));
+    assert_eq!(calls, 0, "no supervisor process should have been spawned");
+    let agent_only = outcome.usage.clone();
+    assert_eq!(
+        agent_only.as_ref().and_then(|u| u.output_tokens),
+        Some(1),
+        "only the agent turn is billed: {agent_only:?}"
+    );
+
+    // Breaking on the supervisor's own words stops after it answered — a distinct
+    // outcome: the process ran and is billed, and the instruction is still dropped.
+    let said = scratch_path("observing-break-supervisor-said");
+    let (seen, outcome, calls) = run_until(
+        |s| {
+            matches!(
+                s,
+                Seen::Said {
+                    role: Role::User,
+                    ..
+                }
+            )
+        },
+        &said,
+    );
+    assert_eq!(seen.len(), 6, "{seen:#?}");
+    assert!(matches!(
+        seen[5],
+        Seen::Said {
+            role: Role::User,
+            ..
+        }
+    ));
+    assert_eq!(calls, 1, "exactly one supervisor process was asked");
+    assert_eq!(
+        outcome.usage.as_ref().and_then(|u| u.output_tokens),
+        Some(2),
+        "the agent turn plus the supervisor turn: {:?}",
+        outcome.usage
+    );
+
+    // And breaking on its *close* — the last thing it is offered — behaves the
+    // same, so allowing the words through is not what pushed them.
+    let closed = scratch_path("observing-break-supervisor-closed");
+    let (seen, outcome, calls) = run_until(
+        |s| {
+            matches!(
+                s,
+                Seen::Closed {
+                    role: Role::User,
+                    ..
+                }
+            )
+        },
+        &closed,
+    );
+    assert_eq!(seen.len(), 7, "{seen:#?}");
+    assert!(matches!(
+        seen[6],
+        Seen::Closed {
+            role: Role::User,
+            ..
+        }
+    ));
+    assert_eq!(calls, 1, "exactly one supervisor process was asked");
+    assert_eq!(
+        outcome.usage.as_ref().and_then(|u| u.output_tokens),
+        Some(2)
+    );
+}
