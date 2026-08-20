@@ -195,9 +195,6 @@ pub(crate) fn tool_event(event: &ActionEvent) -> ToolEvent {
         input: event.input.clone(),
         output: event.output.clone(),
         index: event.index,
-        // The identity oneharness has carried all along: it is what joins a call
-        // to its result, and dropping it left a consumer with no way to say *which*
-        // call a live observation belongs to.
         tool_call_id: event.tool_call_id.clone(),
     }
 }
