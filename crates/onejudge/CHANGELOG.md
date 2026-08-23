@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.1](https://github.com/nickderobertis/onejudge/compare/v0.5.0...v0.5.1) - 2026-08-23
+
+### Fixed
+
+- *(gate)* stop a corrupt coverage profile failing the test recipe ([#57](https://github.com/nickderobertis/onejudge/pull/57))
+
 ## [0.5.0](https://github.com/nickderobertis/onejudge/compare/v0.4.0...v0.5.0) - 2026-08-20
 
 ### Added
