@@ -136,14 +136,15 @@ Use the `just` recipes; do not hand-roll equivalents. `just --list` is the index
 
 ## Coverage and e2e (the gate's depth)
 
-- **Coverage — enforced, 95% lines.** The gate's `just test` step (`cargo
-  llvm-cov nextest --features fake-provider,cli --fail-under-lines 95`) is wired
-  into `just check` and fails below 95%. It excludes `src/bin/` — the two
+- **Coverage — enforced.** `just test` is the coverage step and is wired into
+  `just check`; the floor and the gate's feature set are declared once, in the
+  justfile (`coverage_min`, `gate_features`). It excludes `src/bin/` — the
   `fake-provider` doubles **and** the thin `onejudge` entrypoint are excluded (the
-  CLI's real logic lives in the covered `src/cli/` library modules). The gate runs
-  on `--features fake-provider,cli` (`gate_features` in the justfile). Every model
+  CLI's real logic lives in the covered `src/cli/` library modules). Every model
   call goes through oneharness; the deterministic gate fakes only the model, via
-  the real subprocess doubles.
+  the real subprocess doubles. That step's `--failure-mode all` is load-bearing
+  rather than slack: see the justfile comment on `test`, which `tests/coverage.rs`
+  keeps honest by planting the artifact it exists for.
 - **E2E — real, in the gate.** `crates/onejudge/tests/e2e.rs` drives the real
   engine across a **real subprocess boundary**: it points `CommandProvider` and
   `OneharnessProvider` at deterministic test-double binaries
