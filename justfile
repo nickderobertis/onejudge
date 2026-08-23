@@ -37,9 +37,19 @@ alias gate := check
 gate_features := "fake-provider,cli,sdk-schema"
 
 # Gate test step: whole suite (unit + integration + e2e + cli), coverage enforced.
+#
+# `--failure-mode all` is load-bearing, not laxity. The suite kills instrumented
+# processes on purpose, and a child killed while the profiling runtime is still
+# flushing leaves a truncated `.profraw` in the merge set. `llvm-profdata`
+# defaults to `any`, where that one file aborts the merge of every other profile
+# in the run and the step fails as if a test had — which is how the v0.5.0
+# release chain died with 310/310 green and published nothing. `all` fails only
+# when *every* profile is unmergeable, so a genuinely broken merge still stops
+# the gate, and `--fail-under-lines` below still catches any real coverage loss.
+# tests/coverage.rs plants that artifact, so every gate run proves this.
 test:
     cargo llvm-cov nextest --features {{gate_features}} --ignore-filename-regex 'src/bin/' \
-        --fail-under-lines {{coverage_min}}
+        --failure-mode all --fail-under-lines {{coverage_min}}
 
 # Quick inner loop: the suite with no coverage instrumentation.
 test-fast:

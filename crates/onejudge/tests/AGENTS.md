@@ -21,6 +21,12 @@ repo-wide contract; this covers only what differs here.
   the out-of-tree liveness check for a leaked harness stand-in, and the POSIX
   process-group hook the cancellation journeys drive. `e2e.rs` runs them against
   the engine, `cli.rs` against a `Plan`; put a helper here rather than copying it.
+- **`coverage.rs` plants a corrupt profile on purpose.** It writes a truncated
+  `.profraw` into the directory `cargo llvm-cov` merges from, so the gate's own
+  coverage step has to survive the artifact a killed instrumented child leaves —
+  the one that blocked the v0.5.0 release. It follows that any coverage
+  invocation here needs `--failure-mode all`: run `just test`, not a hand-rolled
+  `cargo llvm-cov`.
 - **`live.rs` is the real-harness tier**: every test is `#[ignore]`-d, compiles
   in the normal build, and runs only via `just test-live` / the `live` workflow.
   See `docs/live-tier.md`.
