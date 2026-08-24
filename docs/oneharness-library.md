@@ -5,6 +5,11 @@ git ref) and uses it for everything about the oneharness boundary that can be
 expressed as a typed call — **including the invocation itself**. A turn is
 `oneharness_core::io::run::run`, not a spawned `oneharness` process.
 
+The pin is in the workspace manifest; everything below is verified against it.
+The **CLI** floor an operator installs is a different number — currently
+**0.11.0+**, the release that embeds the pinned core — because the two crates
+version independently. Never read one off the other.
+
 One seam still spawns, and this file records exactly why — so the decision is
 revisitable when oneharness's library surface changes, rather than rediscovered.
 
@@ -68,17 +73,14 @@ field fails the build), and both columns against the rows below.
 
 `Execution::Process` (`crates/onejudge/src/oneharness/mod.rs`) spawns an
 `oneharness` executable, and is reached **only** by naming one
-(`OneharnessProvider::with_bin`) or by installing a `SpawnHook`. It exists for a
-single upstream gap, verified against `oneharness-core` 0.12.0 (the CLI 0.11.0+
-embeds):
-
-**`RunControls` cannot offer a spawned harness to the embedder.** Its whole
-surface is `events`, `cancel`, `signal_cancel`, `version`. Every harness child is
-spawned *inside* `run` through `oneharness_core::io::process::Process::spawn`
+(`OneharnessProvider::with_bin`) or by installing a `SpawnHook`. It exists because
+`run` alone hands an embedder no harness child: `RunControls`' whole surface is
+`events`, `cancel`, `signal_cancel`, `version`, and every harness is spawned
+*inside* `run` through `oneharness_core::io::process::Process::spawn`
 (`pub(crate)`), whose Unix path calls `setpgid(0, 0)` in `pre_exec` — each harness
 is its own process-group leader by design. An in-process turn therefore has no
-process to hand to an embedder's `SpawnHook`, which empties `Report::processes`,
-`Plan::with_spawn_hook` and the group an embedder terminates
+process to hand to an embedder's `SpawnHook`, which would empty
+`Report::processes`, `Plan::with_spawn_hook` and the group an embedder terminates
 (`docs/spawn-hook.md`). That is a documented public contract on a versioned wire
 (`SCHEMA_VERSION`), and the thing four e2e journeys exist to prove — including
 `an_embedder_group_reaps_the_whole_two_party_harness_tree_on_a_kill_cancel`, which
@@ -86,11 +88,28 @@ is precisely the orphaned-paid-harness failure the seam was added for. So
 installing a hook **selects the spawning seam** rather than silently doing
 nothing, which would leave an embedder believing it owns an empty group.
 
-**Proposal (oneharness):** a spawn observer on
-`oneharness_core::io::run::RunControls`, offered each harness's `Command` before
-it starts and its live `Child`/pid after, mirroring what
-`oneharness_core::io::process::Tree::prepare` already does internally. With it,
-this seam deletes and `Report::processes` is served in process.
+**The gap this seam was proposed against is now closed upstream, and onejudge has
+not yet moved onto it.** `oneharness-core` 0.10.1 added
+`io::run::run_supervised(args, controls, Option<&dyn ProcessSupervisor>)` — a
+second entry point rather than a field, because `RunControls` is exhaustively
+constructible and a field there would break every consumer's literal. The trait
+offers each harness's `Command` before the spawn and its live `Child` after,
+which is exactly what `SpawnHook` needs. Two things stand between it and a
+deletion of this seam, and neither is upstream's:
+
+- **A refusal has nowhere to go.** `SpawnHook::spawning` returns
+  `io::Result<()>`, and a hook that fails is a loud `Spawn` error with the child
+  torn down (`docs/spawn-hook.md`, and the e2e that proves a hook is consulted at
+  all does it by *refusing*). `ProcessSupervisor::spawning` returns `()`. Adopting
+  it as-is would silently downgrade that contract.
+- **`Report::processes` would change meaning.** Today an in-process run reports no
+  processes, and installing a hook is what selects the seam that has one. Serving
+  them in process is a wire-visible change to a versioned contract, so it is a
+  deliberate release, not a migration detail.
+
+Doing it is worth its own change: it would delete this seam, serve
+`Report::processes` in process, and let `with_spawn_hook` stop moving a caller
+between seams.
 
 ## Driving the in-process seam deterministically
 

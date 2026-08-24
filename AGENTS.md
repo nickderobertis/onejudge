@@ -213,10 +213,14 @@ follow only from reading it typed, and both have tests: under `run_mode =
 one the chain routed around), and a candidate that timed out / could not spawn /
 was skipped carries no `failure_kind` — its `Status` is the signal, and ignoring it
 banks a vacuously empty turn. One seam still spawns — `Execution::Process`, reached only by naming a binary
-(`with_bin`) or installing a `SpawnHook`, because `RunControls` cannot offer a
-spawned harness and an in-process turn would empty `Report::processes`.
+(`with_bin`) or installing a `SpawnHook`, because `run` offers an embedder no
+spawned harness and an in-process turn would empty `Report::processes`. Upstream
+has since closed that gap (`run_supervised` + `ProcessSupervisor`, oneharness-core
+0.10.1) and onejudge has **not** moved onto it: adopting it as-is would drop
+`SpawnHook`'s refusal contract and change what `Report::processes` means in
+process, so it is its own release.
 `docs/oneharness-library.md` records the argv↔`RunRequest` mapping (one `TurnSpec`,
-two renderings, reconciled by a gate) and that gap's proposal against oneharness.
+two renderings, reconciled by a gate) and what that move still needs.
 The e2e double for the in-process seam is `onejudge-fake-harness`, a *harness*
 stand-in reached through ordinary `[harness.<id>] bin` config — so the whole of
 oneharness is the real code under test and only the model is faked. The measurements onejudge's `telemetry`
