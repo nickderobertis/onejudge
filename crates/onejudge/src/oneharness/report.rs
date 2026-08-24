@@ -95,16 +95,22 @@ impl Invocation {
         self.ran.map(|index| &self.report.results[index])
     }
 
-    /// The reply text, falling back to raw stdout for the (contractually rare)
-    /// case where a harness produced output but oneharness left `text` null.
+    /// The reply text the selected result reported, and nothing else: empty when
+    /// it reported none.
+    ///
+    /// It deliberately does **not** substitute `result.stdout`. A completed turn
+    /// carrying no text is a turn that said nothing, and empty is the truthful
+    /// answer to hand back; the harness process's raw output is protocol exhaust,
+    /// not the model's words. Substituting it published megabytes of JSON-RPC
+    /// framing as the assistant's message, which the next turn then re-inlined —
+    /// one measured run reached a 699 MB event line whose model-authored content
+    /// was 0 characters. A turn that genuinely failed is loud through
+    /// [`failure`]/[`Invocation::into_ok`] instead, which is where that noise
+    /// belongs.
     pub(crate) fn reply(&self) -> String {
-        self.result().map_or_else(String::new, |result| {
-            result
-                .text
-                .clone()
-                .filter(|t| !t.is_empty())
-                .unwrap_or_else(|| result.stdout.clone())
-        })
+        self.result()
+            .and_then(|result| result.text.clone())
+            .unwrap_or_default()
     }
 
     /// The turn's normalized tool events, lifted from oneharness's [`ActionEvent`].
@@ -578,13 +584,19 @@ mod tests {
     }
 
     #[test]
-    fn falls_back_to_stdout_when_text_is_null() {
-        let mut result = fixture::result("codex", "");
-        result.text = None;
-        result.stdout = "raw reply".into();
-        let invocation = parse(&fixture::report(vec![result])).unwrap();
-        assert_eq!(invocation.reply(), "raw reply");
-        assert_eq!(invocation.usage(), None);
+    fn a_completed_turn_with_no_text_replies_empty_never_raw_stdout() {
+        // The result says the turn completed and carries no text: it said nothing,
+        // and empty is the truthful answer. The harness process's raw output is
+        // protocol exhaust — substituting it here is what published a megabyte of
+        // JSON-RPC framing as the agent's own words.
+        for text in [None, Some(String::new())] {
+            let mut result = fixture::result("codex", "");
+            result.text = text.clone();
+            result.stdout = "{\"jsonrpc\":\"2.0\",\"method\":\"agentMessage\"}".into();
+            let invocation = parse(&fixture::report(vec![result])).unwrap();
+            assert_eq!(invocation.reply(), "", "{text:?}");
+            assert_eq!(invocation.usage(), None, "{text:?}");
+        }
     }
 
     #[test]
