@@ -1024,11 +1024,9 @@ mod tests {
         //
         // The relation is `>=`, not `==`: a pin that moves forward is the ordinary
         // case, and only a pin that moves PAST what the advertised CLI embeds is
-        // drift. It is checked against `MIN_ONEHARNESS_CORE` rather than against
-        // `MIN_ONEHARNESS`, because the CLI and its engine crate version
-        // independently — no `oneharness` 0.6.13 was ever published, and the
-        // 0.11.0 CLI ships `oneharness-core` 0.12.0 — so comparing the two
-        // numbers directly compares versions of different crates.
+        // drift. It is checked against `MIN_ONEHARNESS_CORE`, not against
+        // `MIN_ONEHARNESS` — see that constant's doc for why the two numbers
+        // cannot be compared to each other.
         let manifest = include_str!("../../../../Cargo.toml");
         let pinned = manifest
             .lines()

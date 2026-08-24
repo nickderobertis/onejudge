@@ -55,9 +55,7 @@ pub fn control_store(name: &str) -> std::path::PathBuf {
 /// collide between two checkouts running the same journey.
 ///
 /// Rooted at the system temp dir rather than `CARGO_TARGET_TMPDIR` for the reason
-/// [`control_store`] gives: the socket address underneath it is capped at ~100
-/// bytes, which a target directory nested under a worktree path exhausts on its
-/// own.
+/// [`control_store`] gives.
 #[cfg(unix)]
 pub fn use_private_session_store(name: &str) -> std::path::PathBuf {
     let home = std::env::temp_dir().join(format!("oj-state-{name}-{}", std::process::id()));
