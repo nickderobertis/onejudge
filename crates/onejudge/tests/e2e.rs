@@ -2047,7 +2047,7 @@ fn a_controlled_turn_resumes_the_named_session_on_a_mechanism_that_carries_it() 
     // than by luck. This is the *honoured* half of that rule, proven the only way
     // it can be: the reply is the native token the second turn was resumed on, so
     // a run that silently opened a new conversation could not produce it.
-    let store = support::private_session_store("ctl-resume");
+    let store = support::use_private_session_store("ctl-resume");
     let dir = harness_project("in-process-control-resume");
 
     let (created, _) = one_turn(&dir, false, "[[echo-resume]]", "start the job");
@@ -2088,7 +2088,7 @@ fn a_controlled_turn_on_a_mechanism_that_cannot_resume_degrades_instead_of_start
     // oneharness 0.12 refuses that combination before spawning anything. onejudge
     // must neither fail the run nor take the refusal as licence to start over: it
     // drops the one thing it was refused for, and the handle continues.
-    let _store = support::private_session_store("ctl-no-resume");
+    let _store = support::use_private_session_store("ctl-no-resume");
     let dir = harness_project_on("opencode", "in-process-control-no-resume");
 
     let (created, _) = one_turn(&dir, false, "[[echo-resume]]", "start the job");

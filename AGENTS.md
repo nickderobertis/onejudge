@@ -234,9 +234,10 @@ talks to** — an orphaned harness keeps billing. In process that is
 tree. The **spawning** seam still escalates through three rungs — close stdout,
 SIGTERM, kill — because a spawned producer has to be reached through the OS, and
 each rung reaches a case the one before cannot; two e2e tests gate that pair, one
-per rung. The crate pins `oneharness-core` **0.12.0**, which the **0.11.0+** CLI
-release is the one that embeds — the two crates version independently, so never
-infer one number from the other (`cli/mod.rs` pins the pairing and gates it). See
+per rung. The `oneharness-core` pin lives in the workspace manifest and nowhere
+else; the **CLI** floor an operator installs is a different number (**0.11.0+**,
+the release that embeds the pin) because the two crates version independently.
+Never infer one from the other — `cli/mod.rs` holds the pairing and gates it. See
 `docs/oneharness-library.md` before touching either.
 
 The **free deterministic harness** is reachable through this layer:

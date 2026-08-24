@@ -41,7 +41,10 @@ pub fn control_store(name: &str) -> std::path::PathBuf {
 }
 
 /// Point this test process's **session store** at a private directory, and hand
-/// back the store root a controlled run will use.
+/// back the store root a controlled run will now use.
+///
+/// Named for the mutation rather than the value: the load-bearing half is the
+/// `XDG_STATE_HOME` it sets, and one caller wants only that.
 ///
 /// The in-process seam gives a caller no way to choose the store — oneharness
 /// resolves it from the platform state directory — so the only lever is that
@@ -56,7 +59,7 @@ pub fn control_store(name: &str) -> std::path::PathBuf {
 /// bytes, which a target directory nested under a worktree path exhausts on its
 /// own.
 #[cfg(unix)]
-pub fn private_session_store(name: &str) -> std::path::PathBuf {
+pub fn use_private_session_store(name: &str) -> std::path::PathBuf {
     let home = std::env::temp_dir().join(format!("oj-state-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&home);
     std::fs::create_dir_all(&home).expect("the state home is creatable");

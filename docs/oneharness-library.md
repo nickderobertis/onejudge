@@ -203,7 +203,8 @@ every cancel. oneharness **v0.6.9** closed it — `commands::run` calls
 `cancellation_requested` on its own `CANCEL_POLL_SLICE` rather than only on
 `PipeEvent::Data`, so the cancellation is noticed while the harness says nothing
 and still ends in `Finish::Terminate`. That is what first moved onejudge's floor
-off 0.6.8; the floor today is the pinned `oneharness-core` (`MIN_ONEHARNESS`).
+off 0.6.8; the floor today is `MIN_ONEHARNESS`, which is a CLI version and not the
+core pin (see the top of this file).
 
 Rung 1 is kept, and kept first, precisely because rung 2 is not free: SIGTERM's
 *default* disposition is to terminate, so signalling a producer that would have

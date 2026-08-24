@@ -9,9 +9,9 @@ already finished the wrong work.
 oneharness 0.6.14 provides the lever: `oneharness run --control` opens a unix
 socket for the run's lifetime, and a **separate** `oneharness interrupt` process
 aborts the in-flight turn and delivers a replacement message in one operation.
-onejudge's advertised CLI floor is **0.11.0+**, the release embedding the pinned
-`oneharness-core` 0.12.0. The two crates version independently; never read one
-number off the other.
+onejudge's advertised CLI floor is **0.11.0+** — the release that embeds the
+`oneharness-core` the workspace manifest pins. The two crates version
+independently; never read one number off the other.
 
 onejudge's part is deliberately narrow, and it is all of this page:
 
@@ -139,7 +139,7 @@ rather than silently turning a degraded run into a failed one.
 ## A named session, under control
 
 The lever and the handle have to agree about what a turn is, and since oneharness
-0.11.0 (`oneharness-core` 0.12.0) they are made to. A control mechanism that
+0.11.0 they are made to. A control mechanism that
 **drives the turn over its own protocol** negotiates prompt, model, cwd and
 approvals on the wire and builds no argv at all — so the harness's `--resume`
 mapping is never reached, and the only way to continue one conversation is the
