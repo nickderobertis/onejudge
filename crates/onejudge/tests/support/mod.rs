@@ -40,6 +40,30 @@ pub fn control_store(name: &str) -> std::path::PathBuf {
     path
 }
 
+/// Point this test process's **session store** at a private directory, and hand
+/// back the store root a controlled run will use.
+///
+/// The in-process seam gives a caller no way to choose the store — oneharness
+/// resolves it from the platform state directory — so the only lever is that
+/// directory itself, and `XDG_STATE_HOME` is what resolves it on unix. Safe to
+/// set here because the suite runs under `cargo nextest`, which gives every test
+/// its own process; and necessary, because the alternative is the developer's own
+/// store, where a `control/<session>.sock` keyed only by session name would
+/// collide between two checkouts running the same journey.
+///
+/// Rooted at the system temp dir rather than `CARGO_TARGET_TMPDIR` for the reason
+/// [`control_store`] gives: the socket address underneath it is capped at ~100
+/// bytes, which a target directory nested under a worktree path exhausts on its
+/// own.
+#[cfg(unix)]
+pub fn private_session_store(name: &str) -> std::path::PathBuf {
+    let home = std::env::temp_dir().join(format!("oj-state-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&home);
+    std::fs::create_dir_all(&home).expect("the state home is creatable");
+    std::env::set_var("XDG_STATE_HOME", &home);
+    home.join("oneharness").join("sessions")
+}
+
 /// The `<pid> <port>` the double's harness stand-in published once it was live.
 pub fn descendant_handle(path: &std::path::Path) -> (u32, u16) {
     let raw = std::fs::read_to_string(path).expect("the harness stand-in published its handle");

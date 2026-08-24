@@ -256,6 +256,16 @@ the **0.11.0+** floor the crate advertises.
 socket and asserts the reported address *redirects the live turn*, not that it
 merely exists.
 
+**A named session and `--control` must agree about what a turn is.** A mechanism
+that drives the turn over its own protocol builds no argv, so the harness's
+`--resume` mapping is never reached and only the protocol's own resume request can
+continue a conversation; oneharness refuses a continuation on a mechanism without
+one (`SessionControlNoResume`) rather than silently opening a new one — the defect
+that re-sent a whole transcript every turn. onejudge degrades from that refusal
+like any other: drop `--control`, keep the conversation. Both halves are driven
+through the real in-process engine, one journey per outcome, each asserting on the
+native token the harness was resumed on.
+
 **Every hop that moves in-process gives up something the subprocess boundary was
 supplying.** oneharness's descendant teardown was the first (restored by signalling
 it, above); OS **process grouping** is the second. An in-process embedder can no

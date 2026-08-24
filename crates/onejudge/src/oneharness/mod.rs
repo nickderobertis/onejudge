@@ -1478,6 +1478,29 @@ mod tests {
                 with: "--control",
                 why: "control drives one live turn",
             },
+            // A named handle whose stored conversation cannot be reopened over
+            // the mechanism that would serve this turn (oneharness 0.12). It
+            // belongs on this ladder rather than failing the run because
+            // oneharness's own remedy is onejudge's next rung: drop `--control`
+            // and the handle continues on the harness's ordinary headless run.
+            // Degrading the other way — keeping the flag and taking a fresh
+            // conversation — is the very failure the refusal exists to stop.
+            OneharnessError::SessionControlNoResume {
+                name: "run-42-skill".into(),
+                id: "opencode".into(),
+                mechanism: "opencode-http",
+                supported: "claude-code, codex".into(),
+            },
+            // The socket address the run would open is past this platform's
+            // `sun_path` budget (oneharness 0.12). The channel cannot exist, so
+            // it is the ask that is refused, not the turn.
+            OneharnessError::ControlSocketAddress {
+                source: oneharness_core::domain::control::socket_path(
+                    std::path::Path::new(&"/x".repeat(200)),
+                    "run-42-skill",
+                )
+                .expect_err("an address that long cannot be bound anywhere"),
+            },
         ];
         for refusal in refusals {
             let err = stderr_error(&format!("oneharness: error: {refusal}"));

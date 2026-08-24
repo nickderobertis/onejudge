@@ -122,6 +122,8 @@ Refusals onejudge degrades from:
 | A server-backed mechanism that cannot also `--stream` | oneharness's `ControlStreamUnsupported` |
 | The socket could not be opened | oneharness's `ControlSocket` |
 | The harness cannot bind a `--session` at all | onejudge's own: control needs a name to be addressed by |
+| The named handle cannot be **continued** over this mechanism | oneharness's `SessionControlNoResume` — see below |
+| The socket address would overrun this platform's `sun_path` budget | oneharness's `ControlSocketAddress` |
 | **Windows** | onejudge's own, before the call: the socket is a unix domain socket |
 
 Windows is answered by onejudge rather than by oneharness on purpose. There is
@@ -133,6 +135,40 @@ raised before a report exists, so there is nothing typed on the wire to match.
 `control_refusal_markers_track_oneharness` pins the whole set against
 `OneharnessError`'s own rendering, so an upstream rewording fails the gate here
 rather than silently turning a degraded run into a failed one.
+
+## A named session, under control
+
+The lever and the handle have to agree about what a turn is, and since oneharness
+0.11.0 (`oneharness-core` 0.12.0) they are made to. A control mechanism that
+**drives the turn over its own protocol** negotiates prompt, model, cwd and
+approvals on the wire and builds no argv at all — so the harness's `--resume`
+mapping is never reached, and the only way to continue one conversation is the
+protocol's own resume request. Codex's app-server has one (`thread/resume`);
+OpenCode's, Crush's and ACP's do not. Claude Code's mechanism does not drive the
+turn at all — its control frame rides the ordinary headless run — so its handle
+travels on the same `--resume` argv it always did.
+
+Where the mechanism cannot carry the handle, a *continuation* is refused before
+anything spawns. That refusal is the fix: without it the turn opened a **new**
+conversation while the store, the flag and the report all looked healthy, and the
+whole transcript was re-sent every turn (measured: a 699 MB single event line).
+
+onejudge degrades from it like any other refused ask — it drops `--control` and
+the handle continues on the harness's ordinary headless run. That is oneharness's
+own remedy, and it is the right one: the run loses the lever, never the
+conversation. Degrading the other way — keeping the flag and taking a fresh
+conversation — is exactly what the refusal exists to prevent.
+
+Two journeys in `tests/e2e.rs` drive both halves through the **real** engine, one
+per outcome, and each asserts on the native session token the harness was resumed
+on — a run that silently started over cannot produce it:
+
+- `a_controlled_turn_resumes_the_named_session_on_a_mechanism_that_carries_it`
+  (claude-code): the second, controlled turn replies with the stored token, and
+  the run still reports an address.
+- `a_controlled_turn_on_a_mechanism_that_cannot_resume_degrades_instead_of_starting_over`
+  (opencode): the ask is refused, `control` is `null` with oneharness's own words
+  beside it, and the turn still continues the stored conversation.
 
 ## What is proven, and how
 

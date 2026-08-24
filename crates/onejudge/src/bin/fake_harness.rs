@@ -16,11 +16,21 @@
 //! is ordinary oneharness config, so the seam the e2e suite drives is one a real
 //! caller can drive too.
 //!
-//! It models **claude-code**: `-p <prompt> … --output-format <json|stream-json>`.
-//! The requested format is honoured, because that is the whole of what oneharness
-//! parses back — a single `result` document for `json`, and the Anthropic
-//! content-block NDJSON that oneharness normalizes into `events` for
-//! `stream-json`.
+//! It models two harnesses, selected by the argv oneharness builds — never by a
+//! flag of its own, so which one it is playing is decided by the same registry
+//! entry a real run would be decided by:
+//!
+//! * **claude-code** — `-p <prompt> … --output-format <json|stream-json>`. The
+//!   requested format is honoured, because that is the whole of what oneharness
+//!   parses back: a single `result` document for `json`, and the Anthropic
+//!   content-block NDJSON that oneharness normalizes into `events` for
+//!   `stream-json`. Under `--control` the prompt arrives as a JSON frame on
+//!   stdin (`--input-format stream-json`) instead of positionally.
+//! * **opencode** — `run --format json <system>\n\n<prompt>`, answering with the
+//!   line-delimited `part` events oneharness reconstructs its text from. It is
+//!   here for one reason: its control mechanism drives the turn over its own HTTP
+//!   protocol and implements no resume request, which is the case oneharness
+//!   0.12 refuses a named session's *continuation* on.
 //!
 //! # Markers
 //!
@@ -38,6 +48,12 @@
 //!   real harness with work in flight and nothing more to say: the only thing that
 //!   can reap it is oneharness terminating the tree it owns, which is what a
 //!   cancelled run must do.
+//! * `[[echo-resume]]` — reply with the **native session token this run was
+//!   resumed on** (`--resume` for claude-code, `--session` for opencode), or
+//!   `none` when the run opened a fresh conversation. A caller-owned handle that
+//!   silently started over and one that genuinely continued are otherwise the
+//!   same successful turn, and telling them apart is the whole point of the
+//!   session-and-control journeys.
 
 use std::io::Write as _;
 use std::path::Path;
@@ -78,9 +94,32 @@ fn main() {
     let stream = args
         .windows(2)
         .any(|w| w[0] == "--output-format" && w[1] == "stream-json");
+    // OpenCode is the one harness here whose argv carries no `-p`/`--output-format`
+    // at all: oneharness builds `run --format json <message>`. Reading the shape
+    // rather than being told which harness to be keeps the double honest — it plays
+    // whichever one the registry entry under test actually invoked.
+    let opencode = args.first().map(String::as_str) == Some("run")
+        && args
+            .windows(2)
+            .any(|w| w[0] == "--format" && w[1] == "json");
 
-    let reply = marker(&prompt, "reply").unwrap_or_else(|| "ok".to_string());
+    let mut reply = marker(&prompt, "reply").unwrap_or_else(|| "ok".to_string());
+    if prompt.contains("[[echo-resume]]") {
+        reply = resumed_on(&args).unwrap_or_else(|| "none".to_string());
+    }
     let events = markers(&prompt, "event");
+
+    if opencode {
+        // OpenCode's `run --format json` answers with one JSON event per line; the
+        // visible answer is the `text` parts, and `sessionID` is the handle
+        // oneharness stores for `--session`. Tool parts are not modelled: the
+        // journeys that need events drive the claude-code shape above.
+        emit(&format!(
+            r#"{{"type":"text","sessionID":"fake-opencode-session","part":{{"type":"text","text":{}}}}}"#,
+            json_string(&reply)
+        ));
+        return;
+    }
 
     // Spawned *before* the first event, and blocking until it has published: the
     // consumer's cancel is triggered by an event, so a descendant spawned after
@@ -124,17 +163,36 @@ fn main() {
 /// delivers a onejudge turn's two halves through two different flags — the
 /// prompt positionally and the skill's instructions on `--append-system-prompt` —
 /// and a journey may steer the double from either. Stdin is folded in for the
-/// case where the command layer moved a large prompt off the argv
-/// (`--input-format text`).
+/// cases where the command layer moved the prompt off the argv: a large prompt
+/// (`--input-format text`), and every `--control` turn, whose prompt is a JSON
+/// frame on stdin so the handle can stay open for the interrupt frame afterwards.
+///
+/// **One line, never to EOF.** A controlled turn's stdin is held open by
+/// oneharness for the whole turn precisely so it can deliver that interrupt — so
+/// a read to EOF here waits for a close that waits for this process to answer,
+/// and the turn deadlocks. One line is the whole prompt frame either way: both
+/// input formats oneharness writes are line-delimited.
 fn steering(args: &[String]) -> String {
     let mut text = args.join("\u{1f}");
     if args.windows(2).any(|w| w[0] == "--input-format") {
         let mut buffer = String::new();
-        let _ = std::io::Read::read_to_string(&mut std::io::stdin(), &mut buffer);
+        let _ = std::io::BufRead::read_line(&mut std::io::stdin().lock(), &mut buffer);
         text.push('\u{1f}');
         text.push_str(&buffer);
     }
     text
+}
+
+/// The native session token this run was told to continue, or `None` when it
+/// opened a fresh conversation.
+///
+/// Two spellings because the two harnesses spell it differently, and both are
+/// oneharness's own argv rather than anything this double chose: claude-code
+/// resumes with `--resume <token>`, opencode with `--session <token>`.
+fn resumed_on(args: &[String]) -> Option<String> {
+    args.windows(2)
+        .find(|w| w[0] == "--resume" || w[0] == "--session")
+        .map(|w| w[1].clone())
 }
 
 /// The first `[[name:value]]` in `text`, if any.
