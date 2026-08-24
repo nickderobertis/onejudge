@@ -21,6 +21,15 @@ repo-wide contract; this covers only what differs here.
   the out-of-tree liveness check for a leaked harness stand-in, and the POSIX
   process-group hook the cancellation journeys drive. `e2e.rs` runs them against
   the engine, `cli.rs` against a `Plan`; put a helper here rather than copying it.
+- **A control socket's address has a byte budget, and it differs per platform.**
+  `sun_path` is 108 bytes on Linux, 104 on the macOS/BSD lineage, and absent off
+  unix — and a macOS runner's temp dir (`/var/folders/<ab>/<hash>/T`) spends half
+  of it before your store is named. Take a store root from `control_store` /
+  `use_private_session_store`, which measure it against oneharness's own
+  `socket_path`; a hand-rolled `temp_dir().join(..)` passes locally and fails only
+  on the macOS job. For the same reason, asserting that an over-long address is
+  *refused* is unix-only: off unix no address is too long, so oneharness's error
+  cannot be constructed at all. Reproduce either locally with a long `TMPDIR`.
 - **`coverage.rs` plants a corrupt profile on purpose.** It writes a truncated
   `.profraw` into the directory `cargo llvm-cov` merges from, so the gate's own
   coverage step has to survive the artifact a killed instrumented child leaves —
