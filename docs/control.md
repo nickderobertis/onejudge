@@ -9,7 +9,9 @@ already finished the wrong work.
 oneharness 0.6.14 provides the lever: `oneharness run --control` opens a unix
 socket for the run's lifetime, and a **separate** `oneharness interrupt` process
 aborts the in-flight turn and delivers a replacement message in one operation.
-onejudge's advertised floor is the pinned `oneharness-core`, currently **0.8.0**.
+onejudge's advertised CLI floor is **0.11.0+**, the release embedding the pinned
+`oneharness-core` 0.12.0. The two crates version independently; never read one
+number off the other.
 
 onejudge's part is deliberately narrow, and it is all of this page:
 

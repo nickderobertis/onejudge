@@ -7,6 +7,7 @@
 //! leaving a stale literal that only the fixture still believes in.
 
 use oneharness_core::domain::events::ActionEvent;
+use oneharness_core::domain::fallback::FallThroughReason;
 use oneharness_core::domain::history::{HistoryId, HistoryLabels, HistoryRecord};
 use oneharness_core::domain::mode::PermissionMode;
 use oneharness_core::domain::report::{
@@ -47,10 +48,15 @@ pub(crate) fn result(harness_id: &str, text: &str) -> RunResult {
         schema_error: None,
         failure_kind: None,
         failure_kind_source: None,
+        work: None,
         stdout: String::new(),
         stderr: String::new(),
         error: None,
     }
+    // oneharness derives the published work reading from the finished envelope,
+    // and every one of its own constructors ends here — so the fixture does too,
+    // rather than hand-setting a value a real report would have computed.
+    .with_work_evidence()
 }
 
 /// One result that failed with oneharness's classified `kind`.
@@ -62,7 +68,7 @@ pub(crate) fn failed(harness_id: &str, status: Status, kind: Option<FailureKind>
     result.failure_kind = kind;
     result.failure_kind_source = kind.map(|_| "stderr".into());
     result.error = Some(format!("fixture failure for `{harness_id}`"));
-    result
+    result.with_work_evidence()
 }
 
 /// The token/cost accounting a harness reports.
@@ -133,16 +139,21 @@ pub(crate) fn telemetry() -> ExecutionTelemetry {
 }
 
 /// The fallback block for a chain that settled on `ran` (or nowhere).
-pub(crate) fn fallback(ran: Option<&str>, fell_through: &[(&str, &str)]) -> FallbackReport {
+pub(crate) fn fallback(
+    ran: Option<&str>,
+    fell_through: &[(&str, FallThroughReason)],
+) -> FallbackReport {
     FallbackReport {
         ran: ran.map(str::to_string),
         fell_through: fell_through
             .iter()
             .map(|(harness, reason)| FallThrough {
                 harness: (*harness).into(),
-                reason: (*reason).into(),
+                reason: *reason,
+                detail: None,
             })
             .collect(),
+        stopped_without_work: false,
     }
 }
 
@@ -181,6 +192,9 @@ pub(crate) fn record(harness_id: &str) -> HistoryRecord {
         session_id: None,
         events: None,
         failure_kind: None,
+        // A successful record: `work` answers only an unclassified failure, so
+        // oneharness leaves it absent here and so does the fixture.
+        work: None,
         error: None,
     }
 }

@@ -125,6 +125,7 @@ mod coverage;
 use coverage::{detached_profile, publish_profile};
 
 use oneharness_core::domain::events::ActionEvent;
+use oneharness_core::domain::fallback::FallThroughReason;
 use oneharness_core::domain::history::{
     HistoryId, HistoryLabels, HistoryLine, HistoryRecord, HistoryRunRecord,
 };
@@ -272,20 +273,20 @@ fn main() {
     // through first, then the one that ran (or, when exhausted, only the failures).
     let exhausted = marker(system, "fallback-exhausted");
     let chain = exhausted.or_else(|| marker(system, "fallback"));
-    let fell_through: Vec<(String, String)> = chain
+    let fell_through: Vec<(String, FallThroughReason)> = chain
         .map(|spec| {
             spec.split(',')
                 .filter(|entry| !entry.is_empty())
                 .map(|entry| {
                     let (id, reason) = entry.split_once('|').unwrap_or((entry, "auth"));
-                    (id.to_string(), reason.to_string())
+                    (id.to_string(), fall_through_reason(reason))
                 })
                 .collect()
         })
         .unwrap_or_default();
     let mut results: Vec<RunResult> = fell_through
         .iter()
-        .map(|(id, reason)| fell_through_result(id, reason))
+        .map(|(id, reason)| fell_through_result(id, *reason))
         .collect();
     let fallback = chain.map(|_| FallbackReport {
         ran: exhausted.is_none().then(|| ran.harness_id.clone()),
@@ -293,9 +294,15 @@ fn main() {
             .iter()
             .map(|(id, reason)| FallThrough {
                 harness: id.split(':').next().unwrap_or(id).to_string(),
-                reason: reason.clone(),
+                reason: *reason,
+                // The candidate's own account of the refusal, which this double
+                // has none of beyond the token it was told to produce.
+                detail: None,
             })
             .collect(),
+        // Every chain this double builds either ran a candidate or fell every one
+        // of them through with a named reason, so no candidate stops it unexplained.
+        stopped_without_work: false,
     });
     let ran_index = (exhausted.is_none()).then(|| {
         results.push(ran.clone());
@@ -310,6 +317,14 @@ fn main() {
             results[index].telemetry = Some(provider_measured(is_agent));
         }
     }
+
+    // The published work reading, derived by oneharness's own rule from each
+    // finished result rather than asserted here — the double reports what the
+    // real producer would report for the same envelope.
+    let results: Vec<RunResult> = results
+        .into_iter()
+        .map(RunResult::with_work_evidence)
+        .collect();
 
     let failed = ran_index.is_none()
         || results[ran_index.unwrap_or(0)].failure_kind.is_some()
@@ -467,6 +482,7 @@ fn base_result(harness_id: &str) -> RunResult {
         schema_error: None,
         failure_kind: None,
         failure_kind_source: None,
+        work: None,
         stdout: String::new(),
         stderr: String::new(),
         error: None,
@@ -476,25 +492,39 @@ fn base_result(harness_id: &str) -> RunResult {
 /// One candidate a fallback chain routed around, shaped the way oneharness shapes
 /// it: `not-installed` never ran (`skipped`), the rest were refused before doing
 /// any work (a classified `failure_kind` on a non-zero run).
-fn fell_through_result(harness_id: &str, reason: &str) -> RunResult {
+fn fell_through_result(harness_id: &str, reason: FallThroughReason) -> RunResult {
     let mut result = base_result(harness_id);
     result.exit_code = Some(1);
     result.duration_ms = None;
-    result.error = Some(format!("candidate `{harness_id}` could not run ({reason})"));
+    result.error = Some(format!(
+        "candidate `{harness_id}` could not run ({})",
+        reason.as_str()
+    ));
     match reason {
-        "not-installed" => {
+        FallThroughReason::NotInstalled => {
             result.status = Status::Skipped;
             result.available = false;
             result.exit_code = None;
         }
-        "spawn-error" => result.status = Status::SpawnError,
+        FallThroughReason::SpawnError => result.status = Status::SpawnError,
         other => {
             result.status = Status::Nonzero;
-            result.failure_kind = Some(failure_kind(&other.replace('-', "_")));
+            result.failure_kind = Some(failure_kind(&other.as_str().replace('-', "_")));
             result.failure_kind_source = Some("stderr".into());
         }
     }
     result
+}
+
+/// oneharness's fall-through reason for a `[[fallback:ID|REASON]]` token, read
+/// through oneharness's own serde spelling rather than a second copy of the
+/// table — so a reason it renames stops this double instead of being invented.
+fn fall_through_reason(token: &str) -> FallThroughReason {
+    serde_json::from_value(serde_json::Value::String(token.to_string())).unwrap_or_else(|_| {
+        emit_error(&format!(
+            "`{token}` is not a oneharness fall-through reason (the double mirrors the real set)"
+        ))
+    })
 }
 
 /// oneharness's classified failure for a `[[fail:KIND]]` / fall-through token.
@@ -596,6 +626,7 @@ fn write_history(path: &str, results: &[RunResult]) {
             session_id: result.session_id.clone(),
             events: result.events.clone(),
             failure_kind: result.failure_kind,
+            work: result.work,
             error: None,
         };
         let line = serde_json::to_string(&HistoryLine::Run(HistoryRunRecord::from_record(&record)))
@@ -1185,7 +1216,14 @@ mod control {
             .unwrap_or_else(|e| emit_error(&format!("could not resolve the session store: {e}")));
         write_session_record(&dir, cwd, ran, session);
 
-        let socket = socket_path(&dir, session);
+        let socket = socket_path(&dir, session).unwrap_or_else(|too_long| {
+            emit_error(&format!(
+                "control socket address `{}` is {} bytes, past this platform's {}-byte limit",
+                too_long.path().display(),
+                too_long.bytes(),
+                too_long.limit()
+            ))
+        });
         match marker(system, "control-linger") {
             Some(sink) => spawn_server(&socket, sink),
             None => bind_here(&socket),

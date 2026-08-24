@@ -1575,7 +1575,13 @@ fn interrupt_at(
     );
     let request =
         ControlRequest::redirect(RedirectInput::new(input).expect("a usable redirection"));
-    let response = control::send(&socket_path(&dir, &address.session), &request);
+    // The address `oneharness interrupt` would dial. Fallible since oneharness
+    // 0.12: a store plus a session name that together overrun this platform's
+    // `sun_path` budget has no bindable address at all, and a suite that unwrapped
+    // it silently would be asserting against a path nothing ever listened on.
+    let socket = socket_path(&dir, &address.session)
+        .expect("the reported address fits this platform's unix-socket budget");
+    let response = control::send(&socket, &request);
     (record, response)
 }
 
@@ -1654,10 +1660,13 @@ fn the_reported_control_address_is_one_oneharness_interrupt_can_redirect_the_tur
 
     // The lingering server and the turn it holds both outlive the run by design,
     // so both are spawned out of the profile set `cargo llvm-cov` merges.
-    assert_profile_is_detached(&oneharness_core::domain::control::socket_path(
-        std::path::Path::new(&address.session_dir),
-        &address.session,
-    ));
+    assert_profile_is_detached(
+        &oneharness_core::domain::control::socket_path(
+            std::path::Path::new(&address.session_dir),
+            &address.session,
+        )
+        .expect("the reported address fits this platform's unix-socket budget"),
+    );
     assert_profile_is_detached(&sink);
 
     let _ = std::fs::remove_file(&sink);

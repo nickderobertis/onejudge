@@ -69,7 +69,8 @@ field fails the build), and both columns against the rows below.
 `Execution::Process` (`crates/onejudge/src/oneharness/mod.rs`) spawns an
 `oneharness` executable, and is reached **only** by naming one
 (`OneharnessProvider::with_bin`) or by installing a `SpawnHook`. It exists for a
-single upstream gap, verified against 0.8.0:
+single upstream gap, verified against `oneharness-core` 0.12.0 (the CLI 0.11.0+
+embeds):
 
 **`RunControls` cannot offer a spawned harness to the embedder.** Its whole
 surface is `events`, `cancel`, `signal_cancel`, `version`. Every harness child is
@@ -134,8 +135,8 @@ onejudge passes them through by not touching it. If the above proposal lands, th
 becomes a plain field on both renderings and the seam selection goes away.
 
 A third gap is load-bearing for the *other* double rather than for the hop:
-**`io::control::bind` is public but its result cannot be made to serve.** 0.8.0
-late-binds a controlled turn's mechanism to the candidate serving it, and both
+**`io::control::bind` is public but its result cannot be made to serve.** The
+core late-binds a controlled turn's mechanism to the candidate serving it, and both
 `ControlHandle::bind` and its `Binding` are `pub(crate)` — so a listener an
 external crate binds has no mechanism behind it and refuses every interrupt
 `no_active_turn`. `onejudge-fake-oneharness` therefore serves the frames itself,

@@ -49,7 +49,7 @@ side runs under oneharness's discovered `oneharness.toml`, and the judge /
 simulated-user side runs under a separately-named config (`provider.judge_config`,
 default `oneharness.judge.toml`, passed as `oneharness run --config <path>`).
 `onejudge init` scaffolds all three by shelling out to `oneharness init` (needs
-oneharness **0.8.0+**): it runs `oneharness init oneharness.toml` and `oneharness
+oneharness **0.11.0+**): it runs `oneharness init oneharness.toml` and `oneharness
 init oneharness.judge.toml`, then writes the loop-only `onejudge.yaml`. Pass
 `--oneharness-bin <path>` if `oneharness` is not on `PATH`, and `--force` to
 overwrite existing files. To change the harness or model, edit those `.toml`
@@ -170,7 +170,7 @@ is a loud, actionable error — never a silent default.
 The CLI can build any of onejudge's backends from `provider.kind`. Every model
 call goes through oneharness:
 
-- **`oneharness`** (default) — shell out to the `oneharness` CLI (0.8.0+) to drive
+- **`oneharness`** (default) — shell out to the `oneharness` CLI (0.11.0+) to drive
   a real harness (Claude Code, Codex, …). The agent side uses the discovered
   `oneharness.toml`; the judge side uses `judge_config` (`--config`). Set
   `stream: true` when that binary publishes its agent turn as the
