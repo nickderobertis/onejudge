@@ -24,6 +24,14 @@
 //! spawned with (`none` for an unmocked one), so the deterministic-harness
 //! passthrough is asserted against the real argv.
 //!
+//! **A completed turn that said nothing.** `[[no-text]]` reports a successful
+//! result whose `text` is null while the harness's raw process output sits on
+//! `stdout` — the shape a codex app-server turn produced on every one of 26
+//! consecutive turns. onejudge must report that turn as an *empty* reply and never
+//! publish the raw output as the model's words. Unlike most markers it is read
+//! from `--system` on the agent side and from the prompt on the judge side, so one
+//! run can drive either party.
+//!
 //! **Fallback chains.** `[[fallback:ID|REASON,…]]` reports the run the way
 //! `run_mode = "fallback"` does: one result per *attempted* candidate — the listed
 //! ones fallen through, in order — then the candidate that ran, with the matching
@@ -132,6 +140,12 @@ use serde_json::{json, Value};
 /// The harness this double claims to be, so a result carries a real identity.
 const HARNESS: &str = "claude-code";
 
+/// The raw process output a `[[no-text]]` result carries: the harness protocol's
+/// own framing, carrying no model-authored character. Distinctive enough that a
+/// test can assert it reached nothing onejudge hands back.
+const RAW_PROCESS_OUTPUT: &str =
+    r#"{"jsonrpc":"2.0","method":"agentMessage","params":{"text":""}}"#;
+
 fn main() {
     // `oneharness init [PATH] [--force]` scaffolds a config file, mirroring the
     // real subcommand so `onejudge init` can be driven end-to-end without a live
@@ -239,6 +253,14 @@ fn main() {
             &prompt,
         )
     };
+    // A turn that completed while reporting no reply text, with the harness
+    // process's raw output left on the result — protocol exhaust, not the model's
+    // words. Applied to whichever party the steering text names, so the agent side
+    // and the judge side are both reachable.
+    if steering.contains("[[no-text]]") {
+        ran.text = None;
+        ran.stdout = RAW_PROCESS_OUTPUT.into();
+    }
     if let Some(native) = session
         .as_deref()
         .or(Some(if is_agent { "agent" } else { "judge" }))

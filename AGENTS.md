@@ -130,6 +130,11 @@ Use the `just` recipes; do not hand-roll equivalents. `just --list` is the index
   oneharness report are parsed into typed models (`serde`) before use, and a
   provider that ignores a request contract (empty output, missing verdict field)
   is a loud error, never a vacuous pass.
+- **A turn's reply is what the harness reported, never its raw output.** A
+  completed turn carrying no `text` replies empty — the truthful answer. The
+  substitution of `RunResult::stdout` that used to stand in for it published
+  protocol exhaust as the model's words and re-inlined it next turn (a measured
+  699 MB event line, 0 model-authored characters). See `Invocation::reply`.
 - Keep the crate portable across Linux, macOS, and Windows (the CI matrix).
 - **Security is gate-level.** No secrets in the tree (live-tier credentials come
   from the environment / repo secrets by name); grants are least-privilege.

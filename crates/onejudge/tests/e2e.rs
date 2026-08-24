@@ -435,6 +435,40 @@ fn oneharness_respond_parses_text_usage_and_events() {
 }
 
 #[test]
+fn a_turn_that_reported_no_text_replies_empty_never_the_harnesss_raw_output() {
+    // The measured cascade this guards. A codex app-server turn returned an
+    // `agentMessage` whose text was empty on 26 of 26 consecutive turns; the reply
+    // path substituted the harness process's raw output, so the whole JSON-RPC dump
+    // became the assistant's message and the next prompt re-inlined it. Nothing
+    // model-authored was ever in it. Across the real subprocess boundary the reply
+    // must be empty and the raw output must reach nothing.
+    let provider = fake_oneharness();
+    let engine = Engine::new(&provider, settings());
+    let outcome = engine
+        .run(&Conversation::single_turn(skill_with("[[no-text]]"), "go"))
+        .expect("a completed turn that said nothing is not a failed turn");
+    assert_eq!(outcome.transcript.assistant_turns(), 1);
+    assert_eq!(outcome.transcript.messages[1].content, "");
+    assert!(
+        !outcome
+            .transcript
+            .messages
+            .iter()
+            .any(|m| m.content.contains("jsonrpc")),
+        "the harness's raw process output must not reach the transcript"
+    );
+
+    // The judge side reads the same reply, and its own emptiness guard is still the
+    // loud error it always was — not a dump of the harness's protocol framing.
+    let err = engine
+        .assess("summarize follow-up work [[no-text]]", &outcome.transcript)
+        .unwrap_err();
+    let message = err.to_string();
+    assert!(message.contains("empty assessment"), "{message}");
+    assert!(!message.contains("jsonrpc"), "{message}");
+}
+
+#[test]
 fn oneharness_multi_turn_drives_the_simulated_user() {
     // A multi-turn run on a session-capable platform exercises the simulated-user
     // call and the session-threaded judge side of OneharnessProvider.
