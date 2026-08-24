@@ -1491,16 +1491,6 @@ mod tests {
                 mechanism: "opencode-http",
                 supported: "claude-code, codex".into(),
             },
-            // The socket address the run would open is past this platform's
-            // `sun_path` budget (oneharness 0.12). The channel cannot exist, so
-            // it is the ask that is refused, not the turn.
-            OneharnessError::ControlSocketAddress {
-                source: oneharness_core::domain::control::socket_path(
-                    std::path::Path::new(&"/x".repeat(200)),
-                    "run-42-skill",
-                )
-                .expect_err("an address that long cannot be bound anywhere"),
-            },
         ];
         for refusal in refusals {
             let err = stderr_error(&format!("oneharness: error: {refusal}"));
@@ -1512,6 +1502,38 @@ mod tests {
         // And it must not swallow an ordinary turn failure as a control refusal.
         let unrelated = stderr_error("oneharness: error: harness `codex` is not installed");
         assert!(!is_control_refused(&unrelated));
+    }
+
+    /// The `sun_path` rung of the ladder above, which exists only where
+    /// `sun_path` does: the socket address the run would open is past this
+    /// platform's budget (oneharness 0.12), so the channel cannot exist and it is
+    /// the *ask* that is refused, not the turn.
+    ///
+    /// Split out and gated because this is the one refusal that cannot be spelled
+    /// off unix rather than merely being unlikely there. `SocketAddressTooLong`
+    /// is constructible only by *failing* to build an address, and oneharness
+    /// sets `SOCKET_ADDRESS_MAX` to `usize::MAX` where there is no `sun_path` to
+    /// overflow — so on Windows no address is ever too long and there is no value
+    /// to render. Hand-rolling the rendering instead would assert onejudge
+    /// against a string oneharness could never emit on the host running the test.
+    /// Windows' own answer is
+    /// [`a_platform_without_unix_sockets_degrades_with_a_stated_reason`]: the ask
+    /// is dropped, with a reason, before a socket is ever addressed.
+    #[cfg(unix)]
+    #[test]
+    fn an_unaddressable_control_socket_is_refused_rather_than_failing_the_turn() {
+        let refusal = OneharnessError::ControlSocketAddress {
+            source: oneharness_core::domain::control::socket_path(
+                std::path::Path::new(&"/x".repeat(200)),
+                "run-42-skill",
+            )
+            .expect_err("an address that long overruns every platform that bounds one"),
+        };
+        let err = stderr_error(&format!("oneharness: error: {refusal}"));
+        assert!(
+            is_control_refused(&err),
+            "onejudge would fail the run instead of degrading; oneharness now says: {refusal}"
+        );
     }
 
     #[test]

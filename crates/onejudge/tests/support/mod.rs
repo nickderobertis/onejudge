@@ -25,19 +25,79 @@ pub fn scratch_path(name: &str) -> std::path::PathBuf {
     path
 }
 
+/// A private scratch directory whose `store_within` subdirectory can really
+/// address a control socket on **this** platform, created empty and handed back
+/// canonicalized.
+///
+/// A unix socket address is capped at `sockaddr_un.sun_path` — 108 bytes on
+/// Linux, 104 on the macOS/BSD lineage — and the platform temp dir does not cost
+/// the same everywhere. Linux's is `/tmp` (5 bytes); macOS's is
+/// `/var/folders/<ab>/<30-char hash>/T` (49, and 56 once resolved through
+/// `/private`), which can leave a store nested under it with no budget left to
+/// spell a socket name in. So the root is **measured** rather than assumed, and
+/// the first candidate that can carry a socket wins — on Linux that is always
+/// the first one, leaving its behaviour byte-identical.
+///
+/// Two details make the measurement the same one the run will make. It is taken
+/// **canonicalized**, because that is the address oneharness finally checks (its
+/// own `socket_path` docs call out `/tmp` → `/private/tmp` as the case that
+/// lengthens an address after it is built). And it asks for a name long enough to
+/// force the digest fallback: a store that can address `<digest>.sock` can
+/// address *every* session name, since `socket_file_name` abbreviates any longer
+/// one to exactly that.
+///
+/// The pid keeps two checkouts running the same test apart.
+#[cfg(unix)]
+fn addressable_store_root(leaf: &str, store_within: &[&str]) -> std::path::PathBuf {
+    // `/tmp` is the fallback rather than the default so that a host which points
+    // `TMPDIR` somewhere deliberately (a sandbox, a tmpfs) keeps being honoured
+    // whenever its budget genuinely stretches to a socket.
+    let mut candidates = vec![std::env::temp_dir()];
+    if !candidates
+        .iter()
+        .any(|root| root == std::path::Path::new("/tmp"))
+    {
+        candidates.push("/tmp".into());
+    }
+
+    let mut refusal = None;
+    for root in candidates {
+        let dir = root.join(leaf);
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("the session store is creatable");
+        let canonical = dir
+            .canonicalize()
+            .expect("a directory this process just created resolves");
+        let store = store_within
+            .iter()
+            .fold(canonical.clone(), |path, part| path.join(part));
+        match oneharness_core::domain::control::socket_path(&store, &"n".repeat(256)) {
+            Ok(_) => return canonical,
+            Err(too_long) => {
+                let _ = std::fs::remove_dir_all(&dir);
+                refusal = Some(too_long);
+            }
+        }
+    }
+    panic!(
+        "no temp root on this host can address a control socket for `{leaf}`: {}",
+        refusal.expect("at least one candidate root is always measured")
+    );
+}
+
 /// A unique, empty oneharness **session store** for a controlled run: the
 /// directory its handle and its `control/<name>.sock` live under. Never the
 /// platform default, which is the developer's own store.
 ///
-/// Deliberately NOT under `CARGO_TARGET_TMPDIR` like every other scratch path: a
-/// unix socket address is capped at ~100 bytes (`SUN_LEN`), and a target dir
-/// nested under a worktree path blows that before the socket name is even
-/// appended. The pid keeps two checkouts running the same test apart.
+/// Deliberately NOT under `CARGO_TARGET_TMPDIR` like every other scratch path:
+/// a target dir nested under a worktree path blows the socket-address budget
+/// before the socket name is even appended. See [`addressable_store_root`] for
+/// the budget and how the root is chosen against it.
+#[cfg(unix)]
 pub fn control_store(name: &str) -> std::path::PathBuf {
-    let path = std::env::temp_dir().join(format!("oj-{name}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&path);
-    std::fs::create_dir_all(&path).expect("the session store is creatable");
-    path
+    // The socket lands directly in this directory's `control/`, so the store is
+    // the root itself.
+    addressable_store_root(&format!("oj-{name}-{}", std::process::id()), &[])
 }
 
 /// Point this test process's **session store** at a private directory, and hand
@@ -54,15 +114,20 @@ pub fn control_store(name: &str) -> std::path::PathBuf {
 /// store, where a `control/<session>.sock` keyed only by session name would
 /// collide between two checkouts running the same journey.
 ///
-/// Rooted at the system temp dir rather than `CARGO_TARGET_TMPDIR` for the reason
-/// [`control_store`] gives.
+/// Rooted outside `CARGO_TARGET_TMPDIR`, and measured, for the reason
+/// [`addressable_store_root`] gives — doubly so here, because oneharness nests
+/// its store a further `oneharness/sessions` under the state home, and that
+/// nesting is what pushed a macOS runner's address to 120 bytes against a
+/// 104-byte budget.
 #[cfg(unix)]
 pub fn use_private_session_store(name: &str) -> std::path::PathBuf {
-    let home = std::env::temp_dir().join(format!("oj-state-{name}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&home);
-    std::fs::create_dir_all(&home).expect("the state home is creatable");
+    let store_within = ["oneharness", "sessions"];
+    let home = addressable_store_root(
+        &format!("oj-state-{name}-{}", std::process::id()),
+        &store_within,
+    );
     std::env::set_var("XDG_STATE_HOME", &home);
-    home.join("oneharness").join("sessions")
+    store_within.iter().fold(home, |path, part| path.join(part))
 }
 
 /// The `<pid> <port>` the double's harness stand-in published once it was live.
