@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.2](https://github.com/nickderobertis/onejudge/compare/v0.5.1...v0.5.2) - 2026-08-24
+
+### Fixed
+
+- *(oneharness)* reply with the reported text, never the harness's raw output ([#59](https://github.com/nickderobertis/onejudge/pull/59))
+
 ## [0.5.1](https://github.com/nickderobertis/onejudge/compare/v0.5.0...v0.5.1) - 2026-08-23
 
 ### Fixed
