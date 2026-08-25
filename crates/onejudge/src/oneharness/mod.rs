@@ -12,13 +12,15 @@
 //! separately-configured harness/model — again without `--harness`/`--model`.
 //! Scaffold both with `onejudge init` (which shells out to `oneharness init`).
 //!
-//! It targets **oneharness v0.8.0+** — the release carrying the report contract
-//! it compiles against (`oneharness-core`, pinned in the workspace manifest).
-//! v0.6.9 was the first whose `run` verb answers a cancellation signal by tearing
-//! its harness tree down instead of dying and orphaning it, and v0.6.14 added the
-//! `run --control` / `interrupt` pair it reports the address of; since 0.7 the
-//! CLI and the engine crate release in lockstep, so the advertised floor and the
-//! pin are one number. It always threads the uniform `--session
+//! It targets **oneharness v0.11.0+** — the release embedding the `oneharness-core`
+//! this crate compiles against (pinned in the workspace manifest). v0.6.9 was the
+//! first whose `run` verb answers a cancellation signal by tearing its harness
+//! tree down instead of dying and orphaning it, v0.6.14 added the
+//! `run --control` / `interrupt` pair it reports the address of, and v0.11.0 is
+//! the first that either resumes a named session on a turn-driving control
+//! mechanism or refuses the continuation outright. The CLI and the engine crate
+//! version independently, so the advertised floor is not the pin — see
+//! `MIN_ONEHARNESS_CORE`. It always threads the uniform `--session
 //! <name>` handle (the engine's caller-owned name, mapped to the harness's native
 //! session in oneharness's on-disk store), and if a run fails because the harness
 //! does not support `--session`, it retries the same call once **without**
@@ -977,7 +979,7 @@ fn invocation_telemetry(role: TelemetryRole, invocation: &Invocation) -> Invocat
                     .iter()
                     .map(|fell| FellThrough {
                         harness: fell.harness.clone(),
-                        reason: fell.reason.clone(),
+                        reason: fell.reason.as_str().to_string(),
                     })
                     .collect()
             })
@@ -1476,6 +1478,19 @@ mod tests {
                 with: "--control",
                 why: "control drives one live turn",
             },
+            // A named handle whose stored conversation cannot be reopened over
+            // the mechanism that would serve this turn (oneharness 0.12). It
+            // belongs on this ladder rather than failing the run because
+            // oneharness's own remedy is onejudge's next rung: drop `--control`
+            // and the handle continues on the harness's ordinary headless run.
+            // Degrading the other way — keeping the flag and taking a fresh
+            // conversation — is the very failure the refusal exists to stop.
+            OneharnessError::SessionControlNoResume {
+                name: "run-42-skill".into(),
+                id: "opencode".into(),
+                mechanism: "opencode-http",
+                supported: "claude-code, codex".into(),
+            },
         ];
         for refusal in refusals {
             let err = stderr_error(&format!("oneharness: error: {refusal}"));
@@ -1487,6 +1502,38 @@ mod tests {
         // And it must not swallow an ordinary turn failure as a control refusal.
         let unrelated = stderr_error("oneharness: error: harness `codex` is not installed");
         assert!(!is_control_refused(&unrelated));
+    }
+
+    /// The `sun_path` rung of the ladder above, which exists only where
+    /// `sun_path` does: the socket address the run would open is past this
+    /// platform's budget (oneharness 0.12), so the channel cannot exist and it is
+    /// the *ask* that is refused, not the turn.
+    ///
+    /// Split out and gated because this is the one refusal that cannot be spelled
+    /// off unix rather than merely being unlikely there. `SocketAddressTooLong`
+    /// is constructible only by *failing* to build an address, and oneharness
+    /// sets `SOCKET_ADDRESS_MAX` to `usize::MAX` where there is no `sun_path` to
+    /// overflow — so on Windows no address is ever too long and there is no value
+    /// to render. Hand-rolling the rendering instead would assert onejudge
+    /// against a string oneharness could never emit on the host running the test.
+    /// Windows' own answer is
+    /// [`a_platform_without_unix_sockets_degrades_with_a_stated_reason`]: the ask
+    /// is dropped, with a reason, before a socket is ever addressed.
+    #[cfg(unix)]
+    #[test]
+    fn an_unaddressable_control_socket_is_refused_rather_than_failing_the_turn() {
+        let refusal = OneharnessError::ControlSocketAddress {
+            source: oneharness_core::domain::control::socket_path(
+                std::path::Path::new(&"/x".repeat(200)),
+                "run-42-skill",
+            )
+            .expect_err("an address that long overruns every platform that bounds one"),
+        };
+        let err = stderr_error(&format!("oneharness: error: {refusal}"));
+        assert!(
+            is_control_refused(&err),
+            "onejudge would fail the run instead of degrading; oneharness now says: {refusal}"
+        );
     }
 
     #[test]

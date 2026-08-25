@@ -213,10 +213,14 @@ follow only from reading it typed, and both have tests: under `run_mode =
 one the chain routed around), and a candidate that timed out / could not spawn /
 was skipped carries no `failure_kind` — its `Status` is the signal, and ignoring it
 banks a vacuously empty turn. One seam still spawns — `Execution::Process`, reached only by naming a binary
-(`with_bin`) or installing a `SpawnHook`, because `RunControls` cannot offer a
-spawned harness and an in-process turn would empty `Report::processes`.
+(`with_bin`) or installing a `SpawnHook`, because `run` offers an embedder no
+spawned harness and an in-process turn would empty `Report::processes`. Upstream
+has since closed that gap (`run_supervised` + `ProcessSupervisor`, oneharness-core
+0.10.1) and onejudge has **not** moved onto it: adopting it as-is would drop
+`SpawnHook`'s refusal contract and change what `Report::processes` means in
+process, so it is its own release.
 `docs/oneharness-library.md` records the argv↔`RunRequest` mapping (one `TurnSpec`,
-two renderings, reconciled by a gate) and that gap's proposal against oneharness.
+two renderings, reconciled by a gate) and what that move still needs.
 The e2e double for the in-process seam is `onejudge-fake-harness`, a *harness*
 stand-in reached through ordinary `[harness.<id>] bin` config — so the whole of
 oneharness is the real code under test and only the model is faked. The measurements onejudge's `telemetry`
@@ -230,9 +234,11 @@ talks to** — an orphaned harness keeps billing. In process that is
 tree. The **spawning** seam still escalates through three rungs — close stdout,
 SIGTERM, kill — because a spawned producer has to be reached through the OS, and
 each rung reaches a case the one before cannot; two e2e tests gate that pair, one
-per rung. The crate's floor is **0.8.0** (the pinned `oneharness-core`, which since
-0.7 releases in lockstep with the CLI). See `docs/oneharness-library.md` before
-touching either.
+per rung. The `oneharness-core` pin lives in the workspace manifest and nowhere
+else; the **CLI** floor an operator installs is a different number (**0.11.0+**,
+the release that embeds the pin) because the two crates version independently.
+Never infer one from the other — `cli/mod.rs` holds the pairing and gates it. See
+`docs/oneharness-library.md` before touching either.
 
 The **free deterministic harness** is reachable through this layer:
 `provider.mock_harness` / `OneharnessProvider::with_mock_harness` forwards
@@ -250,10 +256,20 @@ when null; a refused ask is `null` **plus** `control_unavailable`, because "neve
 asked" and "asked and refused" are different facts. A refusal costs no model
 tokens (oneharness validates before spawning), so the call is retried without the
 flag rather than failing the run. `--control` arrived in oneharness 0.6.14, under
-the **0.8.0+** floor the crate advertises.
+the **0.11.0+** floor the crate advertises.
 `docs/control.md` is the contract; the e2e that matters drives a real
 socket and asserts the reported address *redirects the live turn*, not that it
 merely exists.
+
+**A named session and `--control` must agree about what a turn is.** A mechanism
+that drives the turn over its own protocol builds no argv, so the harness's
+`--resume` mapping is never reached and only the protocol's own resume request can
+continue a conversation; oneharness refuses a continuation on a mechanism without
+one (`SessionControlNoResume`) rather than silently opening a new one — the defect
+that re-sent a whole transcript every turn. onejudge degrades from that refusal
+like any other: drop `--control`, keep the conversation. Both halves are driven
+through the real in-process engine, one journey per outcome, each asserting on the
+native token the harness was resumed on.
 
 **Every hop that moves in-process gives up something the subprocess boundary was
 supplying.** oneharness's descendant teardown was the first (restored by signalling

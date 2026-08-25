@@ -1575,7 +1575,13 @@ fn interrupt_at(
     );
     let request =
         ControlRequest::redirect(RedirectInput::new(input).expect("a usable redirection"));
-    let response = control::send(&socket_path(&dir, &address.session), &request);
+    // The address `oneharness interrupt` would dial. Fallible since oneharness
+    // 0.12: a store plus a session name that together overrun this platform's
+    // `sun_path` budget has no bindable address at all, and a suite that unwrapped
+    // it silently would be asserting against a path nothing ever listened on.
+    let socket = socket_path(&dir, &address.session)
+        .expect("the reported address fits this platform's unix-socket budget");
+    let response = control::send(&socket, &request);
     (record, response)
 }
 
@@ -1654,10 +1660,13 @@ fn the_reported_control_address_is_one_oneharness_interrupt_can_redirect_the_tur
 
     // The lingering server and the turn it holds both outlive the run by design,
     // so both are spawned out of the profile set `cargo llvm-cov` merges.
-    assert_profile_is_detached(&oneharness_core::domain::control::socket_path(
-        std::path::Path::new(&address.session_dir),
-        &address.session,
-    ));
+    assert_profile_is_detached(
+        &oneharness_core::domain::control::socket_path(
+            std::path::Path::new(&address.session_dir),
+            &address.session,
+        )
+        .expect("the reported address fits this platform's unix-socket budget"),
+    );
     assert_profile_is_detached(&sink);
 
     let _ = std::fs::remove_file(&sink);
@@ -1824,13 +1833,21 @@ fn no_control_ask_reports_neither_an_address_nor_a_reason() {
 /// double — ordinary `[harness.<id>] bin` config, so this is the seam a real
 /// deployment uses and not a test-only hook.
 fn harness_project(name: &str) -> std::path::PathBuf {
+    harness_project_on("claude-code", name)
+}
+
+/// The same, for a named registry harness. Which harness a project selects is
+/// what decides its **control mechanism**, and the mechanism is what oneharness
+/// 0.12 either continues a named session over or refuses to — so a journey about
+/// that boundary has to be able to pick one.
+fn harness_project_on(harness: &str, name: &str) -> std::path::PathBuf {
     let dir = scratch_path(name);
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(
         dir.join("oneharness.toml"),
         format!(
-            "harnesses = [\"claude-code\"]\nhistory_dir = {:?}\n\n[harness.claude-code]\nbin = {:?}\n",
+            "harnesses = [\"{harness}\"]\nhistory_dir = {:?}\n\n[harness.{harness}]\nbin = {:?}\n",
             dir.join("history").display().to_string(),
             env!("CARGO_BIN_EXE_onejudge-fake-harness"),
         ),
@@ -1993,6 +2010,105 @@ fn cancelling_an_in_process_turn_terminates_the_harness_tree_oneharness_owns() {
     // double, and it is detached for the same reason — so it needs the same
     // redirect, out of the profile set `cargo llvm-cov` merges.
     assert_profile_is_detached(&handle);
+}
+
+/// Drive one skill turn through the real engine in `dir`, and hand back the
+/// reply and the report the run produced.
+///
+/// The session-and-control journeys below are two runs of this against one
+/// project and one session name — a supervisor that turned `control: true` on for
+/// an already-running handle, which is exactly the shape whose continuation
+/// oneharness 0.12 either honours or refuses.
+#[cfg(unix)]
+fn one_turn(
+    dir: &std::path::Path,
+    control: bool,
+    instructions: &str,
+    prompt: &str,
+) -> (String, onejudge::Report) {
+    let provider = OneharnessProvider::new().with_control(control);
+    let engine = Engine::new(&provider, settings().with_session_name("run-42"));
+    let outcome = engine
+        .run(&Conversation::single_turn(
+            Skill::new("demo", dir.to_str().unwrap(), instructions),
+            prompt,
+        ))
+        .expect("a session-threaded turn is an ordinary turn");
+    let reply = outcome.transcript.messages[1].content.clone();
+    (reply, outcome.into_report(vec![]))
+}
+
+#[cfg(unix)]
+#[test]
+fn a_controlled_turn_resumes_the_named_session_on_a_mechanism_that_carries_it() {
+    // claude-code's control frame rides its ordinary headless run, so the handle
+    // travels on the same `--resume` argv it would without `--control` — and
+    // oneharness 0.12 says so by rule (`ControlShape::carries_session`) rather
+    // than by luck. This is the *honoured* half of that rule, proven the only way
+    // it can be: the reply is the native token the second turn was resumed on, so
+    // a run that silently opened a new conversation could not produce it.
+    let store = support::use_private_session_store("ctl-resume");
+    let dir = harness_project("in-process-control-resume");
+
+    let (created, _) = one_turn(&dir, false, "[[echo-resume]]", "start the job");
+    assert_eq!(
+        created, "none",
+        "the first turn opens the conversation, so there is no token to resume on"
+    );
+
+    let (resumed, report) = one_turn(&dir, true, "[[echo-resume]]", "keep going");
+    assert_eq!(
+        resumed, "fake-harness-session",
+        "the controlled turn must continue the stored conversation, not start a new one"
+    );
+
+    // And the run really was controllable: an address, no reason beside it.
+    let address = report
+        .control
+        .as_ref()
+        .expect("a controlled run reports where its turn is addressed");
+    assert_eq!(address.session, "run-42-skill");
+    assert!(report.control_unavailable.is_none());
+    assert_eq!(
+        std::path::Path::new(&address.session_dir),
+        store.canonicalize().unwrap(),
+        "the address names the store the run really opened its socket under"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_controlled_turn_on_a_mechanism_that_cannot_resume_degrades_instead_of_starting_over() {
+    // The refusal half, and the defect the whole upgrade exists for. OpenCode's
+    // control mechanism drives the turn over its own HTTP protocol and implements
+    // no resume request, so a `--control` continuation of a named handle would
+    // open a NEW conversation while the store, the flag and the report all looked
+    // healthy — the failure that re-sent a whole transcript every turn.
+    //
+    // oneharness 0.12 refuses that combination before spawning anything. onejudge
+    // must neither fail the run nor take the refusal as licence to start over: it
+    // drops the one thing it was refused for, and the handle continues.
+    let _store = support::use_private_session_store("ctl-no-resume");
+    let dir = harness_project_on("opencode", "in-process-control-no-resume");
+
+    let (created, _) = one_turn(&dir, false, "[[echo-resume]]", "start the job");
+    assert_eq!(created, "none");
+
+    let (resumed, report) = one_turn(&dir, true, "[[echo-resume]]", "keep going");
+    assert_eq!(
+        resumed, "fake-opencode-session",
+        "the refused control ask must cost the lever, never the conversation"
+    );
+
+    // No address, and oneharness's own words for why — a supervisor deciding where
+    // to route a controllable turn needs the mechanism named, not a paraphrase.
+    assert!(report.control.is_none());
+    let reason = report
+        .control_unavailable
+        .as_deref()
+        .expect("a refused ask is a stated reason, never a silent absence");
+    assert!(reason.contains("opencode-http"), "{reason}");
+    assert!(reason.contains("implements no resume request"), "{reason}");
 }
 
 #[test]

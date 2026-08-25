@@ -23,6 +23,7 @@
 //!   the crate's boundary invariant forbids.
 
 use oneharness_core::domain::events::ActionEvent;
+use oneharness_core::domain::fallback::FallThroughReason;
 use oneharness_core::domain::report::{ExecutionTelemetry, RunReport, RunResult, Status};
 use oneharness_core::domain::signals::FailureKind;
 use serde::Deserialize;
@@ -276,6 +277,12 @@ pub(crate) fn classify(kind: FailureKind) -> ProviderErrorKind {
         // is still runnable — so it stays `Other` rather than borrowing a category
         // that would tell a caller to stop trying.
         FailureKind::SessionNotFound => ProviderErrorKind::Other,
+        // Two refusals the harness makes *before* it asks the model: the working
+        // directory is not one it will act in, and the prompt is past the size it
+        // accepts. Both are real refusals to do the work, and neither is an
+        // environment category onejudge names — retrying elsewhere would not help,
+        // and `Spawn` would be a lie (the harness started fine). They stay `Other`.
+        FailureKind::UntrustedDirectory | FailureKind::InputTooLarge => ProviderErrorKind::Other,
     }
 }
 
@@ -388,7 +395,7 @@ fn select(op: &str, report: &RunReport) -> Result<(Option<usize>, Option<Error>)
             let chain = fallback
                 .fell_through
                 .iter()
-                .map(|f| format!("{} [{}]", f.harness, f.reason))
+                .map(|f| format!("{} [{}]", f.harness, f.reason.as_str()))
                 .collect::<Vec<_>>()
                 .join(", ");
             // Classify by the *last* reason tried: it is the one that decided the
@@ -396,7 +403,7 @@ fn select(op: &str, report: &RunReport) -> Result<(Option<usize>, Option<Error>)
             let kind = fallback
                 .fell_through
                 .last()
-                .map_or(ProviderErrorKind::Spawn, |f| reason_kind(&f.reason));
+                .map_or(ProviderErrorKind::Spawn, |f| reason_kind(f.reason));
             return Ok((
                 None,
                 Some(Error::provider_classified(
@@ -431,18 +438,24 @@ fn select(op: &str, report: &RunReport) -> Result<(Option<usize>, Option<Error>)
     Ok((Some(0), None))
 }
 
-/// Map a fallback `fell_through` reason token to a classified kind. The tokens are
-/// oneharness's (`not-installed`, `spawn-error`, `auth`, `quota`,
-/// `model-not-found`, `rate-limit`); an unknown one stays unclassified rather than
-/// being guessed at.
-fn reason_kind(reason: &str) -> ProviderErrorKind {
+/// Map a fallback `fell_through` reason to a classified kind. Total on purpose,
+/// like [`classify`]: the reason is oneharness's own closed enum since report
+/// schema `0.8`, so a reason a later release adds fails to compile here instead
+/// of being silently guessed at by a wildcard.
+fn reason_kind(reason: FallThroughReason) -> ProviderErrorKind {
     match reason {
-        "not-installed" | "spawn-error" => ProviderErrorKind::Spawn,
-        "auth" => ProviderErrorKind::Auth,
-        "quota" => ProviderErrorKind::Quota,
-        "model-not-found" => ProviderErrorKind::ModelNotFound,
-        "rate-limit" => ProviderErrorKind::RateLimit,
-        _ => ProviderErrorKind::Other,
+        FallThroughReason::NotInstalled | FallThroughReason::SpawnError => ProviderErrorKind::Spawn,
+        FallThroughReason::Auth => ProviderErrorKind::Auth,
+        FallThroughReason::Quota => ProviderErrorKind::Quota,
+        FallThroughReason::ModelNotFound => ProviderErrorKind::ModelNotFound,
+        FallThroughReason::RateLimit => ProviderErrorKind::RateLimit,
+        // The same three onejudge has no narrower category for as in `classify`:
+        // the session is gone, the directory is untrusted, the input is too big.
+        // Each is a candidate that could not start for a reason that says nothing
+        // about the environment onejudge would retry in.
+        FallThroughReason::SessionNotFound
+        | FallThroughReason::UntrustedDirectory
+        | FallThroughReason::InputTooLarge => ProviderErrorKind::Other,
     }
 }
 
@@ -654,7 +667,7 @@ mod tests {
         let mut report = fixture::report(vec![fell, fixture::result("claude-code", "done")]);
         report.fallback = Some(fixture::fallback(
             Some("claude-code"),
-            &[("codex", "quota")],
+            &[("codex", FallThroughReason::Quota)],
         ));
 
         let invocation = parse(&report).unwrap();
@@ -669,7 +682,10 @@ mod tests {
         // variant), so the composed id — not the base harness — selects the turn.
         let fell = fixture::failed("codex:personal", Status::Nonzero, Some(FailureKind::Quota));
         let mut report = fixture::report(vec![fell, fixture::result("codex:work", "done")]);
-        report.fallback = Some(fixture::fallback(Some("codex:work"), &[("codex", "quota")]));
+        report.fallback = Some(fixture::fallback(
+            Some("codex:work"),
+            &[("codex", FallThroughReason::Quota)],
+        ));
 
         let invocation = parse(&report).unwrap();
         assert_eq!(invocation.result().unwrap().harness_id, "codex:work");
@@ -703,7 +719,10 @@ mod tests {
         let mut report = fixture::report(vec![a, b]);
         report.fallback = Some(fixture::fallback(
             None,
-            &[("codex", "not-installed"), ("claude-code", "auth")],
+            &[
+                ("codex", FallThroughReason::NotInstalled),
+                ("claude-code", FallThroughReason::Auth),
+            ],
         ));
 
         let err = parse(&report).unwrap_err();
@@ -724,7 +743,10 @@ mod tests {
         ]);
         report.fallback = Some(fixture::fallback(
             None,
-            &[("codex", "not-installed"), ("claude-code", "auth")],
+            &[
+                ("codex", FallThroughReason::NotInstalled),
+                ("claude-code", FallThroughReason::Auth),
+            ],
         ));
 
         let invocation = parse_report("respond", &fixture::json(&report)).unwrap();
@@ -734,17 +756,37 @@ mod tests {
     }
 
     #[test]
-    fn reason_tokens_map_to_the_kinds_a_caller_branches_on() {
-        assert_eq!(reason_kind("not-installed"), ProviderErrorKind::Spawn);
-        assert_eq!(reason_kind("spawn-error"), ProviderErrorKind::Spawn);
-        assert_eq!(reason_kind("auth"), ProviderErrorKind::Auth);
-        assert_eq!(reason_kind("quota"), ProviderErrorKind::Quota);
-        assert_eq!(
-            reason_kind("model-not-found"),
-            ProviderErrorKind::ModelNotFound
-        );
-        assert_eq!(reason_kind("rate-limit"), ProviderErrorKind::RateLimit);
-        assert_eq!(reason_kind("something-new"), ProviderErrorKind::Other);
+    fn every_fall_through_reason_maps_to_a_kind_a_caller_branches_on() {
+        // `FallThroughReason` is a closed enum upstream since report schema `0.8`,
+        // so the "an unrecognized token stays `Other`" case this test used to pin
+        // is now unrepresentable — a reason a later release adds fails the build
+        // in `reason_kind` instead. What is left to check is that every declared
+        // reason has a mapping, and that the mapping reads oneharness's own wire
+        // spelling rather than a second copy of it.
+        for (reason, expected) in [
+            (FallThroughReason::NotInstalled, ProviderErrorKind::Spawn),
+            (FallThroughReason::SpawnError, ProviderErrorKind::Spawn),
+            (FallThroughReason::Auth, ProviderErrorKind::Auth),
+            (FallThroughReason::Quota, ProviderErrorKind::Quota),
+            (
+                FallThroughReason::ModelNotFound,
+                ProviderErrorKind::ModelNotFound,
+            ),
+            (FallThroughReason::RateLimit, ProviderErrorKind::RateLimit),
+            (FallThroughReason::SessionNotFound, ProviderErrorKind::Other),
+            (
+                FallThroughReason::UntrustedDirectory,
+                ProviderErrorKind::Other,
+            ),
+            (FallThroughReason::InputTooLarge, ProviderErrorKind::Other),
+        ] {
+            assert_eq!(reason_kind(reason), expected, "{reason:?}");
+            assert_eq!(
+                serde_json::to_value(reason).unwrap(),
+                serde_json::json!(reason.as_str()),
+                "{reason:?}"
+            );
+        }
     }
 
     #[test]
@@ -755,6 +797,9 @@ mod tests {
             (FailureKind::ModelNotFound, ProviderErrorKind::ModelNotFound),
             (FailureKind::Quota, ProviderErrorKind::Quota),
             (FailureKind::ToolDeferred, ProviderErrorKind::Other),
+            (FailureKind::SessionNotFound, ProviderErrorKind::Other),
+            (FailureKind::UntrustedDirectory, ProviderErrorKind::Other),
+            (FailureKind::InputTooLarge, ProviderErrorKind::Other),
         ] {
             assert_eq!(classify(kind), expected);
             // The token onejudge surfaces is oneharness's own wire spelling.
@@ -807,7 +852,7 @@ mod tests {
         let mut report = fixture::report(vec![fell, fixture::result("claude-code", "done")]);
         report.fallback = Some(fixture::fallback(
             Some("claude-code"),
-            &[("codex", "quota")],
+            &[("codex", FallThroughReason::Quota)],
         ));
         let mut value: Value = serde_json::from_str(&fixture::json(&report)).unwrap();
         value["results"][0]["model_ms"] = serde_json::json!(999);

@@ -40,13 +40,30 @@ pub const STARTER_CONFIG: &str = include_str!("starter.yaml");
 /// against the prose that repeats it — so bumping the pin without bumping what an
 /// operator is told to install fails the gate instead of shipping a wrong number.
 ///
-/// It is a *lower bound on* the core pin rather than equal to it. The two crates
-/// have not always released together — there is no `oneharness` 0.6.13, and the
-/// 0.6.14 CLI is the one that carried `oneharness-core` 0.6.13 — so naming the
-/// core version here could tell an operator to install a CLI that was never
-/// published. Since 0.7 the workspace releases in lockstep, which is why this is
-/// now the same number as the pin.
-const MIN_ONEHARNESS: &str = "0.8.0";
+/// It is the CLI's own version, which is **not** the pinned core's. The two
+/// crates version independently — there is no `oneharness` 0.6.13, the 0.6.14
+/// CLI carried `oneharness-core` 0.6.13, and the 0.11.0 CLI carries
+/// `oneharness-core` 0.12.0 — so naming the core version here would tell an
+/// operator to install a CLI that was never published. What ties the two is
+/// [`MIN_ONEHARNESS_CORE`], and the gate below is written against that.
+const MIN_ONEHARNESS: &str = "0.11.0";
+
+/// The `oneharness-core` version the [`MIN_ONEHARNESS`] CLI release embeds, read
+/// off that release's own `oneharness-core` requirement (`oneharness` 0.11.0
+/// depends on `^0.12.0`).
+///
+/// The two constants are one fact and are bumped together. It exists because the
+/// relation the drift gate actually needs — "a CLI an operator installs at the
+/// advertised version has an engine at least as new as the one this build parses
+/// reports from" — is not a comparison of the two *numbers*: they belong to
+/// different crates, and 0.11.0 is a perfectly good CLI for a 0.12.0 core.
+/// Recording the pairing makes that comparison expressible, and offline.
+///
+/// Test-only because the gate is the only thing that reads it: nothing an
+/// operator sees names a core version, and a second number in a CLI message
+/// would be one more copy to drift.
+#[cfg(test)]
+const MIN_ONEHARNESS_CORE: &str = "0.12.0";
 
 /// Errors surfaced by the CLI. Config/validation problems are separated from IO
 /// and engine failures so the entrypoint can exit with a fitting code.
@@ -1005,10 +1022,11 @@ mod tests {
         // constrains the build, so it is the source; this is the gate that keeps
         // the other two from drifting off it — which they had.
         //
-        // The relation is `>=`, not `==`: the CLI and its engine crate version
-        // independently (no `oneharness` 0.6.13 was ever published), so a CLI
-        // older than the core it embeds is the drift worth catching, while a newer
-        // one is simply the release that carries it.
+        // The relation is `>=`, not `==`: a pin that moves forward is the ordinary
+        // case, and only a pin that moves PAST what the advertised CLI embeds is
+        // drift. It is checked against `MIN_ONEHARNESS_CORE`, not against
+        // `MIN_ONEHARNESS` — see that constant's doc for why the two numbers
+        // cannot be compared to each other.
         let manifest = include_str!("../../../../Cargo.toml");
         let pinned = manifest
             .lines()
@@ -1018,10 +1036,11 @@ mod tests {
             .trim_matches('"')
             .to_string();
         assert!(
-            version_parts(MIN_ONEHARNESS) >= version_parts(&pinned),
-            "the advertised oneharness minimum {MIN_ONEHARNESS} is older than the pinned \
-             oneharness-core {pinned}, so an operator following it installs a CLI that cannot \
-             produce the report this build parses"
+            version_parts(MIN_ONEHARNESS_CORE) >= version_parts(&pinned),
+            "the advertised oneharness minimum {MIN_ONEHARNESS} embeds oneharness-core \
+             {MIN_ONEHARNESS_CORE}, which is older than the pinned oneharness-core {pinned}, so \
+             an operator following it installs a CLI that cannot produce the report this build \
+             parses"
         );
 
         // Everything else that repeats it — prose and rustdoc alike — so a bump
