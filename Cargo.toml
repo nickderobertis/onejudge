@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/onejudge"]
 
 [workspace.package]
-version = "0.6.0"
+version = "0.6.1"
 edition = "2021"
 # Floored by `oneharness-core`, whose typed report/stream contract onejudge parses
 # the oneharness boundary into (it declares 1.86). See `just msrv`.
