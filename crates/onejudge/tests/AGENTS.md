@@ -36,6 +36,13 @@ repo-wide contract; this covers only what differs here.
   the one that blocked the v0.5.0 release. It follows that any coverage
   invocation here needs `--failure-mode all`: run `just test`, not a hand-rolled
   `cargo llvm-cov`.
+- **`release_targets.rs` reads the release configuration, never a transcribed
+  inventory.** It derives what this repository publishes from the release
+  workflows and the manifests they build, so a new artifact fails the gate instead
+  of going undeclared in `release-targets.txt`. Its offline half drives
+  `scripts/release-probe.sh` for the not-answered cases; the two answers that need
+  a public registry are `#[ignore]`-d like `live.rs` and run via
+  `just test-release-probe`.
 - **`live.rs` is the real-harness tier**: every test is `#[ignore]`-d, compiles
   in the normal build, and runs only via `just test-live` / the `live` workflow.
   See `docs/live-tier.md`.

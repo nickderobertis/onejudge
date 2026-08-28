@@ -118,6 +118,16 @@ Use the `just` recipes; do not hand-roll equivalents. `just --list` is the index
   crate-owned trigger file; the next normal release-plz run then bumps and
   publishes the crate, CLI, and stamped SDK together. `just check` proves the
   attribution rules.
+- **What this repository releases is declared, and answerable.**
+  `release-targets.txt` names each published artifact registry-qualified —
+  `crate:onejudge`, `pypi:onejudge-cli`, `pypi:onejudge` — because `onejudge`
+  alone names *both* the crate and the SDK wheel. `scripts/release-probe.sh <id>`
+  answers what a registry serves for one: a version, empty output for "no release
+  yet", or a non-zero exit for **not answered**, which a consumer holds on
+  indefinitely and must never read as the second. `tests/release_targets.rs`
+  derives the published set from the real workflows and manifests — never a
+  transcribed list — and fails in both directions; its network half runs under
+  `just test-release-probe`.
 
 ## Invariants (non-negotiable)
 
