@@ -91,6 +91,9 @@ with open(sys.argv[1], encoding="utf-8") as handle:
     payload = json.load(handle)
 if sys.argv[2] == "crate":
     crate = payload["crate"]
+    # The stable release is what the registry serves a dependent. A crate with
+    # only prereleases has none, and answering nothing there would read as "no
+    # release yet" for a release that already happened.
     print(crate.get("max_stable_version") or crate["newest_version"])
 else:
     print(payload["info"]["version"])

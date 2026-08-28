@@ -574,6 +574,20 @@ mod probe {
             "a prerelease is not what the registry serves to a dependent"
         );
 
+        // A crate whose only releases are prereleases serves `max_stable_version:
+        // null`. Something IS published, so the prerelease is the answer: saying
+        // nothing would read as "no release yet" and hold a consumer on a release
+        // that already happened.
+        let prerelease_only = registry_on_path(
+            "crate-prerelease-only",
+            "200",
+            r#"{"crate": {"max_stable_version": null, "newest_version": "2.0.0-rc.1"}}"#,
+            0,
+        );
+        let (output, _) = probe_on_path(&prerelease_only, &["crate:onejudge"]);
+        assert!(output.status.success(), "the stand-in served a prerelease");
+        assert_eq!(String::from_utf8_lossy(&output.stdout), "2.0.0-rc.1\n");
+
         assert_no_release_yet(
             &registry_on_path("never-served", "404", "", 0),
             &["crate:onejudge"],
