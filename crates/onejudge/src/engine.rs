@@ -513,7 +513,7 @@ impl<'a> Engine<'a> {
             // declared a quiet repeated exchange to be its contract — so the streak
             // state stays honest either way and the two settings differ in exactly
             // one place.
-            let looping =
+            let should_settle =
                 noop.observe(&instruction, &message, &events) && self.settings.settle_on_noop;
             let finished_at = observed_at();
             // Nothing follows the observation that asked to stop — a sink that broke
@@ -555,7 +555,7 @@ impl<'a> Engine<'a> {
             // finished dispatch — one measured run spent 137 of them — so settle on
             // the work already there. Checked before the supervisor is asked again,
             // because that call is one of the two this loop keeps paying for.
-            if looping {
+            if should_settle {
                 settled_reason = Some(format!(
                     "the agent and the supervisor repeated {NOOP_SETTLE_LIMIT} no-op exchanges \
                      (no tool activity, and the same agent reply each time); settled on the work \
