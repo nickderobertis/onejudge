@@ -18,7 +18,7 @@
 #                      from python/onejudge-sdk/pyproject.toml.
 #
 # Ask what a registry serves for one of these with `scripts/release-probe.sh
-# <identifier>`. `crates/onejudge/tests/release_targets.rs` proves this list
+# <identifier>`. `crates/onejudge/tests/registry_targets.rs` proves this list
 # against the *real* release configuration above, in both directions, so an
 # artifact the workflows publish without a line here fails the gate rather than
 # going silently undeclared.
@@ -31,9 +31,6 @@
 #     (release-binaries.yml) are download artifacts for install.sh, not a name a
 #     dependent resolves from a registry;
 #   * this repository publishes nothing to npm.
-#
-# Unrelated to `scripts/check-release-targets.sh` despite the name: that gates the
-# *build triples* install.sh downloads, not the registry artifacts declared here.
 
 crate:onejudge
 pypi:onejudge-cli

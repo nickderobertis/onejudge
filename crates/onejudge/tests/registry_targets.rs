@@ -4,7 +4,7 @@
 //! A consumer that sequences work across repositories holds a dependent task
 //! until the artifact it depends on is released; a repository that declares no
 //! release target releases nothing as far as that consumer is concerned, so the
-//! hold quietly stops happening. `release-targets.txt` is this repository's
+//! hold quietly stops happening. `registry-targets.txt` is this repository's
 //! declaration and `scripts/release-probe.sh` answers it.
 //!
 //! The declaration is the thing that goes stale silently, so this suite never
@@ -35,10 +35,10 @@ fn read(path: &Path) -> String {
     fs::read_to_string(path).unwrap_or_else(|err| panic!("reading {}: {err}", path.display()))
 }
 
-/// The identifiers declared in `release-targets.txt`, in file order. Blank lines
+/// The identifiers declared in `registry-targets.txt`, in file order. Blank lines
 /// and `#` comments are documentation; everything else is a target.
 fn declared_targets() -> Vec<String> {
-    read(&repo_root().join("release-targets.txt"))
+    read(&repo_root().join("registry-targets.txt"))
         .lines()
         .map(|line| line.split('#').next().unwrap_or("").trim().to_string())
         .filter(|line| !line.is_empty())
@@ -272,7 +272,7 @@ fn the_declaration_matches_the_real_release_configuration() {
     let undeclared: Vec<&String> = published.difference(&declared).collect();
     assert!(
         undeclared.is_empty(),
-        "the release configuration publishes {undeclared:?}, which release-targets.txt does not \
+        "the release configuration publishes {undeclared:?}, which registry-targets.txt does not \
          declare — declare it, or account for it there as a per-platform build of a target that \
          is already declared"
     );
@@ -280,7 +280,7 @@ fn the_declaration_matches_the_real_release_configuration() {
     let unpublished: Vec<&String> = declared.difference(&published).collect();
     assert!(
         unpublished.is_empty(),
-        "release-targets.txt declares {unpublished:?}, which no release workflow publishes — a \
+        "registry-targets.txt declares {unpublished:?}, which no release workflow publishes — a \
          consumer would hold on it forever. Published: {published:?}"
     );
 }
@@ -298,19 +298,24 @@ fn nothing_here_publishes_to_npm() {
         assert!(
             !publishes,
             "{} runs `npm publish`: teach published_targets() to derive npm names and declare \
-             them in release-targets.txt",
+             them in registry-targets.txt",
             path.display()
         );
     }
 }
 
-/// Every declared identifier is registry-qualified, unique, and answerable by the
-/// probe. `onejudge` alone names both the crate and the SDK distribution, so an
-/// unqualified identifier names two different artifacts.
+/// Every declared identifier is registry-qualified and unique. `onejudge` alone
+/// names both the crate and the SDK distribution, so an unqualified identifier
+/// names two different artifacts. That the probe can actually *answer* for each
+/// one is derived from the probe itself, in `probe::the_probe_recognises_every_
+/// declared_target`, rather than restated as an allow-list here.
 #[test]
-fn every_declared_identifier_is_registry_qualified_and_probeable() {
+fn every_declared_identifier_is_registry_qualified() {
     let declared = declared_targets();
-    assert!(!declared.is_empty(), "release-targets.txt declares nothing");
+    assert!(
+        !declared.is_empty(),
+        "registry-targets.txt declares nothing"
+    );
 
     let mut seen = BTreeSet::new();
     for target in &declared {
@@ -318,9 +323,8 @@ fn every_declared_identifier_is_registry_qualified_and_probeable() {
             .split_once(':')
             .unwrap_or_else(|| panic!("`{target}` is not a `<registry>:<name>` identifier"));
         assert!(
-            matches!(registry, "crate" | "pypi"),
-            "`{target}` names the `{registry}` registry, which scripts/release-probe.sh cannot \
-             answer for — teach the probe that registry before declaring a target on it"
+            !registry.is_empty(),
+            "`{target}` names no registry, and `onejudge` alone names two different artifacts"
         );
         assert!(
             !name.is_empty()
@@ -335,12 +339,21 @@ fn every_declared_identifier_is_registry_qualified_and_probeable() {
 
 /// The probe's contract, driven as the real script over a real subprocess.
 ///
+/// The registry is faked the way the rest of this suite fakes the model: with a
+/// **real** binary — a `curl` stand-in first on `PATH`, which is the probe's only
+/// view of a registry — so "the registry failed" and "the registry serves nothing"
+/// are deterministic offline journeys rather than untestable branches. The two
+/// answers that must come from the true public registries are `#[ignore]`-d.
+///
 /// Unix only: the contract is a direct spawn with no shell interposed, and
 /// Windows cannot execute a `#!` script without one.
 #[cfg(unix)]
 mod probe {
+    use std::os::unix::fs::PermissionsExt;
+    use std::path::PathBuf;
     use std::process::{Command, Output};
     use std::time::{Duration, Instant};
+    use std::{env, fs};
 
     use super::{declared_targets, repo_root};
 
@@ -350,23 +363,86 @@ mod probe {
     /// Spawn the probe exactly as a consumer does: directly, from the repository
     /// root, with an environment carrying only PATH and HOME — no credential, and
     /// no variable the caller happened to be holding.
-    fn probe(args: &[&str]) -> (Output, Duration) {
+    fn probe_on_path(path: &str, args: &[&str]) -> (Output, Duration) {
         let root = repo_root();
         let mut command = Command::new(root.join("scripts/release-probe.sh"));
-        command.current_dir(&root).args(args).env_clear();
-        for key in ["PATH", "HOME"] {
-            if let Ok(value) = std::env::var(key) {
-                command.env(key, value);
-            }
+        command
+            .current_dir(&root)
+            .args(args)
+            .env_clear()
+            .env("PATH", path);
+        if let Ok(home) = env::var("HOME") {
+            command.env("HOME", home);
         }
         let started = Instant::now();
         let output = command.output().expect("the probe should be executable");
         (output, started.elapsed())
     }
 
+    fn probe(args: &[&str]) -> (Output, Duration) {
+        probe_on_path(&env::var("PATH").expect("PATH"), args)
+    }
+
+    /// A directory of this test's own, emptied first so an earlier run's stand-in
+    /// can never answer for this one.
+    fn stub_dir(case: &str) -> PathBuf {
+        let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+            .join("release-probe")
+            .join(case);
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("the stub directory is creatable");
+        dir
+    }
+
+    /// Where `bash` really is: the probe's shebang resolves its interpreter through
+    /// PATH like anything else, so a PATH under test still has to carry it.
+    fn interpreter() -> PathBuf {
+        env::var("PATH")
+            .unwrap_or_default()
+            .split(':')
+            .map(|dir| PathBuf::from(dir).join("bash"))
+            .find(|candidate| candidate.is_file())
+            .unwrap_or_else(|| PathBuf::from("/bin/bash"))
+    }
+
+    /// A registry stand-in, and the `PATH` that reaches it: a real `curl` that
+    /// answers the one call the probe makes with a canned status and body, or
+    /// refuses to connect at all (`exit_code` non-zero, as curl does at 7).
+    /// Prepended to the real PATH, so everything else the probe needs is still
+    /// found and only the registry is faked.
+    fn registry_on_path(case: &str, status: &str, body: &str, exit_code: i32) -> String {
+        assert!(!body.contains('\''), "the stand-in quotes the body with '");
+        let dir = stub_dir(case);
+        let curl = dir.join("curl");
+        fs::write(
+            &curl,
+            format!(
+                "#!/usr/bin/env bash\n\
+                 # Registry stand-in for tests/registry_targets.rs.\n\
+                 set -eu\n\
+                 out=\n\
+                 prev=\n\
+                 for arg in \"$@\"; do\n\
+                 \x20   if [ \"$prev\" = --output ]; then out=$arg; fi\n\
+                 \x20   prev=$arg\n\
+                 done\n\
+                 if [ -n \"$out\" ]; then printf '%s' '{body}' > \"$out\"; fi\n\
+                 if [ {exit_code} -ne 0 ]; then\n\
+                 \x20   echo 'curl: ({exit_code}) stand-in refused to connect' >&2\n\
+                 \x20   exit {exit_code}\n\
+                 fi\n\
+                 printf '%s' '{status}'\n"
+            ),
+        )
+        .expect("the registry stand-in is writable");
+        fs::set_permissions(&curl, fs::Permissions::from_mode(0o755))
+            .expect("the registry stand-in is executable");
+        format!("{}:{}", dir.display(), env::var("PATH").unwrap_or_default())
+    }
+
     /// Not answered: a reason on stderr, nothing on stdout, non-zero exit.
-    fn assert_not_answered(args: &[&str]) {
-        let (output, elapsed) = probe(args);
+    fn assert_not_answered(path: &str, args: &[&str]) {
+        let (output, elapsed) = probe_on_path(path, args);
         assert!(
             !output.status.success(),
             "{args:?} should not be answered, but the probe exited 0 with {:?}",
@@ -385,26 +461,123 @@ mod probe {
         assert!(elapsed < BOUND, "{args:?} took {elapsed:?}");
     }
 
+    /// No release yet: exit 0 and *nothing at all* on stdout.
+    fn assert_no_release_yet(path: &str, args: &[&str]) {
+        let (output, elapsed) = probe_on_path(path, args);
+        assert!(
+            output.status.success(),
+            "{args:?} has no release, which is an answer, not a failure: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            output.stdout.is_empty(),
+            "{args:?} has no release, so the probe must say nothing at all, got {:?}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+        assert!(elapsed < BOUND, "{args:?} took {elapsed:?}");
+    }
+
     /// The failure that matters most: an identifier the probe does not recognise
     /// must be *not answered*, never the empty output that means "no release yet".
     /// A consumer reading the second launches work whose dependency never landed.
     #[test]
     fn an_unrecognised_identifier_is_not_answered_rather_than_no_release_yet() {
+        let path = env::var("PATH").expect("PATH");
         // Unqualified: `onejudge` alone names both the crate and the SDK wheel.
-        assert_not_answered(&["onejudge"]);
+        assert_not_answered(&path, &["onejudge"]);
         // A registry this repository publishes nothing to.
-        assert_not_answered(&["npm:onejudge"]);
+        assert_not_answered(&path, &["npm:onejudge"]);
         // Qualified, but no artifact name at all.
-        assert_not_answered(&["crate:"]);
+        assert_not_answered(&path, &["crate:"]);
         // A name no registry could serve.
-        assert_not_answered(&["pypi:not a name"]);
+        assert_not_answered(&path, &["pypi:not a name"]);
     }
 
     /// Exactly one argument — no argument, and no second one to be ignored.
     #[test]
     fn the_probe_takes_exactly_one_identifier() {
-        assert_not_answered(&[]);
-        assert_not_answered(&["crate:onejudge", "pypi:onejudge"]);
+        let path = env::var("PATH").expect("PATH");
+        assert_not_answered(&path, &[]);
+        assert_not_answered(&path, &["crate:onejudge", "pypi:onejudge"]);
+    }
+
+    /// Which registries the probe can answer for is the probe's own fact, so it is
+    /// read off the probe: under a stand-in that serves nothing, a *recognised*
+    /// identifier answers no-release-yet, and an unrecognised one does not. Every
+    /// declared target has to be one the probe recognises, or the target is a hold
+    /// that never resolves.
+    #[test]
+    fn the_probe_recognises_every_declared_target() {
+        let path = registry_on_path("recognises", "404", "", 0);
+        for target in declared_targets() {
+            assert_no_release_yet(&path, &[&target]);
+        }
+    }
+
+    /// A registry that could not be read is NOT a registry that has nothing to
+    /// serve. Each of these is a way the lookup can fail after the identifier is
+    /// recognised, and every one of them must stay on the not-answered side.
+    #[test]
+    fn a_registry_that_cannot_be_read_is_not_answered() {
+        // Unreachable: curl itself fails (7 is its connect error).
+        let unreachable = registry_on_path("unreachable", "", "", 7);
+        assert_not_answered(&unreachable, &["pypi:onejudge"]);
+
+        // Reached, but answering something neither served nor absent.
+        let broken = registry_on_path("server-error", "500", "upstream is down", 0);
+        assert_not_answered(&broken, &["pypi:onejudge"]);
+
+        // Served, but with a payload no version can be read out of.
+        let garbled = registry_on_path("garbled", "200", "<html>maintenance</html>", 0);
+        assert_not_answered(&garbled, &["pypi:onejudge"]);
+
+        // Served, well-formed, and empty where the version belongs.
+        let empty = registry_on_path("empty-version", "200", r#"{"info": {"version": ""}}"#, 0);
+        assert_not_answered(&empty, &["pypi:onejudge"]);
+    }
+
+    /// The probe assumes only PATH and HOME, so a PATH that cannot reach what it
+    /// looks things up with is not-answered — never a silent no-release-yet.
+    ///
+    /// The PATH still carries `bash`, because a shebang that cannot resolve its
+    /// interpreter never starts the probe at all: that would prove the harness,
+    /// not the contract.
+    #[test]
+    fn a_lookup_tool_the_path_cannot_reach_is_not_answered() {
+        let dir = stub_dir("no-tools");
+        std::os::unix::fs::symlink(interpreter(), dir.join("bash"))
+            .expect("the interpreter is linkable");
+        assert_not_answered(&dir.display().to_string(), &["pypi:onejudge"]);
+    }
+
+    /// The two remaining answers, against a registry stand-in: a version it serves,
+    /// and nothing for an artifact it has never served. The same two are proven
+    /// against the true registries in the network tier below.
+    #[test]
+    fn a_stand_in_registry_answers_the_version_it_serves() {
+        let pypi = registry_on_path("pypi-served", "200", r#"{"info": {"version": "1.2.3"}}"#, 0);
+        let (output, _) = probe_on_path(&pypi, &["pypi:onejudge"]);
+        assert!(output.status.success(), "the stand-in served a version");
+        assert_eq!(String::from_utf8_lossy(&output.stdout), "1.2.3\n");
+
+        let crates = registry_on_path(
+            "crate-served",
+            "200",
+            r#"{"crate": {"max_stable_version": "1.2.3", "newest_version": "2.0.0-rc.1"}}"#,
+            0,
+        );
+        let (output, _) = probe_on_path(&crates, &["crate:onejudge"]);
+        assert!(output.status.success(), "the stand-in served a version");
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            "1.2.3\n",
+            "a prerelease is not what the registry serves to a dependent"
+        );
+
+        assert_no_release_yet(
+            &registry_on_path("never-served", "404", "", 0),
+            &["crate:onejudge"],
+        );
     }
 
     /// Network tier: what crates.io and PyPI serve for every declared target right
@@ -438,27 +611,18 @@ mod probe {
         }
     }
 
-    /// The third answer: a registry that has never served the artifact reports it
-    /// as no release yet — exit 0 with empty output, distinct from not answered.
+    /// The third answer against the real thing: a registry that has never served
+    /// the artifact reports no release yet — exit 0, empty, distinct from a
+    /// failure to answer.
     #[test]
     #[ignore = "network: reads the public registries; run via `just test-release-probe`"]
     fn an_artifact_no_registry_serves_answers_no_release_yet() {
+        let path = env::var("PATH").expect("PATH");
         for target in [
             "crate:onejudge-no-such-crate-6bd41f",
             "pypi:onejudge-no-such-distribution-6bd41f",
         ] {
-            let (output, elapsed) = probe(&[target]);
-            assert!(
-                output.status.success(),
-                "`{target}` has no release, which is an answer, not a failure: {}",
-                String::from_utf8_lossy(&output.stderr)
-            );
-            assert!(
-                output.stdout.is_empty(),
-                "`{target}` has no release, so the probe must say nothing at all, got {:?}",
-                String::from_utf8_lossy(&output.stdout)
-            );
-            assert!(elapsed < BOUND, "`{target}` took {elapsed:?}");
+            assert_no_release_yet(&path, &[target]);
         }
     }
 }

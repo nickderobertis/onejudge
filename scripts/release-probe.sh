@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # What does the public registry serve, right now, for ONE release target of this
-# repository? The targets are declared in `release-targets.txt`.
+# repository? The targets are declared in `registry-targets.txt`.
 #
 #   scripts/release-probe.sh crate:onejudge      -> 0.6.0   (exit 0)
 #   scripts/release-probe.sh pypi:onejudge-cli   -> 0.6.0   (exit 0)
@@ -49,7 +49,9 @@ name=${id#*:}
 if [ "$registry" = "$id" ]; then
     unanswered "unrecognised identifier '$id': expected a registry-qualified <registry>:<name>"
 fi
-if ! printf '%s' "$name" | grep -qE '^[A-Za-z0-9][A-Za-z0-9._-]*$'; then
+# Bash's own matching, not grep's: a name check that shelled out would report a
+# PATH missing `grep` as a malformed identifier, which is a different answer.
+if ! [[ $name =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
     unanswered "unrecognised identifier '$id': '$name' is not a registry artifact name"
 fi
 
@@ -59,7 +61,7 @@ case "$registry" in
     *) unanswered "unrecognised identifier '$id': this repository publishes to crate: and pypi: only" ;;
 esac
 
-for tool in curl python3; do
+for tool in curl mktemp python3; do
     command -v "$tool" >/dev/null 2>&1 || unanswered "$tool is not on PATH, so '$id' cannot be looked up"
 done
 
