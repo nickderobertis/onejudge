@@ -58,6 +58,13 @@ const NOOP_EXCHANGE_CHARS: usize = 240;
 /// agent may well repeat itself once. Only all three together describe a loop that
 /// has nothing left to add — and a real next instruction, being neither tiny nor
 /// answered identically, breaks the streak on the very next turn.
+///
+/// What the signature cannot see is a conversation whose *contract* is to report
+/// nothing: a long-lived observer told to answer with one fixed short sentence when
+/// it finds nothing satisfies every leg by construction, on its second quiet
+/// exchange. That conversation says so with
+/// [`Settings::settle_on_noop`]`= false`, which leaves the streak measured but
+/// stops it ending the run; the turn cap remains the bound either way.
 #[derive(Default)]
 struct NoopStreak {
     /// The normalized reply the current streak keeps repeating.
@@ -226,6 +233,17 @@ pub struct Settings {
     /// (e.g. a harness with no headless session id) degrades gracefully by
     /// re-inlining the transcript.
     pub session_name: String,
+    /// Whether a no-op streak may end the loop early. `true` (the default) is the
+    /// behaviour every run has always had: [`NOOP_SETTLE_LIMIT`] consecutive
+    /// quiet, repeated exchanges settle the run on the work it already has.
+    ///
+    /// Set it `false` for a conversation whose *contract* is to report nothing —
+    /// an observer instructed to answer with one fixed short sentence while it
+    /// finds nothing satisfies the whole no-op signature by construction, and
+    /// settling it silently ends a watch that was still working. The streak goes
+    /// on being measured; it just no longer ends the run, and `max_turns` remains
+    /// the bound, so opting out can never make a loop unbounded.
+    pub settle_on_noop: bool,
 }
 
 impl Default for Settings {
@@ -235,13 +253,15 @@ impl Default for Settings {
 }
 
 impl Settings {
-    /// Loop settings with `max_turns` defaulting to 8 and `session_name` to
-    /// `"onejudge"`. Adjust the fields directly or via the builders.
+    /// Loop settings with `max_turns` defaulting to 8, `session_name` to
+    /// `"onejudge"`, and `settle_on_noop` to `true`. Adjust the fields directly or
+    /// via the builders.
     #[must_use]
     pub fn new() -> Self {
         Self {
             max_turns: 8,
             session_name: "onejudge".into(),
+            settle_on_noop: true,
         }
     }
 
@@ -256,6 +276,15 @@ impl Settings {
     #[must_use]
     pub fn with_session_name(mut self, name: impl Into<String>) -> Self {
         self.session_name = name.into();
+        self
+    }
+
+    /// Declare whether a no-op streak may settle the loop (builder style). Pass
+    /// `false` when a quiet repeated exchange is this conversation's contract
+    /// rather than a stalled loop; see [`Settings::settle_on_noop`].
+    #[must_use]
+    pub fn with_settle_on_noop(mut self, settle: bool) -> Self {
+        self.settle_on_noop = settle;
         self
     }
 }
@@ -480,7 +509,12 @@ impl<'a> Engine<'a> {
             if let Some(u) = &usage {
                 totals.add(u);
             }
-            let looping = noop.observe(&instruction, &message, &events);
+            // Measured on every run, acted on only when this conversation has not
+            // declared a quiet repeated exchange to be its contract — so the streak
+            // state stays honest either way and the two settings differ in exactly
+            // one place.
+            let should_settle =
+                noop.observe(&instruction, &message, &events) && self.settings.settle_on_noop;
             let finished_at = observed_at();
             // Nothing follows the observation that asked to stop — a sink that broke
             // mid-turn is not handed the reply it declined to wait for.
@@ -521,7 +555,7 @@ impl<'a> Engine<'a> {
             // finished dispatch — one measured run spent 137 of them — so settle on
             // the work already there. Checked before the supervisor is asked again,
             // because that call is one of the two this loop keeps paying for.
-            if looping {
+            if should_settle {
                 settled_reason = Some(format!(
                     "the agent and the supervisor repeated {NOOP_SETTLE_LIMIT} no-op exchanges \
                      (no tool activity, and the same agent reply each time); settled on the work \

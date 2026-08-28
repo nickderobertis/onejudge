@@ -75,6 +75,14 @@ pub struct UserConfig {
     /// The assistant-turn cap for this run.
     #[serde(default)]
     pub max_turns: Option<u32>,
+    /// Whether a run of quiet, repeated exchanges settles the loop early.
+    /// Defaults to `true` — omitting the key is exactly what every config has
+    /// always done. Set it `false` when reporting nothing *is* this
+    /// conversation's contract (a long-lived observer answering with one fixed
+    /// short sentence while it finds nothing), so the loop is driven on to
+    /// `max_turns` instead of being settled on its second quiet exchange.
+    #[serde(default)]
+    pub settle_on_noop: Option<bool>,
 }
 
 /// One eval scored against the finished transcript.
@@ -337,6 +345,9 @@ impl Config {
             Some(u) => {
                 if let Some(turns) = u.max_turns {
                     settings = settings.with_max_turns(turns);
+                }
+                if let Some(settle) = u.settle_on_noop {
+                    settings = settings.with_settle_on_noop(settle);
                 }
                 let mut sim = SimulatedUser::new(u.persona);
                 if let Some(dw) = &u.done_when {
@@ -975,6 +986,28 @@ mod tests {
                 ProviderSpec::Oneharness { control: true, .. }
             )),
             other => panic!("expected split, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn settle_on_noop_defaults_to_true_and_is_declarable_either_way() {
+        // Omitting the key is what every existing config does, and it must keep
+        // meaning "settle a stalled loop". Declaring it is how a conversation whose
+        // contract is to report nothing opts out.
+        let omitted = Config::from_yaml("task: t\nuser:\n  persona: p\n")
+            .unwrap()
+            .into_plan()
+            .unwrap();
+        assert!(omitted.settings.settle_on_noop);
+
+        for declared in [true, false] {
+            let plan = Config::from_yaml(&format!(
+                "task: t\nuser:\n  persona: p\n  settle_on_noop: {declared}\n"
+            ))
+            .unwrap()
+            .into_plan()
+            .unwrap();
+            assert_eq!(plan.settings.settle_on_noop, declared);
         }
     }
 

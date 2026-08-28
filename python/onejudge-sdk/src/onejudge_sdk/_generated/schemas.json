@@ -1762,6 +1762,14 @@
             "default": "",
             "description": "How the simulated user behaves (their instructions).",
             "type": "string"
+          },
+          "settle_on_noop": {
+            "default": null,
+            "description": "Whether a run of quiet, repeated exchanges settles the loop early.\nDefaults to `true` \u2014 omitting the key is exactly what every config has\nalways done. Set it `false` when reporting nothing *is* this\nconversation's contract (a long-lived observer answering with one fixed\nshort sentence while it finds nothing), so the loop is driven on to\n`max_turns` instead of being settled on its second quiet exchange.",
+            "type": [
+              "boolean",
+              "null"
+            ]
           }
         },
         "type": "object"

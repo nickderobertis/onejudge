@@ -49,6 +49,7 @@ class UserConfig(TypedDict, total=False):
     done_when: Optional[str]
     max_turns: Optional[int]
     persona: str
+    settle_on_noop: Optional[bool]
 
 
 class _CandidateAttemptRequired(TypedDict):
