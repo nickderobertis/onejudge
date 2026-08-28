@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0](https://github.com/nickderobertis/onejudge/compare/v0.5.4...v0.6.0) - 2026-08-28
+
+### Added
+
+- *(engine)* let a conversation whose contract is a quiet turn opt out of the no-op settle ([#65](https://github.com/nickderobertis/onejudge/pull/65))
+
 ## [0.5.4](https://github.com/nickderobertis/onejudge/compare/v0.5.3...v0.5.4) - 2026-08-26
 
 ### Other
