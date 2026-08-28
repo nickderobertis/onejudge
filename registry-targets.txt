@@ -1,0 +1,37 @@
+# The release targets of this repository: the artifacts a dependent names in
+# order to depend on onejudge. One registry-qualified identifier per line,
+# `<registry>:<name>`, where <name> is exactly the name that registry serves.
+#
+# The qualification is load-bearing rather than decorative. `onejudge` alone
+# names BOTH the crate and the Python SDK distribution — two different artifacts,
+# published by two different jobs — so an unqualified name here would leave a
+# consumer waiting on a release unable to say which one it got.
+#
+#   crate:onejudge     the library      `cargo add onejudge`
+#                      released by .github/workflows/release-plz.yml (`command: release`)
+#                      from crates/onejudge/Cargo.toml.
+#   pypi:onejudge-cli  the CLI wheel    `pip install onejudge-cli`
+#                      released by .github/workflows/release-pypi.yml (`Publish onejudge-cli`)
+#                      from ./pyproject.toml (maturin wraps the `onejudge` binary).
+#   pypi:onejudge      the Python SDK   `pip install onejudge`
+#                      released by .github/workflows/release-pypi.yml (`Publish onejudge`)
+#                      from python/onejudge-sdk/pyproject.toml.
+#
+# Ask what a registry serves for one of these with `scripts/release-probe.sh
+# <identifier>`. `crates/onejudge/tests/registry_targets.rs` proves this list
+# against the *real* release configuration above, in both directions, so an
+# artifact the workflows publish without a line here fails the gate rather than
+# going silently undeclared.
+#
+# Named artifacts that are deliberately NOT targets of their own:
+#   * the per-platform `onejudge-cli` wheels (release-pypi.yml's build matrix)
+#     are builds of `pypi:onejudge-cli`, resolved by pip at that project's own
+#     version — one name, many wheels, not many names;
+#   * the `onejudge-<triple>.(tar.gz|zip)` GitHub Release archives
+#     (release-binaries.yml) are download artifacts for install.sh, not a name a
+#     dependent resolves from a registry;
+#   * this repository publishes nothing to npm.
+
+crate:onejudge
+pypi:onejudge-cli
+pypi:onejudge

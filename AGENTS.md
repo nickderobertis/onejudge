@@ -118,6 +118,14 @@ Use the `just` recipes; do not hand-roll equivalents. `just --list` is the index
   crate-owned trigger file; the next normal release-plz run then bumps and
   publishes the crate, CLI, and stamped SDK together. `just check` proves the
   attribution rules.
+- **What this repository releases is declared** in `registry-targets.txt`, and
+  `scripts/release-probe.sh` answers what a registry serves for one of those
+  identifiers. Identifiers are registry-qualified because `onejudge` alone names
+  *both* the crate and the SDK wheel. The probe's **not answered** is not "no
+  release yet": a consumer holds on the first indefinitely, and reading it as the
+  second launches work whose dependency never landed. `tests/registry_targets.rs`
+  keeps the declaration honest by deriving what is published from the release
+  configuration, so a new artifact fails the gate rather than going undeclared.
 
 ## Invariants (non-negotiable)
 
