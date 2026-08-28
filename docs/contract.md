@@ -113,7 +113,10 @@ completion decision, and it has two causes — the text says which:
 * the exchanges themselves stopped moving — `NOOP_SETTLE_LIMIT` consecutive turns
   that recorded no tool activity and gave the same tiny answer to the same tiny
   instruction. Every turn is still counted against `max_turns`; settling only ends
-  the run *earlier* than the cap would.
+  the run *earlier* than the cap would. A conversation whose contract *is* to
+  report nothing says so with `user.settle_on_noop: false`
+  (`Settings::with_settle_on_noop`) and is never settled this way — it ends at
+  `max_turns` like any other run.
 
 Neither is a failure, and a run that simply hit `max_turns` carries neither.
 

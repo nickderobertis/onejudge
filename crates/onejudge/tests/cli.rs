@@ -208,6 +208,48 @@ user:
 }
 
 #[test]
+fn a_config_declaring_quiet_its_contract_is_driven_to_the_cap_not_settled() {
+    // The config-file half of the same contract, through the real run driver: an
+    // observer whose job is to report nothing keeps being driven, and the run it
+    // produces reads as one that hit its cap rather than one that settled.
+    let quiet = "\
+task: watch the run
+system_prompt: Be helpful.
+user:
+  persona: '[[supervisor-noop]]'
+  max_turns: 5
+";
+    // Omitting the key is accepted and behaves exactly as it always has.
+    let settling = plan_from(quiet);
+    assert_eq!(
+        settling.report.transcript.assistant_turns(),
+        1 + onejudge::NOOP_SETTLE_LIMIT as usize
+    );
+    assert!(!settling.hit_max_turns);
+    let settled = settling
+        .report
+        .settled_reason
+        .clone()
+        .expect("the default settles on the no-op streak");
+    assert!(settled.contains("no-op exchanges"), "{settled}");
+
+    let watching = plan_from(&format!("{quiet}  settle_on_noop: false\n"));
+    assert_eq!(
+        watching.report.transcript.assistant_turns(),
+        5,
+        "the declared-quiet observer is driven to its cap"
+    );
+    assert!(watching.hit_max_turns);
+    assert!(
+        watching.report.settled_reason.is_none(),
+        "{:?}",
+        watching.report.settled_reason
+    );
+    assert_eq!(exit_code(&watching), 1);
+    assert!(render_human(&watching).contains("hit the turn cap (5)"));
+}
+
+#[test]
 fn binary_reports_a_settled_run_in_both_formats() {
     // The same journey through the shipped binary: the reason reaches the JSON
     // report a consumer parses *and* the human status line, and the exit code says

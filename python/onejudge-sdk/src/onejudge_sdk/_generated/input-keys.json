@@ -16,6 +16,7 @@
     "provider": "provider",
     "scale": "scale",
     "session": "session",
+    "settle_on_noop": "settle_on_noop",
     "skill": "skill",
     "stream": "stream",
     "system_prompt": "system_prompt",

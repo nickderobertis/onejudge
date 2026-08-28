@@ -48,6 +48,8 @@ user:                         # one unified supervisor call decides done or supp
     cases; do not accept "done" until you have verified it.
   done_when: "the task is complete and all tests pass"
   max_turns: 12
+  settle_on_noop: true        # false: reporting nothing IS this conversation's contract,
+                              # so quiet repeated exchanges never settle it early
 
 session: onejudge             # caller-owned session name, threaded across turns
 

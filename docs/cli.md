@@ -151,7 +151,7 @@ Top-level keys:
 | `skill` | a skill directory (containing `SKILL.md`) whose body seeds the system prompt, resolved relative to the config file; optional |
 | `system_prompt` | extra system-prompt text; used alone, or prepended before a `skill` body when both are set; optional |
 | `task` | the task to drive to completion (or supply via `--task`) |
-| `user` | the simulated supervisor: `persona`, `done_when`, `max_turns` (omit for a single-turn run) |
+| `user` | the simulated supervisor: `persona`, `done_when`, `max_turns`, `settle_on_noop` (omit for a single-turn run) |
 | `session` | the caller-owned session name threaded across turns |
 | `evals` | optional criteria to score the finished transcript: each has a `criterion`, a `kind` (`boolean` / `numeric`), and — for numeric — a `scale: [min, max]` |
 | `assessment` | optional prompt for one free-text judgement over the finished transcript and its tool actions |

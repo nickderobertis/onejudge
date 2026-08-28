@@ -155,6 +155,55 @@ fn a_no_op_supervisor_loop_settles_the_run_on_the_work_it_has() {
 }
 
 #[test]
+fn a_conversation_that_declares_quiet_its_contract_is_driven_to_its_cap_instead() {
+    // The same repeated quiet exchange, twice through the real loop, differing only
+    // in `settle_on_noop` — because a long-lived observer told to answer with one
+    // fixed short sentence while it finds nothing satisfies the whole no-op
+    // signature by construction, and settling it silently ends a watch that was
+    // still working. Opting out does not unbound the loop: the turn cap ends it.
+    const CAP: u32 = 5;
+    let persona = "[[supervisor-noop]]".to_string();
+
+    // Declared nothing: unchanged. Two quiet exchanges settle it, with the reason
+    // it has always carried.
+    let settling = Engine::new(&echo(), settings())
+        .run(&Conversation::multi_turn(
+            skill_with("Be helpful."),
+            "watch the run",
+            SimulatedUser::new(persona.clone()).max_turns(CAP),
+        ))
+        .expect("the default run settles rather than failing");
+    assert_eq!(
+        settling.transcript.assistant_turns(),
+        1 + onejudge::NOOP_SETTLE_LIMIT as usize,
+        "the default settles before the cap"
+    );
+    let settled = settling.settled_reason.clone().expect("a settle reason");
+    assert!(settled.contains("no-op exchanges"), "{settled}");
+
+    // Declared quiet its contract: the streak never ends the run, so every turn of
+    // the budget is driven and the run ends at the cap carrying no settle reason.
+    let watching = Engine::new(&echo(), settings().with_settle_on_noop(false))
+        .run(&Conversation::multi_turn(
+            skill_with("Be helpful."),
+            "watch the run",
+            SimulatedUser::new(persona).max_turns(CAP),
+        ))
+        .expect("an opted-out run is driven, not failed");
+    assert_eq!(
+        watching.transcript.assistant_turns(),
+        CAP as usize,
+        "the observer goes on being driven, and the turn cap is still the bound"
+    );
+    assert!(
+        watching.settled_reason.is_none(),
+        "the cap ended this run, not the no-op streak: {:?}",
+        watching.settled_reason
+    );
+    assert!(watching.completion_reason.is_none());
+}
+
+#[test]
 fn a_supervisor_with_no_next_instruction_settles_the_run_instead_of_killing_it() {
     // A supervisor that judges the work incomplete and then produces no message
     // used to abort the dispatch through the `CommandProvider` seam, destroying
