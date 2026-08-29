@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.2](https://github.com/nickderobertis/onejudge/compare/v0.6.1...v0.6.2) - 2026-08-29
+
+### Other
+
+- *(release)* declare release targets in the canonical release-targets.toml ([#69](https://github.com/nickderobertis/onejudge/pull/69))
+
 ## [0.6.1](https://github.com/nickderobertis/onejudge/compare/v0.6.0...v0.6.1) - 2026-08-28
 
 ### Added
