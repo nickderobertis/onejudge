@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # What does the public registry serve, right now, for ONE release target of this
-# repository? The targets are declared in `registry-targets.txt`.
+# repository? The targets are declared in `release-targets.toml`, which names this
+# script as its `probe`.
 #
 #   scripts/release-probe.sh crate:onejudge      -> 0.6.0   (exit 0)
 #   scripts/release-probe.sh pypi:onejudge-cli   -> 0.6.0   (exit 0)

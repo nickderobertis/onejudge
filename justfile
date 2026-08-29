@@ -64,10 +64,10 @@ test-live:
     cargo nextest run --features fake-provider --test live --run-ignored all
 
 # Drives `scripts/release-probe.sh` against the REAL public registries (no
-# credential, just network) for every target `registry-targets.txt` declares.
+# credential, just network) for every target `release-targets.toml` declares.
 # Opt-in network tier: the probe's registry answers, never in offline `check`.
 test-release-probe:
-    cargo nextest run --features {{gate_features}} --test registry_targets --run-ignored all
+    cargo nextest run --features {{gate_features}} --test release_targets --run-ignored all
 
 # Build the shipped `onejudge` CLI binary — the artifact the `cli-binary` PR job
 # smoke-tests and `release-binaries.yml` packages. Optional `target`
