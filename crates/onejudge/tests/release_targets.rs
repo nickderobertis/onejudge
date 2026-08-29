@@ -25,7 +25,7 @@
 //! The probe's three answers are proven by driving the real script. The two that
 //! need a public registry are `#[ignore]`-d, like every other network-touching
 //! test here (`live.rs`, `docs/live-tier.md`): the gate stays offline and
-//! deterministic. Run them with `just test-release-probe`.
+//! deterministic. Run them with `just test-release-targets`.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -54,18 +54,18 @@ mod schema {
     /// The schema version this gate reads, and the oldest it accepts.
     pub const SCHEMA_VERSION: u32 = 1;
     /// How long one line of operator-written prose may be.
-    const MAX_PROSE: usize = 400;
+    pub const MAX_PROSE: usize = 400;
     /// How long a registry-qualified identifier may be.
-    const MAX_IDENTIFIER: usize = 128;
+    pub const MAX_IDENTIFIER: usize = 128;
     /// How long a target's short name may be.
-    const MAX_TARGET_NAME: usize = 64;
+    pub const MAX_TARGET_NAME: usize = 64;
 
     /// The keys `schema_version = 1` declares, by the table they belong to. Spelled
     /// out rather than derived from `deny_unknown_fields`, because a *later* schema's
     /// keys are read leniently and that attribute would refuse them too.
-    const TOP_LEVEL_KEYS: [&str; 4] = ["schema_version", "probe", "target", "retired"];
-    const TARGET_KEYS: [&str; 6] = ["id", "name", "what", "published_by", "manifest", "covers"];
-    const RETIRED_KEYS: [&str; 2] = ["id", "why"];
+    pub const TOP_LEVEL_KEYS: [&str; 4] = ["schema_version", "probe", "target", "retired"];
+    pub const TARGET_KEYS: [&str; 6] = ["id", "name", "what", "published_by", "manifest", "covers"];
+    pub const RETIRED_KEYS: [&str; 2] = ["id", "why"];
 
     /// What one repository publishes, as its own `release-targets.toml` declares it.
     #[derive(Debug, Deserialize)]
@@ -716,65 +716,246 @@ fn every_declared_manifest_is_the_one_that_publishes_the_target() {
     );
 }
 
-/// The whole point: the declaration and the release configuration agree, in both
-/// directions. A published name no target covers is a consumer that never holds;
-/// a declared target nothing publishes is a consumer that holds forever.
+/// Where a declaration and the release configuration disagree, in both
+/// directions. Empty is agreement.
+///
+/// The comparison lives here rather than inside the assertion below, because the
+/// assertion below can only ever be driven over a declaration that *agrees*: this
+/// repository's own. What it does when the two disagree is the half that matters —
+/// a published name no target declares is a consumer that never holds, and a
+/// declared target nothing publishes is a consumer that holds forever — and
+/// [`the_drift_check_fails_a_declaration_that_disagrees_with_the_workflows`]
+/// drives this same function over real documents that really disagree.
+fn drift(declared: &BTreeSet<String>, published: &BTreeSet<String>) -> Vec<String> {
+    let mut disagreements = Vec::new();
+    for undeclared in published.difference(declared) {
+        disagreements.push(format!(
+            "the release configuration publishes {undeclared:?}, which the declaration does not \
+             declare — declare it, or account for it there as a per-platform build of a target \
+             that is already declared"
+        ));
+    }
+    for unpublished in declared.difference(published) {
+        disagreements.push(format!(
+            "the declaration declares {unpublished:?}, which no release workflow publishes — a \
+             consumer would hold on it forever"
+        ));
+    }
+    disagreements
+}
+
+/// The identifiers one declaration document declares, read by the real reader.
+fn declared_in(document: &str, origin: &str) -> BTreeSet<String> {
+    schema::parse(document, origin)
+        .unwrap_or_else(|failure| panic!("{failure}"))
+        .targets
+        .into_iter()
+        .map(|target| target.id)
+        .collect()
+}
+
+/// The declaration with one `[[target]]` cut out of it — a document that really
+/// says something different, for the reader to read back.
+fn without_target(document: &str, id: &str) -> String {
+    const HEADER: &str = "\n[[target]]\n";
+    let declared = format!("id = \"{id}\"");
+    let mut parts = document.split(HEADER);
+    let mut kept = parts
+        .next()
+        .expect("split always yields the text before the first target")
+        .to_owned();
+    let mut dropped = false;
+    for part in parts {
+        if part.lines().any(|line| line.trim() == declared) {
+            dropped = true;
+            continue;
+        }
+        kept.push_str(HEADER);
+        kept.push_str(part);
+    }
+    assert!(dropped, "the document declares no `{id}` to cut out");
+    kept
+}
+
+/// The whole point: this repository's declaration and its release configuration
+/// agree.
 #[test]
 fn the_declaration_matches_the_real_release_configuration() {
     let declared: BTreeSet<String> = declared_targets().into_iter().collect();
     let published: BTreeSet<String> = published_targets().into_keys().collect();
-
-    let undeclared: Vec<&String> = published.difference(&declared).collect();
+    let disagreements = drift(&declared, &published);
     assert!(
-        undeclared.is_empty(),
-        "the release configuration publishes {undeclared:?}, which release-targets.toml does not \
-         declare — declare it, or account for it there as a per-platform build of a target that \
-         is already declared"
-    );
-
-    let unpublished: Vec<&String> = declared.difference(&published).collect();
-    assert!(
-        unpublished.is_empty(),
-        "release-targets.toml declares {unpublished:?}, which no release workflow publishes — a \
-         consumer would hold on it forever. Published: {published:?}"
+        disagreements.is_empty(),
+        "{}\nDeclared: {declared:?}\nPublished: {published:?}",
+        disagreements.join("\n")
     );
 }
 
-/// The drift check fails in *both* directions, driven end to end over documents
-/// that really disagree with this repository's real release configuration.
-///
-/// The assertion above can only ever prove the agreeing case, so what it does when
-/// the two disagree is proven here instead — over the same reader, against the
-/// same workflows, with the declaration replaced.
+/// The drift check fails in *both* directions, driven end to end: a real document,
+/// edited to really disagree with this repository's real release configuration,
+/// read back by the same reader and compared by the same function the assertion
+/// above is made of.
 #[test]
 fn the_drift_check_fails_a_declaration_that_disagrees_with_the_workflows() {
     let published: BTreeSet<String> = published_targets().into_keys().collect();
+    let real = read(&declaration_path());
 
-    // A name this repository publishes without declaring: drop the SDK.
-    let declared: BTreeSet<String> = published
-        .iter()
-        .filter(|id| *id != "pypi:onejudge")
-        .cloned()
-        .collect();
-    let undeclared: Vec<&String> = published.difference(&declared).collect();
+    // A name this repository publishes without declaring: the SDK's target, cut.
+    let without_sdk = without_target(&real, "pypi:onejudge");
+    let declared = declared_in(&without_sdk, "the declaration with its SDK target cut");
+    let disagreements = drift(&declared, &published);
     assert_eq!(
-        undeclared,
-        vec!["pypi:onejudge"],
-        "a published artifact left out of the declaration must be caught"
+        disagreements.len(),
+        1,
+        "one artifact was undeclared: {disagreements:?}"
+    );
+    assert!(
+        disagreements[0].contains("publishes \"pypi:onejudge\"")
+            && disagreements[0].contains("does not declare"),
+        "an undeclared published artifact must be reported as one: {disagreements:?}"
     );
 
     // A name declared without publishing: a target nothing here releases.
-    let declared: BTreeSet<String> = published
-        .iter()
-        .cloned()
-        .chain(["npm:onejudge".to_owned()])
-        .collect();
-    let unpublished: Vec<&String> = declared.difference(&published).collect();
-    assert_eq!(
-        unpublished,
-        vec!["npm:onejudge"],
-        "a declared target no workflow publishes must be caught"
+    let with_phantom = format!(
+        "{real}\n[[target]]\nid = \"npm:onejudge\"\nname = \"npm\"\nwhat = \"A launcher \
+         nothing here publishes.\"\npublished_by = \"Nothing: no workflow in this repository \
+         publishes to npm.\"\n"
     );
+    let declared = declared_in(&with_phantom, "the declaration with a phantom npm target");
+    let disagreements = drift(&declared, &published);
+    assert_eq!(
+        disagreements.len(),
+        1,
+        "one target was unpublished: {disagreements:?}"
+    );
+    assert!(
+        disagreements[0].contains("declares \"npm:onejudge\"")
+            && disagreements[0].contains("hold on it forever"),
+        "a declared target no workflow publishes must be reported as one: {disagreements:?}"
+    );
+}
+
+/// Network tier: the canonical schema this suite restates has not moved.
+///
+/// [`schema`] is a restatement of a contract this repository does not own, so it is
+/// the one thing here that can drift *silently*: upstream tightens a limit or adds
+/// a required key, this gate keeps passing, and the defect is met by a consumer
+/// whose reader refuses a document this repository published. There is no offline
+/// way to close that — the definition is in another repository — so it is
+/// reconciled the way every other answer needing a network is reached here: an
+/// `#[ignore]`-d tier, out of the deterministic gate, run by
+/// `just test-release-targets`.
+///
+/// It reconciles against the *implementation* that defines the schema rather than
+/// against `docs/contract.md`'s prose beside it, because the implementation is what
+/// a consumer's reader actually enforces. A refusal here is never "fix this test":
+/// it is the canonical schema having changed, and what this repository publishes
+/// has to be reread against it.
+#[test]
+#[ignore = "network: reads nickderobertis/onevcs; run via `just test-release-targets`"]
+fn the_restated_schema_matches_the_canonical_definition() {
+    /// Where the one implementation of the canonical schema lives.
+    const CANONICAL: &str = "https://raw.githubusercontent.com/nickderobertis/onevcs/HEAD";
+
+    /// One upstream file, fetched with the tool the probe uses for the same reason:
+    /// no credential, a public read, and a bound well inside the suite's own.
+    fn upstream(path: &str) -> String {
+        let url = format!("{CANONICAL}/{path}");
+        let output = std::process::Command::new("curl")
+            .args([
+                "--silent",
+                "--show-error",
+                "--fail",
+                "--location",
+                "--max-time",
+                "30",
+                &url,
+            ])
+            .output()
+            .unwrap_or_else(|err| panic!("curl is needed to read {url}: {err}"));
+        assert!(
+            output.status.success(),
+            "could not read the canonical schema at {url}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).expect("the canonical schema is UTF-8")
+    }
+
+    /// The value of `const <name>` in a Rust source file, up to its `;`.
+    fn constant<'a>(source: &'a str, origin: &str, name: &str) -> &'a str {
+        let declaration = format!("const {name}:");
+        source
+            .lines()
+            .map(str::trim)
+            .find(|line| {
+                line.starts_with(&declaration) || line.starts_with(&format!("pub {declaration}"))
+            })
+            .and_then(|line| line.split_once('=')?.1.trim().strip_suffix(';'))
+            .map(str::trim)
+            .unwrap_or_else(|| {
+                panic!(
+                    "the canonical schema at {origin} no longer declares `{name}` on one line; \
+                     the definition has moved or been renamed, and what this repository \
+                     publishes has to be reread against it"
+                )
+            })
+    }
+
+    /// Every quoted string of a Rust array literal.
+    fn strings(literal: &str) -> Vec<String> {
+        let mut items = Vec::new();
+        let mut rest = literal;
+        while let Some(open) = rest.find('"') {
+            let after = &rest[open + 1..];
+            let Some(close) = after.find('"') else { break };
+            items.push(after[..close].to_owned());
+            rest = &after[close + 1..];
+        }
+        items
+    }
+
+    let declaration = upstream("crates/onevcs/src/declaration.rs");
+    let releases = upstream("crates/onevcs/src/releases.rs");
+    let origin = "crates/onevcs/src/declaration.rs";
+
+    for (name, restated) in [
+        ("SCHEMA_VERSION", u64::from(schema::SCHEMA_VERSION)),
+        ("MAX_PROSE", schema::MAX_PROSE as u64),
+        ("MAX_IDENTIFIER", schema::MAX_IDENTIFIER as u64),
+    ] {
+        let canonical: u64 = constant(&declaration, origin, name)
+            .parse()
+            .unwrap_or_else(|err| panic!("the canonical `{name}` is not a number: {err}"));
+        assert_eq!(
+            restated, canonical,
+            "the canonical schema declares {name} = {canonical}; this suite restates {restated}"
+        );
+    }
+    let canonical: u64 = constant(
+        &releases,
+        "crates/onevcs/src/releases.rs",
+        "MAX_TARGET_NAME",
+    )
+    .parse()
+    .expect("the canonical MAX_TARGET_NAME is a number");
+    assert_eq!(
+        schema::MAX_TARGET_NAME as u64,
+        canonical,
+        "the canonical schema declares MAX_TARGET_NAME = {canonical}"
+    );
+
+    for (name, restated) in [
+        ("TOP_LEVEL_KEYS", &schema::TOP_LEVEL_KEYS[..]),
+        ("TARGET_KEYS", &schema::TARGET_KEYS[..]),
+        ("RETIRED_KEYS", &schema::RETIRED_KEYS[..]),
+    ] {
+        let canonical = strings(constant(&declaration, origin, name));
+        assert_eq!(
+            restated, canonical,
+            "the canonical schema declares {name} = {canonical:?}; this suite restates \
+             {restated:?}, so a document this gate passes is one a consumer's reader may refuse"
+        );
+    }
 }
 
 /// This repository publishes nothing to npm, so no target names that registry.
@@ -1208,9 +1389,9 @@ mod probe {
 
     /// Network tier: what crates.io and PyPI serve for every declared target right
     /// now. `#[ignore]`-d like the rest of this repository's network-touching
-    /// verification — the gate is offline. Run with `just test-release-probe`.
+    /// verification — the gate is offline. Run with `just test-release-targets`.
     #[test]
-    #[ignore = "network: reads the public registries; run via `just test-release-probe`"]
+    #[ignore = "network: reads the public registries; run via `just test-release-targets`"]
     fn every_declared_target_reports_the_version_its_registry_serves() {
         for target in declared_targets() {
             let (output, elapsed) = probe(&[&target]);
@@ -1241,7 +1422,7 @@ mod probe {
     /// the artifact reports no release yet — exit 0, empty, distinct from a
     /// failure to answer.
     #[test]
-    #[ignore = "network: reads the public registries; run via `just test-release-probe`"]
+    #[ignore = "network: reads the public registries; run via `just test-release-targets`"]
     fn an_artifact_no_registry_serves_answers_no_release_yet() {
         let path = env::var("PATH").expect("PATH");
         for target in [

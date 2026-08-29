@@ -46,7 +46,7 @@ repo-wide contract; this covers only what differs here.
   suite fakes the model — a real `curl` stand-in first on `PATH` — so a registry
   that fails, or serves nothing, is a deterministic offline journey. Only the
   answers that must come from the true public registries are `#[ignore]`-d, like
-  `live.rs`; they run via `just test-release-probe`.
+  `live.rs`; they run via `just test-release-targets`.
 - **`live.rs` is the real-harness tier**: every test is `#[ignore]`-d, compiles
   in the normal build, and runs only via `just test-live` / the `live` workflow.
   See `docs/live-tier.md`.

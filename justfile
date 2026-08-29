@@ -64,9 +64,11 @@ test-live:
     cargo nextest run --features fake-provider --test live --run-ignored all
 
 # Drives `scripts/release-probe.sh` against the REAL public registries (no
-# credential, just network) for every target `release-targets.toml` declares.
-# Opt-in network tier: the probe's registry answers, never in offline `check`.
-test-release-probe:
+# credential, just network) for every target `release-targets.toml` declares, and
+# reconciles the canonical release-target schema this repository writes against
+# with the one implementation that defines it (nickderobertis/onevcs).
+# Opt-in network tier: the answers that need a network, never in offline `check`.
+test-release-targets:
     cargo nextest run --features {{gate_features}} --test release_targets --run-ignored all
 
 # Build the shipped `onejudge` CLI binary — the artifact the `cli-binary` PR job
