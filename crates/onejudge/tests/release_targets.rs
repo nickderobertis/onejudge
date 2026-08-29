@@ -1048,9 +1048,24 @@ fn nothing_here_publishes_to_npm() {
 /// the tree. Two documents answering "what does this repository publish?" is the
 /// defect this document exists to end: a consumer reading the stale one waits on
 /// an artifact nobody releases, or fails to wait on one somebody does.
+///
+/// Both ways a second one arrives are asked. A nested `release-targets.toml` is
+/// the likelier of the two now — the name is canonical, so a subdirectory that
+/// grows one is a document a reader could reasonably find — and the two legacy
+/// names are what this repository and its siblings declared targets in before.
 #[test]
 fn the_declaration_is_the_only_one() {
     let root = repo_root();
+
+    let mut found = Vec::new();
+    find(&root, "release-targets.toml", &mut found);
+    assert_eq!(
+        found,
+        vec![declaration_path()],
+        "the declaration is one document, at the repository root; a second one is a second \
+         answer to the one question a consumer asks"
+    );
+
     for stale in ["registry-targets.txt", "release-targets.txt"] {
         let mut found = Vec::new();
         find(&root, stale, &mut found);
