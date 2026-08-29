@@ -1,0 +1,42 @@
+# The release-target network tier: what the public registries serve for every
+# target `release-targets.toml` declares, and whether the canonical
+# release-target schema this repository writes against has moved.
+#
+# Deliberately OUT of the `check` gate, which is offline and deterministic — the
+# answers here need a network. It is automated rather than left to somebody
+# remembering `just test-release-targets`, because the drift it catches is
+# silent: the canonical schema is owned by nickderobertis/onevcs, and an upstream
+# change first shows up as a consumer's reader refusing a document this
+# repository published. The schedule is what catches that between changes here.
+#
+# Not in the required-checks set (a registry or GitHub outage is not this
+# repository being wrong).
+
+name: release-targets
+
+on:
+  pull_request:
+    paths:
+      - release-targets.toml
+      - scripts/release-probe.sh
+      - crates/onejudge/tests/release_targets.rs
+      - .github/workflows/release-targets.yml
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  release-targets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned toolchain (from rust-toolchain.toml)
+        run: rustup show
+      - uses: extractions/setup-just@v3
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+      - run: just test-release-targets

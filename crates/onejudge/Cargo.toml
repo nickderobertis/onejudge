@@ -45,6 +45,12 @@ signal-hook = { workspace = true, optional = true }
 # The contract drift gate (`tests/contract.rs`) serializes the public `Report`
 # and diffs it against a checked-in golden.
 serde_json = { workspace = true }
+# `tests/release_targets.rs` holds `release-targets.toml` to the canonical
+# release-target schema, and reads the Cargo/PyPI manifests the release
+# configuration publishes from. A standard TOML parser rather than a hand-rolled
+# one, because the schema promises exactly that of whoever reads the document.
+# Already in the tree via `oneharness-core`, so this costs no new dependency.
+toml = "1"
 
 [features]
 # The deterministic test doubles the e2e suite drives as real subprocesses.

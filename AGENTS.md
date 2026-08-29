@@ -118,14 +118,20 @@ Use the `just` recipes; do not hand-roll equivalents. `just --list` is the index
   crate-owned trigger file; the next normal release-plz run then bumps and
   publishes the crate, CLI, and stamped SDK together. `just check` proves the
   attribution rules.
-- **What this repository releases is declared** in `registry-targets.txt`, and
-  `scripts/release-probe.sh` answers what a registry serves for one of those
-  identifiers. Identifiers are registry-qualified because `onejudge` alone names
-  *both* the crate and the SDK wheel. The probe's **not answered** is not "no
-  release yet": a consumer holds on the first indefinitely, and reading it as the
-  second launches work whose dependency never landed. `tests/registry_targets.rs`
-  keeps the declaration honest by deriving what is published from the release
-  configuration, so a new artifact fails the gate rather than going undeclared.
+- **What this repository releases is declared** in `release-targets.toml` at the
+  root — one document, at the **canonical release-target schema** defined in
+  `docs/contract.md` of `nickderobertis/onevcs`, because a consumer reads these
+  across repositories it does not own. It names `scripts/release-probe.sh` as its
+  `probe`, which answers what a registry serves for one identifier. Identifiers
+  are registry-qualified, and each target also carries a short `name`, because
+  `onejudge` alone names *both* the crate and the SDK wheel and `pypi:` alone
+  names two of the three. The probe's **not answered** is not "no release yet": a
+  consumer holds on the first indefinitely, and reading it as the second launches
+  work whose dependency never landed. `tests/release_targets.rs` holds the
+  document to that schema and keeps it honest by deriving what is published from
+  the release configuration, so a new artifact fails the gate rather than going
+  undeclared. `scripts/check-release-targets.sh` is *not* that check despite its
+  name — it gates the shipped-archive build triples.
 
 ## Invariants (non-negotiable)
 

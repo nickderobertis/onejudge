@@ -658,6 +658,7 @@ dependencies = [
  "serde_yaml_ng",
  "signal-hook",
  "thiserror",
+ "toml",
 ]
 
 [[package]]

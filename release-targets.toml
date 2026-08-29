@@ -1,0 +1,65 @@
+# What this repository publishes: the artifacts a dependent names in order to
+# depend on onejudge. Written against the canonical release-target schema
+# (`schema_version = 1`), which is defined once, in `docs/contract.md` of
+# github.com/nickderobertis/onevcs, and read across repositories by machinery
+# that does not know this one.
+#
+# The registry qualification in every `id` is load-bearing rather than
+# decorative. `onejudge` alone names BOTH the crate and the Python SDK
+# distribution — two different artifacts, published by two different jobs — so an
+# unqualified name here would leave a consumer waiting on a release unable to say
+# which one it got. For the same reason each target carries a short `name`: this
+# repository publishes `pypi:onejudge-cli` AND `pypi:onejudge`, so the short name
+# a host document and a consumer's plan wait on cannot be derived from the
+# registry half of an identifier.
+#
+# `crates/onejudge/tests/release_targets.rs` holds this document to the schema and
+# proves it against the *real* release configuration, in both directions, so an
+# artifact the workflows publish without a target here fails the gate rather than
+# going silently undeclared.
+
+schema_version = 1
+
+# Ask what a registry serves for one `id` below with
+# `scripts/release-probe.sh <id>`. Its three answers — a version, no release yet,
+# and NOT ANSWERED — are the probe's own contract; see the script's header.
+probe = "scripts/release-probe.sh"
+
+[[target]]
+id = "crate:onejudge"
+name = "crate"
+what = "The onejudge library, as a Rust dependent takes it with `cargo add onejudge`."
+published_by = ".github/workflows/release-plz.yml — the `release` job's `command: release` step, from crates/onejudge/Cargo.toml's [package] name."
+manifest = "crates/onejudge/Cargo.toml"
+
+[[target]]
+id = "pypi:onejudge-cli"
+name = "cli"
+what = "The standalone `onejudge` binary as a wheel, installed with `pip install onejudge-cli`."
+published_by = ".github/workflows/release-pypi.yml — the `publish-cli` job's `Publish onejudge-cli` step, from pyproject.toml (maturin wraps the crate's binary)."
+manifest = "pyproject.toml"
+
+[[target]]
+id = "pypi:onejudge"
+name = "sdk"
+what = "The typed async Python SDK over the CLI, installed with `pip install onejudge`."
+published_by = ".github/workflows/release-pypi.yml — the `publish-sdk` job's `Publish onejudge` step, from python/onejudge-sdk/pyproject.toml."
+manifest = "python/onejudge-sdk/pyproject.toml"
+
+# Named artifacts that are deliberately NOT targets of their own, and are not
+# `covers` entries either, because `covers` names registry-qualified identifiers
+# and none of these is one:
+#
+#   * the per-platform `onejudge-cli` wheels (release-pypi.yml's
+#     `build-cli-wheels` matrix) are builds of `pypi:onejudge-cli`, resolved by
+#     pip at that project's own version — ONE name, many wheels, not many names,
+#     so there is no second identifier to cover;
+#   * the `onejudge-<triple>.(tar.gz|zip)` GitHub Release archives
+#     (release-binaries.yml) are download artifacts for install.sh, not a name a
+#     dependent resolves from a registry. `scripts/check-release-targets.sh` is
+#     the drift gate over *those* build triples and is not a release-target check
+#     despite its name;
+#   * this repository publishes nothing to npm.
+#
+# No `[[retired]]` entry: this repository has never published an artifact it does
+# not publish today.
