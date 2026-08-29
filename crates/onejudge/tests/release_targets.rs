@@ -848,9 +848,14 @@ fn the_drift_check_fails_a_declaration_that_disagrees_with_the_workflows() {
 ///
 /// It reconciles against the *implementation* that defines the schema rather than
 /// against `docs/contract.md`'s prose beside it, because the implementation is what
-/// a consumer's reader actually enforces. A refusal here is never "fix this test":
-/// it is the canonical schema having changed, and what this repository publishes
-/// has to be reread against it.
+/// a consumer's reader actually enforces — its constants, its key lists, and the
+/// expressions its rules are made of. A refusal here is never "fix this test": it
+/// is the canonical schema having changed, and what this repository publishes has
+/// to be reread against it.
+///
+/// `.github/workflows/release-targets.yml` runs it, on a schedule as well as on a
+/// change here, because drift upstream is silent and does not wait for a change in
+/// this repository to become a document a consumer refuses.
 #[test]
 #[ignore = "network: reads nickderobertis/onevcs; run via `just test-release-targets`"]
 fn the_restated_schema_matches_the_canonical_definition() {
@@ -943,6 +948,68 @@ fn the_restated_schema_matches_the_canonical_definition() {
         canonical,
         "the canonical schema declares MAX_TARGET_NAME = {canonical}"
     );
+
+    // The rules themselves, not only the numbers they are bounded by. Each of
+    // these is the expression one canonical check is made of, and `schema` restates
+    // it verbatim; a rule tightened upstream changes the expression, and this is
+    // where that is heard rather than at a consumer whose reader refuses a document
+    // this gate passed.
+    for (rule, source, origin, expression) in [
+        (
+            "an identifier's registry half",
+            &declaration,
+            origin,
+            "c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-'",
+        ),
+        (
+            "an identifier's name half",
+            &declaration,
+            origin,
+            "c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '@' | '/')",
+        ),
+        (
+            "a short name's alphabet",
+            &releases,
+            "crates/onevcs/src/releases.rs",
+            "c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.')",
+        ),
+        (
+            "blank prose",
+            &declaration,
+            origin,
+            "value.trim().is_empty()",
+        ),
+        (
+            "prose carrying a control character",
+            &declaration,
+            origin,
+            "value.chars().any(char::is_control)",
+        ),
+        (
+            "a path's separators",
+            &declaration,
+            origin,
+            "const SEPARATORS: [char; 2] = ['/', '\\\\'];",
+        ),
+        (
+            "a path that leaves the repository root",
+            &declaration,
+            origin,
+            "component == \"..\"",
+        ),
+        (
+            "a drive-qualified path",
+            &declaration,
+            origin,
+            "(Some(drive), Some(':')) if drive.is_ascii_alphabetic()",
+        ),
+    ] {
+        assert!(
+            source.contains(expression),
+            "the canonical schema at {origin} no longer decides {rule} with `{expression}`; the \
+             rule has changed, and `schema` restates the one it replaced"
+        );
+    }
 
     for (name, restated) in [
         ("TOP_LEVEL_KEYS", &schema::TOP_LEVEL_KEYS[..]),
