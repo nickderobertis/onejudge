@@ -798,3 +798,92 @@ fn a_criterion_that_perishes_or_names_a_procedure_is_refused_where_the_note_is_b
         Some("the migration path is covered by a test that fails without the migration")
     );
 }
+
+#[test]
+fn a_note_arriving_after_a_run_that_failed_raises_naming_the_failure() {
+    let (notes, inbox) = Notes::channel();
+    let provider = echo();
+    let engine = Engine::new(&provider, Settings::new()).with_notes(inbox);
+
+    // `[[emit-exit]]` makes the double exit non-zero, so the turn fails outright.
+    let error = engine
+        .run(&Conversation::single_turn(
+            Skill::new("demo", "/skills/demo", "[[emit-exit]]"),
+            "start the job",
+        ))
+        .expect_err("the provider fails the turn");
+
+    let refused = notes
+        .send(Note::to(Addressee::Worker, NOTE))
+        .expect_err("a note arriving after the run failed is not delivered");
+    let Undelivered::MemberSettled { outcome } = &refused else {
+        panic!("a failed run settles the channel: {refused:?}");
+    };
+    assert!(
+        outcome.contains("the conversation failed"),
+        "the refusal does not say the run failed: {outcome}"
+    );
+    assert!(
+        outcome.contains(&error.to_string()),
+        "the refusal does not carry the failure itself: {outcome}"
+    );
+    assert!(engine.delivered_notes().is_empty());
+}
+
+#[test]
+fn a_note_arriving_after_a_settled_no_op_loop_raises_naming_the_settle() {
+    let (notes, inbox) = Notes::channel();
+    let provider = echo();
+    let engine = Engine::new(&provider, Settings::new()).with_notes(inbox);
+
+    // The supervisor that answers a valid `continue` asking for nothing, every
+    // time: the loop settles on the work it has rather than running to its cap.
+    let outcome = engine
+        .run(&Conversation::multi_turn(
+            Skill::new("demo", "/skills/demo", ""),
+            "release the dispatch",
+            SimulatedUser::new("[[supervisor-noop]]").max_turns(40),
+        ))
+        .expect("the run settles rather than failing");
+    let settled = outcome.settled_reason.clone().expect("a settle reason");
+
+    let refused = notes
+        .send(Note::to(Addressee::Worker, NOTE))
+        .expect_err("a note arriving after the run settled is not delivered");
+    assert_eq!(
+        refused,
+        Undelivered::MemberSettled { outcome: settled },
+        "a settled run tells the sender why it settled, not merely that it ended"
+    );
+}
+
+#[test]
+fn a_note_arriving_after_an_observation_short_circuited_the_run_raises_naming_that() {
+    let (notes, inbox) = Notes::channel();
+    let provider = echo();
+    let engine = Engine::new(&provider, Settings::new()).with_notes(inbox);
+
+    let mut stop_at_once = |_: &Observation<'_>| ControlFlow::Break(());
+    let outcome = engine
+        .run_observing(
+            &Conversation::multi_turn(
+                Skill::new("demo", "/skills/demo", ""),
+                "start the job",
+                SimulatedUser::new("A reviewer.").max_turns(9),
+            ),
+            &mut stop_at_once,
+        )
+        .expect("a sink that breaks short-circuits rather than failing");
+    assert!(outcome.stopped_early);
+
+    let refused = notes
+        .send(Note::to(Addressee::Worker, NOTE))
+        .expect_err("a note arriving after the run was short-circuited is not delivered");
+    let Undelivered::MemberSettled { outcome } = &refused else {
+        panic!("a short-circuited run settles the channel: {refused:?}");
+    };
+    assert!(
+        outcome.contains("short-circuited"),
+        "the refusal does not say the run was stopped early: {outcome}"
+    );
+}
