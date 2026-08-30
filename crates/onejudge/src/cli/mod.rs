@@ -682,6 +682,7 @@ fn execute(
         done_when,
         assessment,
         spawn_hook,
+        notes,
     } = plan;
 
     let multi_turn = conversation.user.is_some();
@@ -699,7 +700,10 @@ fn execute(
         Some(hook) => AnyProvider::build(&provider)?.with_spawn_hook(hook),
         None => AnyProvider::build(&provider)?,
     };
-    let engine = Engine::new(&backend, settings);
+    let engine = match notes {
+        Some(inbox) => Engine::new(&backend, settings).with_notes(inbox),
+        None => Engine::new(&backend, settings),
+    };
     // Read the engine's telemetry once the loop is done, whichever way it ended, so
     // a failure still carries which harness identities the run attempted.
     let drive = || -> Result<RunSummary, CliError> {
@@ -713,9 +717,14 @@ fn execute(
         // Re-judge the completion condition against the FINAL transcript: this is the
         // authoritative "did the task actually complete?" signal that drives the exit
         // code (the loop's own mid-run check can be preempted by the turn cap).
-        let done = match &done_when {
+        //
+        // The criterion re-judged here is the one actually in force: the configured
+        // one plus every criterion a delivered binding note added. A note that moved
+        // the bar mid-run would otherwise be invisible to the verdict that decides
+        // `done` versus `task-failed` — and this is the site that decides it.
+        let done = match engine.criteria(done_when.as_deref()).rendered() {
             Some(criterion) => {
-                let verdict = engine.judge_boolean(criterion, &outcome.transcript)?;
+                let verdict = engine.judge_boolean(&criterion, &outcome.transcript)?;
                 let satisfied = matches!(verdict.value, JudgeValue::Bool(true));
                 verdicts.push(NamedVerdict::new(
                     criterion.clone(),
@@ -723,7 +732,7 @@ fn execute(
                     verdict,
                 ));
                 Some(DoneWhen {
-                    criterion: criterion.clone(),
+                    criterion,
                     satisfied,
                 })
             }
@@ -1189,7 +1198,11 @@ mod tests {
     fn json_render_is_the_versioned_report() {
         let report = Report::new(Transcript::from_input("hi"), vec![], None, false);
         let json = render_json(&report).unwrap();
-        assert!(json.contains("\"schema_version\": 10"));
+        // Against the constant, not a literal: this asserts that `--format json`
+        // renders *the versioned report*, and a hand-copied number turns every
+        // schema bump into an unrelated failure here. `tests/contract.rs` is what
+        // holds the number itself.
+        assert!(json.contains(&format!("\"schema_version\": {}", crate::SCHEMA_VERSION)));
     }
 
     #[test]

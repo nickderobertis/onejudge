@@ -146,6 +146,13 @@ fn canonical_report() -> Report {
         session_dir: "/state/oneharness/sessions".into(),
         cwd: "/work/repo".into(),
     }));
+    // The v11 addition, and the whole reason it is a second pair rather than a
+    // second meaning for the first: the supervisor's turn is a different session on
+    // a different socket, so this document carries an agent address that is open
+    // and a judge ask that was refused — the two states one field could not hold.
+    report = report.with_supervisor_control(&ControlOutcome::Unavailable(
+        "harness `qwen` has no out-of-band turn control".into(),
+    ));
     // Both halves of the grouping contract: a process an embedder's spawn hook
     // claimed, and one it did not — the latter serialized WITHOUT a `group`, so a
     // consumer can never read a group onejudge did not observe.
@@ -168,19 +175,19 @@ fn canonical_report() -> Report {
     report
 }
 
-const EXAMPLE_GOLDEN: &str = include_str!("golden/report.example-v10.json");
+const EXAMPLE_GOLDEN: &str = include_str!("golden/report.example-v11.json");
 #[cfg(feature = "sdk-schema")]
-const SCHEMA_GOLDEN: &str = include_str!("golden/report.schema-v10.json");
+const SCHEMA_GOLDEN: &str = include_str!("golden/report.schema-v11.json");
 
 #[test]
-fn report_matches_the_golden_example_v10() {
-    assert_eq!(SCHEMA_VERSION, 10, "golden is for schema v10");
+fn report_matches_the_golden_example_v11() {
+    assert_eq!(SCHEMA_VERSION, 11, "golden is for schema v11");
     let actual = serde_json::to_string_pretty(&canonical_report()).unwrap();
     assert_eq!(
         actual.trim(),
         EXAMPLE_GOLDEN.trim(),
         "the Report wire form changed. If this is intentional, bump SCHEMA_VERSION \
-         and update the v10 contract goldens. Actual serialization:\n{actual}"
+         and update the v11 contract goldens. Actual serialization:\n{actual}"
     );
 }
 
@@ -226,7 +233,7 @@ fn the_contract_doc_states_the_version_this_build_stamps() {
 
 #[cfg(feature = "sdk-schema")]
 #[test]
-fn generated_report_schema_matches_the_schema_v10_golden() {
+fn generated_report_schema_matches_the_schema_v11_golden() {
     let actual = serde_json::to_value(onejudge::sdk_schema::bundle().report).unwrap();
     let golden: serde_json::Value = serde_json::from_str(SCHEMA_GOLDEN).unwrap();
     assert_eq!(

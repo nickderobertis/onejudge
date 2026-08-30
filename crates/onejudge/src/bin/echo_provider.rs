@@ -13,6 +13,16 @@
 //!   `[[supervisor-noop]]` in the persona instead returns the same valid-looking
 //!   instruction that asks for nothing, every time it is asked — the loop the
 //!   engine settles after `NOOP_SETTLE_LIMIT` exchanges.
+//! * `[[record:PATH]]` anywhere in the request appends the whole request JSON to
+//!   `PATH`, one line per call, so a test can assert on exactly what each party was
+//!   given across the real subprocess boundary.
+//! * `[[worker-dwell:MS:PATH]]` (in the skill instructions or the latest user turn)
+//!   and `[[judge-dwell:MS:PATH]]` (in the persona) touch `PATH` and then hold the
+//!   turn open for `MS` milliseconds, so a note can be sent *while that party's turn
+//!   is live* rather than between turns.
+//! * `[[complete-on-note]]` in the persona makes the supervisor answer
+//!   `completion:true` exactly once it has been shown a delivered note — the judge
+//!   passing the work with the note in hand.
 //! * `judge` returns `true` (or the numeric high) iff the criterion text appears
 //!   in the transcript it is given — **including the rendered tool events** — so an
 //!   events-backed criterion is genuinely decided by what the skill did.
@@ -41,6 +51,17 @@ fn main() {
         Ok(v) => v,
         Err(e) => fail(&format!("request was not valid JSON: {e}")),
     };
+    if let Some(path) = marker(&input, "record") {
+        let mut line = input.trim().to_string();
+        line.push('\n');
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .unwrap_or_else(|e| fail(&format!("could not open the request log: {e}")));
+        file.write_all(line.as_bytes())
+            .unwrap_or_else(|e| fail(&format!("could not write the request log: {e}")));
+    }
     let op = request.get("op").and_then(Value::as_str).unwrap_or("");
     let response = match op {
         "respond" => respond(&request),
@@ -90,6 +111,20 @@ fn marker<'a>(text: &'a str, name: &str) -> Option<&'a str> {
     Some(&rest[..end])
 }
 
+/// Touch the marker path and then hold the turn open, so a note can be sent while
+/// this party's turn is genuinely live. `MS:PATH`.
+fn dwell(spec: &str) {
+    let (millis, path) = spec
+        .split_once(':')
+        .unwrap_or_else(|| fail("a dwell marker is `MS:PATH`"));
+    let millis: u64 = millis
+        .parse()
+        .unwrap_or_else(|e| fail(&format!("a dwell marker's MS is a number: {e}")));
+    std::fs::write(path, b"live\n")
+        .unwrap_or_else(|e| fail(&format!("could not publish the dwell marker: {e}")));
+    std::thread::sleep(std::time::Duration::from_millis(millis));
+}
+
 fn respond(request: &Value) -> Value {
     let messages = messages_of(request);
     let latest = latest_user(&messages);
@@ -99,6 +134,9 @@ fn respond(request: &Value) -> Value {
         .and_then(Value::as_str)
         .unwrap_or("");
     let scope = format!("{instructions}\n{latest}");
+    if let Some(spec) = marker(&scope, "worker-dwell") {
+        dwell(spec);
+    }
 
     let mut response = json!({
         "message": format!("echo: {latest}"),
@@ -132,6 +170,22 @@ fn user(request: &Value) -> Value {
 
 fn supervisor(request: &Value) -> Value {
     let persona = request.get("persona").and_then(Value::as_str).unwrap_or("");
+    if let Some(spec) = marker(persona, "judge-dwell") {
+        dwell(spec);
+    }
+    // The judge passing the work with the note in hand: completion is answered only
+    // on the decision that was re-taken carrying the note, never the one before it.
+    if persona.contains("[[complete-on-note]]") {
+        let shown = request
+            .get("notes")
+            .and_then(Value::as_array)
+            .is_some_and(|notes| !notes.is_empty());
+        return if shown {
+            json!({"completion": true, "reason": "the note was in hand when the work was passed", "usage": {"input_tokens": 1, "output_tokens": 1}})
+        } else {
+            json!({"completion": false, "message": "Thanks — and what about the next step?", "reason": "no note yet", "usage": {"input_tokens": 1, "output_tokens": 1}})
+        };
+    }
     if let Some(path) = marker(persona, "count") {
         use std::io::Write as _;
         let mut file = std::fs::OpenOptions::new()

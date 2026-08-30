@@ -97,6 +97,20 @@
 //! into the live turn's stdin at SINK, and `[[control-unsupported:ID]]` refuses the
 //! ask the way a harness with no control mechanism does. See `docs/control.md`.
 //!
+//! **A redirected turn.** `[[redirected]]` — in a persona, which the supervisor
+//! prompt inlines — reports the run's control block carrying one *served
+//! redirection* (oneharness's own `ControlEvent`), and makes the supervisor answer
+//! the correction in prose instead of the question. onejudge must notice the
+//! redirection from the report and ask once more; a build that does not never gets
+//! a parseable answer. `[[redirected-always]]` reports the same redirection and
+//! never recovers, so the *second* unparseable answer is the one that fails the
+//! member.
+//!
+//! **What a party was actually given.** `[[record-prompt:PATH]]` — read from
+//! `--system` on the agent side and from the prompt on the judge side — appends the
+//! whole prompt to `PATH`, so a test can assert on the framing onejudge composed
+//! rather than on a re-derivation of it.
+//!
 //! **A supervisor with nothing to say.** In a *persona* (which the supervisor
 //! prompt inlines), `[[supervisor-silent]]` answers `completion:false` with no
 //! `message` every time it is asked, and `[[supervisor-silent-once]]` answers that
@@ -207,23 +221,37 @@ fn main() {
         std::process::exit(1);
     }
 
+    let is_agent = !(prompt.contains("completion supervisor")
+        || prompt.contains("role-playing the USER")
+        || prompt.contains("Assessment request:")
+        || prompt.contains("Criterion:") && prompt.contains("single-line JSON object"));
+    // The process-grouping and control journeys (`docs/spawn-hook.md`,
+    // `docs/control.md`). Read from `--system` on the agent side and from the
+    // prompt on the judge side, because those are the two texts a caller controls
+    // per party — which is what lets ONE run drive both halves of a two-party tree,
+    // and what makes the judge side's own socket reachable now that it has one.
+    let steering = if is_agent { system } else { prompt.as_str() };
+
     // `--control` is validated before anything runs, exactly as oneharness
     // validates it: every refusal here is a usage error the caller must be able to
     // degrade from without having paid for a turn.
     let control_wanted = flags.contains_key("--control");
     if control_wanted {
-        control::validate(session.as_deref(), system);
+        control::validate(session.as_deref(), steering);
     }
-
-    let is_agent = !(prompt.contains("completion supervisor")
-        || prompt.contains("role-playing the USER")
-        || prompt.contains("Assessment request:")
-        || prompt.contains("Criterion:") && prompt.contains("single-line JSON object"));
-    // The process-grouping journey (`docs/spawn-hook.md`). Read from `--system` on
-    // the agent side and from the prompt on the judge side, because those are the
-    // two texts a caller controls per party — which is what lets ONE run drive both
-    // halves of a two-party tree.
-    let steering = if is_agent { system } else { prompt.as_str() };
+    // The exact text this party was given, appended verbatim. It is the only way to
+    // assert on the *framing* a party was handed — the prompt onejudge composed, not
+    // a re-derivation of it — across the real subprocess boundary.
+    if let Some(path) = marker(steering, "record-prompt") {
+        use std::io::Write as _;
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .unwrap_or_else(|e| emit_error(&format!("could not open the prompt log: {e}")));
+        file.write_all(format!("{prompt}\n=== end of prompt ===\n").as_bytes())
+            .unwrap_or_else(|e| emit_error(&format!("could not write the prompt log: {e}")));
+    }
     if let Some(handle) = marker(steering, "orphan") {
         orphan_harness(handle);
     }
@@ -349,7 +377,7 @@ fn main() {
                 .expect("validate refuses --control without --session"),
             flags.get("--cwd").map_or(".", String::as_str),
             ran_index.map_or(HARNESS, |index| results[index].harness_id.as_str()),
-            system,
+            steering,
         )
     });
 
@@ -1102,6 +1130,19 @@ fn judge_text(prompt: &str) -> String {
 }
 
 fn supervisor_text(prompt: &str) -> String {
+    // A redirect ends the turn and reopens the next one carrying the correction, so
+    // what comes back answers the correction — prose, where the contract wants one
+    // JSON object. The double answers exactly that, until the re-ask arrives naming
+    // what was unusable, so a build that did not re-ask never gets a usable answer.
+    // `[[redirected-always]]` never recovers: the second unparseable answer must
+    // fail the member exactly as it does today, because at that point the transport
+    // is broken rather than the turn misaddressed.
+    if prompt.contains("[[redirected-always]]")
+        || (prompt.contains("[[redirected]]")
+            && !prompt.contains("Your previous answer did not parse"))
+    {
+        return "Understood — I have taken the correction into account.".into();
+    }
     // The supervisor that judges the work incomplete and then says nothing about
     // what to do next — the answer that used to abort the whole run.
     // `[[supervisor-silent-once]]` answers that way until the re-ask arrives
@@ -1173,7 +1214,7 @@ fn parse_scale(prompt: &str) -> (f64, f64) {
 /// turn the report just named.
 mod control {
     use oneharness_core::domain::control::{
-        socket_path, AbsolutePath, ControlReport, ControlShape,
+        socket_path, AbsolutePath, ControlEvent, ControlReport, ControlShape, ControlVerb,
     };
     use oneharness_core::domain::harness::{self, HarnessIdentity};
     use oneharness_core::errors::OneharnessError;
@@ -1232,8 +1273,25 @@ mod control {
             socket: AbsolutePath::new(&socket)
                 .unwrap_or_else(|e| emit_error(&format!("control socket path: {e}"))),
             mechanism: shape(),
-            interrupts: Vec::new(),
+            interrupts: served_redirect(system),
         }
+    }
+
+    /// The record oneharness writes when a redirection was committed with the
+    /// abort — `[[redirected]]` — versus the empty list an uninterrupted turn
+    /// reports. Built from oneharness's own `ControlEvent`, so onejudge's read of
+    /// it is a read of the real shape.
+    fn served_redirect(system: &str) -> Vec<ControlEvent> {
+        if !(system.contains("[[redirected]]") || system.contains("[[redirected-always]]")) {
+            return Vec::new();
+        }
+        vec![ControlEvent::Served {
+            verb: ControlVerb::Interrupt,
+            at: "2026-01-01T00:00:00.010Z"
+                .parse()
+                .expect("a control instant"),
+            redirected: true,
+        }]
     }
 
     /// The mechanism the registry declares for the harness this double claims to

@@ -9,6 +9,7 @@ use std::time::Instant;
 
 use crate::control::ControlOutcome;
 use crate::error::Result;
+use crate::note::{Accepted, Criteria, DeliveredNote, Note, NoteInbox, Party};
 use crate::provider::{
     build_judge_prompt, Assessment, AssistantTurn, JudgeKind, JudgeQuery, JudgeVerdict, Provider,
     SkillRef, SupervisorOutcome, SupervisorQuery,
@@ -91,6 +92,19 @@ impl NoopStreak {
         }
         self.count >= NOOP_SETTLE_LIMIT
     }
+}
+
+/// Why a run that reached no completion decision ended — what a note arriving
+/// afterwards is told, so a caller reading a refusal knows which of relaunch,
+/// amend or follow-up it is choosing between.
+fn ended_because(outcome: &Outcome) -> String {
+    if let Some(settled) = &outcome.settled_reason {
+        return settled.clone();
+    }
+    if outcome.stopped_early {
+        return "the run was short-circuited before it reached a completion decision".into();
+    }
+    "the conversation ended without a completion decision".into()
 }
 
 /// Whether `text` is short enough to be one half of a no-op exchange.
@@ -315,9 +329,13 @@ pub struct Outcome {
     /// provider that spawns nothing.
     pub processes: Vec<SpawnedProcess>,
     /// Where an `oneharness interrupt` process addresses this run's controllable
-    /// turn, or why there is none. [`ControlOutcome::NotRequested`] unless the
-    /// provider was asked for control.
+    /// **agent** turn, or why there is none. [`ControlOutcome::NotRequested`]
+    /// unless the provider was asked for control.
     pub control: ControlOutcome,
+    /// The same, for the **supervisor** turn. Reported apart from
+    /// [`Outcome::control`] because the two sides are separately addressable and
+    /// separately refusable, so one answer cannot stand for both.
+    pub supervisor_control: ControlOutcome,
 }
 
 impl Outcome {
@@ -342,6 +360,7 @@ impl Outcome {
         report.telemetry = self.telemetry;
         report.processes = self.processes;
         report = report.with_control(&self.control);
+        report = report.with_supervisor_control(&self.supervisor_control);
         match assessment {
             Some(text) => report.with_assessment(text),
             None => report,
@@ -354,6 +373,7 @@ pub struct Engine<'a> {
     provider: &'a dyn Provider,
     settings: Settings,
     started: RefCell<Option<Instant>>,
+    notes: Option<NoteInbox>,
 }
 
 impl<'a> Engine<'a> {
@@ -364,13 +384,95 @@ impl<'a> Engine<'a> {
             provider,
             settings,
             started: RefCell::new(None),
+            notes: None,
         }
+    }
+
+    /// Read notes sent into this run from `inbox` (builder style).
+    ///
+    /// Without one — the default — no note can arrive and every seam below behaves
+    /// exactly as it did before this existed. With one, a note sent on the paired
+    /// [`Notes`](crate::Notes) handle reaches whichever party is live, the other
+    /// party receives it with that party's response, and a criterion the note bound
+    /// enters [`Engine::criteria`]. See the [`note`](crate::note) module.
+    #[must_use]
+    pub fn with_notes(mut self, inbox: NoteInbox) -> Self {
+        self.notes = Some(inbox);
+        self
+    }
+
+    /// The completion criterion actually in force: `configured` plus every
+    /// criterion a delivered binding note added.
+    ///
+    /// Read at **both** judging sites — the per-turn supervisor decision and the
+    /// authoritative re-judge against the finished transcript — so a note that bound
+    /// a criterion cannot be invisible to the verdict that decides whether the work
+    /// is done. Without a note inbox, or on a run where no note bound anything, it
+    /// renders `configured` byte for byte.
+    #[must_use]
+    pub fn criteria(&self, configured: Option<&str>) -> Criteria {
+        Criteria::compose(configured, &self.delivered_notes())
+    }
+
+    /// Every note delivered into this run so far, in delivery order.
+    #[must_use]
+    pub fn delivered_notes(&self) -> Vec<DeliveredNote> {
+        self.notes
+            .as_ref()
+            .map(NoteInbox::delivered_notes)
+            .unwrap_or_default()
     }
 
     /// The engine's settings.
     #[must_use]
     pub fn settings(&self) -> &Settings {
         &self.settings
+    }
+
+    /// Everything accepted on the note channel and not yet handed to a party.
+    fn take_notes(&self) -> Vec<(u64, Note)> {
+        self.notes
+            .as_ref()
+            .map(NoteInbox::take_pending)
+            .unwrap_or_default()
+    }
+
+    /// Hand `notes` to `party`. `accepted` answers their senders now; `None` leaves
+    /// them awaiting a disposition only the redirected turn's answer can decide.
+    fn deliver(
+        &self,
+        notes: Vec<(u64, Note)>,
+        party: Party,
+        accepted: Option<Accepted>,
+    ) -> Vec<DeliveredNote> {
+        self.notes
+            .as_ref()
+            .map(|inbox| inbox.record_delivery(notes, party, accepted))
+            .unwrap_or_default()
+    }
+
+    fn settle_notes(&self, ids: &[u64], accepted: &Accepted) {
+        if let Some(inbox) = &self.notes {
+            inbox.settle(ids, accepted);
+        }
+    }
+
+    fn enter_worker_turn(&self) {
+        if let Some(inbox) = &self.notes {
+            inbox.enter_worker_turn();
+        }
+    }
+
+    fn enter_supervisor_turn(&self) {
+        if let Some(inbox) = &self.notes {
+            inbox.enter_supervisor_turn();
+        }
+    }
+
+    fn between_turns(&self) {
+        if let Some(inbox) = &self.notes {
+            inbox.between_turns();
+        }
     }
 
     /// Drive `conversation` to completion (buffered turns), returning the
@@ -430,7 +532,32 @@ impl<'a> Engine<'a> {
         self.converse(conversation, true, on_observation)
     }
 
+    /// Drive the loop, then close the note channel on what actually happened: a
+    /// note arriving after this point is refused with the reason, never accepted
+    /// into a conversation that will not read it.
     fn converse(
+        &self,
+        conversation: &Conversation,
+        streaming: bool,
+        on_observation: &mut dyn FnMut(&Observation<'_>) -> ControlFlow<()>,
+    ) -> Result<Outcome> {
+        if let Some(inbox) = &self.notes {
+            inbox.begin();
+        }
+        let result = self.drive(conversation, streaming, on_observation);
+        if let Some(inbox) = &self.notes {
+            match &result {
+                Ok(outcome) => match &outcome.completion_reason {
+                    Some(reason) => inbox.complete(reason),
+                    None => inbox.end(&ended_because(outcome)),
+                },
+                Err(error) => inbox.end(&format!("the conversation failed: {error}")),
+            }
+        }
+        result
+    }
+
+    fn drive(
         &self,
         conversation: &Conversation,
         streaming: bool,
@@ -459,8 +586,18 @@ impl<'a> Engine<'a> {
         let mut completion_reason = None;
         let mut settled_reason = None;
         let mut noop = NoopStreak::default();
+        // Notes the supervisor has been handed that the worker has not: it receives
+        // them *with* the supervisor's response, and never at all when that response
+        // is completion — the judge passed the work with the note in hand.
+        let mut for_worker: Vec<DeliveredNote> = Vec::new();
 
         loop {
+            // A note that arrived between turns reaches the next turn to open.
+            let queued = self.take_notes();
+            if !queued.is_empty() {
+                let delivered = self.deliver(queued, Party::Worker, Some(Accepted::Queued));
+                transcript.push(Message::user(crate::note::worker_block(&delivered)));
+            }
             let turn_index = transcript.assistant_turns() + 1;
             // The message this turn is answering — the original task on the first
             // pass, the supervisor's last instruction afterwards. Half of the pair a
@@ -482,6 +619,7 @@ impl<'a> Engine<'a> {
                 return Ok(self.finish(transcript, totals, true, None, None));
             }
             let mut broke = false;
+            self.enter_worker_turn();
             let turn = if streaming {
                 self.provider.respond_streaming(
                     &skill,
@@ -495,11 +633,13 @@ impl<'a> Engine<'a> {
                         broke |= flow.is_break();
                         flow
                     },
-                )?
+                )
             } else {
                 self.provider
-                    .respond(&skill, &transcript.messages, Some(skill_session.as_str()))?
+                    .respond(&skill, &transcript.messages, Some(skill_session.as_str()))
             };
+            self.between_turns();
+            let turn = turn?;
             let AssistantTurn {
                 message,
                 done: skill_done,
@@ -563,6 +703,25 @@ impl<'a> Engine<'a> {
                 ));
                 break;
             }
+            // A note that arrived while the worker's turn was live reaches the worker
+            // first: the turn is reopened carrying it, before the supervisor is
+            // consulted, so the judge receives it *together with* the worker's
+            // response to it rather than ahead of one. The finished reply is kept
+            // rather than discarded — a redirect throws away a turn's words, never
+            // the work it already committed.
+            let arrived = self.take_notes();
+            if !arrived.is_empty() {
+                let delivered = self.deliver(
+                    arrived,
+                    Party::Worker,
+                    Some(Accepted::Interrupted {
+                        party: Party::Worker,
+                    }),
+                );
+                transcript.push(Message::user(crate::note::worker_block(&delivered)));
+                continue;
+            }
+
             let started_at = observed_at();
             // The supervisor answers the reply the agent just gave, so that reply is
             // this turn's instruction — the same relation the agent's own turn has
@@ -579,20 +738,57 @@ impl<'a> Engine<'a> {
             if opened.is_break() {
                 return Ok(self.finish(transcript, totals, true, None, None));
             }
-            let decision = self.provider.supervise(
-                &SupervisorQuery {
-                    task: &conversation.input,
-                    persona: &user.persona,
-                    done_when: user.done_when.as_deref(),
-                    worktree: &conversation.skill.dir,
-                    history_name: &skill_session,
-                },
-                &transcript.messages,
-                Some(user_session.as_str()),
-            )?;
-            let usage = decision.usage;
-            if let Some(u) = &usage {
-                totals.add(u);
+            // The supervisor's decision, re-taken for as long as notes keep arriving
+            // while it is live: a decision taken without the note is exactly the
+            // decision the note exists to change. Each round is a real judge
+            // invocation, so a caller sending notes into a tight loop pays per note.
+            let mut redirected: Vec<u64> = Vec::new();
+            let mut turn_usage: Option<Usage> = None;
+            let decision = loop {
+                let delivered = self.delivered_notes();
+                let criteria = Criteria::compose(user.done_when.as_deref(), &delivered);
+                let rendered = criteria.rendered();
+                self.enter_supervisor_turn();
+                let attempt = self.provider.supervise(
+                    &SupervisorQuery {
+                        task: &conversation.input,
+                        persona: &user.persona,
+                        done_when: rendered.as_deref(),
+                        worktree: &conversation.skill.dir,
+                        history_name: &skill_session,
+                        notes: &delivered,
+                    },
+                    &transcript.messages,
+                    Some(user_session.as_str()),
+                );
+                self.between_turns();
+                let attempt = attempt?;
+                if let Some(u) = &attempt.usage {
+                    totals.add(u);
+                    turn_usage.get_or_insert_with(Usage::default).add(u);
+                }
+                let arrived = self.take_notes();
+                if arrived.is_empty() {
+                    break attempt;
+                }
+                redirected.extend(arrived.iter().map(|(id, _)| *id));
+                for_worker.extend(self.deliver(arrived, Party::Supervisor, None));
+            };
+            let usage = turn_usage;
+            // Answer every sender whose note reached the judge's live turn. Settled
+            // here rather than at the bottom of the loop because an observation that
+            // breaks returns before that, and a delivered note whose sender is never
+            // answered is the silence this seam exists to refuse.
+            if !redirected.is_empty() {
+                let accepted = match &decision.outcome {
+                    SupervisorOutcome::Completed { reason } => Accepted::JudgedWith {
+                        completion_reason: reason.clone(),
+                    },
+                    _ => Accepted::Interrupted {
+                        party: Party::Supervisor,
+                    },
+                };
+                self.settle_notes(&redirected, &accepted);
             }
             let finished_at = observed_at();
             // The supervisor's own words are the next instruction, when it gave one.
@@ -630,6 +826,16 @@ impl<'a> Engine<'a> {
                     break;
                 }
                 SupervisorOutcome::Continue { message, .. } => {
+                    // The other party receives the note *with* the response: one user
+                    // turn carrying the note's framing and then the supervisor's own
+                    // words, so the worker cannot act on one without the other.
+                    let message = if for_worker.is_empty() {
+                        message
+                    } else {
+                        let block = crate::note::worker_block(&for_worker);
+                        for_worker.clear();
+                        format!("{block}\n{message}")
+                    };
                     transcript.push(Message::user(message))
                 }
                 // The supervisor judged the work incomplete and had no next
@@ -670,6 +876,7 @@ impl<'a> Engine<'a> {
             telemetry: self.telemetry(),
             processes: self.spawned_processes(),
             control: self.provider.control(),
+            supervisor_control: self.provider.supervisor_control(),
         }
     }
 

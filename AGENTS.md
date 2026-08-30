@@ -262,18 +262,48 @@ because oneharness delivers that responder by re-executing its own binary and in
 process that binary is the embedder (`docs/oneharness-library.md`).
 
 **Turn control is an address, not a lever onejudge pulls.** `provider.control:
-true` (default off) adds `--control` to the **agent-side** `oneharness run`, and
-`Report::control` reports the three values `oneharness interrupt` addresses that
-turn with (`session`, `session_dir`, `cwd`) — read back from oneharness's report,
-so a fallback chain names the candidate that *ran*. `control` is serialized even
-when null; a refused ask is `null` **plus** `control_unavailable`, because "never
-asked" and "asked and refused" are different facts. A refusal costs no model
-tokens (oneharness validates before spawning), so the call is retried without the
-flag rather than failing the run. `--control` arrived in oneharness 0.6.14, under
-the **0.11.0+** floor the crate advertises.
-`docs/control.md` is the contract; the e2e that matters drives a real
-socket and asserts the reported address *redirects the live turn*, not that it
-merely exists.
+true` (default off) adds `--control` to **both** parties' `oneharness run`, and
+`Report::control` / `Report::supervisor_control` report the three values
+`oneharness interrupt` addresses each turn with (`session`, `session_dir`, `cwd`)
+— read back from oneharness's report, so a fallback chain names the candidate that
+*ran*. Two blocks rather than one because the engine mints two session handles
+(`-skill`, `-user`) and oneharness derives the socket from the name: separate
+sockets, separately refusable, so a caller holding one must not assume the other.
+Both are serialized even when null; a refused ask is `null` **plus** its
+`*_unavailable` reason, because "never asked" and "asked and refused" are
+different facts. A refusal costs no model tokens (oneharness validates before
+spawning), so the call is retried without the flag rather than failing the run.
+`--control` arrived in oneharness 0.6.14, under the **0.11.0+** floor the crate
+advertises. The stateless `judge` / `assess` calls stay uncontrolled (no session
+to be addressed by) and so does the legacy `user` turn, which shares the
+supervisor's session name — the one place "two runs on one address" is real.
+And because a redirect *reopens* the turn carrying the correction rather than
+delivering into it, a **redirected** supervisor turn (read off
+`ControlEvent::is_redirected`) whose answer does not parse is asked once more —
+once, not a budget, with both invocations on the run's usage and attribution.
+`docs/control.md` is the contract; the e2e tests that matter drive a real
+socket per party and assert each reported address *redirects that party's live
+turn*, not that it merely exists.
+
+**A note reaches whoever is live, and the other party gets it with the response.**
+`Notes::channel()` / `Engine::with_notes` / `Plan::with_notes` (`note.rs`) deliver a
+correction into a running conversation: to the worker's live turn, or to the judge's
+— whose decision is then *discarded and re-taken with the note in hand*, because a
+decision taken without it is the decision the note exists to change. The worker's
+finished reply is kept instead, and the note is the next thing it is handed, before
+any other party is consulted. When the re-taken judge decision is completion,
+**nothing** reaches the worker: the work was passed with the note in hand. The note
+carries the **role it addresses**, which is what the recipient is told, never who it
+is delivered to — a judge handed an update to the *worker's* task has to know it is
+one. A note may bind a `Criterion`, which enters the criterion in force at **both**
+judging sites (`Engine::criteria`, read by `cli::run_plan`'s authoritative
+re-judge), so a moved bar cannot be invisible to the verdict that decides the run.
+And **undelivered is an error**: a note arriving after the conversation completed
+raises `Undelivered`, naming that it was not delivered and why, because a caller can
+choose what to do about a refusal and can do nothing at all about a silence.
+`docs/notes.md` is the contract; `tests/notes.rs` drives each of the four arrival
+cases through the library API over the real subprocess doubles, holding a party's
+turn open so the arrival is genuinely live rather than between turns.
 
 **A named session and `--control` must agree about what a turn is.** A mechanism
 that drives the turn over its own protocol builds no argv, so the harness's

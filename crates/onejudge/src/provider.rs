@@ -110,6 +110,14 @@ pub struct SupervisorQuery<'a> {
     pub worktree: &'a str,
     /// Agent-side oneharness history name.
     pub history_name: &'a str,
+    /// Every note delivered into this run so far, in delivery order.
+    ///
+    /// Rendered by [`build_supervisor_prompt`] under a frame that names the role
+    /// each note is addressed to, so a judge handed an update to the *worker's*
+    /// task is told it is one and does not take the worker's job on. A note that
+    /// bound a criterion is *also* in [`SupervisorQuery::done_when`]; this field
+    /// is what the worker was told, never the bar on its own.
+    pub notes: &'a [crate::note::DeliveredNote],
 }
 
 /// A unified supervisor decision after an ordinary, nonterminal agent turn.
@@ -142,6 +150,20 @@ pub enum SupervisorOutcome {
         reason: String,
     },
 }
+
+/// The correction appended when a **redirected** supervisor turn's answer did not
+/// parse at all.
+///
+/// A redirect ends the turn and reopens the next one on the same session with the
+/// note as its prompt, so what comes back answers the note rather than the
+/// question — prose where the contract wants one JSON object. Naming the two
+/// shapes again is what makes the single re-ask worth its cost.
+pub const SUPERVISOR_REDIRECT_NOTE: &str = "\n\n\
+     Your previous answer did not parse: a correction was delivered into your turn, and what \
+     came back was not one JSON object in either valid shape. The correction stands and is \
+     already part of what you were shown above. Answer the original question again, in exactly \
+     one of the two shapes: `completion:true` with a `reason`, or `completion:false` with a \
+     concrete, actionable next instruction in `message`.";
 
 /// How many times a supervisor that answered `completion:false` with no usable
 /// `message` is asked again before the run settles on the work it has.
@@ -229,6 +251,21 @@ pub trait Provider {
     /// out-of-band turn control never claims one. A composing provider forwards
     /// the *skill-running* side, since that is the side the ask applies to.
     fn control(&self) -> crate::ControlOutcome {
+        crate::ControlOutcome::NotRequested
+    }
+
+    /// Where an `oneharness interrupt` process addresses the controllable turn
+    /// this provider's **supervisor side** opened, if one was asked for.
+    ///
+    /// Reported apart from [`Provider::control`] because the two sides are
+    /// separately addressable and separately refusable: they run under different
+    /// configs on different session names, so a harness that can be interrupted on
+    /// one is not thereby interruptible on the other, and a caller must be able to
+    /// tell which lever it actually has.
+    ///
+    /// Defaulted, so every existing implementation keeps compiling and keeps
+    /// claiming no lever — which is the truth for a backend that opens no socket.
+    fn supervisor_control(&self) -> crate::ControlOutcome {
         crate::ControlOutcome::NotRequested
     }
 
@@ -428,7 +465,7 @@ pub fn build_supervisor_prompt(query: &SupervisorQuery<'_>, messages: &[Message]
     format!(
         "You are the simulated USER and completion supervisor for an AI agent.\n\n\
          Original task:\n{task}\n\nSupervisor persona:\n{persona}\n\n\
-         Completion criterion:\n{criterion}\n\n\
+         Completion criterion:\n{criterion}\n\n{notes}\
          Conversation transcript (tool actions are compact normalized summaries, never raw dumps):\n{transcript}\n\n\
          Judge-side oneharness runs inherit the agent worktree `{worktree}` and may use harness tools. \
          If these compact summaries are insufficient, inspect the full recorded agent events from that worktree with exactly:\n\
@@ -446,6 +483,9 @@ pub fn build_supervisor_prompt(query: &SupervisorQuery<'_>, messages: &[Message]
          `completion:true` with the reason instead.",
         task = query.task,
         persona = query.persona,
+        notes = crate::note::supervisor_block(query.notes)
+            .map(|block| format!("{block}\n"))
+            .unwrap_or_default(),
         transcript = render_transcript(messages, true),
         worktree = query.worktree,
         history = query.history_name,
@@ -832,6 +872,7 @@ mod tests {
                 done_when: Some("tests pass"),
                 worktree: "/repo",
                 history_name: "run-skill",
+                notes: &[],
             },
             &transcript_with_event().messages,
         );
@@ -861,6 +902,7 @@ mod tests {
                 done_when: None,
                 worktree: "/repo",
                 history_name: "run-skill",
+                notes: &[],
             },
             &[],
         );
@@ -1015,6 +1057,7 @@ mod tests {
             done_when: None,
             worktree: "/repo",
             history_name: "run",
+            notes: &[],
         };
         let completed = DefaultSupervisor {
             complete: true,
@@ -1042,6 +1085,7 @@ mod tests {
             done_when: None,
             worktree: "/repo",
             history_name: "run",
+            notes: &[],
         };
         let turn = DefaultSupervisor {
             complete: false,

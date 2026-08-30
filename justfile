@@ -57,7 +57,7 @@ test-fast:
 
 # The end-to-end suites alone (real subprocess boundary, test-double binaries).
 test-e2e:
-    cargo nextest run --features {{gate_features}} --test e2e --test cli
+    cargo nextest run --features {{gate_features}} --test e2e --test cli --test notes
 
 # Opt-in live tier: drive a REAL oneharness + harness (never in `check`). See docs/live-tier.md.
 test-live:

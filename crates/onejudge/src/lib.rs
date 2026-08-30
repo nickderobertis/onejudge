@@ -37,12 +37,20 @@
 //!   `docs/spawn-hook.md`). Install it on each provider, or — driving the run
 //!   through the CLI's plan — on the plan itself (`Plan::with_spawn_hook`, under
 //!   the `cli` feature), which reaches both sides of a two-party run.
+//! - [`Notes`] is the **note delivery seam**: a role-addressed correction sent into
+//!   a running conversation reaches whichever party is live, and the other party
+//!   receives it with that party's response. A delivered note enters the acceptance
+//!   [`Criteria`] the judge evaluates against, and one that arrives after the
+//!   conversation completed raises [`Undelivered`] rather than being silently
+//!   accepted. See the [`note`] module.
 //! - [`ControlOutcome`] is the answer to "can something *outside* this run redirect
 //!   the turn in flight?". Asked for with `OneharnessProvider::with_control` (or
 //!   `provider.control: true`) and off by default, it reports the
 //!   [`ControlAddress`] an `oneharness interrupt` process would use — or why the
-//!   ask could not be honored. onejudge never interrupts anything itself; see
-//!   `docs/control.md`.
+//!   ask could not be honored. One per party: [`Provider::control`] for the
+//!   agent's turn and [`Provider::supervisor_control`] for the supervisor's
+//!   decision, on separate sockets and separately refusable. onejudge never
+//!   interrupts anything itself; see `docs/control.md`.
 //!
 //! # Example
 //!
@@ -70,6 +78,7 @@ mod command;
 mod control;
 mod engine;
 mod error;
+pub mod note;
 mod oneharness;
 mod provider;
 mod report;
@@ -89,6 +98,10 @@ pub use engine::{
     TurnClosed, TurnMessage, TurnOpened, NOOP_SETTLE_LIMIT,
 };
 pub use error::{Error, ProviderErrorKind, Result};
+pub use note::{
+    supervisor_block, Accepted, Addressee, Criteria, Criterion, CriterionRefused, DeliveredNote,
+    Note, NoteInbox, NoteRefused, NoteText, Notes, Party, Undelivered,
+};
 pub use oneharness::OneharnessProvider;
 pub use provider::{
     build_assessment_prompt, build_judge_prompt, build_respond_prompt, build_supervisor_prompt,
@@ -96,6 +109,7 @@ pub use provider::{
     render_transcript, supervise_with_reask, Assessment, AssistantTurn, JudgeKind, JudgeQuery,
     JudgeValue, JudgeVerdict, Provider, SkillRef, SupervisorOutcome, SupervisorQuery,
     SupervisorTurn, UserTurn, SUPERVISOR_REASK_LIMIT, SUPERVISOR_REASK_NOTE,
+    SUPERVISOR_REDIRECT_NOTE,
 };
 pub use report::{NamedVerdict, Report, SCHEMA_VERSION};
 #[cfg(feature = "sdk-schema")]

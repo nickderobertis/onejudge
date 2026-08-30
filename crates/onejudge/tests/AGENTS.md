@@ -14,6 +14,16 @@ repo-wide contract; this covers only what differs here.
   feature, so e2e always runs — it is never `#[ignore]`-d.
   Steer a double's behavior with the `[[marker:arg]]` conventions documented in
   each binary's module doc; add a new marker there when a journey needs one.
+- **`notes.rs` drives the note delivery seam through the library API.** Every case
+  goes through `Notes::channel` / `Engine::with_notes` / `Plan::with_notes` and
+  never a command line, and the framing each party was handed is asserted against
+  the text the *double received* (`[[record:PATH]]` on the echo double,
+  `[[record-prompt:PATH]]` on the fake oneharness one) rather than a re-derivation
+  of it. A live turn is driven by holding it open — `[[worker-dwell:MS:PATH]]` /
+  `[[judge-dwell:MS:PATH]]` touch `PATH` as the turn opens, and the sending thread
+  waits for that file before it sends — so an arrival is demonstrably during a
+  party's turn rather than between turns, with the dwell an order of magnitude
+  longer than the wait's poll interval. See `docs/notes.md`.
 - **Coverage excludes `src/bin/`.** The doubles are test infrastructure, not the
   shipped library, so they are outside the 95% line-coverage bar — put the real
   assertions on the library's behavior, not the double's.

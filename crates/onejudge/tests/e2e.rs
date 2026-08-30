@@ -1803,6 +1803,234 @@ fn a_control_ask_a_harness_cannot_honor_degrades_instead_of_failing_the_run() {
     let _ = std::fs::remove_dir_all(&store);
 }
 
+/// A two-turn run under `--control`, with each party's control markers on the text
+/// that party steers by: the agent's on `--system` (the skill instructions), the
+/// supervisor's on the persona the judge prompt inlines. That separation is what
+/// lets one run drive both sockets — and what makes a judge-side answer a judge-side
+/// answer rather than the agent's read twice.
+#[cfg(unix)]
+fn two_party_controlled_run(
+    agent_markers: &str,
+    persona_markers: &str,
+) -> onejudge::Result<onejudge::Report> {
+    let provider = fake_oneharness().with_control(true);
+    let engine = Engine::new(&provider, settings().with_session_name("run-42"));
+    engine
+        .run(&Conversation::multi_turn(
+            Skill::new(
+                "demo",
+                "/skills/demo",
+                format!("[[reply:on it]]{agent_markers}"),
+            ),
+            "start the long job",
+            SimulatedUser::new(format!("A reviewer. {persona_markers}")).max_turns(2),
+        ))
+        .map(|outcome| outcome.into_report(vec![]))
+}
+
+#[cfg(unix)]
+#[test]
+fn the_reported_supervisor_address_redirects_the_judges_live_turn() {
+    // The judge side's own socket, proven the only way an address can be: dial it
+    // with oneharness's own `interrupt` code and watch the correction land on the
+    // stdin the judge harness is reading. A build that reported the agent's address
+    // here would redirect the wrong party's turn.
+    let agent_store = support::control_store("ctl-two-party-agent");
+    let judge_store = support::control_store("ctl-two-party-judge");
+    let sink = scratch_path("control-sink-judge");
+
+    let report = two_party_controlled_run(
+        &format!("[[control-store:{}]]", agent_store.display()),
+        &format!(
+            "[[control-store:{}]][[control-linger:{}]]",
+            judge_store.display(),
+            sink.display()
+        ),
+    )
+    .expect("a two-party controlled run is an ordinary run");
+
+    let address = report
+        .supervisor_control
+        .clone()
+        .expect("a controlled run reports where its SUPERVISOR turn is addressed");
+    assert!(report.supervisor_control_unavailable.is_none());
+    // The engine mints `<base>-user` for the judge and `<base>-skill` for the agent,
+    // so the two are different sockets under different stores — which is the whole
+    // answer to "giving the judge a socket would put two runs on one address".
+    assert_eq!(address.session, "run-42-user");
+    assert_eq!(address.cwd, "/skills/demo");
+    assert_eq!(
+        std::path::Path::new(&address.session_dir),
+        judge_store.canonicalize().unwrap(),
+        "the judge address names the store the JUDGE side opened its socket under"
+    );
+    let agent = report
+        .control
+        .clone()
+        .expect("the agent side still reports its own address");
+    assert_eq!(agent.session, "run-42-skill");
+    assert_ne!(
+        agent.session_dir, address.session_dir,
+        "two parties, two sockets: an address that served for both would be one run \
+         holding another run's lever"
+    );
+
+    // Now be the supervisor's supervisor: redirect the judge's live turn.
+    let (record, response) = interrupt_at(&address, "stop judging — the bar has moved");
+    assert_eq!(record.harness.to_string(), "claude-code");
+    assert!(
+        response.is_ok(),
+        "the reported supervisor address did not reach a live turn: {response:?}"
+    );
+    let delivered = await_contents(&sink, "stop judging — the bar has moved");
+    assert!(
+        delivered.contains("control_request"),
+        "the interrupt frame never reached the judge's turn: {delivered}"
+    );
+
+    assert_profile_is_detached(
+        &oneharness_core::domain::control::socket_path(
+            std::path::Path::new(&address.session_dir),
+            &address.session,
+        )
+        .expect("the reported address fits this platform's unix-socket budget"),
+    );
+    assert_profile_is_detached(&sink);
+
+    let _ = std::fs::remove_file(&sink);
+    let _ = std::fs::remove_dir_all(&agent_store);
+    let _ = std::fs::remove_dir_all(&judge_store);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_judge_side_control_refusal_degrades_and_leaves_the_agents_lever_alone() {
+    // The judge harness declares no control mechanism, so oneharness refuses the
+    // flag before spawning anything. The supervisor turn is retried without it and
+    // the run goes on — and, the point of two fields rather than one: the agent's
+    // address survives a refusal that was never about the agent.
+    let agent_store = support::control_store("ctl-judge-refused-agent");
+    let judge_store = support::control_store("ctl-judge-refused-judge");
+
+    let report = two_party_controlled_run(
+        &format!("[[control-store:{}]]", agent_store.display()),
+        &format!(
+            "[[control-store:{}]][[control-unsupported:qwen]]",
+            judge_store.display()
+        ),
+    )
+    .expect("a refused judge-side control ask must not fail the run it rode on");
+
+    assert!(report.supervisor_control.is_none());
+    let reason = report
+        .supervisor_control_unavailable
+        .clone()
+        .expect("an asked-for judge lever that does not exist has to say so");
+    assert!(
+        reason.contains("has no out-of-band turn control"),
+        "the reason should quote oneharness's own refusal, got: {reason}"
+    );
+    assert!(
+        report.control.is_some() && report.control_unavailable.is_none(),
+        "a judge-side refusal must not take the agent's address with it"
+    );
+    // And the retry without the flag really produced the turn: the supervisor drove
+    // the loop to its cap rather than the run dying on a refused flag.
+    assert_eq!(report.transcript.assistant_turns(), 2);
+
+    let _ = std::fs::remove_dir_all(&agent_store);
+    let _ = std::fs::remove_dir_all(&judge_store);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_redirected_supervisor_answer_that_does_not_parse_is_asked_once_more() {
+    // A redirect ends the turn and reopens the next one carrying the correction, so
+    // what comes back answers the correction rather than the question. Without the
+    // single re-ask, every interrupt of a judge turn is one sample away from killing
+    // a dispatch that has already done real work.
+    let agent_store = support::control_store("ctl-reask-agent");
+    let judge_store = support::control_store("ctl-reask-judge");
+
+    let report = two_party_controlled_run(
+        &format!("[[control-store:{}]]", agent_store.display()),
+        &format!("[[control-store:{}]][[redirected]]", judge_store.display()),
+    )
+    .expect("a redirected supervisor turn that did not parse is re-asked, not fatal");
+
+    // The run survived and the supervisor's decision drove the next turn.
+    assert_eq!(report.transcript.assistant_turns(), 2);
+    assert!(report.supervisor_control.is_some());
+
+    // Journalled, which is the whole of what makes the second invocation
+    // accountable: a manager reading usage sees two judge turns, not one.
+    let judge_invocations = report
+        .telemetry
+        .as_ref()
+        .expect("a run reports its telemetry")
+        .attribution
+        .iter()
+        .filter(|record| record.role == onejudge::TelemetryRole::Judge)
+        .count();
+    assert_eq!(
+        judge_invocations, 2,
+        "the re-ask is a second judge invocation and has to appear as one"
+    );
+
+    let _ = std::fs::remove_dir_all(&agent_store);
+    let _ = std::fs::remove_dir_all(&judge_store);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_second_unparseable_redirected_answer_fails_the_member_as_it_always_did() {
+    // The re-ask is once, not a retry budget. A supervisor that still does not
+    // answer the contract after being told what was unusable is a broken transport,
+    // and that has always failed the member loudly.
+    let agent_store = support::control_store("ctl-reask-twice-agent");
+    let judge_store = support::control_store("ctl-reask-twice-judge");
+
+    let provider = fake_oneharness().with_control(true);
+    let engine = Engine::new(&provider, settings().with_session_name("run-42"));
+    let error = engine
+        .run(&Conversation::multi_turn(
+            Skill::new(
+                "demo",
+                "/skills/demo",
+                format!("[[reply:on it]][[control-store:{}]]", agent_store.display()),
+            ),
+            "start the long job",
+            SimulatedUser::new(format!(
+                "A reviewer. [[control-store:{}]][[redirected-always]]",
+                judge_store.display()
+            ))
+            .max_turns(2),
+        ))
+        .expect_err("a second unparseable answer is a protocol failure, not a settle");
+    assert!(
+        matches!(&error, onejudge::Error::Provider { kind, .. } if *kind == Some(ProviderErrorKind::Protocol)),
+        "the second failure is the transport, classified: {error:?}"
+    );
+
+    // Once, not a budget — and telemetry is readable after a failure, which is how
+    // the bound is provable rather than asserted: exactly two judge invocations were
+    // paid for before the member failed.
+    let judge_invocations = engine
+        .telemetry()
+        .expect("a failed run still reports what it spent")
+        .attribution
+        .iter()
+        .filter(|record| record.role == onejudge::TelemetryRole::Judge)
+        .count();
+    assert_eq!(
+        judge_invocations, 2,
+        "the redirected re-ask is exactly one extra invocation, then the member fails"
+    );
+
+    let _ = std::fs::remove_dir_all(&agent_store);
+    let _ = std::fs::remove_dir_all(&judge_store);
+}
+
 #[cfg(not(unix))]
 #[test]
 fn a_platform_with_no_unix_socket_degrades_before_the_call() {
