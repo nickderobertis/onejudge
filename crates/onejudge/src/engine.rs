@@ -442,7 +442,7 @@ impl<'a> Engine<'a> {
     ) -> Vec<DeliveredNote> {
         self.notes
             .as_ref()
-            .map(|inbox| inbox.delivered(notes, party, accepted))
+            .map(|inbox| inbox.record_delivery(notes, party, accepted))
             .unwrap_or_default()
     }
 

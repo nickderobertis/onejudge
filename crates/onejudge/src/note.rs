@@ -201,7 +201,15 @@ pub struct CriterionRefused {
 }
 
 /// One note: what the worker reads, who it is for, and the property it binds.
+///
+/// Built through [`Note::new`] / [`Note::to`] / [`Note::binding`] and in no other
+/// way — `non_exhaustive` closes the struct literal, and deserialization goes
+/// through the same conversion — so a note whose text nobody can read, or whose
+/// criterion is unusable, is unrepresentable rather than representable and refused
+/// somewhere later.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "NoteWire")]
+#[non_exhaustive]
 pub struct Note {
     /// Who the note is for. Required, no default.
     pub addressee: Addressee,
@@ -214,6 +222,26 @@ pub struct Note {
     /// to the judge as context, and it touches no acceptance criterion.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub criterion: Option<Criterion>,
+}
+
+/// The wire shape a `Note` is deserialized from, so an arriving note is held to the
+/// same rules a locally-built one is.
+#[derive(Deserialize)]
+struct NoteWire {
+    addressee: Addressee,
+    text: String,
+    #[serde(default)]
+    criterion: Option<Criterion>,
+}
+
+impl TryFrom<NoteWire> for Note {
+    type Error = NoteRefused;
+
+    fn try_from(wire: NoteWire) -> Result<Self, Self::Error> {
+        let mut note = Note::new(wire.addressee, wire.text)?;
+        note.criterion = wire.criterion;
+        Ok(note)
+    }
 }
 
 impl Note {
@@ -322,6 +350,11 @@ pub enum Undelivered {
         completion_reason: String,
     },
     /// The conversation ended before the note could be delivered.
+    ///
+    /// Named for the graph layer's word for one conversation — a *member* of a run —
+    /// because this enum is mirrored one-to-one by the transports that carry a note
+    /// in from outside the process, and a variant renamed on one side of that
+    /// mapping is a variant silently dropped on the other.
     #[error(
         "the note was not delivered: the conversation had already ended ({outcome}), so nothing \
          will read it. Relaunch the work, amend the task for a later dispatch, or record the note \
@@ -617,7 +650,7 @@ impl NoteInbox {
     }
 
     /// Record that `notes` were handed to `party`, and answer their senders.
-    pub(crate) fn delivered(
+    pub(crate) fn record_delivery(
         &self,
         notes: Vec<(u64, Note)>,
         party: Party,
@@ -1181,6 +1214,26 @@ mod tests {
     }
 
     #[test]
+    fn a_note_arriving_over_the_wire_is_held_to_the_rules_a_local_one_is() {
+        let good: Note = serde_json::from_str(
+            r#"{"addressee":"both","text":"the bar moved","criterion":"the flag defaults to off"}"#,
+        )
+        .unwrap();
+        assert_eq!(good.addressee, Addressee::Both);
+        assert!(good.binds());
+        // A note that crossed the boundary is the note that was sent.
+        let json = serde_json::to_string(&good).unwrap();
+        assert_eq!(serde_json::from_str::<Note>(&json).unwrap(), good);
+        // …and the two states the constructors refuse are refused here too, rather
+        // than arriving through the one door that skipped them.
+        assert!(serde_json::from_str::<Note>(r#"{"addressee":"worker","text":"  "}"#).is_err());
+        assert!(serde_json::from_str::<Note>(
+            r#"{"addressee":"worker","text":"look","criterion":"the pin moves to 1.2.3"}"#
+        )
+        .is_err());
+    }
+
+    #[test]
     fn a_criterion_round_trips_through_every_conversion_a_caller_has() {
         let text = "the migration path is covered by a test";
         let owned = Criterion::try_from(text.to_string()).unwrap();
@@ -1415,7 +1468,7 @@ mod tests {
             }
             std::thread::sleep(std::time::Duration::from_millis(5));
         };
-        let delivered = inbox.delivered(taken, Party::Supervisor, None);
+        let delivered = inbox.record_delivery(taken, Party::Supervisor, None);
         assert_eq!(delivered.len(), 1);
         assert_eq!(inbox.delivered_notes().len(), 1);
         drop(inbox);

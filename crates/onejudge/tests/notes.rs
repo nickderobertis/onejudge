@@ -664,7 +664,7 @@ fn a_bound_criterion_reaches_the_authoritative_re_judge_a_plan_settles_on() {
     assert!(done.criterion.contains("the change is shipped"));
 }
 
-// --- Part B: undelivered is an error --------------------------------------
+// --- Undelivered is an error ----------------------------------------------
 
 #[test]
 fn a_note_arriving_after_the_conversation_completed_raises_and_is_not_accepted() {
