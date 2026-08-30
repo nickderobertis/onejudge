@@ -71,12 +71,15 @@ impl<S: Provider, J: Provider> Provider for SplitProvider<S, J> {
         records
     }
 
-    // Only the skill side, and deliberately: turn control addresses the long
-    // agent turn a supervisor might want to redirect. The judge side is a short
-    // scoring call with nothing to redirect, and reporting its address here would
+    // Each side reports its own, and only its own: the two backends are separate
+    // runs on separate addresses, so forwarding either one for the other would
     // hand a supervisor a lever over the wrong party.
     fn control(&self) -> crate::ControlOutcome {
         self.skill.control()
+    }
+
+    fn supervisor_control(&self) -> crate::ControlOutcome {
+        self.judge.supervisor_control()
     }
 
     fn respond(

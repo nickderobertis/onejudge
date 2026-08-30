@@ -15,8 +15,8 @@ independently; never read one number off the other.
 
 onejudge's part is deliberately narrow, and it is all of this page:
 
-1. **Ask** for a controllable agent turn.
-2. **Report the address** of the one you got.
+1. **Ask** for controllable turns.
+2. **Report the address** of each one you got — one per party.
 
 onejudge never interrupts anything itself. The lever belongs to whatever is
 supervising the run.
@@ -32,10 +32,22 @@ provider:
 Or, from the library: `OneharnessProvider::new().with_control(true)`.
 
 The default is `false`, and `false` changes nothing at all — no flag on the argv,
-no socket, no extra process. `true` adds `--control` to the **agent-side**
-`oneharness run` only. The judge and simulated-user calls are short scoring turns
-with nothing to redirect, and giving them a socket would put two runs on one
-address.
+no socket, no extra process. `true` adds `--control` to **both** parties'
+`oneharness run`: the agent's turn and the supervisor's decision.
+
+They are two addresses, not one, because the engine mints two session handles —
+`<base>-skill` for the agent and `<base>-user` for the supervisor — and oneharness
+derives the socket from the session name, so `<dir>/control/<name>.sock` differs
+per party. That is the answer to the reason the judge side used to be excluded
+("giving it a socket would put two runs on one address"): it does not, for a caller
+that never gives both sides one name, which this engine never does. The other
+stated reason — "a judge turn is short and has nothing to redirect" — is refuted by
+measurement: a judge turn on this host wedged for nearly two hours.
+
+The short stateless calls (`judge`, `assess`) stay uncontrolled: they carry no
+`--session` for a socket to be addressed by. So does the legacy `user` turn, which
+shares the supervisor's session name and would put a second socket on one address —
+the hazard, in the one place it is real.
 
 `control` belongs to the `oneharness` provider kind. Under `split`, set it on the
 `skill:` child — the side that runs the controllable turn — not on the wrapper,
@@ -43,15 +55,25 @@ which has two backends and so no single turn to address.
 
 ## The address
 
-The report gains one nullable block:
+The report gains one nullable block **per party**:
 
 ```json
 "control": {
   "session": "run-42-skill",
   "session_dir": "/home/you/.local/state/oneharness/sessions",
   "cwd": "/work/repo"
+},
+"supervisor_control": {
+  "session": "run-42-user",
+  "session_dir": "/home/you/.local/state/oneharness/sessions",
+  "cwd": "/work/repo"
 }
 ```
+
+`control` addresses the **agent's** turn; `supervisor_control` addresses the
+**supervisor's** decision. Read the one for the party you mean to redirect: they
+are separately opened and separately refused, so a caller that has one and assumes
+the other holds a lever it does not have.
 
 Those are exactly the three values `oneharness interrupt` addresses a turn with,
 and nothing else:
@@ -95,7 +117,9 @@ guessing whether it is reading an older onejudge.
 
 A control ask that **could not be honored** is a different fact, and it is
 reported as a different thing: `control` is `null` *and* `control_unavailable`
-carries the reason. The reason is quoted from oneharness's own refusal wherever
+carries the reason. `supervisor_control` / `supervisor_control_unavailable` is the
+same pair for the supervisor turn, answered independently — a judge harness with no
+control mechanism leaves the agent's address open and standing. The reason is quoted from oneharness's own refusal wherever
 there is one, because it names the harness, the run shape, or the control-capable
 alternatives a supervisor would use to route around it:
 
@@ -182,6 +206,35 @@ code: resolve the store, read the record, run the pre-flight capability check,
 send one request frame. It asserts the run answered `ok` **and** that the abort
 frame and the operator's replacement message both arrived on the live turn's
 stdin. The address is proven *correct*, not merely present.
+
+`the_reported_supervisor_address_redirects_the_judges_live_turn` does the same for
+the supervisor's socket, and additionally asserts the two parties' addresses are
+different sockets under different stores.
+`a_judge_side_control_refusal_degrades_and_leaves_the_agents_lever_alone` drives a
+judge harness that declares no control mechanism: the supervisor turn is retried
+without the flag, the run reaches its cap, and the agent's address survives a
+refusal that was never about the agent.
+
+## A redirected supervisor turn is asked once more
+
+A redirect has never delivered *into* a running turn. It aborts the turn and
+reopens the next one on the same session with the message as its prompt. On the
+agent side that is invisible — the worker simply answers the correction. On the
+supervisor side it is load-bearing, because that reopened turn's reply is the one
+`parse_supervisor` reads against a two-shape JSON contract, and what comes back
+answers the correction in prose.
+
+So a supervisor turn **that was redirected** — read off oneharness's own
+`ControlReport::interrupts`, asking `ControlEvent::is_redirected` so a plain stop
+does not count — and whose answer does not parse is asked the question once more,
+with the correction named. **Once, not a budget**: a second unparseable answer
+fails the member exactly as it always did, because at that point the transport is
+broken rather than the turn misaddressed. Both invocations are on the run's usage
+and in `telemetry.attribution`, so a manager reading what a run spent sees the two
+judge turns rather than one — a judge turn silently taken twice is a cost nothing
+else would account for. `a_redirected_supervisor_answer_that_does_not_parse_is_asked_once_more`
+and `a_second_unparseable_redirected_answer_fails_the_member_as_it_always_did`
+drive the pair.
 
 ## Scope
 

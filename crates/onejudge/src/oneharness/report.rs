@@ -260,6 +260,24 @@ pub(crate) fn control_socket(report: &RunReport) -> Option<ControlSocket> {
     })
 }
 
+/// Whether the turn this report describes was actually **redirected** through its
+/// control socket.
+///
+/// Read off oneharness's own `ControlReport::interrupts` — every control request
+/// it served, in order — rather than inferred from having opened a socket, because
+/// a turn that offered an address and a turn that was interrupted through it are
+/// different facts, and only the second one changes what the turn was asked. It
+/// asks `ControlEvent::is_redirected` specifically, so a plain stop — which
+/// delivers no new prompt — does not count as one.
+pub(crate) fn was_redirected(report: &RunReport) -> bool {
+    report.control.as_ref().is_some_and(|control| {
+        control
+            .interrupts
+            .iter()
+            .any(oneharness_core::domain::control::ControlEvent::is_redirected)
+    })
+}
+
 /// Map oneharness's closed failure taxonomy onto onejudge's. Total on purpose: a
 /// new upstream kind fails to compile here instead of quietly becoming
 /// [`ProviderErrorKind::Other`] at some call site.

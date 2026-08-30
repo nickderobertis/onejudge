@@ -151,6 +151,20 @@ pub enum SupervisorOutcome {
     },
 }
 
+/// The correction appended when a **redirected** supervisor turn's answer did not
+/// parse at all.
+///
+/// A redirect ends the turn and reopens the next one on the same session with the
+/// note as its prompt, so what comes back answers the note rather than the
+/// question — prose where the contract wants one JSON object. Naming the two
+/// shapes again is what makes the single re-ask worth its cost.
+pub const SUPERVISOR_REDIRECT_NOTE: &str = "\n\n\
+     Your previous answer did not parse: a correction was delivered into your turn, and what \
+     came back was not one JSON object in either valid shape. The correction stands and is \
+     already part of what you were shown above. Answer the original question again, in exactly \
+     one of the two shapes: `completion:true` with a `reason`, or `completion:false` with a \
+     concrete, actionable next instruction in `message`.";
+
 /// How many times a supervisor that answered `completion:false` with no usable
 /// `message` is asked again before the run settles on the work it has.
 ///
@@ -237,6 +251,21 @@ pub trait Provider {
     /// out-of-band turn control never claims one. A composing provider forwards
     /// the *skill-running* side, since that is the side the ask applies to.
     fn control(&self) -> crate::ControlOutcome {
+        crate::ControlOutcome::NotRequested
+    }
+
+    /// Where an `oneharness interrupt` process addresses the controllable turn
+    /// this provider's **supervisor side** opened, if one was asked for.
+    ///
+    /// Reported apart from [`Provider::control`] because the two sides are
+    /// separately addressable and separately refusable: they run under different
+    /// configs on different session names, so a harness that can be interrupted on
+    /// one is not thereby interruptible on the other, and a caller must be able to
+    /// tell which lever it actually has.
+    ///
+    /// Defaulted, so every existing implementation keeps compiling and keeps
+    /// claiming no lever — which is the truth for a backend that opens no socket.
+    fn supervisor_control(&self) -> crate::ControlOutcome {
         crate::ControlOutcome::NotRequested
     }
 

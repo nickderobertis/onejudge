@@ -127,12 +127,13 @@ pub struct ProviderConfig {
     /// terminal report line. Default `false` (one buffered report document).
     #[serde(default)]
     pub stream: Option<bool>,
-    /// `oneharness`: ask for a **controllable** agent turn — the agent-side call
-    /// adds `oneharness run --control`, opening an out-of-band socket a separate
-    /// `oneharness interrupt` process can redirect the in-flight turn through.
-    /// Default `false`, and `false` changes nothing about the run. The address
-    /// lands on the report's `control` block; onejudge never interrupts anything
-    /// itself. See `docs/control.md`.
+    /// `oneharness`: ask for **controllable** turns — both parties' calls add
+    /// `oneharness run --control`, opening an out-of-band socket each that a
+    /// separate `oneharness interrupt` process can redirect the in-flight turn
+    /// through. Default `false`, and `false` changes nothing about the run. The
+    /// addresses land on the report's `control` (agent) and `supervisor_control`
+    /// (judge) blocks — separate sockets, separately refusable; onejudge never
+    /// interrupts anything itself. See `docs/control.md`.
     #[serde(default)]
     pub control: Option<bool>,
     /// `oneharness`: harness ids to run against **oneharness's own deterministic

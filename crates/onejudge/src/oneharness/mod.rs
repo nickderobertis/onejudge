@@ -81,7 +81,7 @@ mod library;
 mod report;
 mod turn;
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::io::{Read as _, Write};
 use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
@@ -94,12 +94,13 @@ use crate::provider::{
     build_assessment_prompt, build_judge_prompt, build_supervisor_prompt, build_user_prompt,
     latest_or_inline, parse_supervisor, parse_verdict, supervise_with_reask, Assessment,
     AssistantTurn, JudgeQuery, JudgeVerdict, Provider, SkillRef, SupervisorQuery, SupervisorTurn,
-    UserTurn, SUPERVISOR_REASK_NOTE,
+    UserTurn, SUPERVISOR_REASK_NOTE, SUPERVISOR_REDIRECT_NOTE,
 };
 use crate::spawn::{role_of, SharedSpawnHook, SpawnContext, SpawnedProcess, Spawner};
 use crate::stream::{read_stream, StreamOutcome};
 use crate::telemetry::{CandidateAttempt, FellThrough, InvocationTelemetry, TelemetryRole};
 use crate::transcript::{Message, ToolEvent};
+use crate::usage::Usage;
 
 pub(crate) use report::tool_event;
 use report::{parse_report, parse_report_value, ControlSocket, Invocation};
@@ -299,6 +300,52 @@ enum Execution {
     Process(String),
 }
 
+/// What **one party** of a run can say about out-of-band turn control.
+///
+/// Two of these, one per party, because the two sides are separately addressable
+/// and separately refusable: the agent and the supervisor run under different
+/// configs, on different session names — `<base>-skill` and `<base>-user`, so
+/// different sockets — and a harness that can be interrupted on one side is not
+/// thereby interruptible on the other. Collapsing them into one field would make
+/// a judge-side refusal read as an agent-side one.
+struct PartyControl {
+    /// Which party this is, for the warning a degraded ask prints.
+    party: &'static str,
+    /// What this party could say about turn control on the last run: the address
+    /// of the socket it opened, or why it has none. Reset with telemetry, because
+    /// it describes one run and not the provider.
+    outcome: RefCell<ControlOutcome>,
+    /// The socket this party's last report named, before the working directory is
+    /// folded in to make it an address. Written where the report is parsed (which
+    /// is the only place that sees it) and consumed by whichever ladder knows the
+    /// `--cwd` the turn ran under.
+    socket: RefCell<Option<ControlSocket>>,
+    /// Whether the last turn this party ran was actually **redirected** — read off
+    /// oneharness's own `ControlReport::interrupts`, never inferred from having
+    /// opened a socket, because opening one and being interrupted through it are
+    /// different facts.
+    redirected: Cell<bool>,
+}
+
+impl PartyControl {
+    fn new(party: &'static str) -> Self {
+        Self {
+            party,
+            outcome: RefCell::new(ControlOutcome::NotRequested),
+            socket: RefCell::new(None),
+            redirected: Cell::new(false),
+        }
+    }
+
+    /// Forget the last run: an address describes one run's turn, and a second run
+    /// must never inherit a socket that is already gone.
+    fn reset(&self) {
+        *self.outcome.borrow_mut() = ControlOutcome::NotRequested;
+        *self.socket.borrow_mut() = None;
+        self.redirected.set(false);
+    }
+}
+
 /// The default [`Provider`]: runs each turn through the `oneharness` engine.
 pub struct OneharnessProvider {
     execution: Execution,
@@ -308,16 +355,10 @@ pub struct OneharnessProvider {
     mock_harness: Vec<String>,
     stream: bool,
     control: bool,
-    /// What the agent side could say about turn control on the last run: the
-    /// address of the socket it opened, or why it has none. Reset with telemetry,
-    /// because it describes one run and not the provider.
-    control_outcome: RefCell<ControlOutcome>,
-    /// The socket the agent side's last report named, before the working
-    /// directory is folded in to make it an address. Written where the report is
-    /// parsed (which is the only place that sees it) and consumed by
-    /// [`OneharnessProvider::run_respond`], which is the only place that knows the
-    /// `--cwd` the turn ran under.
-    control_socket: RefCell<Option<ControlSocket>>,
+    /// The agent side's control state, reported on [`Provider::control`].
+    agent: PartyControl,
+    /// The supervisor side's, reported on [`Provider::supervisor_control`].
+    supervisor: PartyControl,
     telemetry: RefCell<Vec<InvocationTelemetry>>,
     spawner: Spawner,
 }
@@ -347,8 +388,8 @@ impl OneharnessProvider {
             mock_harness: Vec::new(),
             stream: false,
             control: false,
-            control_outcome: RefCell::new(ControlOutcome::NotRequested),
-            control_socket: RefCell::new(None),
+            agent: PartyControl::new("agent"),
+            supervisor: PartyControl::new("judge"),
             telemetry: RefCell::new(Vec::new()),
             spawner: Spawner::default(),
         }
@@ -479,9 +520,22 @@ impl OneharnessProvider {
     /// refusal is reported as [`ControlOutcome::Unavailable`] rather than failing
     /// a run the caller asked to have judged.
     ///
-    /// Only the agent side is controlled. A judge or simulated-user turn is short
-    /// and has nothing to redirect, and giving it a socket would put two runs on
-    /// one address.
+    /// **Both parties are controlled**, on separate addresses: the agent's turn
+    /// under `<base>-skill` and the supervisor's decision under `<base>-user`. The
+    /// two are reported apart, on [`Provider::control`] and
+    /// [`Provider::supervisor_control`], because a harness that can be interrupted
+    /// on one side is not thereby interruptible on the other and a caller must be
+    /// able to tell which lever it has.
+    ///
+    /// The two reasons this used to exclude the judge side are answered rather
+    /// than binding. "Two runs on one address" does not hold for this engine's own
+    /// handles: oneharness derives the socket from the session name, and the
+    /// engine mints two different ones. And "a judge turn is short" is refuted by
+    /// measurement — a judge turn on this host wedged for nearly two hours, which
+    /// is exactly the turn worth redirecting. The short scoring calls (`judge`,
+    /// `assess`) and the legacy `user` turn stay uncontrolled: they carry no
+    /// session to be addressed by, or would put a second socket on the
+    /// supervisor's own name.
     #[must_use]
     pub fn with_control(mut self, control: bool) -> Self {
         self.control = control;
@@ -491,10 +545,13 @@ impl OneharnessProvider {
     /// Record why an asked-for control channel is missing, and warn — a caller
     /// that asked for a lever must not have to diff two reports to learn it has
     /// none.
-    fn control_unavailable(&self, reason: impl Into<String>) {
+    fn control_unavailable(&self, party: &PartyControl, reason: impl Into<String>) {
         let reason = reason.into();
-        eprintln!("onejudge: warning — no out-of-band turn control for this run: {reason}");
-        *self.control_outcome.borrow_mut() = ControlOutcome::Unavailable(reason);
+        eprintln!(
+            "onejudge: warning — no out-of-band turn control for this run's {} side: {reason}",
+            party.party
+        );
+        *party.outcome.borrow_mut() = ControlOutcome::Unavailable(reason);
     }
 
     /// Fold the working directory the turn ran under into the socket the report
@@ -504,16 +561,17 @@ impl OneharnessProvider {
     /// one case that cannot happen through oneharness (it refuses the flag rather
     /// than honoring it silently) and must still not be reported as a lever: it
     /// becomes an `Unavailable` naming the producer.
-    fn control_address(&self, worktree: &str) {
-        match self.control_socket.borrow_mut().take() {
+    fn control_address(&self, party: &PartyControl, worktree: &str) {
+        match party.socket.borrow_mut().take() {
             Some(socket) => {
-                *self.control_outcome.borrow_mut() = ControlOutcome::Open(ControlAddress {
+                *party.outcome.borrow_mut() = ControlOutcome::Open(ControlAddress {
                     session: socket.session,
                     session_dir: socket.session_dir,
                     cwd: worktree.to_string(),
                 });
             }
             None => self.control_unavailable(
+                party,
                 "the run accepted `--control` but its report named no control socket",
             ),
         }
@@ -542,7 +600,7 @@ impl OneharnessProvider {
         if let Some(name) = session {
             // A continued session only needs the latest user turn.
             let prompt = latest_or_inline(messages, true);
-            if self.wants_control() {
+            if self.wants_control(&self.agent) {
                 let spec = self.mocked(respond_spec(
                     instructions,
                     worktree,
@@ -554,16 +612,19 @@ impl OneharnessProvider {
                 ));
                 match self.respond_once(&spec, on_event) {
                     Ok(turn) => {
-                        self.control_address(worktree);
+                        self.control_address(&self.agent, worktree);
                         return Ok(turn);
                     }
                     // oneharness refused the control ask itself, before spawning
                     // anything: drop the flag and run the turn as an ordinary one.
-                    Err(e) if is_control_refused(&e) => self.control_unavailable(refusal(&e)),
+                    Err(e) if is_control_refused(&e) => {
+                        self.control_unavailable(&self.agent, refusal(&e));
+                    }
                     Err(e) if is_session_unsupported(&e) => {
                         // `--control` is addressed by the session name, so a
                         // harness with no session has no address either.
                         self.control_unavailable(
+                            &self.agent,
                             "the agent harness does not support --session, which --control needs \
                              for an address",
                         );
@@ -613,13 +674,13 @@ impl OneharnessProvider {
     /// Windows is answered here rather than by oneharness, so the ask degrades to
     /// a stated reason instead of a refused run: oneharness's control socket is a
     /// unix domain socket, and there is nothing for a retry to discover.
-    fn wants_control(&self) -> bool {
+    fn wants_control(&self, party: &PartyControl) -> bool {
         if !self.control {
             return false;
         }
         match control_platform_reason(cfg!(unix)) {
             Some(reason) => {
-                self.control_unavailable(reason);
+                self.control_unavailable(party, reason);
                 false
             }
             None => true,
@@ -685,35 +746,80 @@ impl OneharnessProvider {
     /// Run a judge/simulated-user turn under the judge config, threading `session`
     /// and — on a `SessionUnsupported` failure — retrying once without it. The
     /// prompt already inlines the whole transcript, so the retry needs no rebuild.
+    ///
+    /// `control` asks for a **controllable supervisor turn**, and rides exactly the
+    /// ladder the agent side does: the most capable call first, and each retry
+    /// drops the one thing the previous attempt was refused for. Both refusals cost
+    /// no model tokens — oneharness validates the flags before it spawns a harness
+    /// — so retrying is cheaper than making the caller pre-declare what its judge
+    /// harness can do. Only [`Provider::supervise`] passes `true`: the stateless
+    /// `judge` / `assess` calls carry no session to be addressed by, and the legacy
+    /// `user` turn shares the supervisor's session name, so controlling it would
+    /// put a second socket on one address.
     fn run_judge_side(
         &self,
         op: &str,
         prompt: &str,
         session: Option<&str>,
         cwd: Option<&str>,
+        control: bool,
     ) -> Result<Invocation> {
+        let mut session = session;
         if let Some(name) = session {
-            let spec = self.mocked(judge_side_spec(
-                self.judge_config.as_deref(),
-                Some(name),
-                cwd,
-                prompt,
-            ));
-            match self.run(op, &spec) {
-                Ok(result) => return Ok(result),
-                Err(e) if is_session_unsupported(&e) => {
-                    eprintln!(
-                        "onejudge: warning — the judge harness does not support --session; \
-                         retrying without it"
-                    );
+            if control && self.wants_control(&self.supervisor) {
+                let spec = self.mocked(judge_side_spec(
+                    self.judge_config.as_deref(),
+                    Some(name),
+                    cwd,
+                    true,
+                    prompt,
+                ));
+                match self.run(op, &spec) {
+                    Ok(result) => {
+                        // The address is keyed on the directory the turn ran under,
+                        // the same string oneharness slugged to key the store.
+                        self.control_address(&self.supervisor, cwd.unwrap_or("."));
+                        return Ok(result);
+                    }
+                    Err(e) if is_control_refused(&e) => {
+                        self.control_unavailable(&self.supervisor, refusal(&e));
+                    }
+                    Err(e) if is_session_unsupported(&e) => {
+                        self.control_unavailable(
+                            &self.supervisor,
+                            "the judge harness does not support --session, which --control needs \
+                             for an address",
+                        );
+                        session = None;
+                    }
+                    Err(e) => return Err(e),
                 }
-                Err(e) => return Err(e),
+            }
+            if let Some(name) = session {
+                let spec = self.mocked(judge_side_spec(
+                    self.judge_config.as_deref(),
+                    Some(name),
+                    cwd,
+                    false,
+                    prompt,
+                ));
+                match self.run(op, &spec) {
+                    Ok(result) => return Ok(result),
+                    Err(e) if is_session_unsupported(&e) => {
+                        eprintln!(
+                            "onejudge: warning — the judge harness does not support --session; \
+                             retrying without it"
+                        );
+                    }
+                    Err(e) => return Err(e),
+                }
             }
         }
         let spec = self.mocked(judge_side_spec(
             self.judge_config.as_deref(),
             None,
             cwd,
+            false,
             prompt,
         ));
         self.run(op, &spec)
@@ -883,8 +989,20 @@ impl OneharnessProvider {
         } else {
             TelemetryRole::Judge
         };
-        if op == "respond" && self.control {
-            *self.control_socket.borrow_mut() = report::control_socket(&invocation.report);
+        if self.control {
+            let party = match op {
+                "respond" => Some(&self.agent),
+                "supervisor" => Some(&self.supervisor),
+                // Every other judge-side op runs uncontrolled, so it has no socket
+                // to report and must not clear the one the supervisor opened.
+                _ => None,
+            };
+            if let Some(party) = party {
+                *party.socket.borrow_mut() = report::control_socket(&invocation.report);
+                party
+                    .redirected
+                    .set(report::was_redirected(&invocation.report));
+            }
         }
         self.telemetry
             .borrow_mut()
@@ -1077,6 +1195,7 @@ fn judge_side_spec(
     judge_config: Option<&Path>,
     session: Option<&str>,
     cwd: Option<&str>,
+    control: bool,
     prompt: &str,
 ) -> TurnSpec {
     TurnSpec {
@@ -1090,7 +1209,10 @@ fn judge_side_spec(
         events: false,
         // Streaming is about the long agent turn, not the short judgement calls.
         stream: false,
-        control: false,
+        // The same expression the agent side uses, for the same reason: turn
+        // control is addressed by the `--session` name, so it only ever rides
+        // alongside one and is dropped when the session is.
+        control: control && session.is_some(),
         prompt: prompt.to_string(),
     }
 }
@@ -1101,9 +1223,10 @@ impl Provider for OneharnessProvider {
         self.spawner.reset();
         // The control address describes one run's turn, not the provider, so a
         // second run must never inherit the first's — least of all an address
-        // whose socket is gone.
-        *self.control_outcome.borrow_mut() = ControlOutcome::NotRequested;
-        *self.control_socket.borrow_mut() = None;
+        // whose socket is gone. Both parties, or the judge side of run two reports
+        // the socket run one opened.
+        self.agent.reset();
+        self.supervisor.reset();
     }
 
     fn invocation_telemetry(&self) -> Vec<InvocationTelemetry> {
@@ -1115,7 +1238,11 @@ impl Provider for OneharnessProvider {
     }
 
     fn control(&self) -> ControlOutcome {
-        self.control_outcome.borrow().clone()
+        self.agent.outcome.borrow().clone()
+    }
+
+    fn supervisor_control(&self) -> ControlOutcome {
+        self.supervisor.outcome.borrow().clone()
     }
 
     fn respond(
@@ -1150,7 +1277,7 @@ impl Provider for OneharnessProvider {
         session: Option<&str>,
     ) -> Result<UserTurn> {
         let prompt = build_user_prompt(persona, messages);
-        let result = self.run_judge_side("user", &prompt, session, None)?;
+        let result = self.run_judge_side("user", &prompt, session, None, false)?;
         Ok(UserTurn {
             message: result.reply(),
             stop: false,
@@ -1174,10 +1301,42 @@ impl Provider for OneharnessProvider {
                 format!("{base}{SUPERVISOR_REASK_NOTE}")
             };
             let result =
-                self.run_judge_side("supervisor", &prompt, session, Some(query.worktree))?;
+                self.run_judge_side("supervisor", &prompt, session, Some(query.worktree), true)?;
+            let mut usage = Usage::default();
+            if let Some(u) = &result.usage() {
+                usage.add(u);
+            }
+            let outcome = match parse_supervisor("oneharness:supervisor", &result.reply()) {
+                Ok(outcome) => outcome,
+                // A redirect ends the turn and reopens the next one on the same
+                // session with the correction as its prompt, so what comes back
+                // answers the correction rather than the question. Ask the question
+                // once more — and only once: a second unparseable answer fails the
+                // member exactly as it does today, because at that point the
+                // transport is broken rather than the turn misaddressed.
+                Err(unparsed) if self.supervisor.redirected.get() => {
+                    eprintln!(
+                        "onejudge: warning — this supervisor turn was redirected and its answer \
+                         did not parse ({unparsed}); asking it once more. That is a second judge \
+                         invocation, and both are on the run's usage and telemetry."
+                    );
+                    let retry = self.run_judge_side(
+                        "supervisor",
+                        &format!("{prompt}{SUPERVISOR_REDIRECT_NOTE}"),
+                        session,
+                        Some(query.worktree),
+                        true,
+                    )?;
+                    if let Some(u) = &retry.usage() {
+                        usage.add(u);
+                    }
+                    parse_supervisor("oneharness:supervisor", &retry.reply())?
+                }
+                Err(unparsed) => return Err(unparsed),
+            };
             Ok(SupervisorTurn {
-                outcome: parse_supervisor("oneharness:supervisor", &result.reply())?,
-                usage: result.usage(),
+                outcome,
+                usage: (!usage.is_empty()).then_some(usage),
             })
         })
     }
@@ -1185,7 +1344,7 @@ impl Provider for OneharnessProvider {
     fn judge(&self, query: &JudgeQuery<'_>, messages: &[Message]) -> Result<JudgeVerdict> {
         // Judging is stateless — no session to continue.
         let prompt = build_judge_prompt(query, messages);
-        let result = self.run_judge_side("judge", &prompt, None, None)?;
+        let result = self.run_judge_side("judge", &prompt, None, None, false)?;
         let mut verdict = parse_verdict(query.kind, "oneharness:judge", &result.reply())?;
         verdict.usage = result.usage();
         Ok(verdict)
@@ -1193,7 +1352,7 @@ impl Provider for OneharnessProvider {
 
     fn assess(&self, prompt: &str, messages: &[Message]) -> Result<Assessment> {
         let prompt = build_assessment_prompt(prompt, messages);
-        let result = self.run_judge_side("assess", &prompt, None, None)?;
+        let result = self.run_judge_side("assess", &prompt, None, None, false)?;
         let text = result.reply();
         if text.trim().is_empty() {
             return Err(Error::provider(
@@ -1236,6 +1395,7 @@ mod tests {
             provider.judge_config.as_deref(),
             Some("s"),
             None,
+            false,
             "p",
         ));
         assert!(args
@@ -1295,6 +1455,7 @@ mod tests {
             provider.judge_config.as_deref(),
             Some("s"),
             None,
+            false,
             "p",
         )));
         assert!(judge
@@ -1304,7 +1465,7 @@ mod tests {
         // And an ordinary provider asks for no responder at all.
         let plain = OneharnessProvider::new();
         assert!(
-            !argv_of(&plain.mocked(judge_side_spec(None, None, None, "p")))
+            !argv_of(&plain.mocked(judge_side_spec(None, None, None, false, "p")))
                 .iter()
                 .any(|arg| arg == "--mock-harness")
         );
@@ -1380,7 +1541,7 @@ mod tests {
         assert!(argv_of(&agent).iter().any(|a| a == "--stream"));
         // The judge / simulated-user side stays buffered: streaming is about the
         // long agent turn, not the short judgement calls.
-        let judge = judge_side_spec(None, Some("s"), None, "p");
+        let judge = judge_side_spec(None, Some("s"), None, false, "p");
         assert!(!judge.stream);
         assert!(!argv_of(&judge).iter().any(|a| a == "--stream"));
     }
@@ -1391,6 +1552,7 @@ mod tests {
             Some(Path::new("oneharness.judge.toml")),
             None,
             None,
+            false,
             "p",
         ));
         assert!(!args.iter().any(|a| a == "--system"));
@@ -1402,7 +1564,7 @@ mod tests {
             .any(|w| w == ["--config", "oneharness.judge.toml"]));
         // With no judge config, no `--config` is passed (oneharness discovers its
         // own default).
-        let no_config = argv_of(&judge_side_spec(None, None, None, "p"));
+        let no_config = argv_of(&judge_side_spec(None, None, None, false, "p"));
         assert!(!no_config.iter().any(|a| a == "--config"));
     }
 
@@ -1580,23 +1742,73 @@ mod tests {
             "p",
         ));
         assert!(!sessionless.iter().any(|a| a == "--control"));
-        // The judge side is never controlled.
-        assert!(!argv_of(&judge_side_spec(None, Some("s"), None, "p"))
+    }
+
+    #[test]
+    fn the_judge_side_rides_the_same_control_expression_the_agent_side_does() {
+        // Asked for, alongside the `--session` name that addresses it.
+        assert!(argv_of(&judge_side_spec(None, Some("s"), None, true, "p"))
+            .iter()
+            .any(|a| a == "--control"));
+        // Not asked for.
+        assert!(
+            !argv_of(&judge_side_spec(None, Some("s"), None, false, "p"))
+                .iter()
+                .any(|a| a == "--control")
+        );
+        // Asked for, but with no session to be addressed by: dropped, exactly as it
+        // is on the agent side, because the socket is keyed on the session name.
+        assert!(!judge_side_spec(None, None, None, true, "p").control);
+        assert!(!argv_of(&judge_side_spec(None, None, None, true, "p"))
             .iter()
             .any(|a| a == "--control"));
     }
 
     #[test]
     fn a_provider_that_never_asked_reports_no_control() {
-        assert_eq!(
-            OneharnessProvider::new().control(),
-            ControlOutcome::NotRequested
-        );
+        let never = OneharnessProvider::new();
+        assert_eq!(never.control(), ControlOutcome::NotRequested);
+        assert_eq!(never.supervisor_control(), ControlOutcome::NotRequested);
         // Asking does not by itself claim an address: only a turn that got one does.
+        let asked = OneharnessProvider::new().with_control(true);
+        assert_eq!(asked.control(), ControlOutcome::NotRequested);
+        assert_eq!(asked.supervisor_control(), ControlOutcome::NotRequested);
+    }
+
+    #[test]
+    fn the_two_parties_control_answers_are_kept_apart() {
+        // The hazard this separation exists for: one side opening a socket must not
+        // make the other side look like it has a lever, and one side's refusal must
+        // not read as the other's.
+        let provider = OneharnessProvider::new().with_control(true);
+        *provider.agent.socket.borrow_mut() = Some(ControlSocket {
+            session: "run-42-skill".into(),
+            session_dir: "/store".into(),
+        });
+        provider.control_address(&provider.agent, "/work");
         assert_eq!(
-            OneharnessProvider::new().with_control(true).control(),
-            ControlOutcome::NotRequested
+            provider.control().address().map(|a| a.session.as_str()),
+            Some("run-42-skill")
         );
+        assert_eq!(provider.supervisor_control(), ControlOutcome::NotRequested);
+
+        provider.control_unavailable(
+            &provider.supervisor,
+            "the judge harness declares no control",
+        );
+        assert!(provider
+            .supervisor_control()
+            .unavailable_reason()
+            .is_some_and(|why| why.contains("judge harness")));
+        assert!(
+            provider.control().address().is_some(),
+            "a judge-side refusal must not take the agent's address with it"
+        );
+
+        // …and a second run inherits neither.
+        provider.reset_telemetry();
+        assert_eq!(provider.control(), ControlOutcome::NotRequested);
+        assert_eq!(provider.supervisor_control(), ControlOutcome::NotRequested);
     }
 
     #[test]
@@ -1605,9 +1817,16 @@ mod tests {
         // is unreachable through it — but a stand-in producer could, and reporting
         // a lever that does not exist is the one failure this feature must not have.
         let provider = OneharnessProvider::new().with_control(true);
-        provider.control_address("/work");
+        provider.control_address(&provider.agent, "/work");
         assert!(provider
             .control()
+            .unavailable_reason()
+            .expect("a missing socket is a stated reason")
+            .contains("named no control socket"));
+        // …on the judge side too, which is a separate socket and a separate answer.
+        provider.control_address(&provider.supervisor, "/work");
+        assert!(provider
+            .supervisor_control()
             .unavailable_reason()
             .expect("a missing socket is a stated reason")
             .contains("named no control socket"));

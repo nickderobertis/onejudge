@@ -30,8 +30,10 @@ use crate::usage::Usage;
 /// the address of the out-of-band turn-control channel a `provider.control: true`
 /// run opened — and its companion `control_unavailable`; `9` added
 /// `settled_reason` — why a run ended without a completion decision because its
-/// supervisor gave no next instruction.
-pub const SCHEMA_VERSION: u32 = 10;
+/// supervisor gave no next instruction; `11` added `supervisor_control` and
+/// `supervisor_control_unavailable` — the same pair for the **supervisor** turn,
+/// which is separately addressable and separately refusable from the agent's.
+pub const SCHEMA_VERSION: u32 = 11;
 
 /// The skip predicate for a field that is always serialized but must not be
 /// *required* of a document being read. Used by [`Report::control`]; see the
@@ -135,6 +137,23 @@ pub struct Report {
     /// is what keeps a refused ask from reading as an ask never made.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub control_unavailable: Option<String>,
+    /// Where an `oneharness interrupt` process addresses the controllable turn
+    /// this run's **supervisor** side opened, or `null` when control was not asked
+    /// for.
+    ///
+    /// A second field rather than a second meaning for [`Report::control`]: the two
+    /// parties run under different configs on different session names, so they are
+    /// different sockets, refusable independently. A reader that has one address
+    /// and assumes the other holds a lever it does not have.
+    ///
+    /// Serialized even when null, and for the reason [`Report::control`] gives.
+    #[serde(default, skip_serializing_if = "never")]
+    pub supervisor_control: Option<ControlAddress>,
+    /// Why an *asked-for* supervisor-side control channel is missing, when one is.
+    /// The companion of [`Report::supervisor_control`], exactly as
+    /// `control_unavailable` is of `control`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supervisor_control_unavailable: Option<String>,
     /// Whether a streaming sink asked to short-circuit the run.
     #[serde(default)]
     pub stopped_early: bool,
@@ -161,6 +180,8 @@ impl Report {
             processes: Vec::new(),
             control: None,
             control_unavailable: None,
+            supervisor_control: None,
+            supervisor_control_unavailable: None,
             stopped_early,
         }
     }
@@ -180,6 +201,16 @@ impl Report {
     pub fn with_control(mut self, outcome: &ControlOutcome) -> Self {
         self.control = outcome.address().cloned();
         self.control_unavailable = outcome.unavailable_reason().map(String::from);
+        self
+    }
+
+    /// Record what the run's **supervisor** side could say about out-of-band turn
+    /// control — the same one-method-not-two-fields discipline
+    /// [`Report::with_control`] uses, for the same reason.
+    #[must_use]
+    pub fn with_supervisor_control(mut self, outcome: &ControlOutcome) -> Self {
+        self.supervisor_control = outcome.address().cloned();
+        self.supervisor_control_unavailable = outcome.unavailable_reason().map(String::from);
         self
     }
 }
@@ -246,7 +277,7 @@ mod tests {
         assert!(!json.contains("verdicts"));
         assert!(!json.contains("usage"));
         assert!(!json.contains("assessment"));
-        assert!(json.contains("\"schema_version\":10"));
+        assert!(json.contains(&format!("\"schema_version\":{SCHEMA_VERSION}")));
         // The run neither completed nor settled, so it claims neither.
         assert!(!json.contains("completion_reason"));
         assert!(!json.contains("settled_reason"));
@@ -254,10 +285,54 @@ mod tests {
         // A run that spawned nothing reports no processes, rather than an empty
         // claim about grouping.
         assert!(!json.contains("processes"));
-        // `control` is the exception: it is always on the wire, so a supervisor
-        // reads "no controllable turn" rather than "an older onejudge".
+        // The control blocks are the exception: both are always on the wire, so a
+        // supervisor reads "no controllable turn" rather than "an older onejudge" —
+        // and reads it per party, since the two are refused independently.
         assert!(json.contains("\"control\":null"));
+        assert!(json.contains("\"supervisor_control\":null"));
         assert!(!json.contains("control_unavailable"));
+        assert!(!json.contains("supervisor_control_unavailable"));
+    }
+
+    #[test]
+    fn the_two_parties_control_answers_ride_the_wire_apart() {
+        // The v11 addition, and the state one field could not hold: an agent turn
+        // that got a lever and a judge ask that was refused, in one document.
+        let report = Report::new(Transcript::from_input("hi"), vec![], None, false)
+            .with_control(&ControlOutcome::Open(ControlAddress {
+                session: "run-42-skill".into(),
+                session_dir: "/state/sessions".into(),
+                cwd: "/work".into(),
+            }))
+            .with_supervisor_control(&ControlOutcome::Unavailable(
+                "harness `qwen` has no out-of-band turn control".into(),
+            ));
+        let json = serde_json::to_string(&report).unwrap();
+        assert!(json.contains("\"session\":\"run-42-skill\""));
+        assert!(json.contains("\"supervisor_control\":null"));
+        assert!(json.contains("\"supervisor_control_unavailable\":\"harness `qwen`"));
+        assert!(!json.contains("\"control_unavailable\""));
+        assert_eq!(serde_json::from_str::<Report>(&json).unwrap(), report);
+
+        // …and the mirror image, so neither field is a copy of the other.
+        let mirrored = Report::new(Transcript::from_input("hi"), vec![], None, false)
+            .with_control(&ControlOutcome::Unavailable(
+                "the agent harness cannot".into(),
+            ))
+            .with_supervisor_control(&ControlOutcome::Open(ControlAddress {
+                session: "run-42-user".into(),
+                session_dir: "/state/sessions".into(),
+                cwd: "/work".into(),
+            }));
+        assert_eq!(
+            mirrored
+                .supervisor_control
+                .as_ref()
+                .map(|a| a.session.as_str()),
+            Some("run-42-user")
+        );
+        assert!(mirrored.control.is_none());
+        assert!(mirrored.supervisor_control_unavailable.is_none());
     }
 
     #[test]

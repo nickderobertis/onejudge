@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Report",
-  "description": "A judged run: the transcript, the verdicts scored against it, aggregated\nusage, and whether a streaming sink short-circuited the run \u2014 stamped with the\n[`SCHEMA_VERSION`] of the contract that produced it.\n\nBuild one from an [`Outcome`](crate::Outcome) with\n[`Outcome::into_report`](crate::Outcome::into_report), or directly with\n[`Report::new`].",
+  "description": "A judged run: the transcript, the verdicts scored against it, aggregated\nusage, and whether a streaming sink short-circuited the run — stamped with the\n[`SCHEMA_VERSION`] of the contract that produced it.\n\nBuild one from an [`Outcome`](crate::Outcome) with\n[`Outcome::into_report`](crate::Outcome::into_report), or directly with\n[`Report::new`].",
   "type": "object",
   "properties": {
     "assessment": {
@@ -19,7 +19,7 @@
       ]
     },
     "control": {
-      "description": "Where an `oneharness interrupt` process addresses the controllable turn\nthis run's agent side opened (`provider.control: true`), or `null` when\ncontrol was not asked for.\n\nSerialized even when null \u2014 unlike the optional fields above \u2014 because a\nsupervisor keys on its presence to decide whether it has a lever at all,\nand an absent key would make \"no control\" indistinguishable from a report\nwritten before this field existed. `null` with a `control_unavailable`\nreason beside it is the third case: asked for, and refused.\n\nAlways *written*, but deliberately not *required* by the generated schema:\na reader must keep accepting the reports older onejudge versions wrote, and\nproducing more than the contract demands is what makes an additive field\nadditive. [`never`] is how those two are said at once \u2014 it is the skip\npredicate that never skips, and its presence is what tells serde's schema\nderive the key may be absent from a document.",
+      "description": "Where an `oneharness interrupt` process addresses the controllable turn\nthis run's agent side opened (`provider.control: true`), or `null` when\ncontrol was not asked for.\n\nSerialized even when null — unlike the optional fields above — because a\nsupervisor keys on its presence to decide whether it has a lever at all,\nand an absent key would make \"no control\" indistinguishable from a report\nwritten before this field existed. `null` with a `control_unavailable`\nreason beside it is the third case: asked for, and refused.\n\nAlways *written*, but deliberately not *required* by the generated schema:\na reader must keep accepting the reports older onejudge versions wrote, and\nproducing more than the contract demands is what makes an additive field\nadditive. [`never`] is how those two are said at once — it is the skip\npredicate that never skips, and its presence is what tells serde's schema\nderive the key may be absent from a document.",
       "anyOf": [
         {
           "$ref": "#/$defs/ControlAddress"
@@ -31,14 +31,14 @@
       "default": null
     },
     "control_unavailable": {
-      "description": "Why an *asked-for* control channel is missing, when one is. Absent unless\n`provider.control` was on and the run could not be given a socket \u2014 which\nis what keeps a refused ask from reading as an ask never made.",
+      "description": "Why an *asked-for* control channel is missing, when one is. Absent unless\n`provider.control` was on and the run could not be given a socket — which\nis what keeps a refused ask from reading as an ask never made.",
       "type": [
         "string",
         "null"
       ]
     },
     "processes": {
-      "description": "Every process the run spawned, and the embedder-owned group a\n[`SpawnHook`](crate::SpawnHook) placed each one in.\n\nThis is the machine-readable form of what an in-process embedder observes\nthrough the hook, so `onejudge run --format json` reports it too. A record\nwhose `group` is absent is not grouped \u2014 onejudge never names a group it did\nnot observe a hook create.",
+      "description": "Every process the run spawned, and the embedder-owned group a\n[`SpawnHook`](crate::SpawnHook) placed each one in.\n\nThis is the machine-readable form of what an in-process embedder observes\nthrough the hook, so `onejudge run --format json` reports it too. A record\nwhose `group` is absent is not grouped — onejudge never names a group it did\nnot observe a hook create.",
       "type": "array",
       "items": {
         "$ref": "#/$defs/SpawnedProcess"
@@ -51,7 +51,7 @@
       "minimum": 0
     },
     "settled_reason": {
-      "description": "Why the run ended *without* a completion decision, when it ended because the\nsupervisor judged the work incomplete and then named no next instruction \u2014\neven asked again.\n\nAbsent on every other run, so its presence is the one signal that separates\n\"the agent could not do it\" from \"the supervisor had nothing to say\". The\ntranscript, verdicts, and usage beside it are the work the run really did:\nthis settles a run, it does not fail one.",
+      "description": "Why the run ended *without* a completion decision, when it ended because the\nsupervisor judged the work incomplete and then named no next instruction —\neven asked again.\n\nAbsent on every other run, so its presence is the one signal that separates\n\"the agent could not do it\" from \"the supervisor had nothing to say\". The\ntranscript, verdicts, and usage beside it are the work the run really did:\nthis settles a run, it does not fail one.",
       "type": [
         "string",
         "null"
@@ -61,6 +61,25 @@
       "description": "Whether a streaming sink asked to short-circuit the run.",
       "type": "boolean",
       "default": false
+    },
+    "supervisor_control": {
+      "description": "Where an `oneharness interrupt` process addresses the controllable turn\nthis run's **supervisor** side opened, or `null` when control was not asked\nfor.\n\nA second field rather than a second meaning for [`Report::control`]: the two\nparties run under different configs on different session names, so they are\ndifferent sockets, refusable independently. A reader that has one address\nand assumes the other holds a lever it does not have.\n\nSerialized even when null, and for the reason [`Report::control`] gives.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ControlAddress"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "supervisor_control_unavailable": {
+      "description": "Why an *asked-for* supervisor-side control channel is missing, when one is.\nThe companion of [`Report::supervisor_control`], exactly as\n`control_unavailable` is of `control`.",
+      "type": [
+        "string",
+        "null"
+      ]
     },
     "telemetry": {
       "description": "Timing, per-party usage, and native oneharness session linkage.",
@@ -103,7 +122,7 @@
   ],
   "$defs": {
     "CandidateAttempt": {
-      "description": "One candidate identity oneharness attempted for a single invocation \u2014 the\nharness (and variant/model) it tried, and what came of it.\n\nUnder `run_mode = \"fallback\"` oneharness attempts candidates in priority order\nand stops at the first that runs the task, so an invocation can have several of\nthese: the ones it fell through, then the one that ran. This is the typed form\nof oneharness's per-candidate record \u2014 the thing that lets a consumer attribute\na failure to a *side* (agent vs judge) and an *identity* (which harness, which\naccount) instead of grepping a message.",
+      "description": "One candidate identity oneharness attempted for a single invocation — the\nharness (and variant/model) it tried, and what came of it.\n\nUnder `run_mode = \"fallback\"` oneharness attempts candidates in priority order\nand stops at the first that runs the task, so an invocation can have several of\nthese: the ones it fell through, then the one that ran. This is the typed form\nof oneharness's per-candidate record — the thing that lets a consumer attribute\na failure to a *side* (agent vs judge) and an *identity* (which harness, which\naccount) instead of grepping a message.",
       "type": "object",
       "properties": {
         "available": {
@@ -153,11 +172,11 @@
           "type": "string"
         },
         "harness_id": {
-          "description": "Base id, or `<base>:<variant>` when a named preset selected the identity \u2014\nthe selector that reproduces this candidate.",
+          "description": "Base id, or `<base>:<variant>` when a named preset selected the identity —\nthe selector that reproduces this candidate.",
           "type": "string"
         },
         "history_id": {
-          "description": "The oneharness history record written for this attempt, when history was\non \u2014 the handle `oneharness history show` resolves.",
+          "description": "The oneharness history record written for this attempt, when history was\non — the handle `oneharness history show` resolves.",
           "type": [
             "string",
             "null"
@@ -213,7 +232,7 @@
       ]
     },
     "ControlAddress": {
-      "description": "Where an `oneharness interrupt` process addresses the controllable turn\nonejudge's agent side opened.\n\nThe three fields are the whole of `interrupt`'s addressing:\n\n```text\noneharness interrupt --session <session> --session-dir <session_dir> \\\n                     --cwd <cwd> --input \"<what to do instead>\"\n```\n\nThey are read back from the oneharness run report rather than re-derived from\nwhat onejudge asked for, so the address names the session the run actually\nbound \u2014 including in a fallback chain, where the handle is bound to the\ncandidate that *ran*, not the first one tried.",
+      "description": "Where an `oneharness interrupt` process addresses the controllable turn\nonejudge's agent side opened.\n\nThe three fields are the whole of `interrupt`'s addressing:\n\n```text\noneharness interrupt --session <session> --session-dir <session_dir> \\\n                     --cwd <cwd> --input \"<what to do instead>\"\n```\n\nThey are read back from the oneharness run report rather than re-derived from\nwhat onejudge asked for, so the address names the session the run actually\nbound — including in a fallback chain, where the handle is bound to the\ncandidate that *ran*, not the first one tried.",
       "type": "object",
       "properties": {
         "cwd": {
@@ -658,7 +677,7 @@
           ]
         },
         "tool_call_id": {
-          "description": "The harness's own stable identity for this call, joining a `tool_call` to\nits `tool_result`. `None` means the harness exposed no identity \u2014 never an\nempty string, which would read as an id that happens to be blank.",
+          "description": "The harness's own stable identity for this call, joining a `tool_call` to\nits `tool_result`. `None` means the harness exposed no identity — never an\nempty string, which would read as an id that happens to be blank.",
           "type": [
             "string",
             "null"
@@ -687,11 +706,11 @@
       ]
     },
     "Usage": {
-      "description": "Token / cost usage for one provider call, or a running total.\n\nEach field is independently optional because not every harness reports every\nsignal (cost is commonly absent on subscription auth, and cache counts only\nwhen the harness surfaces prompt-cache reads/writes). `None` means \"no\nsignal\", never \"zero\" \u2014 so a total stays `None` until something reports a real\nnumber, then accumulates.",
+      "description": "Token / cost usage for one provider call, or a running total.\n\nEach field is independently optional because not every harness reports every\nsignal (cost is commonly absent on subscription auth, and cache counts only\nwhen the harness surfaces prompt-cache reads/writes). `None` means \"no\nsignal\", never \"zero\" — so a total stays `None` until something reports a real\nnumber, then accumulates.",
       "type": "object",
       "properties": {
         "cache_read_tokens": {
-          "description": "Prompt tokens served from the provider's prompt cache \u2014 a cheap read of a\npreviously-written prefix \u2014 when the harness reports them. `None` when the\nharness does not surface cache counts, never `0` as a guess.",
+          "description": "Prompt tokens served from the provider's prompt cache — a cheap read of a\npreviously-written prefix — when the harness reports them. `None` when the\nharness does not surface cache counts, never `0` as a guess.",
           "type": [
             "integer",
             "null"

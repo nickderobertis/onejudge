@@ -329,9 +329,13 @@ pub struct Outcome {
     /// provider that spawns nothing.
     pub processes: Vec<SpawnedProcess>,
     /// Where an `oneharness interrupt` process addresses this run's controllable
-    /// turn, or why there is none. [`ControlOutcome::NotRequested`] unless the
-    /// provider was asked for control.
+    /// **agent** turn, or why there is none. [`ControlOutcome::NotRequested`]
+    /// unless the provider was asked for control.
     pub control: ControlOutcome,
+    /// The same, for the **supervisor** turn. Reported apart from
+    /// [`Outcome::control`] because the two sides are separately addressable and
+    /// separately refusable, so one answer cannot stand for both.
+    pub supervisor_control: ControlOutcome,
 }
 
 impl Outcome {
@@ -356,6 +360,7 @@ impl Outcome {
         report.telemetry = self.telemetry;
         report.processes = self.processes;
         report = report.with_control(&self.control);
+        report = report.with_supervisor_control(&self.supervisor_control);
         match assessment {
             Some(text) => report.with_assessment(text),
             None => report,
@@ -871,6 +876,7 @@ impl<'a> Engine<'a> {
             telemetry: self.telemetry(),
             processes: self.spawned_processes(),
             control: self.provider.control(),
+            supervisor_control: self.provider.supervisor_control(),
         }
     }
 

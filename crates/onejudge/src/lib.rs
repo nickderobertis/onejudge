@@ -47,8 +47,10 @@
 //!   the turn in flight?". Asked for with `OneharnessProvider::with_control` (or
 //!   `provider.control: true`) and off by default, it reports the
 //!   [`ControlAddress`] an `oneharness interrupt` process would use — or why the
-//!   ask could not be honored. onejudge never interrupts anything itself; see
-//!   `docs/control.md`.
+//!   ask could not be honored. One per party: [`Provider::control`] for the
+//!   agent's turn and [`Provider::supervisor_control`] for the supervisor's
+//!   decision, on separate sockets and separately refusable. onejudge never
+//!   interrupts anything itself; see `docs/control.md`.
 //!
 //! # Example
 //!
@@ -107,6 +109,7 @@ pub use provider::{
     render_transcript, supervise_with_reask, Assessment, AssistantTurn, JudgeKind, JudgeQuery,
     JudgeValue, JudgeVerdict, Provider, SkillRef, SupervisorOutcome, SupervisorQuery,
     SupervisorTurn, UserTurn, SUPERVISOR_REASK_LIMIT, SUPERVISOR_REASK_NOTE,
+    SUPERVISOR_REDIRECT_NOTE,
 };
 pub use report::{NamedVerdict, Report, SCHEMA_VERSION};
 #[cfg(feature = "sdk-schema")]

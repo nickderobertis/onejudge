@@ -1198,7 +1198,11 @@ mod tests {
     fn json_render_is_the_versioned_report() {
         let report = Report::new(Transcript::from_input("hi"), vec![], None, false);
         let json = render_json(&report).unwrap();
-        assert!(json.contains("\"schema_version\": 10"));
+        // Against the constant, not a literal: this asserts that `--format json`
+        // renders *the versioned report*, and a hand-copied number turns every
+        // schema bump into an unrelated failure here. `tests/contract.rs` is what
+        // holds the number itself.
+        assert!(json.contains(&format!("\"schema_version\": {}", crate::SCHEMA_VERSION)));
     }
 
     #[test]

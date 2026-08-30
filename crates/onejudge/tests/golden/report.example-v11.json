@@ -1,5 +1,5 @@
 {
-  "schema_version": 10,
+  "schema_version": 11,
   "transcript": {
     "messages": [
       {
@@ -143,5 +143,7 @@
     "session_dir": "/state/oneharness/sessions",
     "cwd": "/work/repo"
   },
+  "supervisor_control": null,
+  "supervisor_control_unavailable": "harness `qwen` has no out-of-band turn control",
   "stopped_early": false
 }

@@ -9,7 +9,7 @@ and re-export, so onejudge — not its consumers — owns the shape of a judged 
 
 ```jsonc
 {
-  "schema_version": 10,                 // bump on any wire change
+  "schema_version": 11,                 // bump on any wire change
   "transcript": {
     "messages": [
       { "role": "user", "content": "commit the fix" },
@@ -76,6 +76,8 @@ and re-export, so onejudge — not its consumers — owns the shape of a judged 
     "cwd": "/work/repo"
   },
   "control_unavailable": "…",           // omitted unless an ASKED-FOR lever is missing
+  "supervisor_control": null,           // ALWAYS present; the SUPERVISOR turn's own address
+  "supervisor_control_unavailable": "…",// omitted unless an ASKED-FOR lever is missing
   "stopped_early": false
 }
 ```
@@ -124,7 +126,7 @@ The distinction is the point: without it, a supervisor with nothing to say is
 indistinguishable from an agent that could not do the task, and an operator acts
 on the wrong one. See [protocol.md](protocol.md#supervisor--decide-completion-or-produce-the-next-user-turn).
 
-## `control` — where a controllable turn is addressed
+## `control` / `supervisor_control` — where a controllable turn is addressed
 
 Present on every report, so a supervisor keys on the value rather than on whether
 the key exists. `null` means turn control was not asked for
@@ -132,6 +134,12 @@ the key exists. `null` means turn control was not asked for
 reason beside it means it was asked for and could not be honored — a different
 fact, and the one a supervisor has to route around. See
 [control.md](control.md).
+
+**Two pairs, one per party** (v11). `control` is the agent's turn, addressed by the
+`<base>-skill` session; `supervisor_control` is the judge's decision, addressed by
+`<base>-user`. They are different sockets and are refused independently — a harness
+that can be interrupted on one side is not thereby interruptible on the other — so
+a reader that has one address and assumes the other holds a lever it does not have.
 
 ## `processes` — what the run spawned, and who owns its group
 
@@ -144,8 +152,8 @@ its records carry pids and no group.
 ## Versioning and the drift gate
 
 The wire form is pinned by a canonical serialized example
-(`crates/onejudge/tests/golden/report.example-v10.json`) and its generated JSON
-Schema (`crates/onejudge/tests/golden/report.schema-v10.json`), both checked by
+(`crates/onejudge/tests/golden/report.example-v11.json`) and its generated JSON
+Schema (`crates/onejudge/tests/golden/report.schema-v11.json`), both checked by
 `tests/contract.rs`. Any change to the serialized shape — a renamed field, a new
 key, a changed default — fails that test, so it can only land as a **deliberate**
 edit that also bumps `SCHEMA_VERSION` and updates both goldens. Downstream SDKs
@@ -178,7 +186,7 @@ attribution for. So `onejudge run --format json` writes a versioned
 
 ```jsonc
 {
-  "schema_version": 10,
+  "schema_version": 11,
   "error": { "message": "run failed: provider error (respond): …", "kind": "auth" },
   "telemetry": { /* as above, including `attribution` */ },
   "processes": [ /* what the failed run had already spawned, as below */ ]
