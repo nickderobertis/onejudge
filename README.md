@@ -137,6 +137,13 @@ to publish tool events on stdout as they occur, ahead of that same report
   `Plan` (`Plan::with_spawn_hook`) when you drive the CLI's run driver — the plan
   reaches both sides of a two-party worker + judge run. See
   [docs/spawn-hook.md](docs/spawn-hook.md).
+- **`Notes`** is the **note delivery seam**: a role-addressed correction sent into a
+  running conversation reaches whichever party is live, and the other party receives
+  it with that party's response. A note can bind a `Criterion`, which enters the
+  acceptance criteria the judge evaluates against; one that arrives after the
+  conversation completed raises `Undelivered` rather than being silently accepted.
+  Open it with `Notes::channel()` and install the inbox on an `Engine`
+  (`with_notes`) or a `Plan`. See [docs/notes.md](docs/notes.md).
 
 Two things it improves over the in-skilltest engine:
 

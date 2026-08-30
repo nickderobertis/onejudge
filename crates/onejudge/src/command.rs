@@ -4,7 +4,10 @@
 //! drives and any custom provider a consumer writes. The wire contract is
 //! documented in `docs/protocol.md`.
 //!
-//! Protocol **v4** adds the unified supervisor request; v2 dropped
+//! Protocol **v5** adds `notes` to the supervisor request — the role-addressed
+//! corrections delivered into the run so far, omitted when there are none, so a v4
+//! double sees a byte-identical request. Protocol **v4** added the unified
+//! supervisor request; v2 dropped
 //! `platform`/`model` from every request: the custom command
 //! owns harness/model selection itself (onejudge no longer passes them).
 
@@ -53,6 +56,10 @@ enum Request<'a> {
         done_when: Option<&'a str>,
         worktree: &'a str,
         history_name: &'a str,
+        /// Every note delivered into this run so far (protocol v5). Omitted when
+        /// none has been, so a v4 double sees a byte-identical request.
+        #[serde(skip_serializing_if = "<[_]>::is_empty")]
+        notes: &'a [crate::note::DeliveredNote],
         messages: &'a [Message],
         #[serde(skip_serializing_if = "Option::is_none")]
         session: Option<&'a str>,
@@ -300,6 +307,7 @@ impl Provider for CommandProvider {
                     done_when: query.done_when,
                     worktree: query.worktree,
                     history_name: query.history_name,
+                    notes: query.notes,
                     messages,
                     session,
                 },

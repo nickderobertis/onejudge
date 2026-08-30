@@ -110,6 +110,14 @@ pub struct SupervisorQuery<'a> {
     pub worktree: &'a str,
     /// Agent-side oneharness history name.
     pub history_name: &'a str,
+    /// Every note delivered into this run so far, in delivery order.
+    ///
+    /// Rendered by [`build_supervisor_prompt`] under a frame that names the role
+    /// each note is addressed to, so a judge handed an update to the *worker's*
+    /// task is told it is one and does not take the worker's job on. A note that
+    /// bound a criterion is *also* in [`SupervisorQuery::done_when`]; this field
+    /// is what the worker was told, never the bar on its own.
+    pub notes: &'a [crate::note::DeliveredNote],
 }
 
 /// A unified supervisor decision after an ordinary, nonterminal agent turn.
@@ -428,7 +436,7 @@ pub fn build_supervisor_prompt(query: &SupervisorQuery<'_>, messages: &[Message]
     format!(
         "You are the simulated USER and completion supervisor for an AI agent.\n\n\
          Original task:\n{task}\n\nSupervisor persona:\n{persona}\n\n\
-         Completion criterion:\n{criterion}\n\n\
+         Completion criterion:\n{criterion}\n\n{notes}\
          Conversation transcript (tool actions are compact normalized summaries, never raw dumps):\n{transcript}\n\n\
          Judge-side oneharness runs inherit the agent worktree `{worktree}` and may use harness tools. \
          If these compact summaries are insufficient, inspect the full recorded agent events from that worktree with exactly:\n\
@@ -446,6 +454,9 @@ pub fn build_supervisor_prompt(query: &SupervisorQuery<'_>, messages: &[Message]
          `completion:true` with the reason instead.",
         task = query.task,
         persona = query.persona,
+        notes = crate::note::supervisor_block(query.notes)
+            .map(|block| format!("{block}\n"))
+            .unwrap_or_default(),
         transcript = render_transcript(messages, true),
         worktree = query.worktree,
         history = query.history_name,
@@ -832,6 +843,7 @@ mod tests {
                 done_when: Some("tests pass"),
                 worktree: "/repo",
                 history_name: "run-skill",
+                notes: &[],
             },
             &transcript_with_event().messages,
         );
@@ -861,6 +873,7 @@ mod tests {
                 done_when: None,
                 worktree: "/repo",
                 history_name: "run-skill",
+                notes: &[],
             },
             &[],
         );
@@ -1015,6 +1028,7 @@ mod tests {
             done_when: None,
             worktree: "/repo",
             history_name: "run",
+            notes: &[],
         };
         let completed = DefaultSupervisor {
             complete: true,
@@ -1042,6 +1056,7 @@ mod tests {
             done_when: None,
             worktree: "/repo",
             history_name: "run",
+            notes: &[],
         };
         let turn = DefaultSupervisor {
             complete: false,

@@ -17,7 +17,10 @@ report line. See [streaming.md](streaming.md). The two are independent — a
 
 ## Protocol version
 
-**v4** (current) — added the unified `supervisor` operation. **v3** added the
+**v5** (current) — added `notes` to the `supervisor` request: the role-addressed
+corrections delivered into the run so far (see [notes.md](notes.md)). The field is
+omitted when nothing has been delivered, so a v4 command sees a byte-identical
+request and needs no change. **v4** added the unified `supervisor` operation. **v3** added the
 `assess` free-text judgement operation. **v2**
 dropped `platform` and `model` from every request: harness and
 model **selection** is the command's own concern now (onejudge no longer passes
@@ -90,6 +93,20 @@ The engine sends exactly one request after each ordinary nonterminal agent turn:
 ```json
 {"op":"supervisor","task":"fix it","persona":"A strict reviewer.","done_when":"tests pass","worktree":"/repo","history_name":"run-42-skill","messages":[...],"session":"run-42-user"}
 ```
+
+`done_when` is the criterion **actually in force**: the configured one plus every
+criterion a delivered binding note added, composed by onejudge. `notes` (v5,
+omitted when empty) carries what each party was told, so a command that renders its
+own judge prompt can frame them by the role they address rather than reading them
+as instructions to itself:
+
+```json
+{"op":"supervisor","...":"...","notes":[{"note":{"addressee":"worker","text":"the reviewer asked for a smaller diff","criterion":"the diff touches only the migration"},"delivered_to":"worker"}]}
+```
+
+`addressee` is who the note is *for* (`worker` / `supervisor` / `both`);
+`delivered_to` is which party was handed it, and the two differ whenever a note
+reached whichever party happened to be live. See [notes.md](notes.md).
 
 Return exactly one discriminated shape. Completed requires a non-empty reason and
 forbids `message`; continue requires the exact non-empty next user message:

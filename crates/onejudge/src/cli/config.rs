@@ -379,6 +379,9 @@ impl Config {
             // A config file cannot name an in-process hook; an embedder installs
             // one with `Plan::with_spawn_hook`, and no hook is today's behaviour.
             spawn_hook: None,
+            // Likewise: a note channel is opened in process by whoever supervises
+            // the run, and installed with `Plan::with_notes`.
+            notes: None,
         })
     }
 }
@@ -590,6 +593,11 @@ pub struct Plan {
     /// — leaves today's behaviour: the run spawns into onejudge's own group and
     /// claims none. Set it with [`Plan::with_spawn_hook`].
     pub spawn_hook: Option<SharedSpawnHook>,
+    /// The note channel's engine end. `None` — the only thing a config file can
+    /// produce — is today's behaviour exactly: no note can arrive, and every seam
+    /// below behaves as it did before the channel existed. Set it with
+    /// [`Plan::with_notes`].
+    pub notes: Option<crate::note::NoteInbox>,
 }
 
 impl std::fmt::Debug for Plan {
@@ -604,6 +612,7 @@ impl std::fmt::Debug for Plan {
             .field("done_when", &self.done_when)
             .field("assessment", &self.assessment)
             .field("spawn_hook", &self.spawn_hook.is_some())
+            .field("notes", &self.notes.is_some())
             .finish()
     }
 }
@@ -625,6 +634,22 @@ impl Plan {
     #[must_use]
     pub fn with_spawn_hook(mut self, hook: SharedSpawnHook) -> Self {
         self.spawn_hook = Some(hook);
+        self
+    }
+
+    /// Read notes sent into this run from `inbox`, so an embedder driving onejudge
+    /// **through a plan** — rather than building the engine itself — can deliver a
+    /// role-addressed correction into the running conversation.
+    ///
+    /// This is the plan-level reach of
+    /// [`Engine::with_notes`](crate::Engine::with_notes), not a second mechanism:
+    /// a criterion a delivered binding note adds is read at *both* judging sites —
+    /// the per-turn supervisor decision and the authoritative re-judge against the
+    /// finished transcript, which is the one that decides the run's exit code. See
+    /// the [`note`](crate::note) module.
+    #[must_use]
+    pub fn with_notes(mut self, inbox: crate::note::NoteInbox) -> Self {
+        self.notes = Some(inbox);
         self
     }
 }

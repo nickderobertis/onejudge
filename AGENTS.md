@@ -275,6 +275,26 @@ the **0.11.0+** floor the crate advertises.
 socket and asserts the reported address *redirects the live turn*, not that it
 merely exists.
 
+**A note reaches whoever is live, and the other party gets it with the response.**
+`Notes::channel()` / `Engine::with_notes` / `Plan::with_notes` (`note.rs`) deliver a
+correction into a running conversation: to the worker's live turn, or to the judge's
+— whose decision is then *discarded and re-taken with the note in hand*, because a
+decision taken without it is the decision the note exists to change. The worker's
+finished reply is kept instead, and the note is the next thing it is handed, before
+any other party is consulted. When the re-taken judge decision is completion,
+**nothing** reaches the worker: the work was passed with the note in hand. The note
+carries the **role it addresses**, which is what the recipient is told, never who it
+is delivered to — a judge handed an update to the *worker's* task has to know it is
+one. A note may bind a `Criterion`, which enters the criterion in force at **both**
+judging sites (`Engine::criteria`, read by `cli::run_plan`'s authoritative
+re-judge), so a moved bar cannot be invisible to the verdict that decides the run.
+And **undelivered is an error**: a note arriving after the conversation completed
+raises `Undelivered`, naming that it was not delivered and why, because a caller can
+choose what to do about a refusal and can do nothing at all about a silence.
+`docs/notes.md` is the contract; `tests/notes.rs` drives each of the four arrival
+cases through the library API over the real subprocess doubles, holding a party's
+turn open so the arrival is genuinely live rather than between turns.
+
 **A named session and `--control` must agree about what a turn is.** A mechanism
 that drives the turn over its own protocol builds no argv, so the harness's
 `--resume` mapping is never reached and only the protocol's own resume request can

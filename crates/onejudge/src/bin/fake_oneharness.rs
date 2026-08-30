@@ -97,6 +97,11 @@
 //! into the live turn's stdin at SINK, and `[[control-unsupported:ID]]` refuses the
 //! ask the way a harness with no control mechanism does. See `docs/control.md`.
 //!
+//! **What a party was actually given.** `[[record-prompt:PATH]]` — read from
+//! `--system` on the agent side and from the prompt on the judge side — appends the
+//! whole prompt to `PATH`, so a test can assert on the framing onejudge composed
+//! rather than on a re-derivation of it.
+//!
 //! **A supervisor with nothing to say.** In a *persona* (which the supervisor
 //! prompt inlines), `[[supervisor-silent]]` answers `completion:false` with no
 //! `message` every time it is asked, and `[[supervisor-silent-once]]` answers that
@@ -224,6 +229,19 @@ fn main() {
     // two texts a caller controls per party — which is what lets ONE run drive both
     // halves of a two-party tree.
     let steering = if is_agent { system } else { prompt.as_str() };
+    // The exact text this party was given, appended verbatim. It is the only way to
+    // assert on the *framing* a party was handed — the prompt onejudge composed, not
+    // a re-derivation of it — across the real subprocess boundary.
+    if let Some(path) = marker(steering, "record-prompt") {
+        use std::io::Write as _;
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .unwrap_or_else(|e| emit_error(&format!("could not open the prompt log: {e}")));
+        file.write_all(format!("{prompt}\n=== end of prompt ===\n").as_bytes())
+            .unwrap_or_else(|e| emit_error(&format!("could not write the prompt log: {e}")));
+    }
     if let Some(handle) = marker(steering, "orphan") {
         orphan_harness(handle);
     }
