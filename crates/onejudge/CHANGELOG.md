@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0](https://github.com/nickderobertis/onejudge/compare/v0.6.2...v0.7.0) - 2026-08-30
+
+### Added
+
+- deliver a role-addressed note to both parties of a conversation ([#71](https://github.com/nickderobertis/onejudge/pull/71))
+
 ## [0.6.2](https://github.com/nickderobertis/onejudge/compare/v0.6.1...v0.6.2) - 2026-08-29
 
 ### Other
