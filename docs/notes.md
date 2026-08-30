@@ -103,8 +103,11 @@ failed on exactly that: a criterion that named the mechanism its author had in m
 ("assert that the script *refuses* an invalid label") failed an implementation that
 reached the same property another way.
 
-`Criterion` is validated where the note is built, so a note carrying an unusable
-criterion is unrepresentable rather than refused somewhere later. The rules are the
+`Criterion` — like `NoteText`, the note's own prose — is a validated newtype, so a
+note carrying an unusable criterion (or text nobody can read) is unrepresentable
+rather than refused somewhere later, for the note's whole life and not only at the
+moment it was built. `Note` itself is `non_exhaustive` and deserialized through the
+same constructor, so there is no door around either check. The rules are the
 ones an orchestrator already enforces on authored plan criteria — the upstream is
 `orchestrator/criteria_guard.py` in `nickderobertis/ai-orchestrator`, and this is a
 port of it:

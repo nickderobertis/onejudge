@@ -98,7 +98,7 @@ pub use engine::{
 pub use error::{Error, ProviderErrorKind, Result};
 pub use note::{
     supervisor_block, Accepted, Addressee, Criteria, Criterion, CriterionRefused, DeliveredNote,
-    Note, NoteInbox, NoteRefused, Notes, Party, Undelivered,
+    Note, NoteInbox, NoteRefused, NoteText, Notes, Party, Undelivered,
 };
 pub use oneharness::OneharnessProvider;
 pub use provider::{

@@ -97,7 +97,8 @@ fn notes_shown(request: &serde_json::Value) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// Every prompt the fake-oneharness double recorded, split on its terminator.
+/// Everything the fake-oneharness double recorded, prompts and terminators alike:
+/// one text to assert the framing a party was handed against.
 fn prompts(path: &std::path::Path) -> String {
     std::fs::read_to_string(path).unwrap_or_default()
 }

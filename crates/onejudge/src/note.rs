@@ -200,6 +200,69 @@ pub struct CriterionRefused {
     pub why: String,
 }
 
+/// What a party reads: a note's prose, guaranteed to be something.
+///
+/// A validated newtype for the reason [`Criterion`] is one — the invariant belongs
+/// to the value rather than to the moment it was built, so a note whose text nobody
+/// can read stays unrepresentable for its whole life and not only at construction.
+/// Trimmed on the way in, so the same words written with stray whitespace are the
+/// same note.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub struct NoteText(String);
+
+impl NoteText {
+    /// The note's prose, trimmed.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for NoteText {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "NoteText({:?})", self.0)
+    }
+}
+
+impl std::fmt::Display for NoteText {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl AsRef<str> for NoteText {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<NoteText> for String {
+    fn from(text: NoteText) -> Self {
+        text.0
+    }
+}
+
+impl TryFrom<String> for NoteText {
+    type Error = NoteRefused;
+
+    fn try_from(text: String) -> Result<Self, Self::Error> {
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            return Err(NoteRefused::Blank);
+        }
+        Ok(NoteText(trimmed.to_string()))
+    }
+}
+
+impl std::str::FromStr for NoteText {
+    type Err = NoteRefused;
+
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        NoteText::try_from(text.to_string())
+    }
+}
+
 /// One note: what the worker reads, who it is for, and the property it binds.
 ///
 /// Built through [`Note::new`] / [`Note::to`] / [`Note::binding`] and in no other
@@ -213,8 +276,9 @@ pub struct CriterionRefused {
 pub struct Note {
     /// Who the note is for. Required, no default.
     pub addressee: Addressee,
-    /// What the addressee reads. Blank is refused by [`Note::new`].
-    pub text: String,
+    /// What the addressee reads. Blank is refused by [`NoteText`], so it stays
+    /// readable however the field is later assigned.
+    pub text: NoteText,
     /// The property the finished work must have, when this note binds one.
     ///
     /// `None` — the default, and the only thing a caller that says nothing gets —
@@ -238,9 +302,11 @@ impl TryFrom<NoteWire> for Note {
     type Error = NoteRefused;
 
     fn try_from(wire: NoteWire) -> Result<Self, Self::Error> {
-        let mut note = Note::new(wire.addressee, wire.text)?;
-        note.criterion = wire.criterion;
-        Ok(note)
+        Ok(Note {
+            addressee: wire.addressee,
+            text: NoteText::try_from(wire.text)?,
+            criterion: wire.criterion,
+        })
     }
 }
 
@@ -251,13 +317,9 @@ impl Note {
     /// [`NoteRefused::Blank`] when `text` is empty or whitespace: a note nobody can
     /// read is not a note.
     pub fn new(addressee: Addressee, text: impl Into<String>) -> Result<Self, NoteRefused> {
-        let text = text.into();
-        if text.trim().is_empty() {
-            return Err(NoteRefused::Blank);
-        }
         Ok(Self {
             addressee,
-            text,
+            text: NoteText::try_from(text.into())?,
             criterion: None,
         })
     }
@@ -799,7 +861,7 @@ pub(crate) fn worker_block(notes: &[DeliveredNote]) -> String {
              it. Act on it as part of the work.\n",
         );
         for delivered in &mine {
-            out.push_str(&format!("\n- {}", delivered.note.text.trim()));
+            out.push_str(&format!("\n- {}", delivered.note.text));
             if let Some(criterion) = &delivered.note.criterion {
                 out.push_str(&format!(
                     "\n  This note also added an acceptance criterion the finished work is \
@@ -821,7 +883,7 @@ pub(crate) fn worker_block(notes: &[DeliveredNote]) -> String {
              read the supervisor's response in light of what it was told.\n",
         );
         for delivered in &theirs {
-            out.push_str(&format!("\n- {}", delivered.note.text.trim()));
+            out.push_str(&format!("\n- {}", delivered.note.text));
         }
         out.push('\n');
     }
@@ -859,7 +921,7 @@ pub fn supervisor_block(notes: &[DeliveredNote]) -> Option<String> {
              light of what it was told.\n",
         );
         for delivered in &worker_observational {
-            out.push_str(&format!("\n- {}", delivered.note.text.trim()));
+            out.push_str(&format!("\n- {}", delivered.note.text));
         }
         out.push('\n');
     }
@@ -875,7 +937,7 @@ pub fn supervisor_block(notes: &[DeliveredNote]) -> Option<String> {
              They are not an instruction to you: do not perform them yourself.\n",
         );
         for delivered in &worker_binding {
-            out.push_str(&format!("\n- {}", delivered.note.text.trim()));
+            out.push_str(&format!("\n- {}", delivered.note.text));
         }
         out.push('\n');
     }
@@ -893,7 +955,7 @@ pub fn supervisor_block(notes: &[DeliveredNote]) -> Option<String> {
             out.push_str(&format!(
                 "\n- (addressed to {}) {}",
                 delivered.note.addressee.as_str(),
-                delivered.note.text.trim()
+                delivered.note.text
             ));
         }
         out.push('\n');
@@ -1208,9 +1270,31 @@ mod tests {
             Note::new(Addressee::Worker, "   \n ").unwrap_err(),
             NoteRefused::Blank
         );
-        let plain = Note::new(Addressee::Worker, "look again at the migration").unwrap();
+        let plain = Note::new(Addressee::Worker, "  look again at the migration ").unwrap();
         assert!(!plain.binds());
         assert!(plain.criterion.is_none());
+        // The invariant is the value's, not the constructor's: it survives being
+        // assigned into an existing note, and it trims on the way in either way.
+        assert_eq!(plain.text.as_str(), "look again at the migration");
+        assert_eq!(plain.text.to_string(), "look again at the migration");
+        assert_eq!(plain.text.as_ref(), "look again at the migration");
+        assert_eq!(
+            format!("{:?}", plain.text),
+            "NoteText(\"look again at the migration\")"
+        );
+        assert_eq!(
+            String::from(plain.text.clone()),
+            "look again at the migration"
+        );
+        assert_eq!(
+            NoteText::try_from(" \n ".to_string()),
+            Err(NoteRefused::Blank)
+        );
+        assert_eq!("".parse::<NoteText>(), Err(NoteRefused::Blank));
+        assert_eq!(
+            "still readable".parse::<NoteText>().unwrap().as_str(),
+            "still readable"
+        );
     }
 
     #[test]
