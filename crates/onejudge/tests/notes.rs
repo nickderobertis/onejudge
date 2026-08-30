@@ -22,9 +22,13 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use onejudge::{
-    cli, Accepted, Addressee, CommandProvider, Conversation, Engine, Note, Notes, Observation,
+    Accepted, Addressee, CommandProvider, Conversation, Engine, Note, Notes, Observation,
     OneharnessProvider, Party, Role, Settings, SimulatedUser, Skill, Undelivered,
 };
+// The plan is the second entry point an embedder has, and it lives behind the
+// non-default `cli` feature — so only the journey that drives it is gated on one.
+#[cfg(feature = "cli")]
+use onejudge::cli;
 
 mod support;
 
@@ -617,6 +621,7 @@ fn a_delivered_note_enters_the_acceptance_criteria_rather_than_only_the_narratio
     );
 }
 
+#[cfg(feature = "cli")]
 #[test]
 fn a_bound_criterion_reaches_the_authoritative_re_judge_a_plan_settles_on() {
     let (notes, inbox) = Notes::channel();
