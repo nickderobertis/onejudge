@@ -992,6 +992,7 @@ impl<'a> Engine<'a> {
         self.provider
             .invocation_telemetry()
             .into_iter()
+            .filter(|invocation| invocation.role == Some(crate::TelemetryRole::Agent))
             .filter_map(|invocation| invocation.history_file)
             .collect()
     }
@@ -1119,6 +1120,7 @@ fn observed_at() -> String {
 mod tests {
     use super::*;
     use crate::provider::{JudgeValue, SkillRef, SupervisorTurn, UserTurn};
+    use crate::{InvocationTelemetry, TelemetryRole};
     use std::cell::RefCell;
 
     /// An in-memory provider scripted with canned turns, so the loop's
@@ -1788,5 +1790,71 @@ mod tests {
             .judge_numeric("x", 10.0, 1.0, &Transcript::default())
             .unwrap_err();
         assert!(matches!(err, crate::error::Error::Invalid(_)));
+    }
+
+    #[test]
+    fn evaluator_evidence_contains_only_typed_agent_history_paths() {
+        struct EvidenceProbe {
+            seen: RefCell<Vec<String>>,
+        }
+
+        impl Provider for EvidenceProbe {
+            fn invocation_telemetry(&self) -> Vec<InvocationTelemetry> {
+                [
+                    (TelemetryRole::Agent, "/history/agent.jsonl"),
+                    (TelemetryRole::Judge, "/history/judge.jsonl"),
+                ]
+                .into_iter()
+                .map(|(role, path)| InvocationTelemetry {
+                    role: Some(role),
+                    history_file: Some(path.into()),
+                    ..InvocationTelemetry::default()
+                })
+                .collect()
+            }
+
+            fn respond(
+                &self,
+                _: &SkillRef<'_>,
+                _: &[Message],
+                _: Option<&str>,
+            ) -> Result<AssistantTurn> {
+                unreachable!()
+            }
+
+            fn simulate_user(&self, _: &str, _: &[Message], _: Option<&str>) -> Result<UserTurn> {
+                unreachable!()
+            }
+
+            fn judge(&self, _: &JudgeQuery<'_>, _: &[Message]) -> Result<JudgeVerdict> {
+                unreachable!()
+            }
+
+            fn judge_with_evidence(
+                &self,
+                _: &JudgeQuery<'_>,
+                _: &[Message],
+                evidence: EvidenceContext<'_>,
+            ) -> Result<JudgeVerdict> {
+                self.seen.replace(evidence.history_files.to_vec());
+                Ok(JudgeVerdict {
+                    value: JudgeValue::Bool(true),
+                    reason: String::new(),
+                    usage: None,
+                })
+            }
+
+            fn assess(&self, _: &str, _: &[Message]) -> Result<Assessment> {
+                unreachable!()
+            }
+        }
+
+        let provider = EvidenceProbe {
+            seen: RefCell::new(Vec::new()),
+        };
+        Engine::new(&provider, settings())
+            .judge_boolean("done", &Transcript::default())
+            .unwrap();
+        assert_eq!(provider.seen.into_inner(), ["/history/agent.jsonl"]);
     }
 }
