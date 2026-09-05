@@ -17,7 +17,10 @@ report line. See [streaming.md](streaming.md). The two are independent — a
 
 ## Protocol version
 
-**v5** (current) — added `notes` to the `supervisor` request: the role-addressed
+**v6** (current) — additively permits an optional `evidence` member on `judge`
+requests. It carries the producer-supplied worktree and exact absolute history
+artifact paths; it is omitted when neither is available, and older providers may
+ignore it. The response object is unchanged. **v5** added `notes` to the `supervisor` request: the role-addressed
 corrections delivered into the run so far (see [notes.md](notes.md)). The field is
 omitted when nothing has been delivered, so a v4 command sees a byte-identical
 request and needs no change. **v4** added the unified `supervisor` operation. **v3** added the
@@ -154,10 +157,12 @@ Response text must be non-empty; usage is optional:
 Request:
 
 ```json
-{ "op": "judge", "kind": "boolean", "criterion": "the reply was polite", "messages": [ ... ] }
+{ "op": "judge", "kind": "boolean", "criterion": "the reply was polite", "messages": [ ... ], "evidence": { "worktree": "/repo", "history_files": ["/state/history/agent.jsonl"] } }
 ```
 
 - `kind` is `boolean` or `numeric`; a numeric query also carries `min` and `max`.
+- `evidence` is omitted without context. Its paths are producer-supplied artifact
+  handles, never reconstructed from oneharness storage layout.
 
 Response:
 

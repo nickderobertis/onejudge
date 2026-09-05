@@ -66,6 +66,7 @@ field fails the build), and both columns against the rows below.
 | `--session` | `session: Option<String>` |
 | `--stream` | `stream: Option<bool>` |
 | `--control` | `control: bool` |
+| `--mode` | `mode: Option<PermissionMode>` |
 | `--prompt-file` | `prompt: Vec<String>` — an owned value, so the `-`/stdin hop that exists only to dodge the OS argv ceiling disappears; oneharness's own `LARGE_INPUT_THRESHOLD` moves a large prompt off-argv for the harness |
 | `--compact` | **none, deliberately** — `RunRequest`'s own docs exclude it as "about how the shell *prints* the report, not how the engine produces it". An in-process caller is handed the `RunReport` value, so there is nothing to compact. Not a gap. |
 

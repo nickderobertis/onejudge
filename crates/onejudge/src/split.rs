@@ -13,8 +13,8 @@ use std::ops::ControlFlow;
 
 use crate::error::Result;
 use crate::provider::{
-    Assessment, AssistantTurn, JudgeQuery, JudgeVerdict, Provider, SkillRef, SupervisorQuery,
-    SupervisorTurn, UserTurn,
+    Assessment, AssistantTurn, EvidenceContext, JudgeQuery, JudgeVerdict, Provider, SkillRef,
+    SupervisorQuery, SupervisorTurn, UserTurn,
 };
 use crate::transcript::{Message, ToolEvent};
 
@@ -123,8 +123,37 @@ impl<S: Provider, J: Provider> Provider for SplitProvider<S, J> {
         self.judge.judge(query, messages)
     }
 
+    fn judge_with_evidence(
+        &self,
+        query: &JudgeQuery<'_>,
+        messages: &[Message],
+        evidence: EvidenceContext<'_>,
+    ) -> Result<JudgeVerdict> {
+        self.judge.judge_with_evidence(query, messages, evidence)
+    }
+
     fn assess(&self, prompt: &str, messages: &[Message]) -> Result<Assessment> {
         self.judge.assess(prompt, messages)
+    }
+
+    fn assess_with_evidence(
+        &self,
+        prompt: &str,
+        messages: &[Message],
+        evidence: EvidenceContext<'_>,
+    ) -> Result<Assessment> {
+        self.judge.assess_with_evidence(prompt, messages, evidence)
+    }
+
+    fn supervise_with_evidence(
+        &self,
+        query: &SupervisorQuery<'_>,
+        messages: &[Message],
+        session: Option<&str>,
+        evidence: EvidenceContext<'_>,
+    ) -> Result<SupervisorTurn> {
+        self.judge
+            .supervise_with_evidence(query, messages, session, evidence)
     }
 }
 

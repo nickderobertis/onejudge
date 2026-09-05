@@ -11,7 +11,7 @@ use crate::control::ControlOutcome;
 use crate::error::Result;
 use crate::note::{Accepted, Criteria, DeliveredNote, Note, NoteInbox, Party};
 use crate::provider::{
-    build_judge_prompt, Assessment, AssistantTurn, JudgeKind, JudgeQuery, JudgeVerdict, Provider,
+    Assessment, AssistantTurn, EvidenceContext, JudgeKind, JudgeQuery, JudgeVerdict, Provider,
     SkillRef, SupervisorOutcome, SupervisorQuery,
 };
 use crate::report::{NamedVerdict, Report};
@@ -374,6 +374,7 @@ pub struct Engine<'a> {
     settings: Settings,
     started: RefCell<Option<Instant>>,
     notes: Option<NoteInbox>,
+    worktree: RefCell<Option<String>>,
 }
 
 impl<'a> Engine<'a> {
@@ -385,6 +386,7 @@ impl<'a> Engine<'a> {
             settings,
             started: RefCell::new(None),
             notes: None,
+            worktree: RefCell::new(None),
         }
     }
 
@@ -565,6 +567,7 @@ impl<'a> Engine<'a> {
     ) -> Result<Outcome> {
         self.provider.reset_telemetry();
         *self.started.borrow_mut() = Some(Instant::now());
+        *self.worktree.borrow_mut() = Some(conversation.skill.dir.clone());
         let skill = conversation.skill.as_ref();
         let max_turns = conversation
             .user
@@ -749,7 +752,8 @@ impl<'a> Engine<'a> {
                 let criteria = Criteria::compose(user.done_when.as_deref(), &delivered);
                 let rendered = criteria.rendered();
                 self.enter_supervisor_turn();
-                let attempt = self.provider.supervise(
+                let history_files = self.history_files();
+                let attempt = self.provider.supervise_with_evidence(
                     &SupervisorQuery {
                         task: &conversation.input,
                         persona: &user.persona,
@@ -760,6 +764,10 @@ impl<'a> Engine<'a> {
                     },
                     &transcript.messages,
                     Some(user_session.as_str()),
+                    EvidenceContext {
+                        worktree: Some(&conversation.skill.dir),
+                        history_files: &history_files,
+                    },
                 );
                 self.between_turns();
                 let attempt = attempt?;
@@ -905,10 +913,16 @@ impl<'a> Engine<'a> {
             criterion,
             scale: None,
         };
-        // Passing the transcript through the shared judge prompt keeps the
-        // events-aware rendering (Improvement 1) on the `done_when` check too.
-        let _ = build_judge_prompt(&query, &transcript.messages);
-        self.provider.judge(&query, &transcript.messages)
+        let histories = self.history_files();
+        let worktree = self.worktree.borrow();
+        self.provider.judge_with_evidence(
+            &query,
+            &transcript.messages,
+            EvidenceContext {
+                worktree: worktree.as_deref(),
+                history_files: &histories,
+            },
+        )
     }
 
     /// Score a boolean criterion against a finished transcript. The judge sees the
@@ -944,7 +958,16 @@ impl<'a> Engine<'a> {
             criterion,
             scale: Some((min, max)),
         };
-        self.provider.judge(&query, &transcript.messages)
+        let histories = self.history_files();
+        let worktree = self.worktree.borrow();
+        self.provider.judge_with_evidence(
+            &query,
+            &transcript.messages,
+            EvidenceContext {
+                worktree: worktree.as_deref(),
+                history_files: &histories,
+            },
+        )
     }
 
     /// Write a free-text assessment of a finished transcript. The judge sees the
@@ -953,7 +976,25 @@ impl<'a> Engine<'a> {
     /// # Errors
     /// Propagates a provider failure.
     pub fn assess(&self, prompt: &str, transcript: &Transcript) -> Result<Assessment> {
-        self.provider.assess(prompt, &transcript.messages)
+        let histories = self.history_files();
+        let worktree = self.worktree.borrow();
+        self.provider.assess_with_evidence(
+            prompt,
+            &transcript.messages,
+            EvidenceContext {
+                worktree: worktree.as_deref(),
+                history_files: &histories,
+            },
+        )
+    }
+
+    fn history_files(&self) -> Vec<String> {
+        self.provider
+            .invocation_telemetry()
+            .into_iter()
+            .filter(|invocation| invocation.role == Some(crate::TelemetryRole::Agent))
+            .filter_map(|invocation| invocation.history_file)
+            .collect()
     }
 }
 
@@ -1079,6 +1120,7 @@ fn observed_at() -> String {
 mod tests {
     use super::*;
     use crate::provider::{JudgeValue, SkillRef, SupervisorTurn, UserTurn};
+    use crate::{InvocationTelemetry, TelemetryRole};
     use std::cell::RefCell;
 
     /// An in-memory provider scripted with canned turns, so the loop's
@@ -1748,5 +1790,71 @@ mod tests {
             .judge_numeric("x", 10.0, 1.0, &Transcript::default())
             .unwrap_err();
         assert!(matches!(err, crate::error::Error::Invalid(_)));
+    }
+
+    #[test]
+    fn evaluator_evidence_contains_only_typed_agent_history_paths() {
+        struct EvidenceProbe {
+            seen: RefCell<Vec<String>>,
+        }
+
+        impl Provider for EvidenceProbe {
+            fn invocation_telemetry(&self) -> Vec<InvocationTelemetry> {
+                [
+                    (TelemetryRole::Agent, "/history/agent.jsonl"),
+                    (TelemetryRole::Judge, "/history/judge.jsonl"),
+                ]
+                .into_iter()
+                .map(|(role, path)| InvocationTelemetry {
+                    role: Some(role),
+                    history_file: Some(path.into()),
+                    ..InvocationTelemetry::default()
+                })
+                .collect()
+            }
+
+            fn respond(
+                &self,
+                _: &SkillRef<'_>,
+                _: &[Message],
+                _: Option<&str>,
+            ) -> Result<AssistantTurn> {
+                unreachable!()
+            }
+
+            fn simulate_user(&self, _: &str, _: &[Message], _: Option<&str>) -> Result<UserTurn> {
+                unreachable!()
+            }
+
+            fn judge(&self, _: &JudgeQuery<'_>, _: &[Message]) -> Result<JudgeVerdict> {
+                unreachable!()
+            }
+
+            fn judge_with_evidence(
+                &self,
+                _: &JudgeQuery<'_>,
+                _: &[Message],
+                evidence: EvidenceContext<'_>,
+            ) -> Result<JudgeVerdict> {
+                self.seen.replace(evidence.history_files.to_vec());
+                Ok(JudgeVerdict {
+                    value: JudgeValue::Bool(true),
+                    reason: String::new(),
+                    usage: None,
+                })
+            }
+
+            fn assess(&self, _: &str, _: &[Message]) -> Result<Assessment> {
+                unreachable!()
+            }
+        }
+
+        let provider = EvidenceProbe {
+            seen: RefCell::new(Vec::new()),
+        };
+        Engine::new(&provider, settings())
+            .judge_boolean("done", &Transcript::default())
+            .unwrap();
+        assert_eq!(provider.seen.into_inner(), ["/history/agent.jsonl"]);
     }
 }

@@ -4,7 +4,7 @@
 //! drives and any custom provider a consumer writes. The wire contract is
 //! documented in `docs/protocol.md`.
 //!
-//! Protocol **v5** adds `notes` to the supervisor request — the role-addressed
+//! Protocol **v6** adds optional evaluator evidence to judge requests. Protocol **v5** adds `notes` to the supervisor request — the role-addressed
 //! corrections delivered into the run so far, omitted when there are none, so a v4
 //! double sees a byte-identical request. Protocol **v4** added the unified
 //! supervisor request; v2 dropped
@@ -18,8 +18,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, ProviderErrorKind, Result};
 use crate::provider::{
-    supervise_with_reask, Assessment, AssistantTurn, JudgeKind, JudgeQuery, JudgeValue,
-    JudgeVerdict, Provider, SkillRef, SupervisorOutcome, SupervisorQuery, SupervisorTurn, UserTurn,
+    supervise_with_reask, Assessment, AssistantTurn, EvidenceContext, JudgeKind, JudgeQuery,
+    JudgeValue, JudgeVerdict, Provider, SkillRef, SupervisorOutcome, SupervisorQuery,
+    SupervisorTurn, UserTurn,
 };
 use crate::spawn::{role_of, SharedSpawnHook, SpawnContext, SpawnedProcess, Spawner};
 use crate::transcript::{Message, ToolEvent};
@@ -32,6 +33,13 @@ struct SkillPayload<'a> {
     name: &'a str,
     path: &'a str,
     instructions: &'a str,
+}
+
+#[derive(Serialize)]
+struct EvidencePayload<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    worktree: Option<&'a str>,
+    history_files: &'a [String],
 }
 
 #[derive(Serialize)]
@@ -72,6 +80,8 @@ enum Request<'a> {
         #[serde(skip_serializing_if = "Option::is_none")]
         max: Option<f64>,
         messages: &'a [Message],
+        #[serde(skip_serializing_if = "Option::is_none")]
+        evidence: Option<EvidencePayload<'a>>,
     },
     Assess {
         prompt: &'a str,
@@ -271,6 +281,45 @@ impl Provider for CommandProvider {
         })
     }
 
+    fn judge_with_evidence(
+        &self,
+        query: &JudgeQuery<'_>,
+        messages: &[Message],
+        evidence: EvidenceContext<'_>,
+    ) -> Result<JudgeVerdict> {
+        let (min, max) = query
+            .scale
+            .map_or((None, None), |(lo, hi)| (Some(lo), Some(hi)));
+        let payload: JudgePayload = self.call(
+            &Request::Judge {
+                kind: query.kind.as_str(),
+                criterion: query.criterion,
+                min,
+                max,
+                messages,
+                evidence: (evidence.worktree.is_some() || !evidence.history_files.is_empty())
+                    .then_some(EvidencePayload {
+                        worktree: evidence.worktree,
+                        history_files: evidence.history_files,
+                    }),
+            },
+            "judge",
+        )?;
+        match (query.kind, payload.value) {
+            (JudgeKind::Boolean, JudgeValue::Number(_))
+            | (JudgeKind::Numeric, JudgeValue::Bool(_)) => Err(Error::provider_classified(
+                "judge",
+                "verdict value has the wrong type",
+                ProviderErrorKind::Protocol,
+            )),
+            _ => Ok(JudgeVerdict {
+                value: payload.value,
+                reason: payload.reason,
+                usage: payload.usage,
+            }),
+        }
+    }
+
     fn simulate_user(
         &self,
         persona: &str,
@@ -355,6 +404,7 @@ impl Provider for CommandProvider {
             min,
             max,
             messages,
+            evidence: None,
         };
         let payload: JudgePayload = self.call(&request, "judge")?;
         // A command speaking the protocol returns a typed value directly, so no
@@ -418,6 +468,7 @@ mod tests {
             min: Some(0.0),
             max: Some(10.0),
             messages: &[],
+            evidence: None,
         };
         let json = serde_json::to_string(&req).unwrap();
         assert!(json.contains("\"op\":\"judge\""));
@@ -425,6 +476,38 @@ mod tests {
         // Protocol v2: no harness/model selection on the wire.
         assert!(!json.contains("platform"));
         assert!(!json.contains("model"));
+    }
+
+    #[test]
+    fn protocol_v6_judge_evidence_is_additive_and_omitted_without_context() {
+        let histories = vec!["/state/history/agent.jsonl".to_string()];
+        let with = Request::Judge {
+            kind: "boolean",
+            criterion: "done",
+            min: None,
+            max: None,
+            messages: &[],
+            evidence: Some(EvidencePayload {
+                worktree: Some("/repo"),
+                history_files: &histories,
+            }),
+        };
+        let json = serde_json::to_string(&with).unwrap();
+        assert!(json.contains("\"evidence\":{\"worktree\":\"/repo\",\"history_files\":[\"/state/history/agent.jsonl\"]}"));
+        let without = Request::Judge {
+            kind: "boolean",
+            criterion: "done",
+            min: None,
+            max: None,
+            messages: &[],
+            evidence: None,
+        };
+        assert!(!serde_json::to_string(&without)
+            .unwrap()
+            .contains("evidence"));
+        let docs = include_str!("../../../docs/protocol.md");
+        assert!(docs.contains("**v6** (current)"));
+        assert!(docs.contains("\"evidence\": { \"worktree\": \"/repo\", \"history_files\""));
     }
 
     #[test]
