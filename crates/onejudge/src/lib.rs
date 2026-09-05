@@ -104,12 +104,14 @@ pub use note::{
 };
 pub use oneharness::OneharnessProvider;
 pub use provider::{
-    build_assessment_prompt, build_judge_prompt, build_respond_prompt, build_supervisor_prompt,
-    build_user_prompt, latest_or_inline, latest_user_message, parse_supervisor, parse_verdict,
-    render_transcript, supervise_with_reask, Assessment, AssistantTurn, JudgeKind, JudgeQuery,
-    JudgeValue, JudgeVerdict, Provider, SkillRef, SupervisorOutcome, SupervisorQuery,
-    SupervisorTurn, UserTurn, SUPERVISOR_REASK_LIMIT, SUPERVISOR_REASK_NOTE,
-    SUPERVISOR_REDIRECT_NOTE,
+    build_assessment_prompt, build_assessment_prompt_with_evidence, build_judge_prompt,
+    build_judge_prompt_with_evidence, build_respond_prompt, build_supervisor_prompt,
+    build_supervisor_prompt_with_evidence, build_user_prompt, latest_or_inline,
+    latest_user_message, parse_supervisor, parse_verdict, render_transcript, supervise_with_reask,
+    Assessment, AssistantTurn, EvidenceContext, JudgeKind, JudgeQuery, JudgeValue, JudgeVerdict,
+    Provider, SkillRef, SupervisorOutcome, SupervisorQuery, SupervisorTurn, UserTurn,
+    EVIDENCE_PROMPT_MARKER, EVIDENCE_TOOL_RETRY_LIMIT, SUPERVISOR_REASK_LIMIT,
+    SUPERVISOR_REASK_NOTE, SUPERVISOR_REDIRECT_NOTE,
 };
 pub use report::{NamedVerdict, Report, SCHEMA_VERSION};
 #[cfg(feature = "sdk-schema")]

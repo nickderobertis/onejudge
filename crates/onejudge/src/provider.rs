@@ -9,6 +9,7 @@
 //! an in-memory fake.
 
 use std::ops::ControlFlow;
+use std::process::Command;
 
 use serde::{Deserialize, Serialize};
 
@@ -16,6 +17,18 @@ use crate::error::{Error, Result};
 use crate::telemetry::InvocationTelemetry;
 use crate::transcript::{Message, ToolEvent};
 use crate::usage::Usage;
+
+/// Producer-supplied artifact handles an evaluator may inspect read-only.
+///
+/// Paths are copied from the skill configuration and typed oneharness reports;
+/// consumers must never reconstruct oneharness's storage layout.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct EvidenceContext<'a> {
+    /// The skill working directory, when the caller has one.
+    pub worktree: Option<&'a str>,
+    /// Exact absolute history artifact paths returned by the producer.
+    pub history_files: &'a [String],
+}
 
 /// A borrowed view of the skill under test, as sent to the provider.
 pub struct SkillRef<'a> {
@@ -383,6 +396,17 @@ pub trait Provider {
         })
     }
 
+    /// Decide completion with read-only access to producer-supplied evidence.
+    fn supervise_with_evidence(
+        &self,
+        query: &SupervisorQuery<'_>,
+        messages: &[Message],
+        session: Option<&str>,
+        _evidence: EvidenceContext<'_>,
+    ) -> Result<SupervisorTurn> {
+        self.supervise(query, messages, session)
+    }
+
     /// Score a criterion against the conversation.
     ///
     /// # Errors
@@ -390,12 +414,33 @@ pub trait Provider {
     /// malformed output.
     fn judge(&self, query: &JudgeQuery<'_>, messages: &[Message]) -> Result<JudgeVerdict>;
 
+    /// Score a criterion with read-only access to producer-supplied evidence.
+    /// Existing providers remain source-compatible and retain their old behavior.
+    fn judge_with_evidence(
+        &self,
+        query: &JudgeQuery<'_>,
+        messages: &[Message],
+        _evidence: EvidenceContext<'_>,
+    ) -> Result<JudgeVerdict> {
+        self.judge(query, messages)
+    }
+
     /// Write a free-text assessment of the finished conversation.
     ///
     /// # Errors
     /// [`Error::Provider`](crate::Error::Provider) if the command fails or returns
     /// malformed output.
     fn assess(&self, prompt: &str, messages: &[Message]) -> Result<Assessment>;
+
+    /// Write an assessment with read-only access to producer-supplied evidence.
+    fn assess_with_evidence(
+        &self,
+        prompt: &str,
+        messages: &[Message],
+        _evidence: EvidenceContext<'_>,
+    ) -> Result<Assessment> {
+        self.assess(prompt, messages)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -459,17 +504,31 @@ pub fn build_user_prompt(persona: &str, messages: &[Message]) -> String {
 /// are inlined; full events remain available on demand through oneharness history.
 #[must_use]
 pub fn build_supervisor_prompt(query: &SupervisorQuery<'_>, messages: &[Message]) -> String {
+    build_supervisor_prompt_with_evidence(
+        query,
+        messages,
+        EvidenceContext {
+            worktree: Some(query.worktree),
+            history_files: &[],
+        },
+    )
+}
+
+/// Build the supervisor prompt with exact producer-supplied artifact handles.
+#[must_use]
+pub fn build_supervisor_prompt_with_evidence(
+    query: &SupervisorQuery<'_>,
+    messages: &[Message],
+    evidence: EvidenceContext<'_>,
+) -> String {
     let criterion = query.done_when.unwrap_or(
         "No explicit completion criterion was supplied; continue unless the original task is clearly complete.",
     );
     format!(
         "You are the simulated USER and completion supervisor for an AI agent.\n\n\
          Original task:\n{task}\n\nSupervisor persona:\n{persona}\n\n\
-         Completion criterion:\n{criterion}\n\n{notes}\
+         Completion criterion:\n{criterion}\n\n{notes}{evidence}\
          Conversation transcript (tool actions are compact normalized summaries, never raw dumps):\n{transcript}\n\n\
-         Judge-side oneharness runs inherit the agent worktree `{worktree}` and may use harness tools. \
-         If these compact summaries are insufficient, inspect the full recorded agent events from that worktree with exactly:\n\
-         oneharness history show {history} --project {worktree} --format text\n\n\
          Return ONLY one JSON object. Exactly one of these shapes is valid:\n\
          {{\"completion\":true,\"reason\":\"<concise reason>\"}}\n\
          {{\"completion\":false,\"message\":\"<concrete, actionable next instruction>\",\"reason\":\"<optional concise reason>\"}}\n\n\
@@ -487,8 +546,7 @@ pub fn build_supervisor_prompt(query: &SupervisorQuery<'_>, messages: &[Message]
             .map(|block| format!("{block}\n"))
             .unwrap_or_default(),
         transcript = render_transcript(messages, true),
-        worktree = query.worktree,
-        history = query.history_name,
+        evidence = evidence_prompt(evidence),
     )
 }
 
@@ -616,14 +674,25 @@ pub fn supervise_with_reask(
 /// text ahead of the transcript and defeat prefix caching entirely.
 #[must_use]
 pub fn build_judge_prompt(query: &JudgeQuery<'_>, messages: &[Message]) -> String {
+    build_judge_prompt_with_evidence(query, messages, EvidenceContext::default())
+}
+
+/// Build the criterion prompt with the shared evidence contract.
+#[must_use]
+pub fn build_judge_prompt_with_evidence(
+    query: &JudgeQuery<'_>,
+    messages: &[Message],
+    evidence: EvidenceContext<'_>,
+) -> String {
     let transcript = render_transcript(messages, true);
+    let evidence = evidence_prompt(evidence);
     match query.kind {
         JudgeKind::Boolean => format!(
             "You are a strict, careful evaluator of an AI assistant's behavior.\n\n\
-             Transcript (assistant tool actions are shown as `[tool]` lines):\n{transcript}\n\n\
+             Transcript (assistant tool actions are shown as `[tool]` lines):\n{transcript}\n\n{evidence}\
              Criterion: {criterion}\n\n\
-             Decide whether the criterion is satisfied. Respond with ONLY a \
-             single-line JSON object and nothing else:\n\
+             Decide whether the criterion is satisfied. Tool transport events may occur before answer text. \
+             The final non-empty answer-text line must be exactly one JSON object; nothing may follow it:\n\
              {{\"value\": true or false, \"reason\": \"<one short sentence>\"}}",
             criterion = query.criterion,
         ),
@@ -631,11 +700,11 @@ pub fn build_judge_prompt(query: &JudgeQuery<'_>, messages: &[Message]) -> Strin
             let (min, max) = query.scale.unwrap_or((0.0, 10.0));
             format!(
                 "You are a strict, careful evaluator of an AI assistant's behavior.\n\n\
-                 Transcript (assistant tool actions are shown as `[tool]` lines):\n{transcript}\n\n\
+                 Transcript (assistant tool actions are shown as `[tool]` lines):\n{transcript}\n\n{evidence}\
                  Criterion: {criterion}\n\n\
                  Score how well the criterion is satisfied on a scale from {min} to \
-                 {max} (inclusive). Respond with ONLY a single-line JSON object and \
-                 nothing else:\n\
+                 {max} (inclusive). Tool transport events may occur before answer text. \
+                 The final non-empty answer-text line must be exactly one JSON object; nothing may follow it:\n\
                  {{\"value\": <number between {min} and {max}>, \"reason\": \"<one short sentence>\"}}",
                 criterion = query.criterion,
             )
@@ -646,13 +715,167 @@ pub fn build_judge_prompt(query: &JudgeQuery<'_>, messages: &[Message]) -> Strin
 /// Build a free-text assessment prompt over the events-aware transcript.
 #[must_use]
 pub fn build_assessment_prompt(prompt: &str, messages: &[Message]) -> String {
+    build_assessment_prompt_with_evidence(prompt, messages, EvidenceContext::default())
+}
+
+/// Build an assessment prompt with the shared evidence contract.
+#[must_use]
+pub fn build_assessment_prompt_with_evidence(
+    prompt: &str,
+    messages: &[Message],
+    evidence: EvidenceContext<'_>,
+) -> String {
     let transcript = render_transcript(messages, true);
+    let evidence = evidence_prompt(evidence);
     format!(
         "You are a careful evaluator of an AI assistant's behavior.\n\n\
-         Transcript (assistant tool actions are shown as `[tool]` lines):\n{transcript}\n\n\
+         Transcript (assistant tool actions are shown as `[tool]` lines):\n{transcript}\n\n{evidence}\
          Assessment request: {prompt}\n\n\
          Answer the assessment request concisely in free-running text. Return only \
          the assessment text."
+    )
+}
+
+/// Semantic marker shared by every evaluator prompt and deterministic double.
+pub const EVIDENCE_PROMPT_MARKER: &str = "EVIDENCE CONTRACT (READ-ONLY, ENFORCED)";
+/// Maximum number of fixed Git evidence requests before a verdict is required.
+pub const EVIDENCE_TOOL_RETRY_LIMIT: u32 = 4;
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "tool", rename_all = "snake_case", deny_unknown_fields)]
+enum EvidenceToolRequest {
+    GitStatus,
+    GitDiff,
+}
+
+/// Resolve an exact, closed evidence-tool request against the context worktree.
+pub(crate) fn resolve_evidence_request(
+    line: &str,
+    context: EvidenceContext<'_>,
+) -> Result<Option<String>> {
+    let trimmed = line.trim();
+    let Ok(object) = serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(trimmed)
+    else {
+        return Ok(None);
+    };
+    if !object.contains_key("tool") {
+        return Ok(None);
+    }
+    if object.len() != 1 {
+        return Err(Error::provider_classified(
+            "evidence",
+            "closed evidence requests admit only the `tool` member",
+            crate::ProviderErrorKind::Protocol,
+        ));
+    }
+    let request: EvidenceToolRequest = serde_json::from_str(trimmed).map_err(|error| {
+        Error::provider_classified(
+            "evidence",
+            format!("invalid closed evidence request: {error}"),
+            crate::ProviderErrorKind::Protocol,
+        )
+    })?;
+    let worktree = context.worktree.ok_or_else(|| {
+        Error::provider_classified(
+            "evidence",
+            "evidence tool requested without a worktree",
+            crate::ProviderErrorKind::Protocol,
+        )
+    })?;
+    let output = match request {
+        EvidenceToolRequest::GitStatus => hardened_git(worktree, &["status", "--porcelain=v1"])?,
+        EvidenceToolRequest::GitDiff => {
+            let unstaged = hardened_git(worktree, &["diff", "--no-ext-diff", "--no-textconv"])?;
+            let staged = hardened_git(
+                worktree,
+                &["diff", "--cached", "--no-ext-diff", "--no-textconv"],
+            )?;
+            format!("unstaged:\n{unstaged}\nstaged:\n{staged}")
+        }
+    };
+    Ok(Some(output))
+}
+
+fn hardened_git(worktree: &str, args: &[&str]) -> Result<String> {
+    let mut command = Command::new("git");
+    let path = std::env::var_os("PATH");
+    let system_root = std::env::var_os("SystemRoot");
+    command.env_clear();
+    if let Some(path) = path {
+        command.env("PATH", path);
+    }
+    if let Some(system_root) = system_root {
+        command.env("SystemRoot", system_root);
+    }
+    let output = command
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env(
+            "GIT_CONFIG_GLOBAL",
+            if cfg!(windows) { "NUL" } else { "/dev/null" },
+        )
+        .env("GIT_PAGER", "cat")
+        .env("PAGER", "cat")
+        .args([
+            "-c",
+            "core.pager=cat",
+            "-c",
+            "interactive.diffFilter=",
+            "-c",
+            "diff.external=",
+            "-c",
+            "core.fsmonitor=false",
+        ])
+        .arg("-C")
+        .arg(worktree)
+        .args(args)
+        .output()
+        .map_err(|error| {
+            Error::provider_classified(
+                "evidence",
+                format!("could not run fixed Git operation: {error}"),
+                crate::ProviderErrorKind::Protocol,
+            )
+        })?;
+    if !output.status.success() {
+        return Err(Error::provider_classified(
+            "evidence",
+            format!(
+                "fixed Git operation failed: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ),
+            crate::ProviderErrorKind::Protocol,
+        ));
+    }
+    String::from_utf8(output.stdout).map_err(|error| {
+        Error::provider_classified(
+            "evidence",
+            format!("Git output was not UTF-8: {error}"),
+            crate::ProviderErrorKind::Protocol,
+        )
+    })
+}
+
+fn evidence_prompt(context: EvidenceContext<'_>) -> String {
+    let worktree = context.worktree.unwrap_or("(not supplied)");
+    let histories = if context.history_files.is_empty() {
+        "  (none supplied)".to_string()
+    } else {
+        context
+            .history_files
+            .iter()
+            .map(|p| format!("  - {p}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    format!(
+        "{EVIDENCE_PROMPT_MARKER}\n\
+         `[tool]` lines are abbreviated summaries; absence there is not evidence of absence. \
+         Only read-only tools may inspect files, git state, and full history; no change is permitted, \
+         and this restriction is enforced. Restrictive evaluators must use file-reading or glob tools \
+         directly, never a shell command. Before the final answer you may request exactly \
+         `{{\"tool\":\"git_status\"}}` or `{{\"tool\":\"git_diff\"}}`; no other member is allowed.\n\
+         Worktree: {worktree}\nHistory files (exact producer-returned paths):\n{histories}\n\n"
     )
 }
 
@@ -681,17 +904,14 @@ pub fn latest_or_inline(messages: &[Message], continuing: bool) -> String {
     }
 }
 
-/// Extract the first JSON object from `text`, tolerating code fences and prose
-/// around it (real models do not always emit bare JSON).
+/// Extract the first JSON object from text (used only by the legacy supervisor).
 fn extract_json_object(text: &str) -> Option<&str> {
     let start = text.find('{')?;
     let end = text.rfind('}')?;
     (end > start).then(|| &text[start..=end])
 }
 
-/// Parse a judge's free-text reply into a typed [`JudgeVerdict`], tolerating the
-/// prose/fences real models wrap around the JSON and type-checking `value`
-/// against `kind`.
+/// Parse only the final non-empty answer-text line as a typed [`JudgeVerdict`].
 ///
 /// # Errors
 /// [`Error::Provider`](crate::Error::Provider) (classified
@@ -700,28 +920,33 @@ fn extract_json_object(text: &str) -> Option<&str> {
 pub fn parse_verdict(kind: JudgeKind, context: &str, text: &str) -> Result<JudgeVerdict> {
     use crate::error::ProviderErrorKind::Protocol;
 
-    let json = extract_json_object(text).ok_or_else(|| {
-        Error::provider_classified(
-            context,
-            format!("judge did not return a JSON object; got: {text}"),
-            Protocol,
-        )
-    })?;
-    let value: serde_json::Value = serde_json::from_str(json).map_err(|e| {
+    let json = text
+        .lines()
+        .rev()
+        .find(|line| !line.trim().is_empty())
+        .map(str::trim)
+        .ok_or_else(|| {
+            Error::provider_classified(
+                context,
+                "judge returned no non-empty answer-text line",
+                Protocol,
+            )
+        })?;
+    #[derive(Deserialize)]
+    struct VerdictLine {
+        value: serde_json::Value,
+        #[serde(default)]
+        reason: String,
+    }
+    let value: VerdictLine = serde_json::from_str(json).map_err(|e| {
         Error::provider_classified(
             context,
             format!("judge verdict was not valid JSON: {e}; got: {json}"),
             Protocol,
         )
     })?;
-    let reason = value
-        .get("reason")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or("")
-        .to_string();
-    let raw = value.get("value").ok_or_else(|| {
-        Error::provider_classified(context, "judge verdict has no `value` field", Protocol)
-    })?;
+    let reason = value.reason;
+    let raw = &value.value;
 
     let verdict_value = match kind {
         JudgeKind::Boolean => JudgeValue::Bool(raw.as_bool().ok_or_else(|| {
@@ -864,6 +1089,73 @@ mod tests {
     }
 
     #[test]
+    fn every_evaluator_prompt_carries_the_same_exact_evidence_contract() {
+        let histories = vec![
+            "/absolute/agent-a.jsonl".into(),
+            "/absolute/agent-b.jsonl".into(),
+        ];
+        let evidence = EvidenceContext {
+            worktree: Some("/worktree"),
+            history_files: &histories,
+        };
+        let messages = transcript_with_event();
+        let boolean = build_judge_prompt_with_evidence(
+            &JudgeQuery {
+                kind: JudgeKind::Boolean,
+                criterion: "done",
+                scale: None,
+            },
+            &messages.messages,
+            evidence,
+        );
+        let numeric = build_judge_prompt_with_evidence(
+            &JudgeQuery {
+                kind: JudgeKind::Numeric,
+                criterion: "quality",
+                scale: Some((1.0, 5.0)),
+            },
+            &messages.messages,
+            evidence,
+        );
+        let supervisor = build_supervisor_prompt_with_evidence(
+            &SupervisorQuery {
+                task: "task",
+                persona: "reviewer",
+                done_when: None,
+                worktree: "/worktree",
+                history_name: "unused",
+                notes: &[],
+            },
+            &messages.messages,
+            evidence,
+        );
+        let assessment =
+            build_assessment_prompt_with_evidence("follow-ups", &messages.messages, evidence);
+        for prompt in [&boolean, &numeric, &supervisor, &assessment] {
+            for expected in [
+                EVIDENCE_PROMPT_MARKER,
+                "absence there is not evidence of absence",
+                "no change is permitted",
+                "Worktree: /worktree",
+                "/absolute/agent-a.jsonl",
+                "/absolute/agent-b.jsonl",
+                "file-reading or glob tools",
+            ] {
+                assert!(
+                    prompt.contains(expected),
+                    "missing `{expected}` in {prompt}"
+                );
+            }
+        }
+        for prompt in [&boolean, &numeric] {
+            assert!(
+                prompt.contains("final non-empty answer-text line must be exactly one JSON object")
+            );
+            assert!(prompt.contains("Tool transport events may occur before answer text"));
+        }
+    }
+
+    #[test]
     fn supervisor_prompt_carries_contract_context_and_only_compact_events() {
         let prompt = build_supervisor_prompt(
             &SupervisorQuery {
@@ -882,7 +1174,8 @@ mod tests {
             "tests pass",
             "[tool]",
             "git commit",
-            "oneharness history show run-skill --project /repo --format text",
+            EVIDENCE_PROMPT_MARKER,
+            "Worktree: /repo",
         ] {
             assert!(prompt.contains(expected), "missing {expected}");
         }
@@ -1109,15 +1402,28 @@ mod tests {
     }
 
     #[test]
-    fn parse_verdict_tolerates_fences_and_prose() {
+    fn parse_verdict_uses_only_the_final_non_empty_line() {
         let v = parse_verdict(
             JudgeKind::Boolean,
             "test:judge",
-            "Sure!\n```json\n{\"value\": true, \"reason\": \"ok\"}\n```",
+            "Earlier prose and {\"value\":false}.\n{\"value\": true, \"reason\": \"ok\"}\n\n",
         )
         .unwrap();
         assert_eq!(v.value, JudgeValue::Bool(true));
         assert_eq!(v.reason, "ok");
+        for text in [
+            "{\"value\":true}\ntrailing prose",
+            "```json\n{\"value\":true}\n```",
+            "{\"value\":true} trailing",
+            "\n \n",
+        ] {
+            assert_eq!(
+                parse_verdict(JudgeKind::Boolean, "c", text)
+                    .unwrap_err()
+                    .kind(),
+                Some(ProviderErrorKind::Protocol)
+            );
+        }
     }
 
     #[test]
@@ -1134,6 +1440,7 @@ mod tests {
             "{not valid}",
             "{\"reason\": \"x\"}",
             "{\"value\": \"nope\"}",
+            "{\"value\": true, \"reason\": 3}",
         ] {
             let err = parse_verdict(JudgeKind::Boolean, "c", text).unwrap_err();
             assert_eq!(err.kind(), Some(ProviderErrorKind::Protocol));
@@ -1141,6 +1448,73 @@ mod tests {
         // A number where a bool is required, and vice versa.
         assert!(parse_verdict(JudgeKind::Boolean, "c", "{\"value\": 3}").is_err());
         assert!(parse_verdict(JudgeKind::Numeric, "c", "{\"value\": true}").is_err());
+    }
+
+    #[test]
+    fn closed_git_tools_report_status_and_both_diff_halves() {
+        use std::fs;
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir =
+            std::env::temp_dir().join(format!("onejudge-evidence-{}-{nonce}", std::process::id()));
+        fs::create_dir(&dir).unwrap();
+        let git = |args: &[&str]| {
+            Command::new("git")
+                .arg("-C")
+                .arg(&dir)
+                .args(args)
+                .output()
+                .unwrap()
+        };
+        assert!(git(&["init", "-q"]).status.success());
+        fs::write(dir.join("tracked"), "base\n").unwrap();
+        assert!(git(&["add", "tracked"]).status.success());
+        assert!(git(&[
+            "-c",
+            "user.name=test",
+            "-c",
+            "user.email=test@example.test",
+            "commit",
+            "-qm",
+            "base"
+        ])
+        .status
+        .success());
+        fs::write(dir.join("tracked"), "staged\n").unwrap();
+        assert!(git(&["add", "tracked"]).status.success());
+        fs::write(dir.join("tracked"), "staged\nunstaged\n").unwrap();
+        fs::write(dir.join("untracked"), "new\n").unwrap();
+        let worktree = dir.to_str().unwrap();
+        let evidence = EvidenceContext {
+            worktree: Some(worktree),
+            history_files: &[],
+        };
+        let status = resolve_evidence_request("{\"tool\":\"git_status\"}", evidence)
+            .unwrap()
+            .unwrap();
+        assert!(status.contains("MM tracked"));
+        assert!(status.contains("?? untracked"));
+        let diff = resolve_evidence_request("{\"tool\":\"git_diff\"}", evidence)
+            .unwrap()
+            .unwrap();
+        assert!(diff.contains("+staged"));
+        assert!(diff.contains("+unstaged"));
+        for refused in [
+            "{\"tool\":\"git_status\",\"path\":\"..\"}",
+            "{\"tool\":\"git_diff\",\"args\":[\"--exec-path\"]}",
+            "{\"tool\":\"status\"}",
+        ] {
+            assert_eq!(
+                resolve_evidence_request(refused, evidence)
+                    .unwrap_err()
+                    .kind(),
+                Some(ProviderErrorKind::Protocol)
+            );
+        }
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

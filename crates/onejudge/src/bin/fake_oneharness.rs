@@ -224,7 +224,7 @@ fn main() {
     let is_agent = !(prompt.contains("completion supervisor")
         || prompt.contains("role-playing the USER")
         || prompt.contains("Assessment request:")
-        || prompt.contains("Criterion:") && prompt.contains("single-line JSON object"));
+        || prompt.contains("Criterion:") && prompt.contains(onejudge::EVIDENCE_PROMPT_MARKER));
     // The process-grouping and control journeys (`docs/spawn-hook.md`,
     // `docs/control.md`). Read from `--system` on the agent side and from the
     // prompt on the judge side, because those are the two texts a caller controls
@@ -263,7 +263,7 @@ fn main() {
         ok_result(supervisor_text(&prompt), &prompt)
     } else if prompt.contains("role-playing the USER") {
         ok_result("Understood — please continue.".into(), &prompt)
-    } else if prompt.contains("Criterion:") && prompt.contains("single-line JSON object") {
+    } else if prompt.contains("Criterion:") && prompt.contains(onejudge::EVIDENCE_PROMPT_MARKER) {
         ok_result(judge_text(&prompt), &prompt)
     } else if prompt.contains("Assessment request:") {
         // `[[assess-empty]]` yields a well-formed reply with empty text, driving
@@ -969,6 +969,7 @@ fn parse_flags() -> HashMap<String, String> {
         "--output-format",
         "--cwd",
         "--history-name",
+        "--mode",
         // Repeatable on the real CLI, and accumulated as such below.
         "--mock-harness",
     ];

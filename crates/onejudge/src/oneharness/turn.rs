@@ -14,6 +14,7 @@
 
 use std::path::PathBuf;
 
+use oneharness_core::domain::mode::PermissionMode;
 use oneharness_core::io::run::RunRequest;
 
 /// Everything one `oneharness run` invocation needs, independent of *how* it runs.
@@ -46,6 +47,8 @@ pub(crate) struct TurnSpec {
     pub(crate) stream: bool,
     /// Ask for the out-of-band turn-control socket.
     pub(crate) control: bool,
+    /// Normalized harness permission mode.
+    pub(crate) mode: Option<PermissionMode>,
     /// The prompt this turn sends.
     pub(crate) prompt: String,
 }
@@ -70,6 +73,7 @@ pub(crate) fn request(spec: &TurnSpec) -> RunRequest {
         session: spec.session.clone(),
         stream: Some(spec.stream),
         control: spec.control,
+        mode: spec.mode,
         // An owned value, so the `--prompt-file -` hop that exists only to keep a
         // long transcript off the OS argv disappears; oneharness moves a large
         // prompt off the *harness's* argv itself (`LARGE_INPUT_THRESHOLD`).
@@ -128,6 +132,10 @@ pub(crate) fn argv(spec: &TurnSpec) -> Vec<String> {
     if spec.control {
         args.push("--control".into());
     }
+    if let Some(mode) = spec.mode {
+        args.push("--mode".into());
+        args.push(mode.as_str().into());
+    }
     args
 }
 
@@ -168,6 +176,10 @@ mod tests {
         ("--stream", Some(("stream", |r| r.stream == Some(true)))),
         ("--control", Some(("control", |r| r.control))),
         (
+            "--mode",
+            Some(("mode", |r| r.mode == Some(PermissionMode::ReadOnly))),
+        ),
+        (
             "--prompt-file",
             Some(("prompt", |r| {
                 !r.prompt.is_empty() && r.prompt_file.is_empty()
@@ -187,6 +199,7 @@ mod tests {
             events: true,
             stream: true,
             control: true,
+            mode: Some(PermissionMode::ReadOnly),
             prompt: "the whole transcript".into(),
         }
     }

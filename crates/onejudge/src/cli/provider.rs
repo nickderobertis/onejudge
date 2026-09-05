@@ -9,7 +9,7 @@
 use std::ops::ControlFlow;
 
 use crate::{
-    Assessment, AssistantTurn, CommandProvider, JudgeQuery, JudgeVerdict, Message,
+    Assessment, AssistantTurn, CommandProvider, EvidenceContext, JudgeQuery, JudgeVerdict, Message,
     OneharnessProvider, Provider, SharedSpawnHook, SkillRef, SupervisorQuery, SupervisorTurn,
     ToolEvent, UserTurn,
 };
@@ -204,6 +204,25 @@ impl Provider for AnyProvider {
             AnyProvider::Split { judge, .. } => judge.supervise(query, messages, session),
         }
     }
+    fn supervise_with_evidence(
+        &self,
+        query: &SupervisorQuery<'_>,
+        messages: &[Message],
+        session: Option<&str>,
+        evidence: EvidenceContext<'_>,
+    ) -> crate::Result<SupervisorTurn> {
+        match self {
+            AnyProvider::Oneharness(p) => {
+                p.supervise_with_evidence(query, messages, session, evidence)
+            }
+            AnyProvider::Command(p) => {
+                p.supervise_with_evidence(query, messages, session, evidence)
+            }
+            AnyProvider::Split { judge, .. } => {
+                judge.supervise_with_evidence(query, messages, session, evidence)
+            }
+        }
+    }
 
     fn judge(&self, query: &JudgeQuery<'_>, messages: &[Message]) -> crate::Result<JudgeVerdict> {
         match self {
@@ -212,12 +231,40 @@ impl Provider for AnyProvider {
             AnyProvider::Split { judge, .. } => judge.judge(query, messages),
         }
     }
+    fn judge_with_evidence(
+        &self,
+        query: &JudgeQuery<'_>,
+        messages: &[Message],
+        evidence: EvidenceContext<'_>,
+    ) -> crate::Result<JudgeVerdict> {
+        match self {
+            AnyProvider::Oneharness(p) => p.judge_with_evidence(query, messages, evidence),
+            AnyProvider::Command(p) => p.judge_with_evidence(query, messages, evidence),
+            AnyProvider::Split { judge, .. } => {
+                judge.judge_with_evidence(query, messages, evidence)
+            }
+        }
+    }
 
     fn assess(&self, prompt: &str, messages: &[Message]) -> crate::Result<Assessment> {
         match self {
             AnyProvider::Oneharness(p) => p.assess(prompt, messages),
             AnyProvider::Command(p) => p.assess(prompt, messages),
             AnyProvider::Split { judge, .. } => judge.assess(prompt, messages),
+        }
+    }
+    fn assess_with_evidence(
+        &self,
+        prompt: &str,
+        messages: &[Message],
+        evidence: EvidenceContext<'_>,
+    ) -> crate::Result<Assessment> {
+        match self {
+            AnyProvider::Oneharness(p) => p.assess_with_evidence(prompt, messages, evidence),
+            AnyProvider::Command(p) => p.assess_with_evidence(prompt, messages, evidence),
+            AnyProvider::Split { judge, .. } => {
+                judge.assess_with_evidence(prompt, messages, evidence)
+            }
         }
     }
 }

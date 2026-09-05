@@ -91,9 +91,11 @@ use std::time::{Duration, Instant};
 use crate::control::{ControlAddress, ControlOutcome};
 use crate::error::{Error, ProviderErrorKind, Result};
 use crate::provider::{
-    build_assessment_prompt, build_judge_prompt, build_supervisor_prompt, build_user_prompt,
-    latest_or_inline, parse_supervisor, parse_verdict, supervise_with_reask, Assessment,
-    AssistantTurn, JudgeQuery, JudgeVerdict, Provider, SkillRef, SupervisorQuery, SupervisorTurn,
+    build_assessment_prompt, build_assessment_prompt_with_evidence, build_judge_prompt,
+    build_judge_prompt_with_evidence, build_supervisor_prompt,
+    build_supervisor_prompt_with_evidence, build_user_prompt, latest_or_inline, parse_supervisor,
+    parse_verdict, resolve_evidence_request, supervise_with_reask, Assessment, AssistantTurn,
+    EvidenceContext, JudgeQuery, JudgeVerdict, Provider, SkillRef, SupervisorQuery, SupervisorTurn,
     UserTurn, SUPERVISOR_REASK_NOTE, SUPERVISOR_REDIRECT_NOTE,
 };
 use crate::spawn::{role_of, SharedSpawnHook, SpawnContext, SpawnedProcess, Spawner};
@@ -1183,6 +1185,7 @@ fn respond_spec(
         // Turn control is addressed by the `--session` name, which is why it only
         // ever rides alongside one and is dropped when the session is.
         control: control && session.is_some(),
+        mode: None,
         prompt: prompt.to_string(),
     }
 }
@@ -1213,6 +1216,13 @@ fn judge_side_spec(
         // control is addressed by the `--session` name, so it only ever rides
         // alongside one and is dropped when the session is.
         control: control && session.is_some(),
+        // Only evaluator calls receive a worktree. The plain simulated-user turn
+        // deliberately remains in the harness default mode.
+        mode: if cwd.is_some() {
+            Some(oneharness_core::domain::mode::PermissionMode::ReadOnly)
+        } else {
+            None
+        },
         prompt: prompt.to_string(),
     }
 }
@@ -1341,6 +1351,71 @@ impl Provider for OneharnessProvider {
         })
     }
 
+    fn supervise_with_evidence(
+        &self,
+        query: &SupervisorQuery<'_>,
+        messages: &[Message],
+        session: Option<&str>,
+        evidence: EvidenceContext<'_>,
+    ) -> Result<SupervisorTurn> {
+        let base = build_supervisor_prompt_with_evidence(query, messages, evidence);
+        supervise_with_reask(|attempt| {
+            let mut prompt = if attempt == 0 {
+                base.clone()
+            } else {
+                format!("{base}{SUPERVISOR_REASK_NOTE}")
+            };
+            let mut usage = Usage::default();
+            for tool_attempt in 0..=crate::provider::EVIDENCE_TOOL_RETRY_LIMIT {
+                let result =
+                    self.run_judge_side("supervisor", &prompt, session, evidence.worktree, true)?;
+                if let Some(value) = result.usage() {
+                    usage.add(&value);
+                }
+                let reply = result.reply();
+                let final_line = reply
+                    .lines()
+                    .rev()
+                    .find(|line| !line.trim().is_empty())
+                    .unwrap_or("");
+                if let Some(tool_result) = resolve_evidence_request(final_line, evidence)? {
+                    if tool_attempt == crate::provider::EVIDENCE_TOOL_RETRY_LIMIT {
+                        return Err(Error::provider_classified(
+                            "oneharness:supervisor",
+                            "evidence tool retry limit exhausted",
+                            crate::ProviderErrorKind::Protocol,
+                        ));
+                    }
+                    prompt.push_str(&format!("\n\nEvidence tool result (read-only):\n{tool_result}\nNow return a decision or one exact allowed request."));
+                    continue;
+                }
+                let outcome = match parse_supervisor("oneharness:supervisor", &reply) {
+                    Ok(outcome) => outcome,
+                    Err(unparsed) if self.supervisor.redirected.get() => {
+                        eprintln!("onejudge: warning — this supervisor turn was redirected and its answer did not parse ({unparsed}); asking it once more.");
+                        let retry = self.run_judge_side(
+                            "supervisor",
+                            &format!("{prompt}{SUPERVISOR_REDIRECT_NOTE}"),
+                            session,
+                            evidence.worktree,
+                            true,
+                        )?;
+                        if let Some(value) = retry.usage() {
+                            usage.add(&value);
+                        }
+                        parse_supervisor("oneharness:supervisor", &retry.reply())?
+                    }
+                    Err(unparsed) => return Err(unparsed),
+                };
+                return Ok(SupervisorTurn {
+                    outcome,
+                    usage: (!usage.is_empty()).then_some(usage),
+                });
+            }
+            unreachable!()
+        })
+    }
+
     fn judge(&self, query: &JudgeQuery<'_>, messages: &[Message]) -> Result<JudgeVerdict> {
         // Judging is stateless — no session to continue.
         let prompt = build_judge_prompt(query, messages);
@@ -1348,6 +1423,43 @@ impl Provider for OneharnessProvider {
         let mut verdict = parse_verdict(query.kind, "oneharness:judge", &result.reply())?;
         verdict.usage = result.usage();
         Ok(verdict)
+    }
+
+    fn judge_with_evidence(
+        &self,
+        query: &JudgeQuery<'_>,
+        messages: &[Message],
+        evidence: EvidenceContext<'_>,
+    ) -> Result<JudgeVerdict> {
+        let mut prompt = build_judge_prompt_with_evidence(query, messages, evidence);
+        let mut usage = Usage::default();
+        for attempt in 0..=crate::provider::EVIDENCE_TOOL_RETRY_LIMIT {
+            let result = self.run_judge_side("judge", &prompt, None, evidence.worktree, false)?;
+            if let Some(value) = result.usage() {
+                usage.add(&value);
+            }
+            let reply = result.reply();
+            let final_line = reply
+                .lines()
+                .rev()
+                .find(|line| !line.trim().is_empty())
+                .unwrap_or("");
+            if let Some(tool_result) = resolve_evidence_request(final_line, evidence)? {
+                if attempt == crate::provider::EVIDENCE_TOOL_RETRY_LIMIT {
+                    return Err(Error::provider_classified(
+                        "oneharness:judge",
+                        "evidence tool retry limit exhausted",
+                        crate::ProviderErrorKind::Protocol,
+                    ));
+                }
+                prompt.push_str(&format!("\n\nEvidence tool result (read-only):\n{tool_result}\nNow return a verdict or one exact allowed request."));
+                continue;
+            }
+            let mut verdict = parse_verdict(query.kind, "oneharness:judge", &reply)?;
+            verdict.usage = (!usage.is_empty()).then_some(usage);
+            return Ok(verdict);
+        }
+        unreachable!()
     }
 
     fn assess(&self, prompt: &str, messages: &[Message]) -> Result<Assessment> {
@@ -1364,6 +1476,50 @@ impl Provider for OneharnessProvider {
             text,
             usage: result.usage(),
         })
+    }
+
+    fn assess_with_evidence(
+        &self,
+        prompt: &str,
+        messages: &[Message],
+        evidence: EvidenceContext<'_>,
+    ) -> Result<Assessment> {
+        let mut prompt = build_assessment_prompt_with_evidence(prompt, messages, evidence);
+        let mut usage = Usage::default();
+        for attempt in 0..=crate::provider::EVIDENCE_TOOL_RETRY_LIMIT {
+            let result = self.run_judge_side("assess", &prompt, None, evidence.worktree, false)?;
+            if let Some(value) = result.usage() {
+                usage.add(&value);
+            }
+            let text = result.reply();
+            let final_line = text
+                .lines()
+                .rev()
+                .find(|line| !line.trim().is_empty())
+                .unwrap_or("");
+            if let Some(tool_result) = resolve_evidence_request(final_line, evidence)? {
+                if attempt == crate::provider::EVIDENCE_TOOL_RETRY_LIMIT {
+                    return Err(Error::provider_classified(
+                        "oneharness:assess",
+                        "evidence tool retry limit exhausted",
+                        crate::ProviderErrorKind::Protocol,
+                    ));
+                }
+                prompt.push_str(&format!("\n\nEvidence tool result (read-only):\n{tool_result}\nNow return the assessment or one exact allowed request."));
+                continue;
+            }
+            if text.trim().is_empty() {
+                return Err(Error::provider(
+                    "oneharness:assess",
+                    "judge returned an empty assessment",
+                ));
+            }
+            return Ok(Assessment {
+                text,
+                usage: (!usage.is_empty()).then_some(usage),
+            });
+        }
+        unreachable!()
     }
 }
 
@@ -1566,6 +1722,28 @@ mod tests {
         // own default).
         let no_config = argv_of(&judge_side_spec(None, None, None, false, "p"));
         assert!(!no_config.iter().any(|a| a == "--config"));
+    }
+
+    #[test]
+    fn evaluator_worktree_enforces_read_only_while_plain_user_stays_default() {
+        let evaluator = judge_side_spec(None, None, Some("/work"), false, "p");
+        assert_eq!(
+            evaluator.mode,
+            Some(oneharness_core::domain::mode::PermissionMode::ReadOnly)
+        );
+        assert_eq!(
+            turn::request(&evaluator).mode,
+            Some(oneharness_core::domain::mode::PermissionMode::ReadOnly)
+        );
+        assert!(argv_of(&evaluator)
+            .windows(2)
+            .any(|pair| pair == ["--mode", "read-only"]));
+
+        let user = judge_side_spec(None, None, None, false, "p");
+        assert_eq!(user.mode, None);
+        assert!(!argv_of(&user).iter().any(|arg| arg == "--mode"));
+        let worker = respond_spec("s", "/work", None, None, false, false, "p");
+        assert_eq!(worker.mode, None);
     }
 
     #[test]
