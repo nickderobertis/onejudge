@@ -1378,16 +1378,26 @@ impl Provider for OneharnessProvider {
                     .rev()
                     .find(|line| !line.trim().is_empty())
                     .unwrap_or("");
-                if let Some(tool_result) = resolve_evidence_request(final_line, evidence)? {
-                    if tool_attempt == crate::provider::EVIDENCE_TOOL_RETRY_LIMIT {
-                        return Err(Error::provider_classified(
-                            "oneharness:supervisor",
-                            "evidence tool retry limit exhausted",
-                            crate::ProviderErrorKind::Protocol,
-                        ));
+                match resolve_evidence_request(final_line, evidence) {
+                    Err(refused) => {
+                        if tool_attempt == crate::provider::EVIDENCE_TOOL_RETRY_LIMIT {
+                            return Err(refused);
+                        }
+                        prompt.push_str(&format!("\n\nEvidence tool request refused: {refused}\nUse only an exact allowed request, or return the final decision."));
+                        continue;
                     }
-                    prompt.push_str(&format!("\n\nEvidence tool result (read-only):\n{tool_result}\nNow return a decision or one exact allowed request."));
-                    continue;
+                    Ok(Some(tool_result)) => {
+                        if tool_attempt == crate::provider::EVIDENCE_TOOL_RETRY_LIMIT {
+                            return Err(Error::provider_classified(
+                                "oneharness:supervisor",
+                                "evidence tool retry limit exhausted",
+                                crate::ProviderErrorKind::Protocol,
+                            ));
+                        }
+                        prompt.push_str(&format!("\n\nEvidence tool result (read-only):\n{tool_result}\nNow return a decision or one exact allowed request."));
+                        continue;
+                    }
+                    Ok(None) => {}
                 }
                 let outcome = match parse_supervisor("oneharness:supervisor", &reply) {
                     Ok(outcome) => outcome,
@@ -1444,16 +1454,26 @@ impl Provider for OneharnessProvider {
                 .rev()
                 .find(|line| !line.trim().is_empty())
                 .unwrap_or("");
-            if let Some(tool_result) = resolve_evidence_request(final_line, evidence)? {
-                if attempt == crate::provider::EVIDENCE_TOOL_RETRY_LIMIT {
-                    return Err(Error::provider_classified(
-                        "oneharness:judge",
-                        "evidence tool retry limit exhausted",
-                        crate::ProviderErrorKind::Protocol,
-                    ));
+            match resolve_evidence_request(final_line, evidence) {
+                Err(refused) => {
+                    if attempt == crate::provider::EVIDENCE_TOOL_RETRY_LIMIT {
+                        return Err(refused);
+                    }
+                    prompt.push_str(&format!("\n\nEvidence tool request refused: {refused}\nUse only an exact allowed request, or return the final verdict."));
+                    continue;
                 }
-                prompt.push_str(&format!("\n\nEvidence tool result (read-only):\n{tool_result}\nNow return a verdict or one exact allowed request."));
-                continue;
+                Ok(Some(tool_result)) => {
+                    if attempt == crate::provider::EVIDENCE_TOOL_RETRY_LIMIT {
+                        return Err(Error::provider_classified(
+                            "oneharness:judge",
+                            "evidence tool retry limit exhausted",
+                            crate::ProviderErrorKind::Protocol,
+                        ));
+                    }
+                    prompt.push_str(&format!("\n\nEvidence tool result (read-only):\n{tool_result}\nNow return a verdict or one exact allowed request."));
+                    continue;
+                }
+                Ok(None) => {}
             }
             let mut verdict = parse_verdict(query.kind, "oneharness:judge", &reply)?;
             verdict.usage = (!usage.is_empty()).then_some(usage);
@@ -1497,16 +1517,26 @@ impl Provider for OneharnessProvider {
                 .rev()
                 .find(|line| !line.trim().is_empty())
                 .unwrap_or("");
-            if let Some(tool_result) = resolve_evidence_request(final_line, evidence)? {
-                if attempt == crate::provider::EVIDENCE_TOOL_RETRY_LIMIT {
-                    return Err(Error::provider_classified(
-                        "oneharness:assess",
-                        "evidence tool retry limit exhausted",
-                        crate::ProviderErrorKind::Protocol,
-                    ));
+            match resolve_evidence_request(final_line, evidence) {
+                Err(refused) => {
+                    if attempt == crate::provider::EVIDENCE_TOOL_RETRY_LIMIT {
+                        return Err(refused);
+                    }
+                    prompt.push_str(&format!("\n\nEvidence tool request refused: {refused}\nUse only an exact allowed request, or return the final assessment."));
+                    continue;
                 }
-                prompt.push_str(&format!("\n\nEvidence tool result (read-only):\n{tool_result}\nNow return the assessment or one exact allowed request."));
-                continue;
+                Ok(Some(tool_result)) => {
+                    if attempt == crate::provider::EVIDENCE_TOOL_RETRY_LIMIT {
+                        return Err(Error::provider_classified(
+                            "oneharness:assess",
+                            "evidence tool retry limit exhausted",
+                            crate::ProviderErrorKind::Protocol,
+                        ));
+                    }
+                    prompt.push_str(&format!("\n\nEvidence tool result (read-only):\n{tool_result}\nNow return the assessment or one exact allowed request."));
+                    continue;
+                }
+                Ok(None) => {}
             }
             if text.trim().is_empty() {
                 return Err(Error::provider(

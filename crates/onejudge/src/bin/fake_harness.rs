@@ -103,7 +103,9 @@ fn main() {
             .windows(2)
             .any(|w| w[0] == "--format" && w[1] == "json");
 
-    let mut reply = marker(&prompt, "reply").unwrap_or_else(|| "ok".to_string());
+    let mut reply = restrictive_evaluator_reply(&prompt, &args)
+        .or_else(|| marker(&prompt, "reply"))
+        .unwrap_or_else(|| "ok".to_string());
     if prompt.contains("[[echo-resume]]") {
         reply = resumed_on(&args).unwrap_or_else(|| "none".to_string());
     }
@@ -155,6 +157,83 @@ fn main() {
         json_string(&reply)
     );
     emit(&terminal);
+}
+
+/// Script the evidence-aware evaluator journey while leaving ordinary doubles
+/// untouched. Each next request is selected only from the typed result onejudge
+/// appended, so skipping a fixed operation cannot accidentally reach a verdict.
+fn restrictive_evaluator_reply(prompt: &str, args: &[String]) -> Option<String> {
+    if prompt.contains("[[allowlist-only]]") {
+        return Some(if exact_read_only_tools(args) {
+            r#"{"value":true,"reason":"exact read-only allowlist"}"#.into()
+        } else {
+            "read-only tool allowlist drifted".into()
+        });
+    }
+    let proof = marker(prompt, "restrict-evidence")?;
+    if !exact_read_only_tools(args) {
+        return Some("read-only tool allowlist drifted".into());
+    }
+    let refused = prompt.matches("Evidence tool request refused:").count();
+    if !prompt.contains("Evidence tool result (read-only):") {
+        return Some(r#"{"tool":"git_status"}"#.into());
+    }
+    if !prompt.contains("unstaged:\n") {
+        if !prompt.contains("MM tracked") || !prompt.contains("?? untracked") {
+            return Some("git_status did not expose tracked and untracked changes".into());
+        }
+        return Some(r#"{"tool":"git_diff"}"#.into());
+    }
+    if !prompt.contains("+staged") || !prompt.contains("+unstaged") {
+        return Some("git_diff did not expose staged and unstaged patches".into());
+    }
+    if refused == 0 {
+        return Some(r#"{"tool":"write_file","path":"escape","text":"changed"}"#.into());
+    }
+    if refused == 1 {
+        return Some(r#"{"tool":"git_diff","args":["--output=escape"]}"#.into());
+    }
+
+    let history = prompt
+        .lines()
+        .find_map(|line| line.strip_prefix("  - "))
+        .and_then(|path| std::fs::read_to_string(path).ok())
+        .unwrap_or_default();
+    if !history.contains("HISTORY_SENTINEL_UNTRUNCATED") {
+        return Some("history evidence was not readable".into());
+    }
+    let kind = if prompt.contains("completion supervisor") {
+        "supervisor"
+    } else if prompt.contains("Assessment request:") {
+        "assessment"
+    } else if prompt.contains("Score how well") {
+        "numeric"
+    } else {
+        "boolean"
+    };
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(proof)
+        .ok()?;
+    writeln!(file, "{kind}:read-full-history").ok()?;
+    Some(match kind {
+        "supervisor" => r#"{"completion":true,"reason":"evidence inspected"}"#.into(),
+        "assessment" => "evidence inspected without mutation".into(),
+        "numeric" => r#"{"value":10,"reason":"evidence inspected"}"#.into(),
+        _ => r#"{"value":true,"reason":"evidence inspected"}"#.into(),
+    })
+}
+
+fn exact_read_only_tools(args: &[String]) -> bool {
+    let tools = args.iter().position(|arg| arg == "--tools").map(|index| {
+        args[index + 1..]
+            .iter()
+            .take_while(|arg| !arg.starts_with("--"))
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+    });
+    tools.as_deref() == Some(&["Read", "Grep", "Glob", "WebFetch", "WebSearch"][..])
 }
 
 /// Everything this run was told, as one string to scan for markers.

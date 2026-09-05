@@ -14,9 +14,9 @@
 use std::ops::ControlFlow;
 
 use onejudge::{
-    CommandProvider, Conversation, Engine, JudgeKind, JudgeValue, NamedVerdict, Observation,
-    OneharnessProvider, ProviderErrorKind, Role, Settings, SimulatedUser, Skill, SplitProvider,
-    ToolQuery, Usage, SCHEMA_VERSION,
+    CommandProvider, Conversation, Engine, EvidenceContext, JudgeKind, JudgeQuery, JudgeValue,
+    NamedVerdict, Observation, OneharnessProvider, Provider, ProviderErrorKind, Role, Settings,
+    SimulatedUser, Skill, SplitProvider, ToolQuery, Usage, SCHEMA_VERSION,
 };
 
 mod support;
@@ -2157,6 +2157,151 @@ fn an_in_process_turn_runs_the_real_engine_over_a_deterministic_harness() {
     // one caller-visible consequence, and the reason `with_spawn_hook` selects
     // the spawning seam instead.
     assert!(outcome.processes.is_empty());
+}
+
+#[test]
+fn restrictive_evaluators_recover_full_history_and_cannot_mutate_or_escape_git_tools() {
+    let dir = harness_project("restrictive-evidence");
+    let proof = scratch_path("restrictive-evidence-proof");
+    let history_dir = scratch_path("restrictive-evidence-history");
+    let _ = std::fs::remove_file(&proof);
+    let _ = std::fs::remove_dir_all(&history_dir);
+    std::fs::write(
+        dir.join("oneharness.toml"),
+        format!(
+            "harnesses = [\"claude-code\"]\nhistory_dir = {:?}\n\n[harness.claude-code]\nbin = {:?}\n",
+            history_dir.display().to_string(),
+            env!("CARGO_BIN_EXE_onejudge-fake-harness"),
+        ),
+    ).unwrap();
+    let git = |args: &[&str]| {
+        std::process::Command::new("git")
+            .arg("-C")
+            .arg(&dir)
+            .args(args)
+            .output()
+            .unwrap()
+    };
+    assert!(git(&["init", "-q"]).status.success());
+    std::fs::write(dir.join("tracked"), "base\n").unwrap();
+    assert!(git(&["add", "tracked"]).status.success());
+    assert!(git(&[
+        "-c",
+        "user.name=test",
+        "-c",
+        "user.email=test@example.test",
+        "commit",
+        "-qm",
+        "base"
+    ])
+    .status
+    .success());
+    std::fs::write(dir.join("tracked"), "staged\n").unwrap();
+    assert!(git(&["add", "tracked"]).status.success());
+    std::fs::write(dir.join("tracked"), "staged\nunstaged\n").unwrap();
+    std::fs::write(dir.join("untracked"), "untouched\n").unwrap();
+    let before_status = git(&["status", "--porcelain=v1"]).stdout;
+    let before_diff = git(&["diff"]).stdout;
+    let before_cached = git(&["diff", "--cached"]).stdout;
+
+    let sentinel = format!("{}HISTORY_SENTINEL_UNTRUNCATED", "x".repeat(240));
+    let provider = OneharnessProvider::new().with_judge_config(dir.join("oneharness.toml"));
+    let engine = Engine::new(&provider, settings());
+    let skill = Skill::new(
+        "demo",
+        dir.to_str().unwrap(),
+        format!("[[reply:finished]][[event:{sentinel}]]"),
+    );
+    let task = format!(
+        "inspect all evidence [[restrict-evidence:{}]]",
+        proof.display()
+    );
+    let outcome = engine
+        .run(&Conversation::multi_turn(
+            skill,
+            task,
+            SimulatedUser::new("strict reviewer")
+                .done_when("evidence proves completion")
+                .max_turns(2),
+        ))
+        .unwrap();
+    let summary = outcome.transcript.messages[1].events[0].summary();
+    assert!(
+        !summary.contains("HISTORY_SENTINEL_UNTRUNCATED"),
+        "the abbreviated [tool] summary must omit the tail sentinel"
+    );
+
+    assert_eq!(
+        engine
+            .judge_boolean("evidence", &outcome.transcript)
+            .unwrap()
+            .value,
+        JudgeValue::Bool(true)
+    );
+    assert_eq!(
+        engine
+            .judge_numeric("evidence", 0.0, 10.0, &outcome.transcript)
+            .unwrap()
+            .value,
+        JudgeValue::Number(10.0)
+    );
+    assert_eq!(
+        engine
+            .assess("assess evidence", &outcome.transcript)
+            .unwrap()
+            .text,
+        "evidence inspected without mutation"
+    );
+    let proof_text = std::fs::read_to_string(&proof).unwrap();
+    for role in ["supervisor", "boolean", "numeric", "assessment"] {
+        assert!(
+            proof_text.contains(&format!("{role}:read-full-history")),
+            "{role} did not read the full producer history: {proof_text}"
+        );
+    }
+    assert!(
+        !dir.join("escape").exists(),
+        "the attempted filesystem mutation was refused"
+    );
+    assert_eq!(git(&["status", "--porcelain=v1"]).stdout, before_status);
+    assert_eq!(git(&["diff"]).stdout, before_diff);
+    assert_eq!(git(&["diff", "--cached"]).stdout, before_cached);
+}
+
+#[test]
+fn pinned_claude_read_only_mapping_has_no_shell_or_command_capability() {
+    let spec = oneharness_core::domain::harness::by_id("claude-code").unwrap();
+    let mode = spec
+        .mode(oneharness_core::domain::mode::PermissionMode::ReadOnly)
+        .expect("Claude must support ReadOnly");
+    assert_eq!(
+        mode.headless,
+        oneharness_core::domain::mode::ModeHeadless::Clean,
+        "ReadOnly must work headlessly"
+    );
+    // The real-engine journey above refuses to produce any evaluator verdict
+    // unless oneharness's actual argv contains exactly this positive allowlist.
+    let allowed = ["Read", "Grep", "Glob", "WebFetch", "WebSearch"];
+    assert!(!allowed
+        .iter()
+        .any(|tool| matches!(*tool, "Bash" | "Shell" | "Command" | "Task")));
+    let dir = harness_project("read-only-allowlist-contract");
+    let provider = OneharnessProvider::new().with_judge_config(dir.join("oneharness.toml"));
+    let verdict = provider
+        .judge_with_evidence(
+            &JudgeQuery {
+                kind: JudgeKind::Boolean,
+                criterion: "[[allowlist-only]]",
+                scale: None,
+            },
+            &[],
+            EvidenceContext {
+                worktree: Some(dir.to_str().unwrap()),
+                history_files: &[],
+            },
+        )
+        .expect("the real oneharness Claude argv must carry exactly the read-only allowlist");
+    assert_eq!(verdict.value, JudgeValue::Bool(true));
 }
 
 #[test]
