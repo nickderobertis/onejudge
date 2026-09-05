@@ -1518,6 +1518,28 @@ mod tests {
     }
 
     #[test]
+    fn closed_git_tools_distinguish_answers_from_refused_requests_and_fail_closed() {
+        let no_evidence = EvidenceContext::default();
+        for answer in ["ordinary assessment", "{\"value\":true}", "{}"] {
+            assert_eq!(resolve_evidence_request(answer, no_evidence).unwrap(), None);
+        }
+
+        for request in ["{\"tool\":null}", "{\"tool\":\"git_status\"}"] {
+            let error = resolve_evidence_request(request, no_evidence).unwrap_err();
+            assert_eq!(error.kind(), Some(ProviderErrorKind::Protocol));
+        }
+
+        let missing_worktree = EvidenceContext {
+            worktree: Some("/onejudge/evidence/worktree/does-not-exist"),
+            history_files: &[],
+        };
+        let error =
+            resolve_evidence_request("{\"tool\":\"git_status\"}", missing_worktree).unwrap_err();
+        assert_eq!(error.kind(), Some(ProviderErrorKind::Protocol));
+        assert!(error.to_string().contains("fixed Git operation failed"));
+    }
+
+    #[test]
     fn judge_value_deserializes_untagged() {
         let b: JudgeValue = serde_json::from_str("true").unwrap();
         assert_eq!(b, JudgeValue::Bool(true));
