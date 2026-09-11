@@ -143,7 +143,13 @@ Use the `just` recipes; do not hand-roll equivalents. `just --list` is the index
 - Validate every external input at its boundary: provider responses and the
   oneharness report are parsed into typed models (`serde`) before use, and a
   provider that ignores a request contract (empty output, missing verdict field)
-  is a loud error, never a vacuous pass.
+  is a loud error, never a vacuous pass. The one exception is the **supervisor's
+  decision**: an answer the harness delivered but that is unusable (no next
+  instruction, or not in either shape) is re-asked with the shape restated,
+  bounded, and then *settles* the run under a reason that says which — never a
+  pass, and never a `protocol` failure, which once destroyed a node carrying
+  finished committed work over a paragraph its supervisor wrote in place of an
+  object. Only a transport failure is fatal, and on its first occurrence.
 - **A turn's reply is what the harness reported, never its raw output.** A
   completed turn carrying no `text` replies empty — the truthful answer. The
   substitution of `RunResult::stdout` that used to stand in for it published

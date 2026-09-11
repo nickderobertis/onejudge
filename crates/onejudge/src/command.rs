@@ -348,7 +348,7 @@ impl Provider for CommandProvider {
         // The same bounded re-ask, and the same settle on exhaustion, as the
         // prompt-building seam: the protocol carries no correction field, so the
         // re-ask is the identical request rather than a nudged one.
-        supervise_with_reask(|_attempt| {
+        supervise_with_reask(|_ask| {
             let payload: SupervisorPayload = self.call(
                 &Request::Supervisor {
                     task: query.task,

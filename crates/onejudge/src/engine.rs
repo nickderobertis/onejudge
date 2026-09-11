@@ -315,12 +315,13 @@ pub struct Outcome {
     pub stopped_early: bool,
     /// The unified supervisor's completion reason, when it ended the loop.
     pub completion_reason: Option<String>,
-    /// Why the loop ended *without* a completion decision, when the supervisor
-    /// judged the work incomplete and then gave no next instruction to act on.
+    /// Why the loop ended *without* a completion decision: the supervisor judged
+    /// the work incomplete and then gave no next instruction to act on, or answered
+    /// in neither documented shape, or the exchanges stopped moving.
     ///
     /// Mutually exclusive with [`Outcome::completion_reason`], and the difference
     /// matters to whoever reads the run: an incomplete outcome with this set is the
-    /// supervisor having nothing to say, not the agent failing the task.
+    /// supervisor having nothing usable to say, not the agent failing the task.
     pub settled_reason: Option<String>,
     /// Timing, per-party usage, and native session linkage, when provided.
     pub telemetry: Option<Telemetry>,
@@ -811,9 +812,9 @@ impl<'a> Engine<'a> {
                     }))
                     .is_break()
                 }
-                SupervisorOutcome::Completed { .. } | SupervisorOutcome::NoInstruction { .. } => {
-                    false
-                }
+                SupervisorOutcome::Completed { .. }
+                | SupervisorOutcome::NoInstruction { .. }
+                | SupervisorOutcome::Unparseable { .. } => false,
             };
             if !broke {
                 broke = on_observation(&Observation::TurnClosed(TurnClosed {
@@ -857,6 +858,23 @@ impl<'a> Engine<'a> {
                         .to_string();
                     if !reason.trim().is_empty() {
                         why.push_str(&format!(" (supervisor's reason: {})", reason.trim()));
+                    }
+                    settled_reason = Some(why);
+                    break;
+                }
+                // The supervisor answered, but not in a shape that can be read as a
+                // decision, even asked again with the shape restated. The same
+                // settle, under its own words: this is neither a transport failure
+                // (the harness delivered the turn) nor a supervisor with nothing to
+                // say — it may well have argued a real point, which is why its last
+                // answer is carried here for whoever reads the run.
+                SupervisorOutcome::Unparseable { problem, answer } => {
+                    let mut why = format!(
+                        "the supervisor's answer did not parse as a decision ({problem}), even \
+                         asked again; settled on the work already done"
+                    );
+                    if !answer.trim().is_empty() {
+                        why.push_str(&format!(" (supervisor's last answer: {})", answer.trim()));
                     }
                     settled_reason = Some(why);
                     break;
@@ -1410,6 +1428,75 @@ mod tests {
         assert!(settled.contains("no next instruction"), "{settled}");
         assert!(settled.contains("the tests still fail"), "{settled}");
         // And it reaches the artifact the operator actually reads.
+        assert_eq!(outcome.into_report(vec![]).settled_reason, Some(settled));
+    }
+
+    #[test]
+    fn a_supervisor_whose_answer_never_parses_settles_the_run_under_its_own_words() {
+        // The other way a supervisor can have nothing usable to say: it wrote a
+        // paragraph where the contract wants an object, and did again when asked.
+        // The run keeps its work, and the settle reason says which case this is
+        // and carries the paragraph — which may have argued a real point — so a
+        // reader tells it from a transport failure and from a silent supervisor.
+        struct Prose;
+
+        impl Provider for Prose {
+            fn respond(
+                &self,
+                _: &SkillRef<'_>,
+                _: &[Message],
+                _: Option<&str>,
+            ) -> Result<AssistantTurn> {
+                Ok(assistant("committed the fix", false))
+            }
+            fn simulate_user(&self, _: &str, _: &[Message], _: Option<&str>) -> Result<UserTurn> {
+                unreachable!("the supervisor answers for the simulated user")
+            }
+            fn supervise(
+                &self,
+                _: &SupervisorQuery<'_>,
+                _: &[Message],
+                _: Option<&str>,
+            ) -> Result<SupervisorTurn> {
+                Ok(SupervisorTurn {
+                    outcome: SupervisorOutcome::Unparseable {
+                        problem: "not a JSON object".into(),
+                        answer: "I'm checking the committed tree against the amended scope…".into(),
+                    },
+                    usage: None,
+                })
+            }
+            fn judge(&self, _: &JudgeQuery<'_>, _: &[Message]) -> Result<JudgeVerdict> {
+                unreachable!()
+            }
+            fn assess(&self, _: &str, _: &[Message]) -> Result<Assessment> {
+                unreachable!()
+            }
+        }
+
+        let provider = Prose;
+        let outcome = Engine::new(&provider, settings())
+            .run(&Conversation::multi_turn(
+                skill(),
+                "fix it",
+                SimulatedUser::new("a strict reviewer").max_turns(8),
+            ))
+            .expect("an unparseable supervisor settles the run, it does not fail it");
+        assert_eq!(outcome.transcript.assistant_turns(), 1);
+        assert_eq!(
+            outcome.transcript.messages.last().unwrap().content,
+            "committed the fix",
+            "the work is kept"
+        );
+        assert!(outcome.completion_reason.is_none());
+        let settled = outcome.settled_reason.clone().expect("a settle reason");
+        assert!(settled.contains("did not parse"), "{settled}");
+        assert!(settled.contains("not a JSON object"), "{settled}");
+        assert!(settled.contains("checking the committed tree"), "{settled}");
+        assert!(
+            !settled.contains("no next instruction"),
+            "distinguishable from a supervisor with nothing to say: {settled}"
+        );
         assert_eq!(outcome.into_report(vec![]).settled_reason, Some(settled));
     }
 

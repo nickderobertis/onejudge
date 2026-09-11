@@ -162,15 +162,79 @@ pub enum SupervisorOutcome {
         /// Whatever justification the supervisor did give, possibly empty.
         reason: String,
     },
+    /// The supervisor answered, but not in either documented shape — prose where
+    /// the contract wants one JSON object, a `completion` that is not a boolean, a
+    /// completion with no `reason` — and did so again when asked again with the
+    /// shape restated (see [`supervise_with_reask`]).
+    ///
+    /// Not an error, for the same reason as [`SupervisorOutcome::NoInstruction`]:
+    /// the harness delivered the turn, the model simply wrote the wrong thing, and
+    /// a dispatch carrying finished work was once failed on exactly that — recorded
+    /// as a `protocol` provider failure, which asserts something false about both
+    /// the transport and the worker's tree. The engine settles the run on what it
+    /// has and records why, keeping this distinguishable from a transport failure
+    /// (still an [`Error`]) and from a supervisor that had nothing to say.
+    Unparseable {
+        /// What was wrong with the answer, as the parser saw it.
+        problem: String,
+        /// The answer itself, verbatim: a supervisor that wrote a paragraph may have
+        /// argued a real point, and the settle reason is where it is finally read.
+        answer: String,
+    },
 }
 
+/// What was unusable about the answer before this one, on a re-ask.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Reask {
+    /// `completion:false` with no usable `message`.
+    NoInstruction,
+    /// Not one JSON object in either valid shape.
+    Unparseable,
+}
+
+/// One ask of the supervisor within [`supervise_with_reask`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Ask {
+    /// Zero-based attempt number: `0` is the first ask.
+    pub attempt: u32,
+    /// Why the loop is asking again; `None` on the first ask.
+    pub reask: Option<Reask>,
+}
+
+impl Ask {
+    /// The correction a prompt-building seam appends for this ask — empty on the
+    /// first, and otherwise the note naming what was unusable about the last
+    /// answer, because a verbatim repeat of the question invites a verbatim repeat
+    /// of the answer.
+    #[must_use]
+    pub fn note(self) -> &'static str {
+        match self.reask {
+            None => "",
+            Some(Reask::NoInstruction) => SUPERVISOR_REASK_NOTE,
+            Some(Reask::Unparseable) => SUPERVISOR_UNPARSED_NOTE,
+        }
+    }
+}
+
+/// The correction appended when the previous answer did not parse — prose where
+/// the contract wants one JSON object, or an object in neither valid shape.
+///
+/// It says that whatever the answer argued was never read, and where an argument
+/// belongs: the supervisor that wrote a paragraph about why the work was not done
+/// had a real point to make, and `reason` is the field that carries it.
+pub const SUPERVISOR_UNPARSED_NOTE: &str = "\n\n\
+     Your previous answer could not be used: it was not one JSON object in either valid shape, \
+     so nothing it said was read as a decision. Whatever you have to say belongs in `reason`. \
+     Answer again, in exactly one of the two shapes above: `completion:true` with a `reason`, \
+     or `completion:false` with a concrete, actionable next instruction in `message`.";
+
 /// The correction appended when a **redirected** supervisor turn's answer did not
-/// parse at all.
+/// parse, in place of [`SUPERVISOR_UNPARSED_NOTE`].
 ///
 /// A redirect ends the turn and reopens the next one on the same session with the
 /// note as its prompt, so what comes back answers the note rather than the
-/// question — prose where the contract wants one JSON object. Naming the two
-/// shapes again is what makes the single re-ask worth its cost.
+/// question — prose where the contract wants one JSON object. Naming that, and the
+/// two shapes again, is what makes the re-ask worth its cost.
 pub const SUPERVISOR_REDIRECT_NOTE: &str = "\n\n\
      Your previous answer did not parse: a correction was delivered into your turn, and what \
      came back was not one JSON object in either valid shape. The correction stands and is \
@@ -178,14 +242,18 @@ pub const SUPERVISOR_REDIRECT_NOTE: &str = "\n\n\
      one of the two shapes: `completion:true` with a `reason`, or `completion:false` with a \
      concrete, actionable next instruction in `message`.";
 
-/// How many times a supervisor that answered `completion:false` with no usable
-/// `message` is asked again before the run settles on the work it has.
+/// How many times a supervisor whose answer was unusable — `completion:false`
+/// with no usable `message`, or nothing that parses at all — is asked again
+/// before the run settles on the work it has. One bound for one decision,
+/// however the unusable answers are mixed.
 ///
-/// Two, for three attempts in all. An omitted `message` is nearly always a
-/// formatting slip that a fresh sample corrects, and two extra samples make a
-/// *persistent* refusal decisive rather than unlucky. Each attempt is a full
-/// judge-side invocation — a real turn's worth of latency and tokens — so a higher
-/// bound buys very little and charges every run that hits it.
+/// Two, for three attempts in all. An omitted `message` or a paragraph in place
+/// of an object is nearly always a formatting slip that a fresh sample corrects,
+/// and two extra samples make a *persistent* refusal decisive rather than
+/// unlucky. Each attempt is a full judge-side invocation — a real turn's worth of
+/// latency and tokens — so a higher bound buys very little and charges every run
+/// that hits it, and an unbounded one would hide a genuinely broken supervisor
+/// behind repeated asking.
 pub const SUPERVISOR_REASK_LIMIT: u32 = 2;
 
 /// The correction appended to the supervisor prompt when the previous answer was
@@ -361,7 +429,7 @@ pub trait Provider {
         session: Option<&str>,
     ) -> Result<SupervisorTurn> {
         let criterion = query.done_when.unwrap_or("the original task is complete");
-        supervise_with_reask(|_attempt| {
+        supervise_with_reask(|_ask| {
             let verdict = self.judge(
                 &JudgeQuery {
                     kind: JudgeKind::Boolean,
@@ -552,42 +620,34 @@ pub fn build_supervisor_prompt_with_evidence(
 
 /// Parse and strictly validate the supervisor's discriminated JSON response.
 ///
-/// Everything malformed is a [`Protocol`](crate::ProviderErrorKind::Protocol)
-/// error, with one deliberate exception: `completion:false` carrying no usable
-/// `message` parses to [`SupervisorOutcome::NoInstruction`] instead. That case is
-/// the supervisor having nothing to say, not the transport being broken, and it
-/// must never cost the caller the work the run has already produced — see
-/// [`supervise_with_reask`].
-///
-/// # Errors
-/// [`Error::Provider`](crate::Error::Provider) if the response is not one JSON
-/// object in one of the two documented shapes.
-pub fn parse_supervisor(context: &str, text: &str) -> Result<SupervisorOutcome> {
-    use crate::error::ProviderErrorKind::Protocol;
-    let json = extract_json_object(text).ok_or_else(|| {
-        Error::provider_classified(
-            context,
-            format!("supervisor did not return a JSON object; got: {text}"),
-            Protocol,
-        )
-    })?;
-    let value: serde_json::Value = serde_json::from_str(json).map_err(|e| {
-        Error::provider_classified(
-            context,
-            format!("supervisor response was not valid JSON: {e}; got: {json}"),
-            Protocol,
-        )
-    })?;
+/// Nothing here is an error. An answer in neither documented shape parses to
+/// [`SupervisorOutcome::Unparseable`], and `completion:false` carrying no usable
+/// `message` to [`SupervisorOutcome::NoInstruction`]: both are the supervisor
+/// having nothing usable to say, not the transport being broken, and neither may
+/// cost the caller the work the run has already produced — see
+/// [`supervise_with_reask`], which asks again, and the engine, which settles the
+/// run on exhaustion. A transport failure is what the *call* returns, before there
+/// is an answer to parse.
+#[must_use]
+pub fn parse_supervisor(text: &str) -> SupervisorOutcome {
+    match parse_supervisor_shape(text) {
+        Ok(outcome) => outcome,
+        Err(problem) => SupervisorOutcome::Unparseable {
+            problem,
+            answer: text.to_string(),
+        },
+    }
+}
+
+/// The two-shape contract itself; the `Err` is what was wrong with the answer.
+fn parse_supervisor_shape(text: &str) -> std::result::Result<SupervisorOutcome, String> {
+    let json = extract_json_object(text).ok_or("not a JSON object")?;
+    let value: serde_json::Value =
+        serde_json::from_str(json).map_err(|e| format!("not valid JSON: {e}"))?;
     let completion = value
         .get("completion")
         .and_then(serde_json::Value::as_bool)
-        .ok_or_else(|| {
-            Error::provider_classified(
-                context,
-                "supervisor response needs boolean `completion`",
-                Protocol,
-            )
-        })?;
+        .ok_or("needs boolean `completion`")?;
     let reason = value
         .get("reason")
         .and_then(serde_json::Value::as_str)
@@ -597,11 +657,9 @@ pub fn parse_supervisor(context: &str, text: &str) -> Result<SupervisorOutcome> 
     let message = value.get("message").and_then(serde_json::Value::as_str);
     if completion {
         if reason.is_empty() || message.is_some() {
-            return Err(Error::provider_classified(
-                context,
-                "completed supervisor response requires non-empty `reason` and forbids `message`",
-                Protocol,
-            ));
+            return Err(
+                "a completed response requires non-empty `reason` and forbids `message`".into(),
+            );
         }
         Ok(SupervisorOutcome::Completed { reason })
     } else {
@@ -621,34 +679,46 @@ pub fn parse_supervisor(context: &str, text: &str) -> Result<SupervisorOutcome> 
     }
 }
 
-/// Ask for one supervisor decision, re-asking while the supervisor judges the work
-/// incomplete but names no next instruction to act on.
+/// Ask for one supervisor decision, re-asking while the answer is unusable: the
+/// supervisor judged the work incomplete but named no next instruction to act on,
+/// or answered in neither documented shape.
 ///
-/// `ask` is given the zero-based attempt number, so a seam that builds its own
-/// prompt can append [`SUPERVISOR_REASK_NOTE`] on a retry. Usage is accumulated
-/// across every attempt, so a re-asked decision still reports what it cost.
+/// `ask` is given the [`Ask`] — the zero-based attempt number and, on a re-ask,
+/// what was unusable about the last answer — so a seam that builds its own prompt
+/// can append the matching correction ([`Ask::note`]). Usage is accumulated across
+/// every attempt, so a re-asked decision still reports what it cost.
 ///
 /// On exhaustion ([`SUPERVISOR_REASK_LIMIT`] re-asks) this returns the last
-/// [`SupervisorOutcome::NoInstruction`] rather than an error, and the engine
+/// unusable outcome rather than an error — [`SupervisorOutcome::NoInstruction`]
+/// or [`SupervisorOutcome::Unparseable`], whichever came last — and the engine
 /// settles the run on the work it has. A dispatch that produced real work must
-/// never be destroyed because its supervisor had nothing to say.
+/// never be destroyed because its supervisor had nothing usable to say.
 ///
 /// # Errors
-/// Whatever `ask` returns: a transport or protocol failure is still fatal.
+/// Whatever `ask` returns, on its first occurrence: a transport failure is still
+/// fatal, because asking a broken provider again only hides that it is broken.
 pub fn supervise_with_reask(
-    mut ask: impl FnMut(u32) -> Result<SupervisorTurn>,
+    mut ask: impl FnMut(Ask) -> Result<SupervisorTurn>,
 ) -> Result<SupervisorTurn> {
     let mut usage = Usage::default();
     let mut unusable = SupervisorOutcome::NoInstruction {
         reason: String::new(),
     };
+    let mut reask = None;
     for attempt in 0..=SUPERVISOR_REASK_LIMIT {
-        let turn = ask(attempt)?;
+        let turn = ask(Ask { attempt, reask })?;
         if let Some(u) = &turn.usage {
             usage.add(u);
         }
         match turn.outcome {
-            SupervisorOutcome::NoInstruction { .. } => unusable = turn.outcome,
+            SupervisorOutcome::NoInstruction { .. } => {
+                reask = Some(Reask::NoInstruction);
+                unusable = turn.outcome;
+            }
+            SupervisorOutcome::Unparseable { .. } => {
+                reask = Some(Reask::Unparseable);
+                unusable = turn.outcome;
+            }
             decided => {
                 return Ok(SupervisorTurn {
                     outcome: decided,
@@ -1213,24 +1283,50 @@ mod tests {
     #[test]
     fn supervisor_parser_enforces_discriminated_shapes() {
         assert!(matches!(
-            parse_supervisor("c", "{\"completion\":true,\"reason\":\"done\"}").unwrap(),
+            parse_supervisor("{\"completion\":true,\"reason\":\"done\"}"),
             SupervisorOutcome::Completed { .. }
         ));
         assert!(matches!(
-            parse_supervisor("c", "{\"completion\":false,\"message\":\"retry\"}").unwrap(),
+            parse_supervisor("{\"completion\":false,\"message\":\"retry\"}"),
             SupervisorOutcome::Continue { .. }
         ));
-        for bad in [
-            "no json",
-            "{bad json}",
-            "{}",
-            "{\"completion\":true}",
-            "{\"completion\":true,\"reason\":\"done\",\"message\":\"x\"}",
+    }
+
+    #[test]
+    fn an_answer_in_neither_shape_is_reported_not_raised() {
+        // It used to be a `Protocol` error on the first occurrence, which failed a
+        // member whose work was finished and committed — under a word that claims
+        // the transport was broken, when the harness had delivered the turn. It is
+        // now an outcome the re-ask loop can act on, carrying what was wrong and
+        // the answer itself, verbatim: a paragraph in place of an object may have
+        // argued a real point, and the settle reason is where it is finally read.
+        for (bad, problem) in [
+            (
+                "I'm checking the committed tree against the amended scope…",
+                "not a JSON object",
+            ),
+            ("{bad json}", "not valid JSON"),
+            ("{}", "needs boolean `completion`"),
+            ("{\"completion\":\"yes\"}", "needs boolean `completion`"),
+            (
+                "{\"completion\":true}",
+                "requires non-empty `reason` and forbids `message`",
+            ),
+            (
+                "{\"completion\":true,\"reason\":\"done\",\"message\":\"x\"}",
+                "requires non-empty `reason` and forbids `message`",
+            ),
         ] {
-            assert_eq!(
-                parse_supervisor("c", bad).unwrap_err().kind(),
-                Some(ProviderErrorKind::Protocol)
-            );
+            match parse_supervisor(bad) {
+                SupervisorOutcome::Unparseable {
+                    problem: got,
+                    answer,
+                } => {
+                    assert!(got.contains(problem), "{bad}: {got}");
+                    assert_eq!(answer, bad, "the answer is carried verbatim");
+                }
+                other => panic!("{bad} should parse to Unparseable, got {other:?}"),
+            }
         }
     }
 
@@ -1246,7 +1342,7 @@ mod tests {
         ] {
             assert!(
                 matches!(
-                    parse_supervisor("c", empty).unwrap(),
+                    parse_supervisor(empty),
                     SupervisorOutcome::NoInstruction { .. }
                 ),
                 "{empty} should parse to NoInstruction"
@@ -1254,22 +1350,22 @@ mod tests {
         }
         assert!(
             matches!(
-                parse_supervisor("c", "{\"completion\":false,\"reason\":\"still failing\"}")
-                    .unwrap(),
+                parse_supervisor("{\"completion\":false,\"reason\":\"still failing\"}"),
                 SupervisorOutcome::NoInstruction { reason } if reason == "still failing"
             ),
             "the supervisor's own reason is carried through"
         );
     }
 
-    /// A supervisor that answers `completion:false` with no `message` for its first
-    /// `blank` attempts, then a usable continue.
-    fn blank_then_continue(blank: u32) -> impl FnMut(u32) -> Result<SupervisorTurn> {
-        move |attempt| {
-            let outcome = if attempt < blank {
-                SupervisorOutcome::NoInstruction {
-                    reason: "not yet".into(),
-                }
+    /// A supervisor whose first `unusable` attempts are answered by `first`, then
+    /// a usable continue.
+    fn unusable_then_continue(
+        unusable: u32,
+        first: impl Fn() -> SupervisorOutcome,
+    ) -> impl FnMut(Ask) -> Result<SupervisorTurn> {
+        move |ask| {
+            let outcome = if ask.attempt < unusable {
+                first()
             } else {
                 SupervisorOutcome::Continue {
                     message: "run the integration suite".into(),
@@ -1286,9 +1382,28 @@ mod tests {
         }
     }
 
+    fn blank() -> SupervisorOutcome {
+        SupervisorOutcome::NoInstruction {
+            reason: "not yet".into(),
+        }
+    }
+
+    fn prose() -> SupervisorOutcome {
+        SupervisorOutcome::Unparseable {
+            problem: "not a JSON object".into(),
+            answer: "I'm checking the committed tree…".into(),
+        }
+    }
+
     #[test]
     fn a_supervisor_with_nothing_to_say_is_asked_again() {
-        let turn = supervise_with_reask(blank_then_continue(SUPERVISOR_REASK_LIMIT)).unwrap();
+        let mut asks = Vec::new();
+        let mut ask = unusable_then_continue(SUPERVISOR_REASK_LIMIT, blank);
+        let turn = supervise_with_reask(|a| {
+            asks.push(a);
+            ask(a)
+        })
+        .unwrap();
         assert!(matches!(
             turn.outcome,
             SupervisorOutcome::Continue { ref message, .. } if message == "run the integration suite"
@@ -1298,6 +1413,40 @@ mod tests {
             turn.usage.unwrap().output_tokens,
             Some(u64::from(SUPERVISOR_REASK_LIMIT) + 1)
         );
+        // The first ask carries no correction; every re-ask names what was unusable.
+        assert_eq!(asks[0].reask, None);
+        assert_eq!(asks[0].note(), "");
+        for re in &asks[1..] {
+            assert_eq!(re.reask, Some(Reask::NoInstruction));
+            assert_eq!(re.note(), SUPERVISOR_REASK_NOTE);
+        }
+    }
+
+    #[test]
+    fn a_supervisor_whose_answer_does_not_parse_is_asked_again() {
+        // The same widening for the answer that used to be fatal on sight: the
+        // re-ask carries the note naming the shape, and the usable answer that
+        // follows is the decision, billed for every attempt it took.
+        let mut asks = Vec::new();
+        let mut ask = unusable_then_continue(SUPERVISOR_REASK_LIMIT, prose);
+        let turn = supervise_with_reask(|a| {
+            asks.push(a);
+            ask(a)
+        })
+        .unwrap();
+        assert!(matches!(
+            turn.outcome,
+            SupervisorOutcome::Continue { ref message, .. } if message == "run the integration suite"
+        ));
+        assert_eq!(
+            turn.usage.unwrap().output_tokens,
+            Some(u64::from(SUPERVISOR_REASK_LIMIT) + 1)
+        );
+        assert_eq!(asks[0].reask, None);
+        for re in &asks[1..] {
+            assert_eq!(re.reask, Some(Reask::Unparseable));
+            assert_eq!(re.note(), SUPERVISOR_UNPARSED_NOTE);
+        }
     }
 
     #[test]
@@ -1322,6 +1471,51 @@ mod tests {
             turn.outcome,
             SupervisorOutcome::NoInstruction { reason } if reason == "nothing to add"
         ));
+    }
+
+    #[test]
+    fn a_supervisor_that_never_parses_settles_instead_of_erroring() {
+        // Bounded, and the ending is the last unparseable answer itself — not an
+        // error, so a consumer tells it from a transport failure, and not
+        // `NoInstruction`, so it tells it from a supervisor with nothing to say.
+        let mut attempts = 0;
+        let turn = supervise_with_reask(|_| {
+            attempts += 1;
+            Ok(SupervisorTurn {
+                outcome: prose(),
+                usage: None,
+            })
+        })
+        .unwrap();
+        assert_eq!(
+            attempts,
+            SUPERVISOR_REASK_LIMIT + 1,
+            "the bound is honoured"
+        );
+        assert_eq!(turn.outcome, prose());
+    }
+
+    #[test]
+    fn one_bound_covers_a_mix_of_unusable_answers() {
+        // The re-asks are one budget for one decision, and each re-ask says what
+        // was wrong with the answer just before it, not the first one.
+        let mut asks = Vec::new();
+        let turn = supervise_with_reask(|a| {
+            asks.push(a);
+            Ok(SupervisorTurn {
+                outcome: if a.attempt == 0 { prose() } else { blank() },
+                usage: None,
+            })
+        })
+        .unwrap();
+        assert_eq!(asks.len() as u32, SUPERVISOR_REASK_LIMIT + 1);
+        assert_eq!(asks[1].reask, Some(Reask::Unparseable));
+        assert_eq!(asks[2].reask, Some(Reask::NoInstruction));
+        assert_eq!(
+            turn.outcome,
+            blank(),
+            "the last unusable answer is the ending"
+        );
     }
 
     #[test]

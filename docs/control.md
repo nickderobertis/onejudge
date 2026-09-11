@@ -215,7 +215,7 @@ judge harness that declares no control mechanism: the supervisor turn is retried
 without the flag, the run reaches its cap, and the agent's address survives a
 refusal that was never about the agent.
 
-## A redirected supervisor turn is asked once more
+## A redirected supervisor turn is asked again, naming the redirect
 
 A redirect has never delivered *into* a running turn. It aborts the turn and
 reopens the next one on the same session with the message as its prompt. On the
@@ -224,16 +224,20 @@ supervisor side it is load-bearing, because that reopened turn's reply is the on
 `parse_supervisor` reads against a two-shape JSON contract, and what comes back
 answers the correction in prose.
 
-So a supervisor turn **that was redirected** — read off oneharness's own
+Any supervisor answer that does not parse is re-asked, bounded by
+`SUPERVISOR_REASK_LIMIT`, and settles the run when the bound is spent
+([contract.md](contract.md)). What a redirect changes is only *what the re-ask
+says*: a supervisor turn **that was redirected** — read off oneharness's own
 `ControlReport::interrupts`, asking `ControlEvent::is_redirected` so a plain stop
-does not count — and whose answer does not parse is asked the question once more,
-with the correction named. **Once, not a budget**: a second unparseable answer
-fails the member exactly as it always did, because at that point the transport is
-broken rather than the turn misaddressed. Both invocations are on the run's usage
-and in `telemetry.attribution`, so a manager reading what a run spent sees the two
-judge turns rather than one — a judge turn silently taken twice is a cost nothing
-else would account for. `a_redirected_supervisor_answer_that_does_not_parse_is_asked_once_more`
-and `a_second_unparseable_redirected_answer_fails_the_member_as_it_always_did`
+does not count — is re-asked with `SUPERVISOR_REDIRECT_NOTE`, which names the
+correction that displaced the question, in place of `SUPERVISOR_UNPARSED_NOTE`.
+It is one bound, not a separate budget, so a supervisor that keeps answering the
+correction is asked the same number of times as one that keeps writing prose.
+Every invocation is on the run's usage and in `telemetry.attribution`, so a manager
+reading what a run spent sees each judge turn rather than one — a judge turn
+silently taken twice is a cost nothing else would account for.
+`a_redirected_supervisor_answer_that_does_not_parse_is_asked_once_more` and
+`a_redirected_supervisor_that_never_answers_the_contract_settles_the_run_bounded`
 drive the pair.
 
 ## Scope
