@@ -85,7 +85,14 @@ and re-export, so onejudge — not its consumers — owns the shape of a judged 
 `telemetry.attribution` is what makes a failure attributable to a **side** (agent
 vs judge) and an **identity** (which harness, which account) without parsing a
 message. `status`, `failure_kind`, and each `fell_through.reason` are oneharness's
-own wire tokens, and `history_id` resolves through `oneharness history show`.
+own wire tokens — `failure_kind` is one of `auth`, `rate_limit`,
+`model_not_found`, `quota`, `tool_deferred`, `session_not_found`,
+`untrusted_directory`, `input_too_large`, `model_mismatch`, passed through
+verbatim from its closed taxonomy — and `history_id` resolves through
+`oneharness history show`. A candidate's `model` is the model *requested*; the
+model the harness itself said it would serve (`observed_model`, the other half
+of a `model_mismatch`) stays on oneharness's own report and history record,
+which onejudge reads typed but does not restate here.
 
 `verdict.value` is a bool for a `boolean` verdict and a number for a `numeric`
 one. `usage` fields are each independently optional — absent means "no signal",

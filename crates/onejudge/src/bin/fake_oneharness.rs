@@ -503,6 +503,7 @@ fn base_result(harness_id: &str) -> RunResult {
         status: Status::Ok,
         prompt: None,
         model: None,
+        observed_model: None,
         exit_code: Some(0),
         duration_ms: Some(30),
         telemetry: None,
@@ -552,6 +553,15 @@ fn fell_through_result(harness_id: &str, reason: FallThroughReason) -> RunResult
             result.failure_kind_source = Some("stderr".into());
         }
     }
+    if reason == FallThroughReason::ModelMismatch {
+        // The refusal oneharness makes when the harness names, on its own
+        // protocol and before any token is spent, a model other than the one
+        // requested: the report carries both halves, the requested `model` and
+        // the served `observed_model`, and they differ — the one shape on which
+        // the two are ever both set and unequal.
+        result.model = Some("gpt-5.5".into());
+        result.observed_model = Some("gpt-5.5-mini".into());
+    }
     result
 }
 
@@ -566,18 +576,16 @@ fn fall_through_reason(token: &str) -> FallThroughReason {
     })
 }
 
-/// oneharness's classified failure for a `[[fail:KIND]]` / fall-through token.
+/// oneharness's classified failure for a `[[fail:KIND]]` / fall-through token,
+/// read through oneharness's own serde spelling like [`fall_through_reason`] —
+/// so every kind the closed taxonomy declares (`model_mismatch` included) is
+/// reachable here without a second copy of the table to fall behind.
 fn failure_kind(token: &str) -> FailureKind {
-    match token {
-        "auth" => FailureKind::Auth,
-        "rate_limit" => FailureKind::RateLimit,
-        "model_not_found" => FailureKind::ModelNotFound,
-        "quota" => FailureKind::Quota,
-        "tool_deferred" => FailureKind::ToolDeferred,
-        other => emit_error(&format!(
-            "`{other}` is not a oneharness failure_kind (the double mirrors the real taxonomy)"
-        )),
-    }
+    serde_json::from_value(serde_json::Value::String(token.to_string())).unwrap_or_else(|_| {
+        emit_error(&format!(
+            "`{token}` is not a oneharness failure_kind (the double mirrors the real taxonomy)"
+        ))
+    })
 }
 
 /// oneharness's terminal status for a `[[status:TOKEN]]` marker.
@@ -637,6 +645,7 @@ fn write_history(path: &str, results: &[RunResult]) {
             variant: result.variant.clone(),
             harness_id: result.harness_id.clone(),
             model: result.model.clone(),
+            observed_model: result.observed_model.clone(),
             prompt: "p".into(),
             permission_mode: PermissionMode::Default,
             status: result.status,

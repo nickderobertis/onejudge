@@ -1356,6 +1356,55 @@ fn a_fallback_chain_advances_past_an_auth_refusal_over_several_identities() {
 }
 
 #[test]
+fn a_fallback_chain_advances_past_a_model_mismatch_refusal_naming_both_models() {
+    // oneharness's third precondition refusal (core 0.13): the harness named, on
+    // its own protocol and before any token was spent, a model other than the one
+    // requested. Its report and its history record both carry the served model as
+    // `observed_model` beside the requested `model`, and the failure is the new
+    // `model_mismatch` kind. onejudge reads both documents over the real
+    // subprocess boundary — through oneharness's own reader for the record, which
+    // drops one it cannot read — and surfaces the token verbatim.
+    let history = scratch_path("model-mismatch-history.jsonl");
+    let provider = fake_oneharness();
+    let engine = Engine::new(&provider, settings().with_session_name("mismatched"));
+    let outcome = engine
+        .run(&Conversation::single_turn(
+            skill_with(&format!(
+                "[[reply:served elsewhere]][[fallback:codex|model-mismatch]][[history:{}]]",
+                history.display()
+            )),
+            "go",
+        ))
+        .expect("the chain settled on a candidate that ran");
+
+    assert_eq!(outcome.transcript.messages[1].content, "served elsewhere");
+    let attribution = agent_attribution(&outcome);
+    assert_eq!(attribution.ran.as_deref(), Some("claude-code"));
+    assert_eq!(attribution.fell_through.len(), 1);
+    assert_eq!(attribution.fell_through[0].harness, "codex");
+    assert_eq!(attribution.fell_through[0].reason, "model-mismatch");
+    assert_eq!(attribution.candidates.len(), 2);
+    let refused = &attribution.candidates[0];
+    assert_eq!(refused.harness_id, "codex");
+    assert_eq!(refused.failure_kind.as_deref(), Some("model_mismatch"));
+    assert_eq!(refused.status, "nonzero");
+    assert!(!refused.ran);
+    // The requested model is attributed; the served one is oneharness's to
+    // report and rides on its own record, which the reader kept intact.
+    assert_eq!(refused.model.as_deref(), Some("gpt-5.5"));
+    assert!(
+        refused.history_id.is_some(),
+        "the refused attempt's record, carrying `observed_model`, was read back"
+    );
+    assert!(attribution.candidates[1].ran);
+    let written = std::fs::read_to_string(&history).expect("the double wrote history");
+    assert!(
+        written.contains("\"observed_model\":\"gpt-5.5-mini\""),
+        "the record names the model the harness said it would serve:\n{written}"
+    );
+}
+
+#[test]
 fn a_fallback_chain_does_not_fall_through_a_task_failure() {
     // The chain stops at the first candidate that actually RAN, whatever came of
     // it. A real task failure there must reach the caller classified — routing

@@ -155,4 +155,53 @@ mod tests {
         );
         std::fs::remove_dir_all(&dir).ok();
     }
+
+    #[test]
+    fn a_refused_record_naming_the_model_it_observed_is_read_back_intact() {
+        // The record oneharness writes for a `model_mismatch` refusal (history
+        // schema `1.8`): `model` is what was asked for, `observed_model` what the
+        // harness said it would serve, and the two differ. Written in oneharness's
+        // own line shape and read back with its own reader, so the field and the
+        // kind both survive the round trip a real run makes.
+        let dir = std::env::temp_dir().join("onejudge-history-model-mismatch");
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join("session.jsonl");
+        let mut record = fixture::record("codex");
+        record.status = oneharness_core::domain::report::Status::Nonzero;
+        record.exit_code = Some(1);
+        record.text = None;
+        record.model = Some("gpt-5.5".into());
+        record.observed_model = Some("gpt-5.5-mini".into());
+        record.failure_kind = Some(oneharness_core::domain::signals::FailureKind::ModelMismatch);
+        let line = oneharness_core::domain::history::HistoryLine::Run(
+            oneharness_core::domain::history::HistoryRunRecord::from_record(&record),
+        );
+        std::fs::write(
+            &path,
+            format!(
+                "{}\n",
+                serde_json::to_string(&line).expect("record serializes")
+            ),
+        )
+        .expect("write history");
+
+        let mut refused = fixture::failed(
+            "codex",
+            oneharness_core::domain::report::Status::Nonzero,
+            Some(oneharness_core::domain::signals::FailureKind::ModelMismatch),
+        );
+        refused.model = Some("gpt-5.5".into());
+        refused.observed_model = Some("gpt-5.5-mini".into());
+        let mut report = with_history(vec![refused]);
+        report.history_file = Some(path.display().to_string());
+        let attempts = read_attempts(&report);
+        assert_eq!(attempts.len(), 1, "oneharness's reader kept the record");
+        assert_eq!(
+            attempts[0].failure_kind,
+            Some(oneharness_core::domain::signals::FailureKind::ModelMismatch)
+        );
+        assert_eq!(attempts[0].model.as_deref(), Some("gpt-5.5"));
+        assert_eq!(attempts[0].observed_model.as_deref(), Some("gpt-5.5-mini"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }

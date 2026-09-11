@@ -33,7 +33,7 @@
             ]
           },
           "failure_kind": {
-            "description": "oneharness's normalized failure reason (`auth`, `rate_limit`,\n`model_not_found`, `quota`, `tool_deferred`), when it classified one.",
+            "description": "oneharness's normalized failure reason (`auth`, `rate_limit`,\n`model_not_found`, `quota`, `tool_deferred`, `session_not_found`,\n`untrusted_directory`, `input_too_large`, `model_mismatch`), when it\nclassified one.",
             "type": [
               "string",
               "null"
@@ -136,7 +136,7 @@
         "type": "object"
       },
       "FellThrough": {
-        "description": "One candidate a fallback chain fell through, with oneharness's reason token\n(`not-installed`, `spawn-error`, `auth`, `quota`, `model-not-found`,\n`rate-limit`).",
+        "description": "One candidate a fallback chain fell through, with oneharness's reason token\n(`not-installed`, `spawn-error`, `auth`, `quota`, `model-not-found`,\n`rate-limit`, `session-not-found`, `untrusted-directory`, `input-too-large`,\n`model-mismatch`).",
         "properties": {
           "harness": {
             "description": "Canonical harness id.",
@@ -873,7 +873,7 @@
             ]
           },
           "failure_kind": {
-            "description": "oneharness's normalized failure reason (`auth`, `rate_limit`,\n`model_not_found`, `quota`, `tool_deferred`), when it classified one.",
+            "description": "oneharness's normalized failure reason (`auth`, `rate_limit`,\n`model_not_found`, `quota`, `tool_deferred`, `session_not_found`,\n`untrusted_directory`, `input_too_large`, `model_mismatch`), when it\nclassified one.",
             "type": [
               "string",
               "null"
@@ -975,7 +975,7 @@
         "type": "object"
       },
       "FellThrough": {
-        "description": "One candidate a fallback chain fell through, with oneharness's reason token\n(`not-installed`, `spawn-error`, `auth`, `quota`, `model-not-found`,\n`rate-limit`).",
+        "description": "One candidate a fallback chain fell through, with oneharness's reason token\n(`not-installed`, `spawn-error`, `auth`, `quota`, `model-not-found`,\n`rate-limit`, `session-not-found`, `untrusted-directory`, `input-too-large`,\n`model-mismatch`).",
         "properties": {
           "harness": {
             "description": "Canonical harness id.",
@@ -1537,6 +1537,25 @@
         "description": "Whether a streaming sink asked to short-circuit the run.",
         "type": "boolean"
       },
+      "supervisor_control": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/ControlAddress"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Where an `oneharness interrupt` process addresses the controllable turn\nthis run's **supervisor** side opened, or `null` when control was not asked\nfor.\n\nA second field rather than a second meaning for [`Report::control`]: the two\nparties run under different configs on different session names, so they are\ndifferent sockets, refusable independently. A reader that has one address\nand assumes the other holds a lever it does not have.\n\nSerialized even when null, and for the reason [`Report::control`] gives."
+      },
+      "supervisor_control_unavailable": {
+        "description": "Why an *asked-for* supervisor-side control channel is missing, when one is.\nThe companion of [`Report::supervisor_control`], exactly as\n`control_unavailable` is of `control`.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
       "telemetry": {
         "anyOf": [
           {
@@ -1654,7 +1673,7 @@
           },
           "control": {
             "default": null,
-            "description": "`oneharness`: ask for a **controllable** agent turn \u2014 the agent-side call\nadds `oneharness run --control`, opening an out-of-band socket a separate\n`oneharness interrupt` process can redirect the in-flight turn through.\nDefault `false`, and `false` changes nothing about the run. The address\nlands on the report's `control` block; onejudge never interrupts anything\nitself. See `docs/control.md`.",
+            "description": "`oneharness`: ask for **controllable** turns \u2014 both parties' calls add\n`oneharness run --control`, opening an out-of-band socket each that a\nseparate `oneharness interrupt` process can redirect the in-flight turn\nthrough. Default `false`, and `false` changes nothing about the run. The\naddresses land on the report's `control` (agent) and `supervisor_control`\n(judge) blocks \u2014 separate sockets, separately refusable; onejudge never\ninterrupts anything itself. See `docs/control.md`.",
             "type": [
               "boolean",
               "null"
