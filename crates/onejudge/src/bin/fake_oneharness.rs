@@ -1146,9 +1146,8 @@ fn supervisor_text(prompt: &str) -> String {
     // what comes back answers the correction — prose, where the contract wants one
     // JSON object. The double answers exactly that, until the re-ask arrives naming
     // what was unusable, so a build that did not re-ask never gets a usable answer.
-    // `[[redirected-always]]` never recovers: the second unparseable answer must
-    // fail the member exactly as it does today, because at that point the transport
-    // is broken rather than the turn misaddressed.
+    // `[[redirected-always]]` never recovers, so the bounded re-ask is spent and
+    // the run settles — never fails: the harness delivered every turn.
     if prompt.contains("[[redirected-always]]")
         || (prompt.contains("[[redirected]]")
             && !prompt.contains("Your previous answer did not parse"))
