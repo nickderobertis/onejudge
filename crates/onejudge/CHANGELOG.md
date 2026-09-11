@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.1](https://github.com/nickderobertis/onejudge/compare/v0.8.0...v0.8.1) - 2026-09-11
+
+### Fixed
+
+- *(deps)* link the oneharness-core that runs a controlled codex turn under its own model, and classify its refusal ([#76](https://github.com/nickderobertis/onejudge/pull/76))
+
 ## [0.8.0](https://github.com/nickderobertis/onejudge/compare/v0.7.0...v0.8.0) - 2026-09-11
 
 ### Fixed
