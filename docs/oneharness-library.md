@@ -7,7 +7,7 @@ expressed as a typed call — **including the invocation itself**. A turn is
 
 The pin is in the workspace manifest; everything below is verified against it.
 The **CLI** floor an operator installs is a different number — currently
-**0.11.0+**, the release that embeds the pinned core — because the two crates
+**0.12.0+**, the release that embeds the pinned core — because the two crates
 version independently. Never read one off the other.
 
 One seam still spawns, and this file records exactly why — so the decision is
@@ -18,7 +18,7 @@ revisitable when oneharness's library surface changes, rather than rediscovered.
 | Concern | Where it now lives |
 | --- | --- |
 | The run report | `oneharness_core::domain::report::{RunReport, RunResult, Status}`, parsed directly — no shadow serde structs declared in onejudge |
-| Failure taxonomy | `oneharness_core::domain::signals::FailureKind`, mapped **totally** onto `ProviderErrorKind`, so a new upstream kind is a compile error here |
+| Failure taxonomy | `oneharness_core::domain::signals::FailureKind`, mapped **totally** onto `ProviderErrorKind`, so a new upstream kind is a compile error here — which is how core 0.13's `model_mismatch` arrived (see below) |
 | Fallback selection | `oneharness_core::domain::report::FallbackReport` — which candidate ran, which were routed around and why |
 | The streamed NDJSON grammar | `oneharness_core::domain::report::RunStreamEnvelope` decides every tagged line |
 | Normalized tool events | `oneharness_core::domain::events::ActionEvent` |
@@ -30,6 +30,23 @@ revisitable when oneharness's library surface changes, rather than rediscovered.
 The e2e double (`onejudge-fake-oneharness`) **builds its report and its history
 lines from those same types and serializes them**, so the suite feeds the real
 reader the document oneharness's own contract produces.
+
+**The precondition refusals, and the model the harness said it would serve.**
+Three of oneharness's failure kinds are refusals the harness makes *before* it
+asks the model, with nothing spent, and a fallback chain falls through each of
+them: `untrusted_directory`, `input_too_large`, and — since `oneharness-core`
+0.13 — `model_mismatch`, where the harness named on its own protocol (codex's
+app-server, on `thread/start` / `thread/resume`) a model other than the one
+requested. That release also put the served model on the report as
+`RunResult::observed_model` and on the history record as
+`HistoryRunRecord::observed_model`, beside the requested `model`; the two differ
+exactly on such a refusal, and the field is `null` on every path that reports
+none. onejudge reads both documents typed and adds no logic over the field —
+oneharness reports it, onejudge parses it — while `classify` maps the kind to
+`ProviderErrorKind::Other` like its two siblings (not `ModelNotFound`: the
+requested model may well exist) and the attribution carries the token
+`model_mismatch` verbatim. The e2e journey is
+`a_fallback_chain_advances_past_a_model_mismatch_refusal_naming_both_models`.
 
 ## The invocation: one engine, two renderings
 

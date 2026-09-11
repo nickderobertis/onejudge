@@ -295,12 +295,20 @@ pub(crate) fn classify(kind: FailureKind) -> ProviderErrorKind {
         // is still runnable — so it stays `Other` rather than borrowing a category
         // that would tell a caller to stop trying.
         FailureKind::SessionNotFound => ProviderErrorKind::Other,
-        // Two refusals the harness makes *before* it asks the model: the working
-        // directory is not one it will act in, and the prompt is past the size it
-        // accepts. Both are real refusals to do the work, and neither is an
-        // environment category onejudge names — retrying elsewhere would not help,
-        // and `Spawn` would be a lie (the harness started fine). They stay `Other`.
-        FailureKind::UntrustedDirectory | FailureKind::InputTooLarge => ProviderErrorKind::Other,
+        // Three refusals the harness makes *before* it asks the model: the working
+        // directory is not one it will act in, the prompt is past the size it
+        // accepts, and the model it named on its own protocol is not the one that
+        // was requested. Each is a real refusal to do the work with nothing spent,
+        // and none is an environment category onejudge names — retrying elsewhere
+        // would not help, and `Spawn` would be a lie (the harness started fine).
+        // A mismatch is not `ModelNotFound` either: the requested model may well
+        // exist, the harness simply said it would serve another, and oneharness
+        // has already fallen through the chain on that answer. They stay `Other`,
+        // with the snake_case token (`model_mismatch`) reaching the attribution
+        // verbatim through `failure_token`.
+        FailureKind::UntrustedDirectory
+        | FailureKind::InputTooLarge
+        | FailureKind::ModelMismatch => ProviderErrorKind::Other,
     }
 }
 
@@ -467,13 +475,15 @@ fn reason_kind(reason: FallThroughReason) -> ProviderErrorKind {
         FallThroughReason::Quota => ProviderErrorKind::Quota,
         FallThroughReason::ModelNotFound => ProviderErrorKind::ModelNotFound,
         FallThroughReason::RateLimit => ProviderErrorKind::RateLimit,
-        // The same three onejudge has no narrower category for as in `classify`:
-        // the session is gone, the directory is untrusted, the input is too big.
+        // The same four onejudge has no narrower category for as in `classify`:
+        // the session is gone, the directory is untrusted, the input is too big,
+        // the harness would have served a model other than the one requested.
         // Each is a candidate that could not start for a reason that says nothing
         // about the environment onejudge would retry in.
         FallThroughReason::SessionNotFound
         | FallThroughReason::UntrustedDirectory
-        | FallThroughReason::InputTooLarge => ProviderErrorKind::Other,
+        | FallThroughReason::InputTooLarge
+        | FallThroughReason::ModelMismatch => ProviderErrorKind::Other,
     }
 }
 
@@ -695,6 +705,42 @@ mod tests {
     }
 
     #[test]
+    fn a_model_mismatch_refusal_is_read_with_both_models_it_names() {
+        // oneharness's third precondition refusal (core 0.13): the harness named,
+        // on its own protocol and before any token was spent, a model other than
+        // the requested one. The report carries both halves — `model` requested,
+        // `observed_model` served — and the chain has already fallen through it.
+        // Read over the serialized document, exactly as a run report arrives.
+        let mut fell = fixture::failed("codex", Status::Nonzero, Some(FailureKind::ModelMismatch));
+        fell.model = Some("gpt-5.5".into());
+        fell.observed_model = Some("gpt-5.5-mini".into());
+        let mut report = fixture::report(vec![fell, fixture::result("claude-code", "done")]);
+        report.fallback = Some(fixture::fallback(
+            Some("claude-code"),
+            &[("codex", FallThroughReason::ModelMismatch)],
+        ));
+
+        let invocation = parse(&report).unwrap();
+        assert_eq!(invocation.reply(), "done");
+        assert_eq!(invocation.ran, Some(1));
+        let refused = &invocation.report.results[0];
+        assert_eq!(refused.failure_kind, Some(FailureKind::ModelMismatch));
+        // The token the attribution surfaces is oneharness's own spelling.
+        assert_eq!(failure_token(FailureKind::ModelMismatch), "model_mismatch");
+        assert_eq!(refused.model.as_deref(), Some("gpt-5.5"));
+        assert_eq!(refused.observed_model.as_deref(), Some("gpt-5.5-mini"));
+
+        // A chain that ends on it is one classified error naming the token, and
+        // the category is the precondition refusals' — never `ModelNotFound`, the
+        // requested model may exist.
+        let mut only = fixture::failed("codex", Status::Nonzero, Some(FailureKind::ModelMismatch));
+        only.error = None;
+        let err = parse(&fixture::report(vec![only])).unwrap_err();
+        assert_eq!(err.kind(), Some(ProviderErrorKind::Other));
+        assert!(err.to_string().contains("model_mismatch"), "{err}");
+    }
+
+    #[test]
     fn a_fallback_chain_over_variants_of_one_harness_picks_the_right_identity() {
         // A chain can list several identities of the SAME harness (an account per
         // variant), so the composed id — not the base harness — selects the turn.
@@ -797,6 +843,7 @@ mod tests {
                 ProviderErrorKind::Other,
             ),
             (FallThroughReason::InputTooLarge, ProviderErrorKind::Other),
+            (FallThroughReason::ModelMismatch, ProviderErrorKind::Other),
         ] {
             assert_eq!(reason_kind(reason), expected, "{reason:?}");
             assert_eq!(
@@ -818,6 +865,7 @@ mod tests {
             (FailureKind::SessionNotFound, ProviderErrorKind::Other),
             (FailureKind::UntrustedDirectory, ProviderErrorKind::Other),
             (FailureKind::InputTooLarge, ProviderErrorKind::Other),
+            (FailureKind::ModelMismatch, ProviderErrorKind::Other),
         ] {
             assert_eq!(classify(kind), expected);
             // The token onejudge surfaces is oneharness's own wire spelling.

@@ -86,7 +86,9 @@ pub struct CandidateAttempt {
     /// Whether this is the candidate that actually ran the turn.
     pub ran: bool,
     /// oneharness's normalized failure reason (`auth`, `rate_limit`,
-    /// `model_not_found`, `quota`, `tool_deferred`), when it classified one.
+    /// `model_not_found`, `quota`, `tool_deferred`, `session_not_found`,
+    /// `untrusted_directory`, `input_too_large`, `model_mismatch`), when it
+    /// classified one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub failure_kind: Option<String>,
     /// Where that reason was read (`stderr`, `stdout`, `config:env_from`).
@@ -115,7 +117,8 @@ pub struct CandidateAttempt {
 
 /// One candidate a fallback chain fell through, with oneharness's reason token
 /// (`not-installed`, `spawn-error`, `auth`, `quota`, `model-not-found`,
-/// `rate-limit`).
+/// `rate-limit`, `session-not-found`, `untrusted-directory`, `input-too-large`,
+/// `model-mismatch`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "sdk-schema", derive(schemars::JsonSchema))]
 pub struct FellThrough {
@@ -407,5 +410,92 @@ mod tests {
         assert_eq!(telemetry.agent.usage, None);
         assert!(telemetry.sessions.is_empty());
         assert_eq!(telemetry.orchestration_ms, 4);
+    }
+
+    /// The `///` block above the first line containing `marker`, past any
+    /// attributes between the two.
+    fn doc_above<'a>(source: &'a str, marker: &str) -> Vec<&'a str> {
+        let lines: Vec<&str> = source.lines().collect();
+        let at = lines
+            .iter()
+            .position(|line| line.contains(marker))
+            .unwrap_or_else(|| panic!("`{marker}` is in telemetry.rs"));
+        let doc: Vec<&str> = lines[..at]
+            .iter()
+            .rev()
+            .skip_while(|line| line.trim_start().starts_with("#["))
+            .take_while(|line| line.trim_start().starts_with("///"))
+            .copied()
+            .collect();
+        assert!(!doc.is_empty(), "`{marker}` carries a doc comment");
+        doc
+    }
+
+    fn names_every(doc: &[&str], tokens: &[&str], what: &str) {
+        let doc = doc.join("\n");
+        for token in tokens {
+            assert!(
+                doc.contains(&format!("`{token}`")),
+                "{what} does not name oneharness's `{token}`; it restates the closed set and \
+                 feeds the published schema description, so add it there:\n{doc}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_restated_failure_kinds_are_oneharnesss_own() {
+        // The doc on `CandidateAttempt::failure_kind` restates oneharness's closed
+        // `FailureKind` token set, and becomes the published schema description
+        // and the SDKs' docstrings. Nothing but this reconciles that copy with the
+        // enum — and it had drifted to 5 of 8 kinds before this gate existed.
+        // `FailureKind::ALL` is upstream's own gated enumeration.
+        let tokens: Vec<&str> = oneharness_core::domain::signals::FailureKind::ALL
+            .iter()
+            .map(|kind| kind.as_str())
+            .collect();
+        names_every(
+            &doc_above(
+                include_str!("telemetry.rs"),
+                "pub failure_kind: Option<String>,",
+            ),
+            &tokens,
+            "`CandidateAttempt::failure_kind`'s doc",
+        );
+        // docs/contract.md spells the same set out for a consumer reading the
+        // report without the crate in hand.
+        let contract: Vec<&str> = include_str!("../../../docs/contract.md").lines().collect();
+        names_every(&contract, &tokens, "docs/contract.md");
+    }
+
+    #[cfg(feature = "sdk-schema")]
+    #[test]
+    fn the_restated_fall_through_reasons_are_oneharnesss_own() {
+        // Same gate for `FellThrough`'s doc over `FallThroughReason`. Upstream
+        // publishes no `ALL` for that enum, but it derives `JsonSchema`, and the
+        // schema's value list is the same closed set serde reads — so the
+        // enumeration is still oneharness's own rather than a third copy here.
+        let schema = serde_json::to_value(schemars::schema_for!(
+            oneharness_core::domain::fallback::FallThroughReason
+        ))
+        .unwrap();
+        let values: Vec<&str> = match (schema.get("enum"), schema.get("oneOf")) {
+            (Some(serde_json::Value::Array(all)), _) => {
+                all.iter().filter_map(serde_json::Value::as_str).collect()
+            }
+            (_, Some(serde_json::Value::Array(all))) => all
+                .iter()
+                .filter_map(|variant| variant.get("const").and_then(serde_json::Value::as_str))
+                .collect(),
+            _ => panic!("FallThroughReason's schema lists its values:\n{schema:#}"),
+        };
+        assert!(
+            values.len() >= 10,
+            "the schema enumerates every reason (core 0.13 declares ten):\n{schema:#}"
+        );
+        names_every(
+            &doc_above(include_str!("telemetry.rs"), "pub struct FellThrough {"),
+            &values,
+            "`FellThrough`'s doc",
+        );
     }
 }
