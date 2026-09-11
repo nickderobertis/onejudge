@@ -621,6 +621,148 @@ fn a_supervisor_that_stays_silent_settles_the_run_on_the_prompt_seam() {
     assert!(settled.contains("cannot say what comes next"), "{settled}");
 }
 
+/// How many judge-side invocations a run paid for, off the telemetry it reports
+/// — the only way a re-ask bound is provable rather than asserted.
+fn judge_invocations(telemetry: &onejudge::Telemetry) -> usize {
+    telemetry
+        .attribution
+        .iter()
+        .filter(|record| record.role == onejudge::TelemetryRole::Judge)
+        .count()
+}
+
+#[test]
+fn a_supervisor_that_argues_in_prose_is_re_asked_and_then_decides() {
+    // The measured defect: a supervisor answered with a substantive paragraph
+    // instead of an object, and the member died on the shape of the turn — over a
+    // finished, committed tree, recorded as a `protocol` failure. Here the judge
+    // side is a real subprocess reporting the turn `ok`, and the double withholds
+    // its decision until the re-ask carries the correction naming what was
+    // unusable and the shape required, so a build that failed on sight, or
+    // re-asked the identical question, never gets the decision.
+    let judge_log = support::scratch_path("prose-once-judge-prompts");
+    let provider = fake_oneharness();
+    let engine = Engine::new(&provider, settings().with_session_name("prose-once"));
+    let outcome = engine
+        .run(&Conversation::multi_turn(
+            skill_with("[[reply:committed the fix]]"),
+            "start",
+            SimulatedUser::new(format!(
+                "A strict reviewer. [[supervisor-prose-once]][[record-prompt:{}]]",
+                judge_log.display()
+            ))
+            .max_turns(2),
+        ))
+        .expect("a supervisor that wrote prose is re-asked, not fatal");
+    assert_eq!(
+        outcome.transcript.assistant_turns(),
+        2,
+        "the corrected decision drove another turn"
+    );
+    assert!(outcome.settled_reason.is_none(), "the run did not settle");
+    assert!(outcome
+        .transcript
+        .messages
+        .iter()
+        .any(|m| m.content == "Fix the stale anchor in docs/cli.md."));
+    // The re-ask told the supervisor its answer was unusable and what shape is
+    // required — the exact note, on the prompt the real subprocess was handed.
+    let prompts = std::fs::read_to_string(&judge_log).unwrap();
+    assert_eq!(
+        prompts
+            .matches(onejudge::SUPERVISOR_UNPARSED_NOTE.trim())
+            .count(),
+        1,
+        "exactly one re-ask, carrying the correction: {prompts}"
+    );
+    // Both invocations are on the run's cost: usage and attribution.
+    let telemetry = outcome
+        .telemetry
+        .as_ref()
+        .expect("a run reports its telemetry");
+    assert_eq!(
+        judge_invocations(telemetry),
+        2,
+        "the first ask and its re-ask; the cap ended the run before a third"
+    );
+    std::fs::remove_file(&judge_log).unwrap();
+}
+
+#[test]
+fn a_supervisor_that_never_parses_settles_the_run_bounded() {
+    // The bound, and the ending when it is spent: the run keeps the work, and the
+    // reason says this case — not a transport failure (the harness delivered every
+    // turn) and not a supervisor with nothing to say — and carries the paragraph
+    // the supervisor kept writing, which is the argument that was never read.
+    let provider = fake_oneharness();
+    let engine = Engine::new(&provider, settings().with_session_name("prose"));
+    let outcome = engine
+        .run(&Conversation::multi_turn(
+            skill_with("[[reply:committed the fix]]"),
+            "start",
+            SimulatedUser::new("A strict reviewer. [[supervisor-prose]]").max_turns(4),
+        ))
+        .expect("the run settles rather than failing");
+    assert_eq!(outcome.transcript.assistant_turns(), 1);
+    assert_eq!(
+        outcome.transcript.messages[1].content, "committed the fix",
+        "the work the agent did is kept"
+    );
+    assert!(outcome.completion_reason.is_none());
+    let settled = outcome.settled_reason.clone().expect("a settle reason");
+    assert!(settled.contains("did not parse"), "{settled}");
+    assert!(settled.contains("not a JSON object"), "{settled}");
+    assert!(
+        settled.contains("the documentation check has one failure"),
+        "the supervisor's argument is carried: {settled}"
+    );
+    assert!(
+        !settled.contains("no next instruction"),
+        "distinguishable from a silent supervisor: {settled}"
+    );
+    // Bounded, and every attempt is a real subprocess that was paid for.
+    let telemetry = outcome
+        .telemetry
+        .as_ref()
+        .expect("a run reports its telemetry");
+    assert_eq!(
+        judge_invocations(telemetry),
+        onejudge::SUPERVISOR_REASK_LIMIT as usize + 1,
+        "one ask plus the bounded re-asks, then the run settles"
+    );
+}
+
+#[test]
+fn a_supervisor_process_failure_is_still_fatal_on_its_first_occurrence() {
+    // The contrast the widening must keep: a judge side whose *process* fails is
+    // a broken provider, and asking it again would only hide that. One
+    // invocation, then the run fails, classified.
+    let judge_log = support::scratch_path("supervisor-exit-judge-prompts");
+    let provider = fake_oneharness();
+    let engine = Engine::new(&provider, settings().with_session_name("sup-exit"));
+    let err = engine
+        .run(&Conversation::multi_turn(
+            skill_with("[[reply:committed the fix]]"),
+            "start",
+            SimulatedUser::new(format!(
+                "A strict reviewer. [[supervisor-exit]][[record-prompt:{}]]",
+                judge_log.display()
+            ))
+            .max_turns(4),
+        ))
+        .expect_err("a supervisor transport failure is fatal, not re-asked");
+    assert_eq!(err.kind(), Some(ProviderErrorKind::Protocol));
+    // A process that exited non-zero reported nothing, so the invocation count is
+    // read off what the subprocess was handed rather than off telemetry.
+    let prompts = std::fs::read_to_string(&judge_log).unwrap();
+    assert_eq!(
+        prompts.matches("=== end of prompt ===").count(),
+        1,
+        "a transport failure is not asked again: {prompts}"
+    );
+    std::fs::remove_file(&judge_log).unwrap();
+}
+
 #[test]
 fn oneharness_process_failure_is_a_protocol_error() {
     let provider = fake_oneharness();
@@ -1964,16 +2106,14 @@ fn a_redirected_supervisor_answer_that_does_not_parse_is_asked_once_more() {
 
     // Journalled, which is the whole of what makes the second invocation
     // accountable: a manager reading usage sees two judge turns, not one.
-    let judge_invocations = report
-        .telemetry
-        .as_ref()
-        .expect("a run reports its telemetry")
-        .attribution
-        .iter()
-        .filter(|record| record.role == onejudge::TelemetryRole::Judge)
-        .count();
     assert_eq!(
-        judge_invocations, 2,
+        judge_invocations(
+            report
+                .telemetry
+                .as_ref()
+                .expect("a run reports its telemetry")
+        ),
+        2,
         "the re-ask is a second judge invocation and has to appear as one"
     );
 
@@ -1983,16 +2123,19 @@ fn a_redirected_supervisor_answer_that_does_not_parse_is_asked_once_more() {
 
 #[cfg(unix)]
 #[test]
-fn a_second_unparseable_redirected_answer_fails_the_member_as_it_always_did() {
-    // The re-ask is once, not a retry budget. A supervisor that still does not
-    // answer the contract after being told what was unusable is a broken transport,
-    // and that has always failed the member loudly.
+fn a_redirected_supervisor_that_never_answers_the_contract_settles_the_run_bounded() {
+    // The redirect re-ask is one case of the bounded re-ask, not a separate
+    // budget: a supervisor that still does not answer the contract after being
+    // told what was unusable is asked SUPERVISOR_REASK_LIMIT times in all, and the
+    // run then settles on the work it has. It used to fail the member here as a
+    // `protocol` failure — a word that claims the transport was broken, when the
+    // harness had delivered every turn.
     let agent_store = support::control_store("ctl-reask-twice-agent");
     let judge_store = support::control_store("ctl-reask-twice-judge");
 
     let provider = fake_oneharness().with_control(true);
     let engine = Engine::new(&provider, settings().with_session_name("run-42"));
-    let error = engine
+    let outcome = engine
         .run(&Conversation::multi_turn(
             Skill::new(
                 "demo",
@@ -2006,25 +2149,25 @@ fn a_second_unparseable_redirected_answer_fails_the_member_as_it_always_did() {
             ))
             .max_turns(2),
         ))
-        .expect_err("a second unparseable answer is a protocol failure, not a settle");
+        .expect("a redirected supervisor that never parses settles the run, it does not fail it");
+    assert_eq!(outcome.transcript.assistant_turns(), 1, "the work is kept");
+    let settled = outcome.settled_reason.clone().expect("a settle reason");
+    assert!(settled.contains("did not parse"), "{settled}");
     assert!(
-        matches!(&error, onejudge::Error::Provider { kind, .. } if *kind == Some(ProviderErrorKind::Protocol)),
-        "the second failure is the transport, classified: {error:?}"
+        settled.contains("taken the correction into account"),
+        "the last answer is carried: {settled}"
     );
 
-    // Once, not a budget — and telemetry is readable after a failure, which is how
-    // the bound is provable rather than asserted: exactly two judge invocations were
-    // paid for before the member failed.
-    let judge_invocations = engine
-        .telemetry()
-        .expect("a failed run still reports what it spent")
-        .attribution
-        .iter()
-        .filter(|record| record.role == onejudge::TelemetryRole::Judge)
-        .count();
+    // Bounded — and telemetry is how the bound is provable rather than asserted:
+    // exactly one ask plus the re-asks were paid for before the run settled.
+    let telemetry = outcome
+        .telemetry
+        .as_ref()
+        .expect("a run reports its telemetry");
     assert_eq!(
-        judge_invocations, 2,
-        "the redirected re-ask is exactly one extra invocation, then the member fails"
+        judge_invocations(telemetry),
+        onejudge::SUPERVISOR_REASK_LIMIT as usize + 1,
+        "the redirected re-ask shares the one bound"
     );
 
     let _ = std::fs::remove_dir_all(&agent_store);

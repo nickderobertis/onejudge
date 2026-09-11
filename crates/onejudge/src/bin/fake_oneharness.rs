@@ -101,10 +101,9 @@
 //! prompt inlines — reports the run's control block carrying one *served
 //! redirection* (oneharness's own `ControlEvent`), and makes the supervisor answer
 //! the correction in prose instead of the question. onejudge must notice the
-//! redirection from the report and ask once more; a build that does not never gets
-//! a parseable answer. `[[redirected-always]]` reports the same redirection and
-//! never recovers, so the *second* unparseable answer is the one that fails the
-//! member.
+//! redirection from the report and re-ask naming it; a build that does not never
+//! gets a parseable answer. `[[redirected-always]]` reports the same redirection
+//! and never recovers, so the bounded re-ask is spent and the run settles.
 //!
 //! **What a party was actually given.** `[[record-prompt:PATH]]` — read from
 //! `--system` on the agent side and from the prompt on the judge side — appends the
@@ -117,6 +116,15 @@
 //! way until the re-ask arrives carrying its correction and then names a real next
 //! instruction — the two halves of the bounded re-ask, driven through the real
 //! judge-side seam.
+//!
+//! **A supervisor with nothing parseable to say.** `[[supervisor-prose]]` answers
+//! every ask with the paragraph a real supervisor wrote in place of an object —
+//! the answer that once failed a member carrying finished work as a `protocol`
+//! failure — and `[[supervisor-prose-once]]` answers that way until the re-ask
+//! arrives carrying the correction naming the shape, then decides. Both from a
+//! turn oneharness reports as `ok`: the harness delivered, the model wrote prose.
+//! `[[supervisor-exit]]` is the contrast — the supervisor *process* fails, which
+//! is a transport failure and must stay fatal on its first occurrence.
 //!
 //! `[[stream-silent-descendant:HANDLE]]` (Unix) models the same contract for a
 //! harness that produces **no output**, which is the case a broken pipe cannot
@@ -259,6 +267,9 @@ fn main() {
         wait_for_path(path, "the [[hold:…]] marker was never released");
     }
 
+    if prompt.contains("completion supervisor") && prompt.contains("[[supervisor-exit]]") {
+        emit_error("deliberate non-zero exit on the supervisor side");
+    }
     let mut ran = if prompt.contains("completion supervisor") {
         ok_result(supervisor_text(&prompt), &prompt)
     } else if prompt.contains("role-playing the USER") {
@@ -1135,9 +1146,8 @@ fn supervisor_text(prompt: &str) -> String {
     // what comes back answers the correction — prose, where the contract wants one
     // JSON object. The double answers exactly that, until the re-ask arrives naming
     // what was unusable, so a build that did not re-ask never gets a usable answer.
-    // `[[redirected-always]]` never recovers: the second unparseable answer must
-    // fail the member exactly as it does today, because at that point the transport
-    // is broken rather than the turn misaddressed.
+    // `[[redirected-always]]` never recovers, so the bounded re-ask is spent and
+    // the run settles — never fails: the harness delivered every turn.
     if prompt.contains("[[redirected-always]]")
         || (prompt.contains("[[redirected]]")
             && !prompt.contains("Your previous answer did not parse"))
@@ -1157,6 +1167,22 @@ fn supervisor_text(prompt: &str) -> String {
     }
     if prompt.contains("[[supervisor-silent-once]]") {
         return "{\"completion\":false,\"message\":\"Run the integration suite too.\",\"reason\":\"corrected\"}".into();
+    }
+    // The supervisor that argues in prose where the contract wants an object — the
+    // measured answer, verbatim in shape. `[[supervisor-prose-once]]` keeps arguing
+    // until the re-ask names what was unusable and where an argument belongs, so
+    // a build that re-asked with the wrong note (or none) never gets the decision.
+    let told_shape = prompt.contains("Your previous answer could not be used");
+    if prompt.contains("[[supervisor-prose]]")
+        || (prompt.contains("[[supervisor-prose-once]]") && !told_shape)
+    {
+        return "I'm checking the committed tree and the exact documentation/test evidence \
+                against the amended scope. The node is not done: the documentation check \
+                has one failure, likely the stale anchor in docs/cli.md."
+            .into();
+    }
+    if prompt.contains("[[supervisor-prose-once]]") {
+        return "{\"completion\":false,\"message\":\"Fix the stale anchor in docs/cli.md.\",\"reason\":\"the documentation check has one failure\"}".into();
     }
     let criterion = prompt
         .split("Completion criterion:\n")

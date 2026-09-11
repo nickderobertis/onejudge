@@ -94,9 +94,9 @@ use crate::provider::{
     build_assessment_prompt, build_assessment_prompt_with_evidence, build_judge_prompt,
     build_judge_prompt_with_evidence, build_supervisor_prompt,
     build_supervisor_prompt_with_evidence, build_user_prompt, latest_or_inline, parse_supervisor,
-    parse_verdict, resolve_evidence_request, supervise_with_reask, Assessment, AssistantTurn,
-    EvidenceContext, JudgeQuery, JudgeVerdict, Provider, SkillRef, SupervisorQuery, SupervisorTurn,
-    UserTurn, SUPERVISOR_REASK_NOTE, SUPERVISOR_REDIRECT_NOTE,
+    parse_verdict, resolve_evidence_request, supervise_with_reask, Ask, Assessment, AssistantTurn,
+    EvidenceContext, JudgeQuery, JudgeVerdict, Provider, Reask, SkillRef, SupervisorOutcome,
+    SupervisorQuery, SupervisorTurn, UserTurn, SUPERVISOR_REASK_LIMIT, SUPERVISOR_REDIRECT_NOTE,
 };
 use crate::spawn::{role_of, SharedSpawnHook, SpawnContext, SpawnedProcess, Spawner};
 use crate::stream::{read_stream, StreamOutcome};
@@ -1227,6 +1227,48 @@ fn judge_side_spec(
     }
 }
 
+impl OneharnessProvider {
+    /// The correction appended to a supervisor re-ask: the note for what was
+    /// unusable about the last answer, except that an unparseable answer from a
+    /// turn that was **redirected** gets [`SUPERVISOR_REDIRECT_NOTE`] instead. A
+    /// redirect ends the turn and reopens the next one on the same session with the
+    /// correction as its prompt, so what came back answered the correction rather
+    /// than the question — a different thing to tell the supervisor than that it
+    /// wrote the wrong shape. Read off oneharness's own report of the last turn,
+    /// never inferred from having opened a socket.
+    fn supervisor_reask_note(&self, ask: Ask) -> &'static str {
+        match ask.reask {
+            Some(Reask::Unparseable) if self.supervisor.redirected.get() => {
+                SUPERVISOR_REDIRECT_NOTE
+            }
+            _ => ask.note(),
+        }
+    }
+
+    /// Parse one supervisor reply, saying on stderr when an unparseable one is
+    /// about to be asked again: that is another judge invocation, on the run's
+    /// usage and telemetry, and an operator watching the run should see why.
+    fn supervisor_outcome(&self, ask: Ask, reply: &str) -> SupervisorOutcome {
+        let outcome = parse_supervisor(reply);
+        if let SupervisorOutcome::Unparseable { problem, .. } = &outcome {
+            if ask.attempt < SUPERVISOR_REASK_LIMIT {
+                let why = if self.supervisor.redirected.get() {
+                    "this supervisor turn was redirected and its answer"
+                } else {
+                    "the supervisor's answer"
+                };
+                eprintln!(
+                    "onejudge: warning — {why} did not parse ({problem}); asking again (re-ask {} \
+                     of {SUPERVISOR_REASK_LIMIT}). That is another judge invocation, on the run's \
+                     usage and telemetry.",
+                    ask.attempt + 1
+                );
+            }
+        }
+        outcome
+    }
+}
+
 impl Provider for OneharnessProvider {
     fn reset_telemetry(&self) {
         self.telemetry.borrow_mut().clear();
@@ -1302,51 +1344,16 @@ impl Provider for OneharnessProvider {
         session: Option<&str>,
     ) -> Result<SupervisorTurn> {
         let base = build_supervisor_prompt(query, messages);
-        supervise_with_reask(|attempt| {
+        supervise_with_reask(|ask| {
             // The re-ask says what was unusable about the last answer; asking the
             // identical question again mostly buys the identical answer.
-            let prompt = if attempt == 0 {
-                base.clone()
-            } else {
-                format!("{base}{SUPERVISOR_REASK_NOTE}")
-            };
+            let prompt = format!("{base}{}", self.supervisor_reask_note(ask));
             let result =
                 self.run_judge_side("supervisor", &prompt, session, Some(query.worktree), true)?;
-            let mut usage = Usage::default();
-            if let Some(u) = &result.usage() {
-                usage.add(u);
-            }
-            let outcome = match parse_supervisor("oneharness:supervisor", &result.reply()) {
-                Ok(outcome) => outcome,
-                // A redirect ends the turn and reopens the next one on the same
-                // session with the correction as its prompt, so what comes back
-                // answers the correction rather than the question. Ask the question
-                // once more — and only once: a second unparseable answer fails the
-                // member exactly as it does today, because at that point the
-                // transport is broken rather than the turn misaddressed.
-                Err(unparsed) if self.supervisor.redirected.get() => {
-                    eprintln!(
-                        "onejudge: warning — this supervisor turn was redirected and its answer \
-                         did not parse ({unparsed}); asking it once more. That is a second judge \
-                         invocation, and both are on the run's usage and telemetry."
-                    );
-                    let retry = self.run_judge_side(
-                        "supervisor",
-                        &format!("{prompt}{SUPERVISOR_REDIRECT_NOTE}"),
-                        session,
-                        Some(query.worktree),
-                        true,
-                    )?;
-                    if let Some(u) = &retry.usage() {
-                        usage.add(u);
-                    }
-                    parse_supervisor("oneharness:supervisor", &retry.reply())?
-                }
-                Err(unparsed) => return Err(unparsed),
-            };
+            let outcome = self.supervisor_outcome(ask, &result.reply());
             Ok(SupervisorTurn {
                 outcome,
-                usage: (!usage.is_empty()).then_some(usage),
+                usage: result.usage(),
             })
         })
     }
@@ -1359,12 +1366,8 @@ impl Provider for OneharnessProvider {
         evidence: EvidenceContext<'_>,
     ) -> Result<SupervisorTurn> {
         let base = build_supervisor_prompt_with_evidence(query, messages, evidence);
-        supervise_with_reask(|attempt| {
-            let mut prompt = if attempt == 0 {
-                base.clone()
-            } else {
-                format!("{base}{SUPERVISOR_REASK_NOTE}")
-            };
+        supervise_with_reask(|ask| {
+            let mut prompt = format!("{base}{}", self.supervisor_reask_note(ask));
             let mut usage = Usage::default();
             for tool_attempt in 0..=crate::provider::EVIDENCE_TOOL_RETRY_LIMIT {
                 let result =
@@ -1399,24 +1402,7 @@ impl Provider for OneharnessProvider {
                     }
                     Ok(None) => {}
                 }
-                let outcome = match parse_supervisor("oneharness:supervisor", &reply) {
-                    Ok(outcome) => outcome,
-                    Err(unparsed) if self.supervisor.redirected.get() => {
-                        eprintln!("onejudge: warning — this supervisor turn was redirected and its answer did not parse ({unparsed}); asking it once more.");
-                        let retry = self.run_judge_side(
-                            "supervisor",
-                            &format!("{prompt}{SUPERVISOR_REDIRECT_NOTE}"),
-                            session,
-                            evidence.worktree,
-                            true,
-                        )?;
-                        if let Some(value) = retry.usage() {
-                            usage.add(&value);
-                        }
-                        parse_supervisor("oneharness:supervisor", &retry.reply())?
-                    }
-                    Err(unparsed) => return Err(unparsed),
-                };
+                let outcome = self.supervisor_outcome(ask, &reply);
                 return Ok(SupervisorTurn {
                     outcome,
                     usage: (!usage.is_empty()).then_some(usage),

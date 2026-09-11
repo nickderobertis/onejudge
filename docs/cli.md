@@ -129,13 +129,14 @@ Completion is decided by **re-judging `done_when` against the final transcript**
 reflects whether the task actually finished. Without a `done_when`, a run is
 "completed" when the loop ended before the cap (the agent declared done, the user
 stopped, or a single-turn run answered once) — with one exception: a **settled**
-run. That is a run whose loop ended on the work it already had, either because the
+run. That is a run whose loop ended on the work it already had: because the
 supervisor judged the work incomplete and then named no next instruction to act on
-(even asked again) or because the exchanges stopped moving — consecutive turns that
-recorded no tool activity and gave the same tiny answer to the same tiny
-instruction. Either way it keeps the work it produced but is reported
-`incomplete — <reason>` and exits `1`, and the reason is on the report as
-`settled_reason` ([contract.md](contract.md)).
+(even asked again), because the supervisor answered in neither documented shape
+(even asked again with the shape restated), or because the exchanges stopped
+moving — consecutive turns that recorded no tool activity and gave the same tiny
+answer to the same tiny instruction. Either way it keeps the work it produced but
+is reported `incomplete — <reason>` and exits `1`, and the reason is on the report
+as `settled_reason` ([contract.md](contract.md)).
 
 ## Config
 

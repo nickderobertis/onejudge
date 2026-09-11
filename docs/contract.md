@@ -108,10 +108,17 @@ assert_eq!(report.schema_version, onejudge::SCHEMA_VERSION);
 At most one of the two is present, and they say different things. A
 `completion_reason` is the supervisor deciding the task is done. A
 `settled_reason` is the loop ending on the work it already had, **without** a
-completion decision, and it has two causes — the text says which:
+completion decision, and it has three causes — the text says which:
 
 * the supervisor judged the work incomplete and then named no next instruction to
-  act on, even when asked again; or
+  act on, even when asked again (`no next instruction`);
+* the supervisor answered in neither documented shape — a paragraph where the
+  contract wants one JSON object — and did again when asked again with the shape
+  restated (`did not parse`). The reason carries what was wrong and the
+  supervisor's last answer verbatim, because a paragraph may have argued a real
+  point and this is where it is finally read. It is *not* a transport failure:
+  the harness delivered the turn, so the run is settled, never failed as
+  `protocol`; or
 * the exchanges themselves stopped moving — `NOOP_SETTLE_LIMIT` consecutive turns
   that recorded no tool activity and gave the same tiny answer to the same tiny
   instruction. Every turn is still counted against `max_turns`; settling only ends
@@ -124,7 +131,9 @@ Neither is a failure, and a run that simply hit `max_turns` carries neither.
 
 The distinction is the point: without it, a supervisor with nothing to say is
 indistinguishable from an agent that could not do the task, and an operator acts
-on the wrong one. See [protocol.md](protocol.md#supervisor--decide-completion-or-produce-the-next-user-turn).
+on the wrong one. The three settle causes, a genuine provider failure (an
+`Error`, and under the CLI a `FailureReport`), and a completion are each
+distinguishable for the same reason. See [protocol.md](protocol.md#supervisor--decide-completion-or-produce-the-next-user-turn).
 
 ## `control` / `supervisor_control` — where a controllable turn is addressed
 

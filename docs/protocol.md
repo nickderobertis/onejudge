@@ -131,7 +131,11 @@ return the same tiny answer to the same tiny instruction end the loop on the wor
 it has, rather than re-prompting a finished task to the turn cap. What onejudge
 never does is hand the agent an empty user turn. A malformed
 response — not one JSON object, a missing `completion`, or a `completed` one
-without a `reason` or carrying a `message` — is still a hard protocol error.
+without a `reason` or carrying a `message` — is still a hard protocol error *on
+this seam*: the party answering here is a program speaking this protocol, and a
+program that breaks it is broken. A *model* answering through the oneharness seam
+is held to the same two shapes but re-asked when it misses them, because the
+turn was delivered and only its shape was wrong ([contract.md](contract.md)).
 
 The transcript carries compact normalized event summaries, not raw tool dumps.
 `worktree` and `history_name` let a backend inspect the full oneharness recording
