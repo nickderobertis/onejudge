@@ -9,12 +9,12 @@
 use std::ops::ControlFlow;
 
 use crate::{
-    Assessment, AssistantTurn, CommandProvider, EvidenceContext, JudgeEntry, JudgePanel,
-    JudgeQuery, JudgeVerdict, Message, OneharnessProvider, Provider, SharedSpawnHook, SkillRef,
-    SupervisorQuery, SupervisorTurn, ToolEvent, UserTurn,
+    Assessment, AssistantTurn, CommandProvider, EvidenceContext, JudgeAbilities, JudgeEntry,
+    JudgePanel, JudgeQuery, JudgeVerdict, LlmlintProvider, Message, OneharnessProvider, Provider,
+    SharedSpawnHook, SkillRef, SupervisorQuery, SupervisorTurn, ToolEvent, UserTurn,
 };
 
-use super::config::ProviderSpec;
+use super::config::{ProviderKind, ProviderSpec};
 use super::CliError;
 
 /// A [`Provider`] whose backend is chosen at runtime from a [`ProviderSpec`].
@@ -29,6 +29,10 @@ pub enum AnyProvider {
     Oneharness(OneharnessProvider),
     /// A custom JSON-lines command backend.
     Command(CommandProvider),
+    /// A judge whose verdict is one `llmlint` run over the worker's tree. Only
+    /// ever built as a judge of a [`AnyProvider::Split`] panel; every agent-side
+    /// call on it is [`crate::Error::Invalid`].
+    Llmlint(LlmlintProvider),
     /// A composed skill-runner + judge-panel backend, dispatched like
     /// [`crate::SplitProvider`].
     Split {
@@ -77,6 +81,24 @@ impl AnyProvider {
                     .map_err(|e| CliError::Config(e.to_string()))?;
                 Ok(AnyProvider::Command(provider))
             }
+            ProviderSpec::Llmlint {
+                bin,
+                config,
+                diff_base,
+                args,
+            } => {
+                // The probe runs here, so an absent `llmlint` is a config error
+                // before any turn — never a judge that silently passes.
+                let mut provider =
+                    LlmlintProvider::new(bin).map_err(|e| CliError::Config(e.to_string()))?;
+                if let Some(config) = config {
+                    provider = provider.with_config(config.clone());
+                }
+                if let Some(base) = diff_base {
+                    provider = provider.with_diff_base(base.clone());
+                }
+                Ok(AnyProvider::Llmlint(provider.with_args(args.clone())))
+            }
             ProviderSpec::Split { skill, judges } => Ok(AnyProvider::Split {
                 skill: Box::new(AnyProvider::build(skill)?),
                 judges: JudgePanel::new(
@@ -87,7 +109,8 @@ impl AnyProvider {
                                 judge.label.clone(),
                                 judge.provider.kind().as_str(),
                                 AnyProvider::build(&judge.provider)?,
-                            ))
+                            )
+                            .with_abilities(abilities_of(judge.provider.kind())))
                         })
                         .collect::<Result<Vec<_>, CliError>>()?,
                 )
@@ -107,10 +130,29 @@ impl AnyProvider {
         match self {
             AnyProvider::Oneharness(p) => AnyProvider::Oneharness(p.with_spawn_hook(hook)),
             AnyProvider::Command(p) => AnyProvider::Command(p.with_spawn_hook(hook)),
+            AnyProvider::Llmlint(p) => AnyProvider::Llmlint(p.with_spawn_hook(hook)),
             AnyProvider::Split { skill, judges } => AnyProvider::Split {
                 skill: Box::new(skill.with_spawn_hook(hook.clone())),
                 judges: judges.map_judges(|judge| judge.with_spawn_hook(hook.clone())),
             },
+        }
+    }
+}
+
+/// Which judge-side operations a judge of `kind` takes part in. An `llmlint`
+/// judge decides and answers boolean judgements only — it scores no number,
+/// writes no prose and plays no user — so the panel leaves it out of those
+/// rather than reaching an operation it refuses. Every other kind has every
+/// ability.
+fn abilities_of(kind: ProviderKind) -> JudgeAbilities {
+    match kind {
+        ProviderKind::Llmlint => JudgeAbilities {
+            numeric: false,
+            prose: false,
+            user: false,
+        },
+        ProviderKind::Oneharness | ProviderKind::Command | ProviderKind::Split => {
+            JudgeAbilities::default()
         }
     }
 }
@@ -123,6 +165,7 @@ impl Provider for AnyProvider {
         match self {
             AnyProvider::Oneharness(p) => p.reset_telemetry(),
             AnyProvider::Command(p) => p.reset_telemetry(),
+            AnyProvider::Llmlint(p) => p.reset_telemetry(),
             AnyProvider::Split { skill, judges } => {
                 skill.reset_telemetry();
                 judges.reset_telemetry();
@@ -134,6 +177,7 @@ impl Provider for AnyProvider {
         match self {
             AnyProvider::Oneharness(p) => p.invocation_telemetry(),
             AnyProvider::Command(p) => p.invocation_telemetry(),
+            AnyProvider::Llmlint(p) => p.invocation_telemetry(),
             AnyProvider::Split { skill, judges } => {
                 let mut records = skill.invocation_telemetry();
                 records.extend(judges.invocation_telemetry());
@@ -146,6 +190,7 @@ impl Provider for AnyProvider {
         match self {
             AnyProvider::Oneharness(p) => p.spawned_processes(),
             AnyProvider::Command(p) => p.spawned_processes(),
+            AnyProvider::Llmlint(p) => p.spawned_processes(),
             AnyProvider::Split { skill, judges } => {
                 let mut records = skill.spawned_processes();
                 records.extend(judges.spawned_processes());
@@ -158,6 +203,7 @@ impl Provider for AnyProvider {
         match self {
             AnyProvider::Oneharness(p) => p.supervisor_control(),
             AnyProvider::Command(p) => p.supervisor_control(),
+            AnyProvider::Llmlint(p) => p.supervisor_control(),
             AnyProvider::Split { judges, .. } => judges.supervisor_control(),
         }
     }
@@ -166,6 +212,7 @@ impl Provider for AnyProvider {
         match self {
             AnyProvider::Oneharness(p) => p.take_judge_decisions(),
             AnyProvider::Command(p) => p.take_judge_decisions(),
+            AnyProvider::Llmlint(p) => p.take_judge_decisions(),
             AnyProvider::Split { judges, .. } => judges.take_judge_decisions(),
         }
     }
@@ -176,6 +223,7 @@ impl Provider for AnyProvider {
         match self {
             AnyProvider::Oneharness(p) => p.control(),
             AnyProvider::Command(p) => p.control(),
+            AnyProvider::Llmlint(p) => p.control(),
             AnyProvider::Split { skill, .. } => skill.control(),
         }
     }
@@ -189,6 +237,7 @@ impl Provider for AnyProvider {
         match self {
             AnyProvider::Oneharness(p) => p.respond(skill, messages, session),
             AnyProvider::Command(p) => p.respond(skill, messages, session),
+            AnyProvider::Llmlint(p) => p.respond(skill, messages, session),
             AnyProvider::Split { skill: s, .. } => s.respond(skill, messages, session),
         }
     }
@@ -203,6 +252,7 @@ impl Provider for AnyProvider {
         match self {
             AnyProvider::Oneharness(p) => p.respond_streaming(skill, messages, session, on_event),
             AnyProvider::Command(p) => p.respond_streaming(skill, messages, session, on_event),
+            AnyProvider::Llmlint(p) => p.respond_streaming(skill, messages, session, on_event),
             AnyProvider::Split { skill: s, .. } => {
                 s.respond_streaming(skill, messages, session, on_event)
             }
@@ -218,6 +268,7 @@ impl Provider for AnyProvider {
         match self {
             AnyProvider::Oneharness(p) => p.simulate_user(persona, messages, session),
             AnyProvider::Command(p) => p.simulate_user(persona, messages, session),
+            AnyProvider::Llmlint(p) => p.simulate_user(persona, messages, session),
             AnyProvider::Split { judges, .. } => judges.simulate_user(persona, messages, session),
         }
     }
@@ -230,6 +281,7 @@ impl Provider for AnyProvider {
         match self {
             AnyProvider::Oneharness(p) => p.supervise(query, messages, session),
             AnyProvider::Command(p) => p.supervise(query, messages, session),
+            AnyProvider::Llmlint(p) => p.supervise(query, messages, session),
             AnyProvider::Split { judges, .. } => judges.supervise(query, messages, session),
         }
     }
@@ -247,6 +299,9 @@ impl Provider for AnyProvider {
             AnyProvider::Command(p) => {
                 p.supervise_with_evidence(query, messages, session, evidence)
             }
+            AnyProvider::Llmlint(p) => {
+                p.supervise_with_evidence(query, messages, session, evidence)
+            }
             AnyProvider::Split { judges, .. } => {
                 judges.supervise_with_evidence(query, messages, session, evidence)
             }
@@ -257,6 +312,7 @@ impl Provider for AnyProvider {
         match self {
             AnyProvider::Oneharness(p) => p.judge(query, messages),
             AnyProvider::Command(p) => p.judge(query, messages),
+            AnyProvider::Llmlint(p) => p.judge(query, messages),
             AnyProvider::Split { judges, .. } => judges.judge(query, messages),
         }
     }
@@ -269,6 +325,7 @@ impl Provider for AnyProvider {
         match self {
             AnyProvider::Oneharness(p) => p.judge_with_evidence(query, messages, evidence),
             AnyProvider::Command(p) => p.judge_with_evidence(query, messages, evidence),
+            AnyProvider::Llmlint(p) => p.judge_with_evidence(query, messages, evidence),
             AnyProvider::Split { judges, .. } => {
                 judges.judge_with_evidence(query, messages, evidence)
             }
@@ -279,6 +336,7 @@ impl Provider for AnyProvider {
         match self {
             AnyProvider::Oneharness(p) => p.assess(prompt, messages),
             AnyProvider::Command(p) => p.assess(prompt, messages),
+            AnyProvider::Llmlint(p) => p.assess(prompt, messages),
             AnyProvider::Split { judges, .. } => judges.assess(prompt, messages),
         }
     }
@@ -291,6 +349,7 @@ impl Provider for AnyProvider {
         match self {
             AnyProvider::Oneharness(p) => p.assess_with_evidence(prompt, messages, evidence),
             AnyProvider::Command(p) => p.assess_with_evidence(prompt, messages, evidence),
+            AnyProvider::Llmlint(p) => p.assess_with_evidence(prompt, messages, evidence),
             AnyProvider::Split { judges, .. } => {
                 judges.assess_with_evidence(prompt, messages, evidence)
             }

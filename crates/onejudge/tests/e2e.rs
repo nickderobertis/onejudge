@@ -15,9 +15,9 @@ use std::ops::ControlFlow;
 
 use onejudge::{
     CommandProvider, Conversation, Decision, Engine, EvidenceContext, JudgeDecision, JudgeEntry,
-    JudgeKind, JudgePanel, JudgeQuery, JudgeValue, JudgedTurn, NamedVerdict, Observation,
-    OneharnessProvider, Provider, ProviderErrorKind, Role, Settings, SimulatedUser, Skill,
-    SplitProvider, ToolQuery, Usage, SCHEMA_VERSION,
+    JudgeKind, JudgePanel, JudgeQuery, JudgeValue, JudgedTurn, LlmlintProvider, NamedVerdict,
+    Observation, OneharnessProvider, Provider, ProviderErrorKind, Role, Settings, SimulatedUser,
+    Skill, SplitProvider, ToolQuery, Usage, SCHEMA_VERSION,
 };
 
 mod support;
@@ -1744,6 +1744,441 @@ fn a_panel_conjoins_boolean_verdicts_and_stacks_assessments_under_headers() {
         "## Judge `a` (command)\n\nAssessment for `follow-ups`.\n\n\
          ## Judge `b` (command)\n\nAssessment for `follow-ups`."
     );
+}
+
+// --- llmlint judge journeys --------------------------------------------------
+//
+// `LlmlintProvider` meets llmlint at the process boundary only, so the double
+// here is a stand-in for the `llmlint` CLI itself (`onejudge-fake-llmlint`),
+// scripted through the environment this test process hands it: the exit code
+// per run, what it writes, and where to record the argv it was given. Every
+// journey runs the real engine over that real subprocess; the only thing faked
+// is llmlint's own verdict.
+
+/// The built fake-llmlint double's path.
+fn fake_llmlint_bin() -> &'static str {
+    env!("CARGO_BIN_EXE_onejudge-fake-llmlint")
+}
+
+/// Script the double for this test process: `exits` is its per-run outcome list
+/// (`docs` on the double), and the returned path is where it records its argv.
+fn script_llmlint(name: &str, exits: &str) -> std::path::PathBuf {
+    let argv = scratch_path(&format!("llmlint-{name}.argv.jsonl"));
+    std::env::set_var("ONEJUDGE_FAKE_LLMLINT_ARGV", &argv);
+    std::env::set_var("ONEJUDGE_FAKE_LLMLINT_EXIT", exits);
+    std::env::remove_var("ONEJUDGE_FAKE_LLMLINT_STDOUT");
+    std::env::remove_var("ONEJUDGE_FAKE_LLMLINT_STDERR");
+    argv
+}
+
+/// An [`LlmlintProvider`] over the double, probed on construction like any other.
+fn fake_llmlint() -> LlmlintProvider {
+    LlmlintProvider::new(fake_llmlint_bin()).unwrap()
+}
+
+/// The argv lines the double recorded at `path`, in the order they arrived.
+fn recorded_argv(path: &std::path::Path) -> Vec<Vec<String>> {
+    std::fs::read_to_string(path)
+        .expect("the double recorded its argv")
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect()
+}
+
+/// The argv the contract spells for one `lint` run over `worktree`, before any
+/// `-c` / `--diff` / extra arguments.
+fn lint_argv(worktree: &str) -> Vec<String> {
+    [
+        "lint",
+        "--cwd",
+        worktree,
+        "--format",
+        "human",
+        "--color",
+        "never",
+        "--progress",
+        "never",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect()
+}
+
+/// The report the double writes for a failing run (its module doc), as the
+/// provider hands it on: trailing whitespace trimmed, nothing else touched.
+const FAILING_REPORT: &str = "\
+FAIL  scripts_are_quiet_on_success
+  scripts/release-probe.sh:12: prints a banner on every successful run
+  rationale: a script that succeeds should print one line or nothing
+1 failed, 3 passed, 0 skipped, 0 not relevant";
+
+const FAILING_SUMMARY: &str = "1 failed, 3 passed, 0 skipped, 0 not relevant";
+const CLEAN_SUMMARY: &str = "0 failed, 4 passed, 0 skipped, 0 not relevant";
+
+#[test]
+fn an_llmlint_judge_with_failing_rules_hands_the_worker_its_report_verbatim() {
+    // Two llmlint judges on one worker — one bare, one carrying a config, a
+    // comparison base and extra arguments — both of whose runs fail. The worker's
+    // next user turn is each judge's report verbatim under its header, and the
+    // argv each run was given is exactly what the contract spells.
+    let argv = script_llmlint("failing", "1");
+    let split = SplitProvider::new(
+        echo(),
+        JudgePanel::new(vec![
+            JudgeEntry::new("lint", "llmlint", fake_llmlint()),
+            JudgeEntry::new(
+                "strict",
+                "llmlint",
+                fake_llmlint()
+                    .with_config("llmlint.strict.yml")
+                    .with_diff_base("origin/main")
+                    .with_args(["--rule", "scripts_are_quiet_on_success"]),
+            ),
+        ])
+        .unwrap(),
+    );
+    let engine = Engine::new(&split, settings());
+    let outcome = engine
+        .run(&Conversation::multi_turn(
+            skill_with("Be helpful."),
+            "please commit",
+            SimulatedUser::new("A tester.").max_turns(2),
+        ))
+        .unwrap();
+
+    let expected = format!(
+        "## Judge `lint` (llmlint)\n\n{FAILING_REPORT}\n\n\
+         ## Judge `strict` (llmlint)\n\n{FAILING_REPORT}"
+    );
+    assert_eq!(outcome.transcript.messages[2].role, Role::User);
+    assert_eq!(outcome.transcript.messages[2].content, expected);
+    // …and the worker really was handed it.
+    assert_eq!(
+        outcome.transcript.messages[3].content,
+        format!("echo: {expected}")
+    );
+    let kinds_and_decisions: Vec<(&str, &str, Decision, &str)> = outcome.judge_decisions[0]
+        .decisions
+        .iter()
+        .map(|d| {
+            (
+                d.judge.as_str(),
+                d.kind.as_str(),
+                d.decision,
+                d.reason.as_str(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        kinds_and_decisions,
+        [
+            ("lint", "llmlint", Decision::Continue, FAILING_SUMMARY),
+            ("strict", "llmlint", Decision::Continue, FAILING_SUMMARY),
+        ]
+    );
+
+    // The argv: one `--version` probe per provider built, then one `lint` run per
+    // judge for the one supervisor decision. The two judges run at the same time,
+    // so their lines land in either order.
+    let mut recorded = recorded_argv(&argv);
+    recorded.sort();
+    let mut strict = lint_argv("/skills/demo");
+    strict.extend(
+        [
+            "-c",
+            "llmlint.strict.yml",
+            "--diff",
+            "--diff-base",
+            "origin/main",
+            "--rule",
+            "scripts_are_quiet_on_success",
+        ]
+        .map(str::to_string),
+    );
+    let mut expected_argv = vec![
+        vec!["--version".to_string()],
+        vec!["--version".to_string()],
+        lint_argv("/skills/demo"),
+        strict,
+    ];
+    expected_argv.sort();
+    assert_eq!(recorded, expected_argv);
+
+    // One judge-side process record per run, under the judge that spawned it,
+    // and one judge-side telemetry record per run carrying its wall time.
+    let judge_processes: Vec<(&str, &str, Option<&str>)> = outcome
+        .processes
+        .iter()
+        .filter(|p| p.role == onejudge::TelemetryRole::Judge)
+        .map(|p| (p.op.as_str(), p.program.as_str(), p.judge.as_deref()))
+        .collect();
+    assert_eq!(
+        judge_processes,
+        [
+            ("supervise", fake_llmlint_bin(), Some("lint")),
+            ("supervise", fake_llmlint_bin(), Some("strict")),
+        ]
+    );
+    let telemetry = outcome.telemetry.expect("telemetry");
+    assert!(telemetry.judge.tool_ms.is_some(), "{telemetry:#?}");
+    assert!(telemetry
+        .attribution
+        .iter()
+        .all(|a| a.role == onejudge::TelemetryRole::Agent));
+}
+
+#[test]
+fn an_llmlint_judge_whose_rules_all_hold_completes_the_run_with_the_summary_line() {
+    let argv = script_llmlint("clean", "0");
+    let split = SplitProvider::new(echo(), fake_llmlint());
+    let engine = Engine::new(&split, settings());
+    let outcome = engine
+        .run(&Conversation::multi_turn(
+            skill_with("Be helpful."),
+            "please commit",
+            SimulatedUser::new("A tester.").max_turns(3),
+        ))
+        .unwrap();
+    assert_eq!(outcome.transcript.assistant_turns(), 1);
+    assert_eq!(outcome.completion_reason.as_deref(), Some(CLEAN_SUMMARY));
+    // The boolean re-judge over the finished transcript is the same run again,
+    // and answers `true` with the same reason.
+    let verdict = engine
+        .judge_boolean("the tree is lint-clean", &outcome.transcript)
+        .unwrap();
+    assert_eq!(verdict.value, JudgeValue::Bool(true));
+    assert_eq!(verdict.reason, CLEAN_SUMMARY);
+    assert_eq!(
+        recorded_argv(&argv),
+        [
+            vec!["--version".to_string()],
+            lint_argv("/skills/demo"),
+            lint_argv("/skills/demo"),
+        ]
+    );
+    let ops: Vec<String> = engine
+        .spawned_processes()
+        .into_iter()
+        .map(|p| p.op)
+        .collect();
+    assert_eq!(ops, ["respond", "supervise", "judge"]);
+}
+
+#[test]
+fn an_llmlint_run_that_could_not_complete_fails_the_turn_and_is_never_a_verdict() {
+    script_llmlint("incomplete", "2");
+    let split = SplitProvider::new(echo(), fake_llmlint());
+    let engine = Engine::new(&split, settings());
+    let err = engine
+        .run(&Conversation::multi_turn(
+            skill_with("Be helpful."),
+            "please commit",
+            SimulatedUser::new("A tester.").max_turns(3),
+        ))
+        .unwrap_err();
+    assert_eq!(err.kind(), Some(ProviderErrorKind::Other), "{err}");
+    let onejudge::Error::Provider {
+        context, message, ..
+    } = &err
+    else {
+        panic!("a provider error: {err}");
+    };
+    assert_eq!(context, "supervise");
+    assert!(
+        message
+            .starts_with("llmlint could not complete (exit 2): error: could not resolve harness"),
+        "{message}"
+    );
+    // The failed run still records the judge-side process and its wall time.
+    assert_eq!(
+        engine
+            .spawned_processes()
+            .into_iter()
+            .map(|p| p.op)
+            .collect::<Vec<_>>(),
+        ["respond", "supervise"]
+    );
+    assert!(engine
+        .telemetry()
+        .expect("telemetry")
+        .judge
+        .tool_ms
+        .is_some());
+}
+
+#[test]
+fn an_llmlint_run_that_exits_with_any_other_code_is_the_same_classified_error() {
+    script_llmlint("exit-7", "7");
+    let provider = fake_llmlint();
+    let err = provider
+        .judge_with_evidence(
+            &JudgeQuery {
+                kind: JudgeKind::Boolean,
+                criterion: "lint-clean",
+                scale: None,
+            },
+            &[],
+            EvidenceContext {
+                worktree: Some("/skills/demo"),
+                history_files: &[],
+            },
+        )
+        .unwrap_err();
+    assert_eq!(err.kind(), Some(ProviderErrorKind::Other), "{err}");
+    assert!(
+        err.to_string()
+            .contains("provider error (judge): llmlint could not complete (exit 7)"),
+        "{err}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn an_llmlint_run_that_dies_by_signal_is_the_same_classified_error() {
+    script_llmlint("signal", "signal");
+    let split = SplitProvider::new(echo(), fake_llmlint());
+    let engine = Engine::new(&split, settings());
+    let err = engine
+        .run(&Conversation::multi_turn(
+            skill_with("Be helpful."),
+            "please commit",
+            SimulatedUser::new("A tester.").max_turns(3),
+        ))
+        .unwrap_err();
+    assert_eq!(err.kind(), Some(ProviderErrorKind::Other), "{err}");
+    let text = err.to_string();
+    assert!(
+        text.contains("llmlint could not complete (signal"),
+        "{text}"
+    );
+}
+
+#[test]
+fn an_llmlint_run_with_failing_rules_but_no_report_is_a_protocol_error() {
+    script_llmlint("no-report", "1");
+    std::env::set_var("ONEJUDGE_FAKE_LLMLINT_STDOUT", "none");
+    let split = SplitProvider::new(echo(), fake_llmlint());
+    let engine = Engine::new(&split, settings());
+    let err = engine
+        .run(&Conversation::multi_turn(
+            skill_with("Be helpful."),
+            "please commit",
+            SimulatedUser::new("A tester.").max_turns(3),
+        ))
+        .unwrap_err();
+    assert_eq!(err.kind(), Some(ProviderErrorKind::Protocol), "{err}");
+    assert!(err.to_string().contains("exited 1"), "{err}");
+
+    // A clean exit that wrote nothing is the same violation: there is no summary
+    // line to complete the run on, and a vacuous pass is never minted for it.
+    std::env::set_var("ONEJUDGE_FAKE_LLMLINT_EXIT", "0");
+    let err = engine
+        .run(&Conversation::multi_turn(
+            skill_with("Be helpful."),
+            "please commit",
+            SimulatedUser::new("A tester.").max_turns(3),
+        ))
+        .unwrap_err();
+    assert_eq!(err.kind(), Some(ProviderErrorKind::Protocol), "{err}");
+    assert!(err.to_string().contains("exited 0"), "{err}");
+}
+
+#[test]
+fn an_llmlint_judge_refuses_every_operation_a_lint_run_cannot_answer() {
+    // Through the public `Provider` trait directly: the config layer keeps the
+    // engine from reaching these, and this is what proves each one refuses
+    // rather than vacuously passing if something ever did.
+    script_llmlint("refusals", "0");
+    let provider = fake_llmlint();
+    let skill = onejudge::SkillRef {
+        name: "demo",
+        dir: "/skills/demo",
+        instructions: "Be helpful.",
+    };
+    let invalid = |err: onejudge::Error| {
+        assert!(matches!(err, onejudge::Error::Invalid(_)), "{err}");
+        assert!(err.to_string().contains("llmlint judge"), "{err}");
+    };
+    invalid(provider.respond(&skill, &[], None).unwrap_err());
+    invalid(
+        provider
+            .respond_streaming(&skill, &[], None, &mut |_| ControlFlow::Continue(()))
+            .unwrap_err(),
+    );
+    invalid(provider.simulate_user("A tester.", &[], None).unwrap_err());
+    invalid(provider.assess("follow-ups", &[]).unwrap_err());
+    invalid(
+        provider
+            .judge_with_evidence(
+                &JudgeQuery {
+                    kind: JudgeKind::Numeric,
+                    criterion: "readable",
+                    scale: Some((1.0, 5.0)),
+                },
+                &[],
+                EvidenceContext {
+                    worktree: Some("/skills/demo"),
+                    history_files: &[],
+                },
+            )
+            .unwrap_err(),
+    );
+    // A boolean judgement with no worktree to lint is refused too.
+    let err = provider
+        .judge(
+            &JudgeQuery {
+                kind: JudgeKind::Boolean,
+                criterion: "lint-clean",
+                scale: None,
+            },
+            &[],
+        )
+        .unwrap_err();
+    assert!(matches!(err, onejudge::Error::Invalid(_)), "{err}");
+    assert!(err.to_string().contains("worktree"), "{err}");
+    // None of the refusals ran llmlint.
+    assert!(provider.spawned_processes().is_empty());
+    assert!(provider.invocation_telemetry().is_empty());
+}
+
+#[test]
+fn an_executable_that_is_not_llmlint_is_refused_where_the_provider_is_built() {
+    script_llmlint("bad-version", "0");
+    std::env::set_var("ONEJUDGE_FAKE_LLMLINT_VERSION_EXIT", "2");
+    let err = LlmlintProvider::new(fake_llmlint_bin()).unwrap_err();
+    std::env::remove_var("ONEJUDGE_FAKE_LLMLINT_VERSION_EXIT");
+    assert_eq!(err.kind(), Some(ProviderErrorKind::Spawn), "{err}");
+    let text = err.to_string();
+    assert!(text.contains(fake_llmlint_bin()), "{text}");
+    assert!(text.contains("`bin`"), "{text}");
+    assert!(text.contains("--version"), "{text}");
+}
+
+#[cfg(unix)]
+#[test]
+fn an_embedders_spawn_hook_reaches_a_running_llmlint() {
+    script_llmlint("grouped", "0");
+    let hook = std::sync::Arc::new(OwnedProcessGroups::default());
+    let split = SplitProvider::new(echo(), fake_llmlint().with_spawn_hook(hook.clone()));
+    let engine = Engine::new(&split, settings());
+    let outcome = engine
+        .run(&Conversation::multi_turn(
+            skill_with("Be helpful."),
+            "please commit",
+            SimulatedUser::new("A tester.").max_turns(3),
+        ))
+        .unwrap();
+    let lint = outcome
+        .processes
+        .iter()
+        .find(|p| p.op == "supervise")
+        .expect("the lint run is on the record");
+    assert_eq!(lint.program, fake_llmlint_bin());
+    assert_eq!(
+        lint.group.as_deref(),
+        Some(format!("pgid:{}", lint.pid).as_str())
+    );
+    assert_eq!(hook.groups.lock().unwrap().as_slice(), [lint.pid]);
 }
 
 // --- The versioned Report contract, assembled from a real run --------------
