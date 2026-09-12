@@ -1106,6 +1106,8 @@ fn invocation_telemetry(role: TelemetryRole, invocation: &Invocation) -> Invocat
             .unwrap_or_default(),
         candidates,
         history_file: report.history_file.clone(),
+        // A backend never knows which judge of a panel it is; the panel stamps it.
+        judge: None,
     }
 }
 

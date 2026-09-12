@@ -20,7 +20,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 
 use crate::{Engine, JudgeKind, JudgeValue, NamedVerdict, Observation, Report, StreamEvent, Usage};
 
-pub use config::{Config, Eval, EvalKind, Overrides, Plan, ProviderKind, ProviderSpec};
+pub use config::{Config, Eval, EvalKind, JudgeSpec, Overrides, Plan, ProviderKind, ProviderSpec};
 pub use provider::AnyProvider;
 
 /// The default config filename, looked up in the working directory when `run` is
@@ -540,6 +540,11 @@ pub struct RunFailure {
     /// group each was placed in — what a caller cleaning up after the failure needs
     /// to name. Empty when nothing was spawned.
     pub processes: Vec<crate::SpawnedProcess>,
+    /// What each judge of a panel decided on each supervisor turn before the
+    /// failure — including the turn that failed, with the judge that failed
+    /// recorded as `error` beside the ones that decided. Empty for a bare
+    /// provider.
+    pub judge_decisions: Vec<crate::JudgedTurn>,
 }
 
 impl From<CliError> for Box<RunFailure> {
@@ -548,6 +553,7 @@ impl From<CliError> for Box<RunFailure> {
             error,
             telemetry: None,
             processes: Vec::new(),
+            judge_decisions: Vec::new(),
         })
     }
 }
@@ -824,6 +830,7 @@ fn execute(
             error,
             telemetry: engine.telemetry(),
             processes: engine.spawned_processes(),
+            judge_decisions: engine.judge_decisions(),
         })
     })
 }
@@ -850,10 +857,7 @@ pub fn exit_code(summary: &RunSummary) -> i32 {
 pub fn render_human(summary: &RunSummary) -> String {
     let mut out = String::new();
     out.push_str("=== Conversation ===\n");
-    out.push_str(&crate::render_transcript(
-        &summary.report.transcript.messages,
-        true,
-    ));
+    out.push_str(&render_conversation(&summary.report));
     out.push_str("\n\n=== Result ===\n");
 
     let status = if summary.completed {
@@ -899,6 +903,48 @@ pub fn render_human(summary: &RunSummary) -> String {
         out.push_str("\n=== Assessment ===\n");
         out.push_str(assessment);
         out.push('\n');
+    }
+    out
+}
+
+/// The conversation as [`render_transcript`](crate::render_transcript) renders
+/// it, with each judge's decision printed beside the supervisor turn it belongs
+/// to — directly under the assistant turn that turn judged, before the next user
+/// message, so a reader sees what each judge said at the point it said it. A run
+/// judged by a bare provider records no decision and renders exactly as before.
+fn render_conversation(report: &Report) -> String {
+    let mut out = String::new();
+    let mut assistant_turn = 0;
+    for (i, message) in report.transcript.messages.iter().enumerate() {
+        if i > 0 {
+            out.push('\n');
+        }
+        out.push_str(&crate::render_transcript(
+            std::slice::from_ref(message),
+            true,
+        ));
+        if message.role != crate::Role::Assistant {
+            continue;
+        }
+        assistant_turn += 1;
+        for judged in report
+            .judge_decisions
+            .iter()
+            .filter(|judged| judged.turn == assistant_turn)
+        {
+            for decision in &judged.decisions {
+                out.push_str(&format!(
+                    "\n  [judge {} ({})] {}",
+                    decision.judge,
+                    decision.kind,
+                    decision.decision.as_str()
+                ));
+                if !decision.reason.is_empty() {
+                    out.push_str(" — ");
+                    out.push_str(&decision.reason);
+                }
+            }
+        }
     }
     out
 }
@@ -970,6 +1016,10 @@ pub struct FailureReport {
     /// group each was placed in. Absent when nothing was spawned.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub processes: Vec<crate::SpawnedProcess>,
+    /// What each judge of a panel decided on each supervisor turn before the
+    /// failure, the failed turn included. Absent for a bare provider.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub judge_decisions: Vec<crate::JudgedTurn>,
 }
 
 /// The failure itself, with the classification a caller branches on.
@@ -999,6 +1049,7 @@ impl FailureReport {
             },
             telemetry: failure.telemetry.clone(),
             processes: failure.processes.clone(),
+            judge_decisions: failure.judge_decisions.clone(),
         }
     }
 }
@@ -1150,6 +1201,65 @@ mod tests {
             "{out}"
         );
         assert!(!out.contains("hit the turn cap"));
+    }
+
+    #[test]
+    fn human_render_prints_each_judges_decision_beside_its_supervisor_turn() {
+        let mut s = summary(true, false, vec![]);
+        let mut transcript = Transcript::from_input("fix it");
+        transcript.push(crate::Message::assistant("did half"));
+        transcript.push(crate::Message::user(
+            "## Judge `lint` (command)\n\nFix the lint.",
+        ));
+        transcript.push(crate::Message::assistant("done"));
+        s.report.transcript = transcript;
+        s.report.judge_decisions = vec![
+            crate::JudgedTurn {
+                turn: 1,
+                decisions: vec![
+                    crate::JudgeDecision {
+                        judge: "reviewer".into(),
+                        kind: "oneharness".into(),
+                        decision: crate::Decision::Done,
+                        reason: "looks right".into(),
+                    },
+                    crate::JudgeDecision {
+                        judge: "lint".into(),
+                        kind: "command".into(),
+                        decision: crate::Decision::Continue,
+                        reason: String::new(),
+                    },
+                ],
+            },
+            crate::JudgedTurn {
+                turn: 2,
+                decisions: vec![crate::JudgeDecision {
+                    judge: "lint".into(),
+                    kind: "command".into(),
+                    decision: crate::Decision::Done,
+                    reason: "clean".into(),
+                }],
+            },
+        ];
+        let out = render_human(&s);
+        assert_eq!(
+            out.split("\n\n=== Result ===").next().unwrap(),
+            "=== Conversation ===\n\
+             User: fix it\n\
+             Assistant: did half\n\
+             \x20 [judge reviewer (oneharness)] done — looks right\n\
+             \x20 [judge lint (command)] continue\n\
+             User: ## Judge `lint` (command)\n\nFix the lint.\n\
+             Assistant: done\n\
+             \x20 [judge lint (command)] done — clean",
+            "{out}"
+        );
+        // Without decisions the conversation renders exactly as it always has.
+        s.report.judge_decisions.clear();
+        assert!(render_human(&s).contains(&format!(
+            "=== Conversation ===\n{}\n\n=== Result ===",
+            crate::render_transcript(&s.report.transcript.messages, true)
+        )));
     }
 
     #[test]

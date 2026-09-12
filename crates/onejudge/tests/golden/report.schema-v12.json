@@ -37,6 +37,13 @@
         "null"
       ]
     },
+    "judge_decisions": {
+      "description": "What each judge of a panel decided on each supervisor turn, one entry per\nturn that consulted the supervisor, in turn order. Omitted when empty — a\nrun judged by a bare provider rather than a [`JudgePanel`](crate::JudgePanel)\nrecords no per-judge decision, and nothing is synthesized for it.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/JudgedTurn"
+      }
+    },
     "processes": {
       "description": "Every process the run spawned, and the embedder-owned group a\n[`SpawnHook`](crate::SpawnHook) placed each one in.\n\nThis is the machine-readable form of what an in-process embedder observes\nthrough the hook, so `onejudge run --format json` reports it too. A record\nwhose `group` is absent is not grouped — onejudge never names a group it did\nnot observe a hook create.",
       "type": "array",
@@ -254,6 +261,36 @@
         "cwd"
       ]
     },
+    "Decision": {
+      "description": "What one judge of a [`JudgePanel`](crate::JudgePanel) decided, as a wire token.\n\nThe five outcomes a supervisor call can have, plus `error` for a judge that\ncould not run — recorded rather than dropped, because a judge that could not\nrun is never read as a pass and a reader has to be able to see that it was\nasked.",
+      "oneOf": [
+        {
+          "description": "The judge declared the work complete.",
+          "type": "string",
+          "const": "done"
+        },
+        {
+          "description": "The judge handed back a next instruction.",
+          "type": "string",
+          "const": "continue"
+        },
+        {
+          "description": "The judge judged the work incomplete but named no next instruction, even\nasked again.",
+          "type": "string",
+          "const": "no_instruction"
+        },
+        {
+          "description": "The judge answered in neither documented shape, even asked again.",
+          "type": "string",
+          "const": "unparseable"
+        },
+        {
+          "description": "The judge's call failed; `reason` is the error's message.",
+          "type": "string",
+          "const": "error"
+        }
+      ]
+    },
     "FellThrough": {
       "description": "One candidate a fallback chain fell through, with oneharness's reason token\n(`not-installed`, `spawn-error`, `auth`, `quota`, `model-not-found`,\n`rate-limit`, `session-not-found`, `untrusted-directory`, `input-too-large`,\n`model-mismatch`).",
       "type": "object",
@@ -297,6 +334,13 @@
             "null"
           ]
         },
+        "judge": {
+          "description": "Which judge of a [`JudgePanel`](crate::JudgePanel) made the invocation, by\nlabel — as [`SessionLink::judge`], and absent under the same conditions.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "ran": {
           "description": "The candidate that ran the turn, by composed id; `null` when none could.",
           "type": [
@@ -319,6 +363,34 @@
         "role",
         "turn_index",
         "candidates"
+      ]
+    },
+    "JudgeDecision": {
+      "description": "One judge's decision on one judge-side call, attributed to the judge by its\npanel label and provider kind.\n\nA [`JudgePanel`](crate::JudgePanel) records one per judge per supervisor call\n— including the call that failed — and the engine drains them after every\nsupervisor call, `Ok` or `Err`, onto [`Report::judge_decisions`]. A provider\nthat is not a panel records none, so a report carrying no decisions was judged\nby a bare provider; nothing is synthesized.",
+      "type": "object",
+      "properties": {
+        "decision": {
+          "description": "What it decided, or that it failed.",
+          "$ref": "#/$defs/Decision"
+        },
+        "judge": {
+          "description": "The judge's label within its panel (`label:` in the config, or the\ndefaulted `<kind>` / `<kind>-<n>`).",
+          "type": "string"
+        },
+        "kind": {
+          "description": "The judge entry's provider kind (`oneharness`, `command`, …).",
+          "type": "string"
+        },
+        "reason": {
+          "description": "Its own reason — or, for an `error`, the error's message.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "judge",
+        "kind",
+        "decision",
+        "reason"
       ]
     },
     "JudgeKind": {
@@ -378,6 +450,29 @@
       "required": [
         "value",
         "reason"
+      ]
+    },
+    "JudgedTurn": {
+      "description": "Every judge's decision on one supervisor turn.",
+      "type": "object",
+      "properties": {
+        "decisions": {
+          "description": "One decision per judge, in the panel's list order.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/JudgeDecision"
+          }
+        },
+        "turn": {
+          "description": "1-based assistant-turn index the supervisor turn belongs to, as\n[`TurnOpened::turn`](crate::TurnOpened::turn).",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "turn",
+        "decisions"
       ]
     },
     "Message": {
@@ -517,6 +612,13 @@
             "null"
           ]
         },
+        "judge": {
+          "description": "Which judge of a [`JudgePanel`](crate::JudgePanel) made the invocation, by\nlabel. Set only by a panel holding more than one judge; absent for a bare\nprovider and for a panel of one, whose records are the ones it has always\nwritten.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "role": {
           "description": "Which side of the conversation owns the invocation.",
           "$ref": "#/$defs/TelemetryRole"
@@ -550,6 +652,13 @@
       "properties": {
         "group": {
           "description": "The embedder-owned group a [`SpawnHook`] reported placing it in.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "judge": {
+          "description": "Which judge of a [`JudgePanel`](crate::JudgePanel) spawned it, by label.\nSet only by a panel holding more than one judge; absent otherwise, so a\nsingle-judge run's records are the ones it has always written.",
           "type": [
             "string",
             "null"

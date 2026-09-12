@@ -6,9 +6,10 @@
 //! break for the SDKs that compose over this contract.
 
 use onejudge::{
-    CandidateAttempt, ControlAddress, ControlOutcome, FellThrough, HarnessAttribution, JudgeKind,
-    JudgeValue, JudgeVerdict, Message, NamedVerdict, PartyTelemetry, Report, SessionLink,
-    SpawnedProcess, Telemetry, TelemetryRole, ToolEvent, Transcript, Usage, SCHEMA_VERSION,
+    CandidateAttempt, ControlAddress, ControlOutcome, Decision, FellThrough, HarnessAttribution,
+    JudgeDecision, JudgeKind, JudgeValue, JudgeVerdict, JudgedTurn, Message, NamedVerdict,
+    PartyTelemetry, Report, SessionLink, SpawnedProcess, Telemetry, TelemetryRole, ToolEvent,
+    Transcript, Usage, SCHEMA_VERSION,
 };
 
 /// The canonical report the golden is generated from: one tool-using assistant
@@ -85,6 +86,8 @@ fn canonical_report() -> Report {
             started_at: "2026-01-01T00:00:00Z".into(),
             finished_at: Some("2026-01-01T00:00:00.025Z".into()),
             history_id: Some("019b76e0-history".into()),
+            // An agent-side record: no judge of a panel made it, so no label.
+            judge: None,
         }],
         attribution: vec![HarnessAttribution {
             role: TelemetryRole::Agent,
@@ -137,8 +140,33 @@ fn canonical_report() -> Report {
                 },
             ],
             history_file: Some("/state/oneharness/history/run-1-skill.jsonl".into()),
+            judge: None,
         }],
     });
+    // The v12 addition: one entry per supervisor turn, each judge of the panel
+    // attributed by label and kind with the wire token of what it decided. Both
+    // `done`, because this is a completed run: a judge that continued or failed on
+    // its only turn is a document no completed run produces. The other tokens —
+    // `error` included, which is how a judge that could not run is kept from
+    // reading as a pass — are pinned by the schema golden's enum and by
+    // `report::tests`.
+    report.judge_decisions = vec![JudgedTurn {
+        turn: 1,
+        decisions: vec![
+            JudgeDecision {
+                judge: "reviewer".into(),
+                kind: "oneharness".into(),
+                decision: Decision::Done,
+                reason: "a git commit ran".into(),
+            },
+            JudgeDecision {
+                judge: "command".into(),
+                kind: "command".into(),
+                decision: Decision::Done,
+                reason: "the commit script passed".into(),
+            },
+        ],
+    }];
     // The address a supervisor interrupts this run's agent turn at — exactly the
     // three values `oneharness interrupt` takes, and nothing else.
     report = report.with_control(&ControlOutcome::Open(ControlAddress {
@@ -163,31 +191,36 @@ fn canonical_report() -> Report {
             program: "oneharness".into(),
             pid: 4242,
             group: Some("job:run-1".into()),
+            judge: None,
         },
+        // …and the v12 half of the same discipline for the judge label: the
+        // judge-side process carries the label of the panel judge that spawned
+        // it, and the agent-side one carries none.
         SpawnedProcess {
             role: TelemetryRole::Judge,
             op: "judge".into(),
             program: "oneharness".into(),
             pid: 4243,
             group: None,
+            judge: Some("reviewer".into()),
         },
     ];
     report
 }
 
-const EXAMPLE_GOLDEN: &str = include_str!("golden/report.example-v11.json");
+const EXAMPLE_GOLDEN: &str = include_str!("golden/report.example-v12.json");
 #[cfg(feature = "sdk-schema")]
-const SCHEMA_GOLDEN: &str = include_str!("golden/report.schema-v11.json");
+const SCHEMA_GOLDEN: &str = include_str!("golden/report.schema-v12.json");
 
 #[test]
-fn report_matches_the_golden_example_v11() {
-    assert_eq!(SCHEMA_VERSION, 11, "golden is for schema v11");
+fn report_matches_the_golden_example_v12() {
+    assert_eq!(SCHEMA_VERSION, 12, "golden is for schema v12");
     let actual = serde_json::to_string_pretty(&canonical_report()).unwrap();
     assert_eq!(
         actual.trim(),
         EXAMPLE_GOLDEN.trim(),
         "the Report wire form changed. If this is intentional, bump SCHEMA_VERSION \
-         and update the v11 contract goldens. Actual serialization:\n{actual}"
+         and update the v12 contract goldens. Actual serialization:\n{actual}"
     );
 }
 
@@ -233,7 +266,7 @@ fn the_contract_doc_states_the_version_this_build_stamps() {
 
 #[cfg(feature = "sdk-schema")]
 #[test]
-fn generated_report_schema_matches_the_schema_v11_golden() {
+fn generated_report_schema_matches_the_schema_v12_golden() {
     let actual = serde_json::to_value(onejudge::sdk_schema::bundle().report).unwrap();
     let golden: serde_json::Value = serde_json::from_str(SCHEMA_GOLDEN).unwrap();
     assert_eq!(

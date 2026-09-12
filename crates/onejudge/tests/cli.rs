@@ -1805,6 +1805,9 @@ user:
             Observation::Tool(e) => format!("tool/{}", e.event.summary()),
             Observation::Message(m) => format!("said/{:?}/{}", m.role, m.text),
             Observation::TurnClosed(c) => format!("closed/{:?}/{}", c.role, c.usage.is_some()),
+            Observation::JudgeDecided(d) => {
+                format!("judged/{}/{}/{}", d.judge, d.decision.as_str(), d.reason)
+            }
         });
         ControlFlow::Continue(())
     })

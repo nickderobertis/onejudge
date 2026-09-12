@@ -53,6 +53,12 @@ pub struct SessionLink {
     /// Native oneharness history record identity, when history was available.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub history_id: Option<String>,
+    /// Which judge of a [`JudgePanel`](crate::JudgePanel) made the invocation, by
+    /// label. Set only by a panel holding more than one judge; absent for a bare
+    /// provider and for a panel of one, whose records are the ones it has always
+    /// written.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub judge: Option<String>,
 }
 
 /// One candidate identity oneharness attempted for a single invocation — the
@@ -148,6 +154,10 @@ pub struct HarnessAttribution {
     /// The oneharness history session file this invocation appended to.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub history_file: Option<String>,
+    /// Which judge of a [`JudgePanel`](crate::JudgePanel) made the invocation, by
+    /// label — as [`SessionLink::judge`], and absent under the same conditions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub judge: Option<String>,
 }
 
 /// Timing, usage, and native linkage for the complete agent+judge run.
@@ -192,6 +202,9 @@ pub struct InvocationTelemetry {
     pub(crate) candidates: Vec<CandidateAttempt>,
     /// The provider's history session file for this invocation.
     pub(crate) history_file: Option<String>,
+    /// The panel label of the judge that made this invocation, stamped by a
+    /// [`JudgePanel`](crate::JudgePanel) of more than one judge.
+    pub(crate) judge: Option<String>,
 }
 
 fn strict_sum_u64(
@@ -276,6 +289,7 @@ pub(crate) fn aggregate(wall_ms: u64, records: &[InvocationTelemetry]) -> Option
                 started_at: started_at.clone(),
                 finished_at: record.finished_at.clone(),
                 history_id: record.history_id.clone(),
+                judge: record.judge.clone(),
             });
         }
         // A provider that names no candidate identity contributes no attribution;
@@ -288,6 +302,7 @@ pub(crate) fn aggregate(wall_ms: u64, records: &[InvocationTelemetry]) -> Option
                 fell_through: record.fell_through.clone(),
                 candidates: record.candidates.clone(),
                 history_file: record.history_file.clone(),
+                judge: record.judge.clone(),
             });
         }
     }
@@ -364,6 +379,7 @@ mod tests {
                 },
             ],
             history_file: Some("/state/oneharness/history/s.jsonl".into()),
+            judge: None,
         }
     }
 
@@ -392,6 +408,23 @@ mod tests {
         assert_eq!(telemetry.sessions[1].turn_index, 2);
         assert_eq!(telemetry.sessions[2].role, TelemetryRole::Judge);
         assert_eq!(telemetry.orchestration_ms, 5);
+    }
+
+    #[test]
+    fn a_panel_stamped_record_carries_its_judge_label_onto_both_joins() {
+        // The label rides the session link AND the attribution, so a consumer can
+        // tell which judge of a panel an invocation was, whichever it joins from.
+        let mut stamped = record(TelemetryRole::Judge, "judge-1");
+        stamped.judge = Some("reviewer".into());
+        let bare = record(TelemetryRole::Judge, "judge-2");
+        let telemetry = aggregate(30, &[stamped, bare]).unwrap();
+        assert_eq!(telemetry.sessions[0].judge.as_deref(), Some("reviewer"));
+        assert_eq!(telemetry.attribution[0].judge.as_deref(), Some("reviewer"));
+        // A record no panel stamped claims no judge, on either join.
+        assert_eq!(telemetry.sessions[1].judge, None);
+        assert_eq!(telemetry.attribution[1].judge, None);
+        let json = serde_json::to_string(&telemetry).unwrap();
+        assert_eq!(json.matches("\"judge\":\"reviewer\"").count(), 2);
     }
 
     #[test]

@@ -1,5 +1,5 @@
 {
-  "schema_version": 11,
+  "schema_version": 12,
   "transcript": {
     "messages": [
       {
@@ -35,6 +35,25 @@
   ],
   "assessment": "No follow-up work remains.",
   "completion_reason": "the commit completed the task",
+  "judge_decisions": [
+    {
+      "turn": 1,
+      "decisions": [
+        {
+          "judge": "reviewer",
+          "kind": "oneharness",
+          "decision": "done",
+          "reason": "a git commit ran"
+        },
+        {
+          "judge": "command",
+          "kind": "command",
+          "decision": "done",
+          "reason": "the commit script passed"
+        }
+      ]
+    }
+  ],
   "usage": {
     "input_tokens": 12,
     "output_tokens": 3,
@@ -135,7 +154,8 @@
       "role": "judge",
       "op": "judge",
       "program": "oneharness",
-      "pid": 4243
+      "pid": 4243,
+      "judge": "reviewer"
     }
   ],
   "control": {
