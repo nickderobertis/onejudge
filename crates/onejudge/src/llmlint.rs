@@ -53,7 +53,9 @@ const OUTPUT_BOUND: usize = 4096;
 const PROBE_OP: &str = "probe";
 
 /// A judge-side [`Provider`] whose verdict is one `llmlint lint` run over the
-/// worker's tree. See the [module docs](self).
+/// worker's tree: exit 1 continues the run with llmlint's report as the worker's
+/// next turn, exit 0 completes it, anything else is an error of the turn. See
+/// `docs/judges.md`.
 #[derive(Debug, Clone)]
 pub struct LlmlintProvider {
     bin: String,

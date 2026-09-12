@@ -1,10 +1,13 @@
 {
   "run_config": {
+    "args": "args",
     "assessment": "assessment",
     "bin": "bin",
     "command": "command",
+    "config": "config",
     "control": "control",
     "criterion": "criterion",
+    "diff_base": "diff_base",
     "done_when": "done_when",
     "evals": "evals",
     "judge": "judge",

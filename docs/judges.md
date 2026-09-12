@@ -17,8 +17,9 @@ the per-judge record below, and — under `control: true` — the judge's own
 `supervisor_control` address, which the release before panels wrote as `null`
 (a defect; see [how a panel decides](#how-a-panel-decides)).
 
-This page is the contract. Three parts: the config shape, how a panel decides,
-and what each surface carries per judge. The library type is
+This page is the contract. Four parts: the config shape, how a panel decides,
+what each surface carries per judge, and the [`llmlint` judge](#the-llmlint-judge)
+— a judge that is a lint run rather than a model. The library type is
 [`JudgePanel`](../crates/onejudge/src/panel.rs), composed as the judge half of a
 `SplitProvider`; the CLI builds one from `judges:`.
 
@@ -34,6 +35,8 @@ provider:
       label: reviewer                       # optional on any judge entry
     - kind: command                         # a custom script speaking docs/protocol.md
       command: [my-judge, --flag]
+    - kind: llmlint                         # one `llmlint` run over the worker's tree
+      diff_base: origin/main                # the host's own comparison base (optional)
 ```
 
 - **`judge:` is the one-element shorthand for `judges: [..]`.** Both spellings
@@ -51,8 +54,8 @@ provider:
 - A config whose `evals` include a numeric eval, or which names an
   `assessment`, while its judge list holds no judge that can score a number or
   write prose (an `oneharness` or `command` judge) is refused, because nothing in
-  it can answer. Every kind this build can name can, so the refusal is in place
-  for a kind that cannot.
+  it can answer. An `llmlint` judge cannot: a list of only llmlint judges is
+  refused for either, and beside an LLM judge it is simply left out of them.
 - `--judge-config` / `ONEJUDGE_JUDGE_CONFIG` still apply to the top-level
   `provider.judge_config` only; there is no new flag or environment variable.
 
@@ -111,7 +114,7 @@ unchanged. The `session` a `command` judge sees on its supervisor request
 ## What each surface carries per judge
 
 **`JudgeDecision { judge, kind, decision, reason }`** — `judge` is the label,
-`kind` the entry's provider kind (`oneharness`, `command`, …), `decision` one of
+`kind` the entry's provider kind (`oneharness`, `command`, `llmlint`, …), `decision` one of
 `done` | `continue` | `no_instruction` | `unparseable` | `error`, and `reason`
 the judge's own reason (the error's message, for `error`). The panel records one
 per judge per supervisor call — the call that failed included — and exposes them
@@ -157,9 +160,91 @@ let provider = SplitProvider::new(OneharnessProvider::new(), panel);
 
 `JudgePanel::new` enforces the same label rules as the config layer.
 `JudgeEntry::with_abilities` declares which operations a judge takes part in
-(numeric scoring, prose, playing a user) — every ability by default. An
-embedder driving a `Plan` gets the panel built for it, and
-`Plan::with_spawn_hook` reaches every judge of it.
+(numeric scoring, prose, playing a user) — every ability by default, and none of
+the three for an `LlmlintProvider`. An embedder driving a `Plan` gets the panel
+built for it, and `Plan::with_spawn_hook` reaches every judge of it.
+
+## The llmlint judge
+
+`kind: llmlint` is a judge that is not a model's opinion: its whole verdict is one
+[`llmlint`](https://github.com/nickderobertis/llmlint) run over the worker's tree.
+A run with failing rules is a *not done* decision whose message to the worker is
+llmlint's own evaluation output; a run with no failing rules is *done*; and a run
+that could not complete is an error of the turn that is never mistaken for
+either. It is the judged lint tier a repository already runs at its merge path,
+moved inside the loop — so a worker is pushed back on its findings turn by turn
+rather than discovering them when it pushes.
+
+**onejudge links no llmlint crate: the boundary is the process.** It needs
+`llmlint` installed on the host, and the contract is llmlint's documented exit
+codes — `0` every rule holds, `1` at least one violation, `2` the run could not
+complete. The library type is
+[`LlmlintProvider`](../crates/onejudge/src/llmlint.rs); the CLI builds one from a
+judge entry:
+
+```yaml
+    - kind: llmlint
+      label: lint                     # optional, as on any judge entry
+      bin: llmlint                    # the executable (default `llmlint`, on PATH)
+      config: llmlint.strict.yml      # `-c <path>`; omit for llmlint's own discovery
+      diff_base: origin/main          # `--diff --diff-base <ref>`; omit to lint the tree
+      args: [--rule, no_todo]         # appended to every run
+```
+
+- **Probed when built.** Building the provider runs `<bin> --version` (through
+  the spawn seam, like every process onejudge creates). A spawn failure, or an
+  executable that does not answer, is `Error::Provider { kind: spawn }` naming the
+  binary and the `bin` field — which `onejudge run` reports as a config error
+  (exit 2) before any turn. An absent `llmlint` is therefore a loud error at the
+  boundary and never a silent pass.
+- **One `lint` run per decision.** Each `supervise` and each boolean `judge` runs
+  `<bin> lint --cwd <worktree> --format human --color never --progress never
+  [-c <config>] [--diff --diff-base <ref>] [<args>…]` with stdin closed, stdout and
+  stderr captured, and the environment inherited. `<worktree>` is the worker's
+  tree — the supervisor query's `worktree`, or the evidence context's for a
+  judgement; a judgement handed no worktree is `Error::Invalid`. onejudge does
+  **no base auto-detection: a host wiring a stack passes its own comparison base
+  in `diff_base`**, and without one llmlint judges the whole tree.
+- **Exit 0** → `Completed { reason }` / a boolean verdict of `true`, the reason
+  being the report's summary line (the last non-empty line of stdout).
+  **Exit 1** → `Continue { message, reason }` / a verdict of `false`: `message` is
+  stdout verbatim with trailing whitespace trimmed — the worker sees llmlint's
+  own evaluation output, never a paraphrase — and `reason` the summary line. An
+  exit 1 (or 0) with **no** stdout is `Error::Provider { kind: protocol }`: there
+  is nothing to hand the worker and no line to complete on, and a vacuous pass is
+  never minted for it.
+- **Exit 2, any other exit code, death by signal, or a spawn failure** →
+  `Error::Provider { context: "supervise" | "judge", kind: spawn for a spawn
+  failure and other otherwise, message: "llmlint could not complete (exit
+  <code>): <stderr then stdout, bounded>" }` — never `Completed`, never
+  `Continue`. In a panel that fails the run as any judge error does: after every
+  other judge has returned, naming the judge, with the work kept.
+- **What it cannot answer it refuses.** `respond`, `respond_streaming`,
+  `simulate_user`, numeric `judge` and `assess` are `Error::Invalid`. The config
+  layer keeps the engine from reaching them: `kind: llmlint` is valid **only as a
+  judge entry** — refused as the top-level provider, under a split's `skill:`,
+  and as the `--provider` / `ONEJUDGE_PROVIDER` override — and every field of
+  another kind under it (`judge_config`, `stream`, `control`, `mock_harness`,
+  `command`, `skill`, `judge`, `judges`) is refused naming the field, as
+  `config`, `diff_base` and `args` are under any other kind. In a panel it takes
+  part in `supervise` and boolean `judge` and is left out of numeric `judge`,
+  `assess` and `simulate_user`.
+- **On the record like any other process.** Each run records one judge-side
+  telemetry invocation (role `judge`, `tool_ms` the run's wall time, no
+  candidates — llmlint's harness selection is its own) and one
+  `SpawnedProcess { role: judge, op: "supervise" | "judge", program: <bin> }`
+  through the spawn hook, so an embedder's group teardown reaches a running
+  llmlint; a child whose call unwinds before it was reaped is killed. Its
+  decisions carry `kind: llmlint` on `judge_decisions`.
+
+The proof is the `onejudge-fake-llmlint` double — a stand-in for the `llmlint`
+CLI, scripted through the environment — driven by `tests/e2e.rs` through the real
+engine (exit 1 verbatim under the header with the exact argv, exit 0 completing on
+the summary line, exit 2 / a signal / a missing report as the classified errors,
+every refused operation through the public trait, a spawn hook reaching the run)
+and by `tests/cli.rs` through the plan driver and the built binary (an LLM judge
+stacked on llmlint where only llmlint fails, an absent executable refused at plan
+build with no turn run, and every placement and field refusal).
 
 ## Proof
 

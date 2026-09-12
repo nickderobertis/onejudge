@@ -66,7 +66,7 @@ class GenerationTests(unittest.TestCase):
         self.assertEqual(config["task"], Optional[str])
         self.assertEqual(
             get_type_hints(ProviderConfig)["kind"],
-            Literal["oneharness", "command", "split"],
+            Literal["oneharness", "command", "split", "llmlint"],
         )
 
 

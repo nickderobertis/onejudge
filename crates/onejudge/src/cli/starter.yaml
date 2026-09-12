@@ -10,7 +10,7 @@
 
 # Which backend runs the harness (and judges / plays the simulated user).
 provider:
-  kind: oneharness                       # oneharness | command | split
+  kind: oneharness                       # oneharness | command | split (llmlint: a judge entry only)
   bin: oneharness                        # oneharness: the binary to shell out to
   judge_config: oneharness.judge.toml    # oneharness: judge/user `--config` file
   # stream: true                         # oneharness: the agent binary publishes
@@ -39,6 +39,11 @@ provider:
   #       label: reviewer                  # optional name ([A-Za-z0-9_-]+, unique;
   #     - kind: command                    # defaults to the kind, then <kind>-2, …)
   #       command: ["my-judge", "--flag"]
+  #     - kind: llmlint                    # one `llmlint lint` run over the worker's
+  #       bin: llmlint                     # tree per decision (needs llmlint installed;
+  #       config: llmlint.yml              # optional `-c`, else llmlint's own discovery)
+  #       diff_base: origin/main           # optional `--diff --diff-base`: YOUR base
+  #       args: []                         # extra `llmlint lint` arguments
   #   `judge: {..provider..}` is the one-element shorthand for `judges: [..]`.
   #   Each judge's decision lands on the report's `judge_decisions` (docs/judges.md)
 

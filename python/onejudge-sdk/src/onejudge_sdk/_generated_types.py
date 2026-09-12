@@ -6,7 +6,7 @@ from collections.abc import Sequence
 from typing import Any, Literal, Optional, TypedDict, Union
 
 JudgeKind = Literal["boolean", "numeric"]
-ProviderKind = Literal["oneharness", "command", "split"]
+ProviderKind = Literal["oneharness", "command", "split", "llmlint"]
 Decision = Literal["done", "continue", "no_instruction", "unparseable", "error"]
 JudgeValue = Union[bool, float]
 Role = Literal["user", "assistant", "system"]
@@ -35,9 +35,12 @@ class EvalConfig(_EvalConfigRequired, total=False):
 
 
 class ProviderConfig(TypedDict, total=False):
+    args: Optional[Sequence[str]]
     bin: Optional[str]
     command: Optional[Sequence[str]]
+    config: Optional[str]
     control: Optional[bool]
+    diff_base: Optional[str]
     judge: Optional[ProviderConfig]
     judge_config: Optional[str]
     judges: Optional[Sequence[ProviderConfig]]

@@ -69,7 +69,7 @@ file, which beats the built-in default**:
 | `--done-when` | `ONEJUDGE_DONE_WHEN` | the completion condition |
 | `--max-turns` | `ONEJUDGE_MAX_TURNS` | the assistant-turn cap |
 | `--session` | `ONEJUDGE_SESSION` | the caller-owned session name |
-| `--provider` | `ONEJUDGE_PROVIDER` | just the backend kind (`oneharness`/`command`/`split`) |
+| `--provider` | `ONEJUDGE_PROVIDER` | just the backend kind (`oneharness`/`command`/`split`; `llmlint` is a judge entry only and is refused here) |
 | `--format` | — | `human` (default) or `json` |
 | `--stream` | — | publish the run on stdout as the [streamed protocol](streaming.md) (needs `--format json`, refuses `--output`) |
 | `--output`, `-o` | — | write the result to a file instead of stdout |
@@ -149,7 +149,7 @@ Top-level keys:
 
 | key | purpose |
 |-----|---------|
-| `provider` | which backend runs the harness: `kind` is `oneharness` (`bin`, `judge_config`, `stream`, `control`, `mock_harness`), `command` (`command: [...]`), or `split` (a `skill:` **sub-provider** — distinct from the top-level `skill:` below — plus the judge side as a **list**: `judges: [..]`, one or more entries each with an optional `label`, or `judge:` as the one-element shorthand; see [judges.md](judges.md)) |
+| `provider` | which backend runs the harness: `kind` is `oneharness` (`bin`, `judge_config`, `stream`, `control`, `mock_harness`), `command` (`command: [...]`), or `split` (a `skill:` **sub-provider** — distinct from the top-level `skill:` below — plus the judge side as a **list**: `judges: [..]`, one or more entries each with an optional `label`, or `judge:` as the one-element shorthand; see [judges.md](judges.md)). A judge entry may also be `llmlint` (`bin`, `config`, `diff_base`, `args`) — a judge that is one `llmlint` run over the worker's tree, valid nowhere but a judge entry |
 | `skill` | a skill directory (containing `SKILL.md`) whose body seeds the system prompt, resolved relative to the config file; optional |
 | `system_prompt` | extra system-prompt text; used alone, or prepended before a `skill` body when both are set; optional |
 | `task` | the task to drive to completion (or supply via `--task`) |
@@ -166,8 +166,11 @@ The config is validated strictly at the boundary (`deny_unknown_fields`): a typo
 key, a missing task, a provider field that does not belong to the chosen `kind`
 (e.g. `bin` or `judge_config` under `kind: command`), a `label` outside a judge
 entry or one that is malformed or repeated, `judge:` beside `judges:` or an empty
-`judges:`, or an inverted numeric scale is a loud, actionable error — never a
-silent default.
+`judges:`, `kind: llmlint` anywhere but a judge entry, a numeric eval or an
+`assessment` with no judge that can answer it, or an inverted numeric scale is a
+loud, actionable error — never a silent default. An `llmlint` judge's executable
+is probed when the run is built, so an absent one is a config error (exit 2)
+before any turn.
 
 ## Providers
 
@@ -192,6 +195,15 @@ call goes through oneharness:
   ([oneharness-library.md](oneharness-library.md)). Script it with the `MOCK_*`
   variables in the environment the run inherits.
 - **`command`** — a custom backend speaking the [JSON-lines protocol](protocol.md).
+- **`llmlint`** — a **judge entry only**: one `llmlint lint` run over the worker's
+  tree per decision, met at the process boundary (no llmlint crate is linked;
+  `llmlint` must be installed). Failing rules send the worker llmlint's own
+  report as its next turn; a clean run passes it; a run that could not complete
+  is an error, never a verdict. `bin` (default `llmlint`), `config` (`-c`),
+  `diff_base` (`--diff --diff-base`, the host's own comparison base — onejudge
+  detects none) and `args`. Refused as the top-level provider, under `skill:`,
+  and as `--provider`; left out of numeric evals and assessments.
+  [judges.md](judges.md#the-llmlint-judge) is the contract.
 - **`split`** — compose a skill-runner with a separate judge side (e.g. drive
   the agent on one harness, judge on another). The judge side is a **list of
   judges** — `judges:` — every one run concurrently against each worker turn and

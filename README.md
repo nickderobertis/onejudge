@@ -92,7 +92,8 @@ The harness and model come from oneharness's own config (`oneharness.toml` for t
 agent, `oneharness.judge.toml` for the judge side) — `onejudge init` scaffolds
 them. More keys — `provider` (`oneharness` / `command` / `split`, with the
 oneharness `judge_config` path, and under `split` the judge side as a `judges:`
-list), `session`, boolean evals. `onejudge init` writes a
+list — an `llmlint` entry there makes a judge of one `llmlint` run over the
+worker's tree), `session`, boolean evals. `onejudge init` writes a
 fully-commented starter and `onejudge schema` prints the annotated field reference
 (the single source of truth); it is validated strictly (`deny_unknown_fields`) so a
 typo is a loud error.
@@ -117,6 +118,12 @@ to publish tool events on stdout as they occur, ahead of that same report
     ([docs/streaming.md](docs/streaming.md)).
   - **`CommandProvider`** speaks a small [JSON-lines protocol](docs/protocol.md),
     for a custom backend or a deterministic test double.
+  - **`LlmlintProvider`** is a judge whose whole verdict is one
+    [`llmlint`](https://github.com/nickderobertis/llmlint) run over the worker's
+    tree, met at the process boundary (nothing linked; `llmlint` installed on the
+    host): failing rules send the worker llmlint's own report, a clean run passes
+    it, and a run that could not complete is an error, never a verdict
+    ([docs/judges.md](docs/judges.md#the-llmlint-judge)).
   - **`JudgePanel`** makes the judge side a **list**: every judge runs against the
     same worker turn at the same time, the panel waits for all of them, and the
     worker gets one combined, attributed message when any says the work is not

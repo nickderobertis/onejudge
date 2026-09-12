@@ -190,13 +190,18 @@ Use the `just` recipes; do not hand-roll equivalents. `just --list` is the index
 
 `onejudge` never talks to a model directly, and every model call goes through
 `oneharness`; a `Provider` (`provider.rs`) runs the skill, plays the simulated
-user, and judges the transcript. Three backends: `OneharnessProvider` (default;
+user, and judges the transcript. Four backends: `OneharnessProvider` (default;
 runs each turn through the **`oneharness-core` engine in process** — see below); `CommandProvider` (a small JSON-lines subprocess
 protocol — see `docs/protocol.md` — backing the deterministic test doubles and any
 custom provider, which itself shells out to oneharness or an equivalent harness);
-and `SplitProvider` (`split.rs`; compose a skill-runner with a separate
-judge/simulated-user provider, e.g. skill on one harness and judge on another). The
-backends feed tool `events` into the transcript the judge sees, and thread a
+`LlmlintProvider` (`llmlint.rs`; a **judge-side only** backend whose whole verdict
+is one `llmlint lint` run over the worker's tree — met **at the process boundary
+only**: no llmlint crate is ever linked or named in a manifest, the contract is
+llmlint's exit codes, the executable is probed when the provider is built, and a
+run that could not complete is a classified error, never a pass or a continue;
+`docs/judges.md`); and `SplitProvider` (`split.rs`; compose a skill-runner with a
+separate judge/simulated-user provider, e.g. skill on one harness and judge on
+another). The backends feed tool `events` into the transcript the judge sees, and thread a
 **caller-owned session name** across turns on session-capable platforms
 (claude-code, codex, opencode, cursor, qwen) rather than extracting and re-passing
 a native id; the rest fall back to re-prompting the inlined transcript.
@@ -262,7 +267,9 @@ process, so it is its own release.
 two renderings, reconciled by a gate) and what that move still needs.
 The e2e double for the in-process seam is `onejudge-fake-harness`, a *harness*
 stand-in reached through ordinary `[harness.<id>] bin` config — so the whole of
-oneharness is the real code under test and only the model is faked. The measurements onejudge's `telemetry`
+oneharness is the real code under test and only the model is faked. The double
+for the llmlint boundary is `onejudge-fake-llmlint`, a stand-in for the `llmlint`
+CLI scripted through the environment, so the gate needs no llmlint installed. The measurements onejudge's `telemetry`
 reports come from `RunResult::telemetry` on the **run report** (oneharness report
 schema `0.5`); the history file is still read, but only for `history_id`.
 
