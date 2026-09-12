@@ -1,0 +1,77 @@
+{
+  "transcript": {
+    "messages": [
+      {
+        "role": "user",
+        "content": "please commit"
+      },
+      {
+        "role": "assistant",
+        "content": "echo: please commit"
+      },
+      {
+        "role": "user",
+        "content": "Thanks — and what about the next step?"
+      },
+      {
+        "role": "assistant",
+        "content": "echo: Thanks — and what about the next step?"
+      }
+    ]
+  },
+  "verdicts": [
+    {
+      "criterion": "next step",
+      "kind": "boolean",
+      "verdict": {
+        "value": true,
+        "reason": "criterion found in transcript",
+        "usage": {
+          "input_tokens": 9,
+          "output_tokens": 1,
+          "cache_read_tokens": 3,
+          "cache_write_tokens": 1
+        }
+      }
+    },
+    {
+      "criterion": "echo",
+      "kind": "boolean",
+      "verdict": {
+        "value": true,
+        "reason": "criterion found in transcript",
+        "usage": {
+          "input_tokens": 4,
+          "output_tokens": 1,
+          "cache_read_tokens": 3,
+          "cache_write_tokens": 1
+        }
+      }
+    },
+    {
+      "criterion": "please",
+      "kind": "numeric",
+      "verdict": {
+        "value": 5.0,
+        "reason": "criterion found in transcript",
+        "usage": {
+          "input_tokens": 6,
+          "output_tokens": 1,
+          "cache_read_tokens": 3,
+          "cache_write_tokens": 1
+        }
+      }
+    }
+  ],
+  "assessment": "Assessment for `Identify follow-up work.`.",
+  "completion_reason": "completion criterion found in transcript",
+  "usage": {
+    "input_tokens": 79,
+    "output_tokens": 8,
+    "cache_read_tokens": 9,
+    "cache_write_tokens": 3
+  },
+  "control": null,
+  "supervisor_control": null,
+  "stopped_early": false
+}

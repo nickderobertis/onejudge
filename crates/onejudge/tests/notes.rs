@@ -22,8 +22,9 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use onejudge::{
-    Accepted, Addressee, CommandProvider, Conversation, Engine, Note, Notes, Observation,
-    OneharnessProvider, Party, Role, Settings, SimulatedUser, Skill, Undelivered,
+    Accepted, Addressee, CommandProvider, Conversation, Decision, Engine, JudgeEntry, JudgePanel,
+    Note, Notes, Observation, OneharnessProvider, Party, Role, Settings, SimulatedUser, Skill,
+    SplitProvider, Undelivered,
 };
 // The plan is the second entry point an embedder has, and it lives behind the
 // non-default `cli` feature — so only the journey that drives it is gated on one.
@@ -362,6 +363,90 @@ fn a_note_arriving_during_the_judges_turn_reaches_the_judge_and_the_worker_with_
         handed.contains("Thanks — and what about the next step?"),
         "the note reached the worker without the judge's response: {handed}"
     );
+}
+
+#[test]
+fn a_note_arriving_during_a_panels_turn_reaches_every_judge_and_re_takes_every_decision() {
+    // The same arrival as above, on a panel of two judges: the note reaches both
+    // (every judge is handed the same notes), the whole panel decides again with
+    // it in hand, and the re-taken round joins the same turn's record rather than
+    // opening a second one — so a reader sees two rounds of two decisions on turn 1.
+    let live = scratch_path("notes-panel-live.marker");
+    let a_log = scratch_path("notes-panel-a.log");
+    let b_log = scratch_path("notes-panel-b.log");
+    let (notes, inbox) = Notes::channel();
+
+    let sender = std::thread::spawn({
+        let live = live.clone();
+        move || {
+            await_path(&live, "the panel's turn never opened");
+            notes.send(Note::to(Addressee::Worker, NOTE))
+        }
+    });
+
+    let judge = |log: &std::path::Path| {
+        CommandProvider::new(vec![
+            env!("CARGO_BIN_EXE_onejudge-echo-provider").to_string(),
+            format!("[[record:{}]]", log.display()),
+        ])
+        .unwrap()
+    };
+    let split = SplitProvider::new(
+        echo(),
+        JudgePanel::new(vec![
+            JudgeEntry::new("a", "command", judge(&a_log)),
+            JudgeEntry::new("b", "command", judge(&b_log)),
+        ])
+        .unwrap(),
+    );
+    let engine = Engine::new(&split, Settings::new()).with_notes(inbox);
+    let outcome = engine
+        .run(&Conversation::multi_turn(
+            Skill::new("demo", "/skills/demo", "Be helpful."),
+            "start the job",
+            SimulatedUser::new(format!(
+                "A reviewer. [[judge-dwell:600:{}]]",
+                live.display()
+            ))
+            .max_turns(2),
+        ))
+        .expect("a note arriving mid-panel-turn does not fail the run");
+    assert_eq!(
+        sender.join().unwrap().unwrap(),
+        Accepted::Interrupted {
+            party: Party::Supervisor
+        }
+    );
+
+    // Both judges were shown the note on the re-taken round.
+    for log in [&a_log, &b_log] {
+        let supervisors = of_op(&requests(log), "supervisor");
+        assert_eq!(supervisors.len(), 2, "{}", log.display());
+        assert!(notes_shown(&supervisors[0]).is_empty());
+        assert_eq!(notes_shown(&supervisors[1]), vec![NOTE.to_string()]);
+    }
+    // One record for turn 1 carrying both rounds, each round in list order.
+    assert_eq!(outcome.judge_decisions.len(), 1);
+    assert_eq!(outcome.judge_decisions[0].turn, 1);
+    let judged: Vec<(&str, Decision)> = outcome.judge_decisions[0]
+        .decisions
+        .iter()
+        .map(|d| (d.judge.as_str(), d.decision))
+        .collect();
+    assert_eq!(
+        judged,
+        [
+            ("a", Decision::Continue),
+            ("b", Decision::Continue),
+            ("a", Decision::Continue),
+            ("b", Decision::Continue),
+        ]
+    );
+    // …and the worker was handed the note with the panel's combined response.
+    let handed = &outcome.transcript.messages[2].content;
+    assert!(handed.contains(NOTE), "{handed}");
+    assert!(handed.contains("## Judge `a` (command)"), "{handed}");
+    assert!(handed.contains("## Judge `b` (command)"), "{handed}");
 }
 
 #[test]

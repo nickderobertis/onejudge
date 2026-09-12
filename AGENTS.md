@@ -201,6 +201,25 @@ backends feed tool `events` into the transcript the judge sees, and thread a
 (claude-code, codex, opencode, cursor, qwen) rather than extracting and re-passing
 a native id; the rest fall back to re-prompting the inlined transcript.
 
+**The judge side is a list, and there is one path for it.** `JudgePanel`
+(`panel.rs`) composes labelled judges and runs every judge-side call on one OS
+thread per judge *at the same time* (each judge behind its own lock — the backends
+are `Send`, not `Sync`), waits for **all** of them, and combines the outcomes per
+the table in `docs/judges.md`: one attributed completion, or one combined
+`## Judge` message the worker fixes in a single turn; a judge that failed fails the
+run *after* every other judge has returned and is never read as a pass. The CLI's
+`split` builds a panel from `judges:` — `judge:` is the one-element shorthand,
+normalized into the same list — and `SplitProvider` takes a panel as its judge
+half, so an embedder composing by hand gets the same semantics. A panel of **one**
+is byte-identical to a bare provider (bare session, no headers, no labels) — proven
+by replaying a fixture captured from the released 0.8.1
+(`tests/golden/single-judge/`, `scripts/capture-single-judge-baseline.sh`); the
+only addition is the per-judge record, drained through
+`Provider::take_judge_decisions` after every supervisor call and kept on the engine
+like telemetry so a failed run still reports it (`Report::judge_decisions`,
+`Observation::JudgeDecided`, the `judge` label on attribution, session links and
+processes).
+
 An `oneharness` provider can also **stream** (`provider.stream: true`): tool events
 reach the caller's sink as oneharness observes them, then the finished report, so a
 600–2000s turn is visible while it runs. `onejudge run --stream` republishes the

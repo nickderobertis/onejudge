@@ -27,6 +27,23 @@
 //!   in the transcript it is given — **including the rendered tool events** — so an
 //!   events-backed criterion is genuinely decided by what the skill did.
 //!
+//! **Argv markers.** A judge of a panel is handed the same persona, task and
+//! transcript as every other judge, so a journey that needs two judges to behave
+//! differently steers each through its own argv instead: every argument after the
+//! program name is scanned for markers exactly as the request text is, so
+//! `command: [onejudge-echo-provider, "[[supervisor-continue:Add a test.]]"]`
+//! configures that judge alone. The `supervisor`-op markers:
+//!
+//! * `[[supervisor-continue:MSG]]` — always `completion:false` with `MSG`;
+//! * `[[supervisor-complete:REASON]]` — always `completion:true` with `REASON`;
+//! * `[[supervisor-sleep:MS]]` — hold the decision for `MS` milliseconds first;
+//! * `[[supervisor-stamp:PATH]]` — append `<start> <end>` (ms since the epoch)
+//!   for the decision to `PATH`, so a journey can prove two judges overlapped;
+//! * `[[supervisor-exit]]` — exit non-zero on the `supervisor` op only, leaving
+//!   the judge's other ops (`judge`, `assess`) working;
+//! * `[[record:PATH]]` — as the request marker, but for this judge's requests
+//!   alone, so two judges of one panel log to two files.
+//!
 //! Built only under the `fake-provider` feature; never shipped to a consumer.
 #![allow(missing_docs)]
 
@@ -39,6 +56,9 @@ fn main() {
     if std::io::stdin().read_to_string(&mut input).is_err() {
         fail("could not read request from stdin");
     }
+    // Markers on this process's own argv, for a judge that has to be steered
+    // apart from the others in its panel (see the module docs).
+    let argv: String = std::env::args().skip(1).collect::<Vec<_>>().join(" ");
     // Protocol-violation markers, so the e2e suite can drive the engine's error
     // branches across a real subprocess: emit nothing, or exit non-zero.
     if input.contains("[[emit-empty]]") {
@@ -51,7 +71,7 @@ fn main() {
         Ok(v) => v,
         Err(e) => fail(&format!("request was not valid JSON: {e}")),
     };
-    if let Some(path) = marker(&input, "record") {
+    if let Some(path) = marker(&input, "record").or_else(|| marker(&argv, "record")) {
         let mut line = input.trim().to_string();
         line.push('\n');
         let mut file = std::fs::OpenOptions::new()
@@ -66,7 +86,7 @@ fn main() {
     let response = match op {
         "respond" => respond(&request),
         "user" => user(&request),
-        "supervisor" => supervisor(&request),
+        "supervisor" => supervisor(&request, &argv),
         "judge" => judge(&request),
         "assess" => assess(&request),
         other => fail(&format!("unknown op `{other}`")),
@@ -168,10 +188,37 @@ fn user(request: &Value) -> Value {
     })
 }
 
-fn supervisor(request: &Value) -> Value {
+fn supervisor(request: &Value, argv: &str) -> Value {
     let persona = request.get("persona").and_then(Value::as_str).unwrap_or("");
     if let Some(spec) = marker(persona, "judge-dwell") {
         dwell(spec);
+    }
+    // The argv-steered judge: sleep, stamp, fail, or answer a canned decision,
+    // before any of the persona-driven behaviour below is consulted.
+    let started = epoch_millis();
+    if let Some(millis) = marker(argv, "supervisor-sleep") {
+        let millis: u64 = millis
+            .parse()
+            .unwrap_or_else(|e| fail(&format!("a supervisor-sleep marker's MS is a number: {e}")));
+        std::thread::sleep(std::time::Duration::from_millis(millis));
+    }
+    if let Some(path) = marker(argv, "supervisor-stamp") {
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .unwrap_or_else(|e| fail(&format!("could not open the stamp file: {e}")));
+        file.write_all(format!("{started} {}\n", epoch_millis()).as_bytes())
+            .unwrap_or_else(|e| fail(&format!("could not write the stamp file: {e}")));
+    }
+    if argv.contains("[[supervisor-exit]]") {
+        fail("deliberate non-zero exit on the supervisor op");
+    }
+    if let Some(message) = marker(argv, "supervisor-continue") {
+        return json!({"completion": false, "message": message, "reason": format!("continue: {message}"), "usage": {"input_tokens": 1, "output_tokens": 1}});
+    }
+    if let Some(reason) = marker(argv, "supervisor-complete") {
+        return json!({"completion": true, "reason": reason, "usage": {"input_tokens": 1, "output_tokens": 1}});
     }
     // The judge passing the work with the note in hand: completion is answered only
     // on the decision that was re-taken carrying the note, never the one before it.
@@ -222,6 +269,13 @@ fn supervisor(request: &Value) -> Value {
     } else {
         json!({"completion": false, "message": "Thanks — and what about the next step?", "reason": "completion criterion not yet met", "usage": {"input_tokens": 1, "output_tokens": 1}})
     }
+}
+
+/// Milliseconds since the Unix epoch, for the overlap stamps.
+fn epoch_millis() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| since.as_millis())
 }
 
 /// Render the transcript the judge is given, including tool-event summaries, so a

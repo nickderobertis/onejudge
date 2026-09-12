@@ -32,14 +32,91 @@ use crate::usage::Usage;
 /// `settled_reason` — why a run ended without a completion decision because its
 /// supervisor gave no next instruction; `11` added `supervisor_control` and
 /// `supervisor_control_unavailable` — the same pair for the **supervisor** turn,
-/// which is separately addressable and separately refusable from the agent's.
-pub const SCHEMA_VERSION: u32 = 11;
+/// which is separately addressable and separately refusable from the agent's;
+/// `12` added `judge_decisions` — what each judge of a [`JudgePanel`] decided on
+/// each supervisor turn — and the `judge` label on `telemetry.attribution`,
+/// `telemetry.sessions` and `processes` that says which judge of a panel an
+/// invocation belonged to.
+///
+/// [`JudgePanel`]: crate::JudgePanel
+pub const SCHEMA_VERSION: u32 = 12;
 
 /// The skip predicate for a field that is always serialized but must not be
 /// *required* of a document being read. Used by [`Report::control`]; see the
 /// reasoning there.
 fn never<T>(_: &T) -> bool {
     false
+}
+
+/// What one judge of a [`JudgePanel`](crate::JudgePanel) decided, as a wire token.
+///
+/// The five outcomes a supervisor call can have, plus `error` for a judge that
+/// could not run — recorded rather than dropped, because a judge that could not
+/// run is never read as a pass and a reader has to be able to see that it was
+/// asked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "sdk-schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum Decision {
+    /// The judge declared the work complete.
+    Done,
+    /// The judge handed back a next instruction.
+    Continue,
+    /// The judge judged the work incomplete but named no next instruction, even
+    /// asked again.
+    NoInstruction,
+    /// The judge answered in neither documented shape, even asked again.
+    Unparseable,
+    /// The judge's call failed; `reason` is the error's message.
+    Error,
+}
+
+impl Decision {
+    /// The stable wire string (`done`, `continue`, `no_instruction`, `unparseable`,
+    /// `error`).
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Decision::Done => "done",
+            Decision::Continue => "continue",
+            Decision::NoInstruction => "no_instruction",
+            Decision::Unparseable => "unparseable",
+            Decision::Error => "error",
+        }
+    }
+}
+
+/// One judge's decision on one judge-side call, attributed to the judge by its
+/// panel label and provider kind.
+///
+/// A [`JudgePanel`](crate::JudgePanel) records one per judge per supervisor call
+/// — including the call that failed — and the engine drains them after every
+/// supervisor call, `Ok` or `Err`, onto [`Report::judge_decisions`]. A provider
+/// that is not a panel records none, so a report carrying no decisions was judged
+/// by a bare provider; nothing is synthesized.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "sdk-schema", derive(schemars::JsonSchema))]
+pub struct JudgeDecision {
+    /// The judge's label within its panel (`label:` in the config, or the
+    /// defaulted `<kind>` / `<kind>-<n>`).
+    pub judge: String,
+    /// The judge entry's provider kind (`oneharness`, `command`, …).
+    pub kind: String,
+    /// What it decided, or that it failed.
+    pub decision: Decision,
+    /// Its own reason — or, for an `error`, the error's message.
+    pub reason: String,
+}
+
+/// Every judge's decision on one supervisor turn.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "sdk-schema", derive(schemars::JsonSchema))]
+pub struct JudgedTurn {
+    /// 1-based assistant-turn index the supervisor turn belongs to, as
+    /// [`TurnOpened::turn`](crate::TurnOpened::turn).
+    pub turn: usize,
+    /// One decision per judge, in the panel's list order.
+    pub decisions: Vec<JudgeDecision>,
 }
 
 /// A judge verdict paired with the criterion it scored and the kind of
@@ -99,6 +176,12 @@ pub struct Report {
     /// this settles a run, it does not fail one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub settled_reason: Option<String>,
+    /// What each judge of a panel decided on each supervisor turn, one entry per
+    /// turn that consulted the supervisor, in turn order. Omitted when empty — a
+    /// run judged by a bare provider rather than a [`JudgePanel`](crate::JudgePanel)
+    /// records no per-judge decision, and nothing is synthesized for it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub judge_decisions: Vec<JudgedTurn>,
     /// Aggregated usage across every provider call (`None` if nothing reported).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub usage: Option<Usage>,
@@ -175,6 +258,7 @@ impl Report {
             assessment: None,
             completion_reason: None,
             settled_reason: None,
+            judge_decisions: Vec::new(),
             usage,
             telemetry: None,
             processes: Vec::new(),
@@ -391,6 +475,7 @@ mod tests {
                 program: "oneharness".into(),
                 pid: 4242,
                 group: Some("job:run-1".into()),
+                judge: None,
             },
             SpawnedProcess {
                 role: crate::TelemetryRole::Judge,
@@ -398,6 +483,7 @@ mod tests {
                 program: "oneharness".into(),
                 pid: 4243,
                 group: None,
+                judge: Some("reviewer".into()),
             },
         ];
         let json = serde_json::to_string(&report).unwrap();
@@ -405,7 +491,52 @@ mod tests {
         assert!(json.contains("job:run-1"));
         // The ungrouped record omits `group` entirely rather than inventing one.
         assert_eq!(json.matches("\"group\"").count(), 1);
+        // Likewise the judge label: only the process a panel stamped carries one
+        // (`"judge":` as a key is also the `role` token, so count the label).
+        assert_eq!(json.matches("\"judge\":\"reviewer\"").count(), 1);
+        assert_eq!(json.matches("\"judge\":").count(), 1);
         assert_eq!(serde_json::from_str::<Report>(&json).unwrap(), report);
+    }
+
+    #[test]
+    fn judge_decisions_round_trip_and_are_omitted_when_empty() {
+        // The v12 addition: one entry per supervisor turn, each decision attributed
+        // to a judge by label and kind, with the wire token of what it decided.
+        let mut report = Report::new(Transcript::from_input("hi"), vec![], None, false);
+        report.judge_decisions = vec![JudgedTurn {
+            turn: 1,
+            decisions: vec![
+                JudgeDecision {
+                    judge: "reviewer".into(),
+                    kind: "oneharness".into(),
+                    decision: Decision::Continue,
+                    reason: "tests are missing".into(),
+                },
+                JudgeDecision {
+                    judge: "command".into(),
+                    kind: "command".into(),
+                    decision: Decision::Error,
+                    reason: "provider exited with 1".into(),
+                },
+            ],
+        }];
+        let json = serde_json::to_string(&report).unwrap();
+        assert!(json.contains("\"judge_decisions\":[{\"turn\":1,\"decisions\":[{\"judge\":\"reviewer\",\"kind\":\"oneharness\",\"decision\":\"continue\",\"reason\":\"tests are missing\"}"));
+        assert!(json.contains("\"decision\":\"error\""));
+        assert_eq!(serde_json::from_str::<Report>(&json).unwrap(), report);
+        for (decision, token) in [
+            (Decision::Done, "done"),
+            (Decision::Continue, "continue"),
+            (Decision::NoInstruction, "no_instruction"),
+            (Decision::Unparseable, "unparseable"),
+            (Decision::Error, "error"),
+        ] {
+            assert_eq!(decision.as_str(), token);
+            assert_eq!(
+                serde_json::to_string(&decision).unwrap(),
+                format!("\"{token}\"")
+            );
+        }
     }
 
     #[test]

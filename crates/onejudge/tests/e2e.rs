@@ -14,9 +14,10 @@
 use std::ops::ControlFlow;
 
 use onejudge::{
-    CommandProvider, Conversation, Engine, EvidenceContext, JudgeKind, JudgeQuery, JudgeValue,
-    NamedVerdict, Observation, OneharnessProvider, Provider, ProviderErrorKind, Role, Settings,
-    SimulatedUser, Skill, SplitProvider, ToolQuery, Usage, SCHEMA_VERSION,
+    CommandProvider, Conversation, Decision, Engine, EvidenceContext, JudgeDecision, JudgeEntry,
+    JudgeKind, JudgePanel, JudgeQuery, JudgeValue, JudgedTurn, NamedVerdict, Observation,
+    OneharnessProvider, Provider, ProviderErrorKind, Role, Settings, SimulatedUser, Skill,
+    SplitProvider, ToolQuery, Usage, SCHEMA_VERSION,
 };
 
 mod support;
@@ -1252,6 +1253,497 @@ fn split_drives_a_multi_turn_conversation_across_both_backends() {
         .messages
         .iter()
         .any(|m| m.content.contains("what about the next step")));
+}
+
+// --- Judge panel journeys ---------------------------------------------------
+//
+// The judge side as a LIST: a `JudgePanel` of echo doubles composed as the judge
+// half of a `SplitProvider`, each judge steered through its own argv (the
+// persona, task and transcript are the same for every judge, by contract). Every
+// journey below runs the real engine over real subprocesses; only the model is
+// faked.
+
+/// The echo double with extra argv markers (see its module docs).
+fn echo_with(markers: &[&str]) -> CommandProvider {
+    let mut argv = vec![env!("CARGO_BIN_EXE_onejudge-echo-provider").to_string()];
+    argv.extend(markers.iter().map(|m| (*m).to_string()));
+    CommandProvider::new(argv).unwrap()
+}
+
+/// A panel of labelled echo judges, every one of kind `command`.
+fn panel(judges: Vec<(&str, CommandProvider)>) -> JudgePanel<CommandProvider> {
+    JudgePanel::new(
+        judges
+            .into_iter()
+            .map(|(label, judge)| JudgeEntry::new(label, "command", judge))
+            .collect(),
+    )
+    .unwrap()
+}
+
+fn decision(judge: &str, decision: Decision, reason: &str) -> JudgeDecision {
+    JudgeDecision {
+        judge: judge.into(),
+        kind: "command".into(),
+        decision,
+        reason: reason.into(),
+    }
+}
+
+/// Every `session` the supervisor requests logged at `path` carried.
+fn recorded_sessions(path: &std::path::Path) -> Vec<String> {
+    std::fs::read_to_string(path)
+        .expect("the judge recorded its requests")
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+        .filter(|request| request["op"] == "supervisor")
+        .map(|request| request["session"].as_str().unwrap().to_string())
+        .collect()
+}
+
+#[test]
+fn a_panel_whose_judges_all_complete_completes_the_run_with_each_reason_attributed() {
+    let reviewer_log = scratch_path("panel-all-done-reviewer.jsonl");
+    let lint_log = scratch_path("panel-all-done-lint.jsonl");
+    let split = SplitProvider::new(
+        echo(),
+        panel(vec![
+            (
+                "reviewer",
+                echo_with(&[
+                    "[[supervisor-complete:tests pass]]",
+                    &format!("[[record:{}]]", reviewer_log.display()),
+                ]),
+            ),
+            (
+                "lint",
+                echo_with(&[
+                    "[[supervisor-complete:lint clean]]",
+                    &format!("[[record:{}]]", lint_log.display()),
+                ]),
+            ),
+        ]),
+    );
+    let engine = Engine::new(&split, settings().with_session_name("panel-run"));
+    let outcome = engine
+        .run(&Conversation::multi_turn(
+            skill_with("Be helpful."),
+            "please commit",
+            SimulatedUser::new("A tester.").max_turns(3),
+        ))
+        .unwrap();
+
+    // One assistant turn; the panel completed the run on its first decision, with
+    // every judge's reason attributed in list order.
+    assert_eq!(outcome.transcript.assistant_turns(), 1);
+    assert_eq!(
+        outcome.completion_reason.as_deref(),
+        Some("[reviewer] tests pass; [lint] lint clean")
+    );
+    assert_eq!(
+        outcome.judge_decisions,
+        vec![JudgedTurn {
+            turn: 1,
+            decisions: vec![
+                decision("reviewer", Decision::Done, "tests pass"),
+                decision("lint", Decision::Done, "lint clean"),
+            ],
+        }]
+    );
+    // Each judge kept its own harness session: the user session, suffixed.
+    assert_eq!(
+        recorded_sessions(&reviewer_log),
+        ["panel-run-user-reviewer"]
+    );
+    assert_eq!(recorded_sessions(&lint_log), ["panel-run-user-lint"]);
+    // …and the judge-side processes carry the label of the judge that spawned
+    // them, while the agent side's carries none.
+    let labels: Vec<(onejudge::TelemetryRole, &str, Option<&str>)> = outcome
+        .processes
+        .iter()
+        .map(|p| (p.role, p.op.as_str(), p.judge.as_deref()))
+        .collect();
+    assert_eq!(
+        labels,
+        [
+            (onejudge::TelemetryRole::Agent, "respond", None),
+            (
+                onejudge::TelemetryRole::Judge,
+                "supervisor",
+                Some("reviewer")
+            ),
+            (onejudge::TelemetryRole::Judge, "supervisor", Some("lint")),
+        ]
+    );
+    // Usage is summed across the judges (each supervisor answer costs 1/1).
+    let usage = outcome.usage.unwrap();
+    assert_eq!(usage.output_tokens, Some(1 + 2));
+}
+
+#[test]
+fn one_continuing_judge_hands_the_worker_its_block_under_the_judges_header() {
+    let split = SplitProvider::new(
+        echo(),
+        panel(vec![
+            (
+                "reviewer",
+                echo_with(&["[[supervisor-complete:looks right]]"]),
+            ),
+            (
+                "lint",
+                echo_with(&["[[supervisor-continue:Fix the two lint findings.]]"]),
+            ),
+        ]),
+    );
+    let engine = Engine::new(&split, settings());
+    let outcome = engine
+        .run(&Conversation::multi_turn(
+            skill_with("Be helpful."),
+            "please commit",
+            SimulatedUser::new("A tester.").max_turns(2),
+        ))
+        .unwrap();
+
+    // The worker's next user turn is exactly the continuing judge's message under
+    // its header — the judge that completed contributes nothing to it.
+    let expected = "## Judge `lint` (command)\n\nFix the two lint findings.";
+    assert_eq!(outcome.transcript.messages[2].role, Role::User);
+    assert_eq!(outcome.transcript.messages[2].content, expected);
+    // …and the worker really was handed it: the echo double replies with it.
+    assert_eq!(
+        outcome.transcript.messages[3].content,
+        format!("echo: {expected}")
+    );
+    assert_eq!(
+        outcome.judge_decisions,
+        vec![JudgedTurn {
+            turn: 1,
+            decisions: vec![
+                decision("reviewer", Decision::Done, "looks right"),
+                decision(
+                    "lint",
+                    Decision::Continue,
+                    "continue: Fix the two lint findings."
+                ),
+            ],
+        }]
+    );
+}
+
+#[test]
+fn several_continuing_judges_stack_their_blocks_in_list_order() {
+    let split = SplitProvider::new(
+        echo(),
+        panel(vec![
+            (
+                "reviewer",
+                echo_with(&["[[supervisor-continue:Add the missing test.]]"]),
+            ),
+            (
+                "lint",
+                echo_with(&["[[supervisor-continue:Fix the lint.]]"]),
+            ),
+        ]),
+    );
+    let engine = Engine::new(&split, settings());
+    let outcome = engine
+        .run(&Conversation::multi_turn(
+            skill_with("Be helpful."),
+            "please commit",
+            SimulatedUser::new("A tester.").max_turns(2),
+        ))
+        .unwrap();
+    assert_eq!(
+        outcome.transcript.messages[2].content,
+        "## Judge `reviewer` (command)\n\nAdd the missing test.\n\n\
+         ## Judge `lint` (command)\n\nFix the lint."
+    );
+    assert_eq!(outcome.judge_decisions.len(), 1);
+    assert_eq!(
+        outcome.judge_decisions[0]
+            .decisions
+            .iter()
+            .map(|d| d.decision)
+            .collect::<Vec<_>>(),
+        [Decision::Continue, Decision::Continue]
+    );
+}
+
+#[test]
+fn a_judge_that_fails_while_another_is_still_running_fails_the_run_after_both_returned() {
+    // `reviewer` exits non-zero at once; `lint` is still deciding for 800 ms. The
+    // panel waits for `lint`, then fails the run with the error naming `reviewer`
+    // — classified as that judge's own failure — and both decisions are on the
+    // record for the turn that failed.
+    let stamp = scratch_path("panel-one-fails.stamp");
+    let split = SplitProvider::new(
+        echo(),
+        panel(vec![
+            ("reviewer", echo_with(&["[[supervisor-exit]]"])),
+            (
+                "lint",
+                echo_with(&[
+                    "[[supervisor-sleep:800]]",
+                    "[[supervisor-continue:Fix the lint.]]",
+                    &format!("[[supervisor-stamp:{}]]", stamp.display()),
+                ]),
+            ),
+        ]),
+    );
+    let engine = Engine::new(&split, settings());
+    let started = std::time::Instant::now();
+    let error = engine
+        .run(&Conversation::multi_turn(
+            skill_with("Be helpful."),
+            "please commit",
+            SimulatedUser::new("A tester.").max_turns(3),
+        ))
+        .unwrap_err();
+
+    // The failure came back only once `lint` had returned too.
+    assert!(
+        started.elapsed() >= std::time::Duration::from_millis(800),
+        "the panel returned before the slow judge did"
+    );
+    assert!(stamp.exists(), "the slow judge finished its decision");
+    let onejudge::Error::Provider {
+        context,
+        message,
+        kind,
+    } = &error
+    else {
+        panic!("a classified provider error: {error}")
+    };
+    assert_eq!(context, "supervise[reviewer]");
+    assert_eq!(*kind, Some(ProviderErrorKind::Protocol));
+    assert!(
+        message.starts_with("[reviewer] failed: provider error (supervisor): provider exited with"),
+        "{message}"
+    );
+    assert!(
+        message.ends_with("; [lint] continue: continue: Fix the lint."),
+        "{message}"
+    );
+    // The turn that failed is on the engine's record — a failed run still reports
+    // what every judge said, the one that failed included, so it can never be
+    // read as a pass.
+    let recorded = engine.judge_decisions();
+    assert_eq!(recorded.len(), 1);
+    assert_eq!(recorded[0].turn, 1);
+    assert_eq!(recorded[0].decisions[0].judge, "reviewer");
+    assert_eq!(recorded[0].decisions[0].decision, Decision::Error);
+    assert!(
+        recorded[0].decisions[0]
+            .reason
+            .starts_with("provider error (supervisor): provider exited with"),
+        "{:?}",
+        recorded[0].decisions[0]
+    );
+    assert_eq!(
+        recorded[0].decisions[1],
+        decision("lint", Decision::Continue, "continue: Fix the lint.")
+    );
+}
+
+#[test]
+fn two_judges_run_at_the_same_time_not_one_after_the_other() {
+    // Each judge sleeps 1500 ms before deciding. Run one after the other the
+    // supervisor turn costs 3000 ms; run concurrently it costs the slowest judge.
+    // The wall-clock bound is the contract; the stamped intervals are the
+    // mechanism, proven to overlap rather than merely to have been fast.
+    const SLEEP_MS: u64 = 1500;
+    let a = scratch_path("panel-overlap-a.stamp");
+    let b = scratch_path("panel-overlap-b.stamp");
+    let sleeper = |stamp: &std::path::Path| {
+        echo_with(&[
+            &format!("[[supervisor-sleep:{SLEEP_MS}]]"),
+            "[[supervisor-complete:slept]]",
+            &format!("[[supervisor-stamp:{}]]", stamp.display()),
+        ])
+    };
+    let split = SplitProvider::new(echo(), panel(vec![("a", sleeper(&a)), ("b", sleeper(&b))]));
+    let engine = Engine::new(&split, settings());
+    let started = std::time::Instant::now();
+    let outcome = engine
+        .run(&Conversation::multi_turn(
+            skill_with("Be helpful."),
+            "please commit",
+            SimulatedUser::new("A tester.").max_turns(2),
+        ))
+        .unwrap();
+    let wall = started.elapsed();
+    assert_eq!(
+        outcome.completion_reason.as_deref(),
+        Some("[a] slept; [b] slept")
+    );
+    assert!(
+        wall >= std::time::Duration::from_millis(SLEEP_MS),
+        "the judges really slept: {wall:?}"
+    );
+    assert!(
+        wall < std::time::Duration::from_millis(2 * SLEEP_MS),
+        "the run took {wall:?}, at least the sum of the two sleeps — the judges ran in sequence"
+    );
+    let interval = |stamp: &std::path::Path| -> (u128, u128) {
+        let text = std::fs::read_to_string(stamp).expect("the judge stamped its decision");
+        let (start, end) = text.trim().split_once(' ').unwrap();
+        (start.parse().unwrap(), end.parse().unwrap())
+    };
+    let (a_start, a_end) = interval(&a);
+    let (b_start, b_end) = interval(&b);
+    assert!(
+        a_start < b_end && b_start < a_end,
+        "the two decisions did not overlap: a={a_start}..{a_end} b={b_start}..{b_end}"
+    );
+}
+
+#[test]
+fn a_panel_of_one_hands_the_bare_session_through_and_attributes_nothing() {
+    // The single-judge shape every existing config has, through the panel path:
+    // no header, no prefix, the bare `<base>-user` session, and no label on the
+    // judge's process records — but its decision is still recorded, because a
+    // panel of one is still a panel.
+    let log = scratch_path("panel-of-one.jsonl");
+    let split = SplitProvider::new(
+        echo(),
+        panel(vec![(
+            "only",
+            echo_with(&[&format!("[[record:{}]]", log.display())]),
+        )]),
+    );
+    let engine = Engine::new(&split, settings().with_session_name("one"));
+    let outcome = engine
+        .run(&Conversation::multi_turn(
+            skill_with("Be helpful."),
+            "please commit",
+            SimulatedUser::new("A tester.")
+                .done_when("next step")
+                .max_turns(4),
+        ))
+        .unwrap();
+    assert_eq!(
+        outcome.transcript.messages[2].content,
+        "Thanks — and what about the next step?"
+    );
+    assert_eq!(
+        outcome.completion_reason.as_deref(),
+        Some("completion criterion found in transcript")
+    );
+    assert_eq!(recorded_sessions(&log), ["one-user", "one-user"]);
+    assert!(outcome.processes.iter().all(|p| p.judge.is_none()));
+    assert_eq!(
+        outcome.judge_decisions,
+        vec![
+            JudgedTurn {
+                turn: 1,
+                decisions: vec![decision(
+                    "only",
+                    Decision::Continue,
+                    "completion criterion not yet met"
+                )],
+            },
+            JudgedTurn {
+                turn: 2,
+                decisions: vec![decision(
+                    "only",
+                    Decision::Done,
+                    "completion criterion found in transcript"
+                )],
+            },
+        ]
+    );
+}
+
+#[test]
+fn a_panel_of_oneharness_judges_labels_each_judges_attribution_and_session_link() {
+    // The label on `telemetry.attribution[]` / `sessions[]` is stamped by the panel
+    // onto records only an oneharness-backed judge produces, so the judges here
+    // are the fake oneharness double rather than the echo one — and each judge's
+    // native session is linked under its own label.
+    let split = SplitProvider::new(
+        fake_oneharness(),
+        JudgePanel::new(vec![
+            JudgeEntry::new("reviewer", "oneharness", fake_oneharness()),
+            JudgeEntry::new("second", "oneharness", fake_oneharness()),
+        ])
+        .unwrap(),
+    );
+    let engine = Engine::new(&split, settings().with_session_name("labelled"));
+    let outcome = engine
+        .run(&Conversation::multi_turn(
+            skill_with("[[reply:ok]]"),
+            "start",
+            SimulatedUser::new("A patient tester.").max_turns(2),
+        ))
+        .unwrap();
+    assert_eq!(outcome.transcript.assistant_turns(), 2);
+    let telemetry = outcome.telemetry.expect("telemetry");
+    let judged: Vec<(onejudge::TelemetryRole, Option<&str>)> = telemetry
+        .attribution
+        .iter()
+        .map(|a| (a.role, a.judge.as_deref()))
+        .collect();
+    assert_eq!(
+        judged,
+        [
+            (onejudge::TelemetryRole::Agent, None),
+            (onejudge::TelemetryRole::Agent, None),
+            (onejudge::TelemetryRole::Judge, Some("reviewer")),
+            (onejudge::TelemetryRole::Judge, Some("second")),
+        ],
+        "{:#?}",
+        telemetry.attribution
+    );
+    let linked: Vec<(onejudge::TelemetryRole, Option<&str>)> = telemetry
+        .sessions
+        .iter()
+        .map(|s| (s.role, s.judge.as_deref()))
+        .collect();
+    assert_eq!(
+        linked,
+        [
+            (onejudge::TelemetryRole::Agent, None),
+            (onejudge::TelemetryRole::Agent, None),
+            (onejudge::TelemetryRole::Judge, Some("reviewer")),
+            (onejudge::TelemetryRole::Judge, Some("second")),
+        ],
+        "{:#?}",
+        telemetry.sessions
+    );
+    // The same labels ride the processes each judge spawned.
+    assert!(outcome
+        .processes
+        .iter()
+        .filter(|p| p.role == onejudge::TelemetryRole::Judge)
+        .all(|p| matches!(p.judge.as_deref(), Some("reviewer" | "second"))));
+}
+
+#[test]
+fn a_panel_conjoins_boolean_verdicts_and_stacks_assessments_under_headers() {
+    let split = SplitProvider::new(echo(), panel(vec![("a", echo()), ("b", echo())]));
+    let engine = Engine::new(&split, settings());
+    let outcome = engine
+        .run(&Conversation::single_turn(skill_with("Be helpful."), "hi"))
+        .unwrap();
+    // Both echo judges decide by substring, so the conjunction agrees with each.
+    let hit = engine.judge_boolean("echo", &outcome.transcript).unwrap();
+    assert_eq!(hit.value, JudgeValue::Bool(true));
+    assert_eq!(
+        hit.reason,
+        "[a] criterion found in transcript; [b] criterion found in transcript"
+    );
+    let miss = engine.judge_boolean("nope", &outcome.transcript).unwrap();
+    assert_eq!(miss.value, JudgeValue::Bool(false));
+    let score = engine
+        .judge_numeric("echo", 1.0, 5.0, &outcome.transcript)
+        .unwrap();
+    assert_eq!(score.value, JudgeValue::Number(5.0));
+    let assessment = engine.assess("follow-ups", &outcome.transcript).unwrap();
+    assert_eq!(
+        assessment.text,
+        "## Judge `a` (command)\n\nAssessment for `follow-ups`.\n\n\
+         ## Judge `b` (command)\n\nAssessment for `follow-ups`."
+    );
 }
 
 // --- The versioned Report contract, assembled from a real run --------------
@@ -2802,6 +3294,13 @@ enum Seen {
         started_at: String,
         finished_at: String,
     },
+    Judged {
+        turn: usize,
+        judge: String,
+        kind: String,
+        decision: onejudge::Decision,
+        reason: String,
+    },
 }
 
 /// Copy one borrowed [`Observation`] into an owned record.
@@ -2829,6 +3328,13 @@ fn observed(observation: &Observation<'_>) -> Seen {
             usage: closed.usage.cloned(),
             started_at: closed.started_at.clone(),
             finished_at: closed.finished_at.clone(),
+        },
+        Observation::JudgeDecided(decided) => Seen::Judged {
+            turn: decided.turn,
+            judge: decided.judge.to_string(),
+            kind: decided.kind.to_string(),
+            decision: decided.decision,
+            reason: decided.reason.to_string(),
         },
     }
 }
@@ -2978,6 +3484,7 @@ fn an_observing_multi_turn_run_reports_both_parties_without_disturbing_the_strea
             Seen::Tool { turn, .. } => ("tool", *turn, None),
             Seen::Said { turn, role, .. } => ("said", *turn, Some(*role)),
             Seen::Closed { turn, role, .. } => ("closed", *turn, Some(*role)),
+            Seen::Judged { turn, .. } => ("judged", *turn, None),
         })
         .collect();
     assert_eq!(

@@ -350,6 +350,18 @@ pub trait Provider {
         crate::ControlOutcome::NotRequested
     }
 
+    /// Take every per-judge decision recorded since the last take.
+    ///
+    /// A [`JudgePanel`](crate::JudgePanel) records one [`JudgeDecision`](crate::JudgeDecision) per judge
+    /// per supervisor call — including a call that failed — and the engine drains
+    /// them after every supervisor call, `Ok` or `Err`, onto the report's
+    /// `judge_decisions`. The default is empty: a provider that is not a panel has
+    /// no per-judge decision to report, and nothing is synthesized for it, so a
+    /// report carrying none was judged by a bare provider.
+    fn take_judge_decisions(&self) -> Vec<crate::JudgeDecision> {
+        Vec::new()
+    }
+
     /// Run one assistant/skill turn given the conversation so far.
     ///
     /// `session`, when `Some`, is a **caller-owned session name** the engine

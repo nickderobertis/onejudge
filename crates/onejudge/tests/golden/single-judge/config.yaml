@@ -1,0 +1,30 @@
+# The single-judge baseline: a `kind: split` with one `judge:` — the shape every
+# pre-existing config has — over the echo double on both sides. Captured by
+# `scripts/capture-single-judge-baseline.sh` from the published `onejudge` 0.8.1
+# and replayed by `tests/cli.rs` on every build, so a panel of one is proven to
+# produce today's transcript, session names, control addresses and usage.
+#
+# `{{ECHO}}` is the JSON-encoded echo double path; `{{RECORD}}` the file the judge
+# side appends every supervisor request to (session names live there).
+provider:
+  kind: split
+  skill:
+    kind: command
+    command: [{{ECHO}}]
+  judge:
+    kind: command
+    command: [{{ECHO}}]
+task: please commit
+system_prompt: 'Commit it on the second try.'
+user:
+  persona: 'A tester. [[record:{{RECORD}}]]'
+  done_when: next step
+  max_turns: 4
+session: baseline
+evals:
+  - criterion: echo
+    kind: boolean
+  - criterion: please
+    kind: numeric
+    scale: [1, 5]
+assessment: Identify follow-up work.

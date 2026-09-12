@@ -3,15 +3,15 @@
 //! (`SplitProvider<S, J>` is generic), so the CLI — which picks a backend at
 //! runtime from YAML — needs one concrete type that erases the choice.
 //! `AnyProvider` is that type: it owns each backend as an enum variant and forwards
-//! every [`Provider`] method, dispatching a `split` to its two children exactly as
-//! [`SplitProvider`] would.
+//! every [`Provider`] method, dispatching a `split` to its skill child and its
+//! [`JudgePanel`] exactly as [`SplitProvider`] would.
 
 use std::ops::ControlFlow;
 
 use crate::{
-    Assessment, AssistantTurn, CommandProvider, EvidenceContext, JudgeQuery, JudgeVerdict, Message,
-    OneharnessProvider, Provider, SharedSpawnHook, SkillRef, SupervisorQuery, SupervisorTurn,
-    ToolEvent, UserTurn,
+    Assessment, AssistantTurn, CommandProvider, EvidenceContext, JudgeEntry, JudgePanel,
+    JudgeQuery, JudgeVerdict, Message, OneharnessProvider, Provider, SharedSpawnHook, SkillRef,
+    SupervisorQuery, SupervisorTurn, ToolEvent, UserTurn,
 };
 
 use super::config::ProviderSpec;
@@ -29,13 +29,14 @@ pub enum AnyProvider {
     Oneharness(OneharnessProvider),
     /// A custom JSON-lines command backend.
     Command(CommandProvider),
-    /// A composed skill-runner + judge backend, dispatched like
+    /// A composed skill-runner + judge-panel backend, dispatched like
     /// [`crate::SplitProvider`].
     Split {
         /// Runs the agent's turns.
         skill: Box<AnyProvider>,
-        /// Judges and plays the simulated user.
-        judge: Box<AnyProvider>,
+        /// The judges — one or more, run concurrently and combined — that judge
+        /// and play the simulated user.
+        judges: JudgePanel<AnyProvider>,
     },
 }
 
@@ -76,16 +77,28 @@ impl AnyProvider {
                     .map_err(|e| CliError::Config(e.to_string()))?;
                 Ok(AnyProvider::Command(provider))
             }
-            ProviderSpec::Split { skill, judge } => Ok(AnyProvider::Split {
+            ProviderSpec::Split { skill, judges } => Ok(AnyProvider::Split {
                 skill: Box::new(AnyProvider::build(skill)?),
-                judge: Box::new(AnyProvider::build(judge)?),
+                judges: JudgePanel::new(
+                    judges
+                        .iter()
+                        .map(|judge| {
+                            Ok(JudgeEntry::new(
+                                judge.label.clone(),
+                                judge.provider.kind().as_str(),
+                                AnyProvider::build(&judge.provider)?,
+                            ))
+                        })
+                        .collect::<Result<Vec<_>, CliError>>()?,
+                )
+                .map_err(|e| CliError::Config(e.to_string()))?,
             }),
         }
     }
 
-    /// Install `hook` on this backend — and, for a `split`, on **both** of its
-    /// children, so one embedder-owned group spans the whole two-party tree rather
-    /// than only the side that happened to spawn first.
+    /// Install `hook` on this backend — and, for a `split`, on its skill child
+    /// **and every judge of its panel**, so one embedder-owned group spans the
+    /// whole tree rather than only the side that happened to spawn first.
     ///
     /// Each variant forwards to its own backend's `with_spawn_hook`, so this is the
     /// reach of the existing seam rather than a second grouping mechanism.
@@ -94,9 +107,9 @@ impl AnyProvider {
         match self {
             AnyProvider::Oneharness(p) => AnyProvider::Oneharness(p.with_spawn_hook(hook)),
             AnyProvider::Command(p) => AnyProvider::Command(p.with_spawn_hook(hook)),
-            AnyProvider::Split { skill, judge } => AnyProvider::Split {
+            AnyProvider::Split { skill, judges } => AnyProvider::Split {
                 skill: Box::new(skill.with_spawn_hook(hook.clone())),
-                judge: Box::new(judge.with_spawn_hook(hook)),
+                judges: judges.map_judges(|judge| judge.with_spawn_hook(hook.clone())),
             },
         }
     }
@@ -110,9 +123,9 @@ impl Provider for AnyProvider {
         match self {
             AnyProvider::Oneharness(p) => p.reset_telemetry(),
             AnyProvider::Command(p) => p.reset_telemetry(),
-            AnyProvider::Split { skill, judge } => {
+            AnyProvider::Split { skill, judges } => {
                 skill.reset_telemetry();
-                judge.reset_telemetry();
+                judges.reset_telemetry();
             }
         }
     }
@@ -121,9 +134,9 @@ impl Provider for AnyProvider {
         match self {
             AnyProvider::Oneharness(p) => p.invocation_telemetry(),
             AnyProvider::Command(p) => p.invocation_telemetry(),
-            AnyProvider::Split { skill, judge } => {
+            AnyProvider::Split { skill, judges } => {
                 let mut records = skill.invocation_telemetry();
-                records.extend(judge.invocation_telemetry());
+                records.extend(judges.invocation_telemetry());
                 records
             }
         }
@@ -133,11 +146,27 @@ impl Provider for AnyProvider {
         match self {
             AnyProvider::Oneharness(p) => p.spawned_processes(),
             AnyProvider::Command(p) => p.spawned_processes(),
-            AnyProvider::Split { skill, judge } => {
+            AnyProvider::Split { skill, judges } => {
                 let mut records = skill.spawned_processes();
-                records.extend(judge.spawned_processes());
+                records.extend(judges.spawned_processes());
                 records
             }
+        }
+    }
+
+    fn supervisor_control(&self) -> crate::ControlOutcome {
+        match self {
+            AnyProvider::Oneharness(p) => p.supervisor_control(),
+            AnyProvider::Command(p) => p.supervisor_control(),
+            AnyProvider::Split { judges, .. } => judges.supervisor_control(),
+        }
+    }
+
+    fn take_judge_decisions(&self) -> Vec<crate::JudgeDecision> {
+        match self {
+            AnyProvider::Oneharness(p) => p.take_judge_decisions(),
+            AnyProvider::Command(p) => p.take_judge_decisions(),
+            AnyProvider::Split { judges, .. } => judges.take_judge_decisions(),
         }
     }
 
@@ -189,7 +218,7 @@ impl Provider for AnyProvider {
         match self {
             AnyProvider::Oneharness(p) => p.simulate_user(persona, messages, session),
             AnyProvider::Command(p) => p.simulate_user(persona, messages, session),
-            AnyProvider::Split { judge, .. } => judge.simulate_user(persona, messages, session),
+            AnyProvider::Split { judges, .. } => judges.simulate_user(persona, messages, session),
         }
     }
     fn supervise(
@@ -201,7 +230,7 @@ impl Provider for AnyProvider {
         match self {
             AnyProvider::Oneharness(p) => p.supervise(query, messages, session),
             AnyProvider::Command(p) => p.supervise(query, messages, session),
-            AnyProvider::Split { judge, .. } => judge.supervise(query, messages, session),
+            AnyProvider::Split { judges, .. } => judges.supervise(query, messages, session),
         }
     }
     fn supervise_with_evidence(
@@ -218,8 +247,8 @@ impl Provider for AnyProvider {
             AnyProvider::Command(p) => {
                 p.supervise_with_evidence(query, messages, session, evidence)
             }
-            AnyProvider::Split { judge, .. } => {
-                judge.supervise_with_evidence(query, messages, session, evidence)
+            AnyProvider::Split { judges, .. } => {
+                judges.supervise_with_evidence(query, messages, session, evidence)
             }
         }
     }
@@ -228,7 +257,7 @@ impl Provider for AnyProvider {
         match self {
             AnyProvider::Oneharness(p) => p.judge(query, messages),
             AnyProvider::Command(p) => p.judge(query, messages),
-            AnyProvider::Split { judge, .. } => judge.judge(query, messages),
+            AnyProvider::Split { judges, .. } => judges.judge(query, messages),
         }
     }
     fn judge_with_evidence(
@@ -240,8 +269,8 @@ impl Provider for AnyProvider {
         match self {
             AnyProvider::Oneharness(p) => p.judge_with_evidence(query, messages, evidence),
             AnyProvider::Command(p) => p.judge_with_evidence(query, messages, evidence),
-            AnyProvider::Split { judge, .. } => {
-                judge.judge_with_evidence(query, messages, evidence)
+            AnyProvider::Split { judges, .. } => {
+                judges.judge_with_evidence(query, messages, evidence)
             }
         }
     }
@@ -250,7 +279,7 @@ impl Provider for AnyProvider {
         match self {
             AnyProvider::Oneharness(p) => p.assess(prompt, messages),
             AnyProvider::Command(p) => p.assess(prompt, messages),
-            AnyProvider::Split { judge, .. } => judge.assess(prompt, messages),
+            AnyProvider::Split { judges, .. } => judges.assess(prompt, messages),
         }
     }
     fn assess_with_evidence(
@@ -262,8 +291,8 @@ impl Provider for AnyProvider {
         match self {
             AnyProvider::Oneharness(p) => p.assess_with_evidence(prompt, messages, evidence),
             AnyProvider::Command(p) => p.assess_with_evidence(prompt, messages, evidence),
-            AnyProvider::Split { judge, .. } => {
-                judge.assess_with_evidence(prompt, messages, evidence)
+            AnyProvider::Split { judges, .. } => {
+                judges.assess_with_evidence(prompt, messages, evidence)
             }
         }
     }
@@ -271,6 +300,7 @@ impl Provider for AnyProvider {
 
 #[cfg(test)]
 mod tests {
+    use super::super::config::JudgeSpec;
     use super::*;
 
     #[test]
@@ -308,11 +338,49 @@ mod tests {
                 control: false,
                 mock_harness: Vec::new(),
             }),
-            judge: Box::new(ProviderSpec::Command {
-                command: vec!["judge".into()],
-            }),
+            judges: vec![
+                JudgeSpec {
+                    label: "command".into(),
+                    provider: ProviderSpec::Command {
+                        command: vec!["judge".into()],
+                    },
+                },
+                JudgeSpec {
+                    label: "reviewer".into(),
+                    provider: ProviderSpec::Oneharness {
+                        bin: None,
+                        judge_config: None,
+                        stream: false,
+                        control: false,
+                        mock_harness: Vec::new(),
+                    },
+                },
+            ],
         };
         let provider = AnyProvider::build(&spec).unwrap();
-        assert!(matches!(provider, AnyProvider::Split { .. }));
+        let AnyProvider::Split { judges, .. } = &provider else {
+            panic!("a split");
+        };
+        // The panel carries each judge's label and kind, in list order.
+        let named: Vec<(&str, &str)> = judges
+            .judges()
+            .iter()
+            .map(|j| (j.label(), j.kind()))
+            .collect();
+        assert_eq!(named, [("command", "command"), ("reviewer", "oneharness")]);
+        // A judge whose backend cannot be built fails the whole build.
+        let broken = ProviderSpec::Split {
+            skill: Box::new(ProviderSpec::Command {
+                command: vec!["s".into()],
+            }),
+            judges: vec![JudgeSpec {
+                label: "j".into(),
+                provider: ProviderSpec::Command { command: vec![] },
+            }],
+        };
+        assert!(matches!(
+            AnyProvider::build(&broken),
+            Err(CliError::Config(_))
+        ));
     }
 }

@@ -9,7 +9,7 @@ and re-export, so onejudge — not its consumers — owns the shape of a judged 
 
 ```jsonc
 {
-  "schema_version": 11,                 // bump on any wire change
+  "schema_version": 12,                 // bump on any wire change
   "transcript": {
     "messages": [
       { "role": "user", "content": "commit the fix" },
@@ -34,6 +34,12 @@ and re-export, so onejudge — not its consumers — owns the shape of a judged 
   "assessment": "No follow-up work remains.", // omitted when not requested
   "completion_reason": "all required tests passed", // omitted unless the supervisor completed the run
   "settled_reason": "…gave no next instruction…",   // omitted unless the run settled instead (see below)
+  "judge_decisions": [                  // omitted when empty: only a JudgePanel records these (see below)
+    { "turn": 1, "decisions": [        // one entry per supervisor turn, in turn order
+        { "judge": "reviewer", "kind": "oneharness", "decision": "done", "reason": "a git commit ran" },
+        { "judge": "command", "kind": "command", "decision": "done", "reason": "the commit script passed" }
+      ] }
+  ],
   "usage": {                            // omitted when nothing reported
     "input_tokens": 12, "output_tokens": 3,
     "cache_read_tokens": 9, "cache_write_tokens": 4   // prompt-cache reads/writes, when the harness reports them
@@ -43,7 +49,7 @@ and re-export, so onejudge — not its consumers — owns the shape of a judged 
     "agent": { "model_ms": 20, "tool_ms": 5, "session_ids": ["native-agent-1"] },
     "judge": { "model_ms": 10, "tool_ms": 0 },
     "orchestration_ms": 5,
-    "sessions": [ /* one link per invocation that exposed a native session id */ ],
+    "sessions": [ /* one link per invocation that exposed a native session id; `judge` names the panel judge, when there is one */ ],
     "attribution": [                    // omitted when the provider names no candidate
       {
         "role": "agent",               // "agent" | "judge" — which SIDE made the call
@@ -62,13 +68,15 @@ and re-export, so onejudge — not its consumers — owns the shape of a judged 
           }
         ],
         "history_file": "/state/oneharness/history/run-1-skill.jsonl"
+        // "judge": "reviewer"         // only on a judge-side call made by one judge of a panel of several
       }
     ]
   },
   "processes": [                        // omitted when the run spawned nothing
     { "role": "agent", "op": "respond", "program": "oneharness", "pid": 41231,
       "group": "job:run-1" },          // only when a SpawnHook named one
-    { "role": "judge", "op": "judge", "program": "oneharness", "pid": 41244 }
+    { "role": "judge", "op": "judge", "program": "oneharness", "pid": 41244,
+      "judge": "reviewer" }            // only when a panel of several judges spawned it
   ],
   "control": {                          // ALWAYS present; null when not asked for
     "session": "run-42-skill",         // the three values `oneharness interrupt` takes
@@ -156,6 +164,31 @@ fact, and the one a supervisor has to route around. See
 `<base>-user`. They are different sockets and are refused independently — a harness
 that can be interrupted on one side is not thereby interruptible on the other — so
 a reader that has one address and assumes the other holds a lever it does not have.
+Under a [judge panel](judges.md) it is the **first** judge's. Through 0.8.1 the CLI
+wrote `null` here for every config, because its runtime provider never forwarded
+the judge side's answer — a defect against this contract, fixed in v12; the
+library path always carried it.
+
+## `judge_decisions` — what each judge of a panel said, per turn (v12)
+
+When the judge side is a [panel](judges.md) — `provider.judges:` with one or
+more entries — every supervisor turn records one `JudgeDecision` per judge, in
+the panel's list order: the judge's `label`, its provider `kind`, what it decided
+(`done`, `continue`, `no_instruction`, `unparseable`, or `error` when its call
+failed) and its own `reason` (the error's message, for `error`). One `JudgedTurn`
+per supervisor turn, keyed by the assistant turn it judged. The
+[`FailureReport`](#when-a-run-fails) carries the same array, the turn that failed
+included, so a judge that could not run is on the record beside the ones that
+decided and is never read as a pass.
+
+Omitted when empty. A run judged by a bare provider — `kind: oneharness`,
+`kind: command`, or a library `SplitProvider` whose judge half is not a
+`JudgePanel` — records no decision, and nothing is synthesized for it; every CLI
+`split` builds a panel, a single `judge:` included, so it records one decision
+per turn. The same label rides
+`telemetry.attribution[].judge`, `telemetry.sessions[].judge` and
+`processes[].judge`, set only by a panel of **more than one** judge; a panel of
+one writes exactly the records a bare provider writes.
 
 ## `processes` — what the run spawned, and who owns its group
 
@@ -168,8 +201,8 @@ its records carry pids and no group.
 ## Versioning and the drift gate
 
 The wire form is pinned by a canonical serialized example
-(`crates/onejudge/tests/golden/report.example-v11.json`) and its generated JSON
-Schema (`crates/onejudge/tests/golden/report.schema-v11.json`), both checked by
+(`crates/onejudge/tests/golden/report.example-v12.json`) and its generated JSON
+Schema (`crates/onejudge/tests/golden/report.schema-v12.json`), both checked by
 `tests/contract.rs`. Any change to the serialized shape — a renamed field, a new
 key, a changed default — fails that test, so it can only land as a **deliberate**
 edit that also bumps `SCHEMA_VERSION` and updates both goldens. Downstream SDKs
@@ -188,8 +221,9 @@ named JSON Schema roots:
 - `report`: the versioned JSON output emitted by `--format json`;
 - `stream_event`: the `{ turn, event }` envelope delivered by streaming runs;
 - `observation`: one live observation of a run in progress — a turn opening, a
-  tool event, a party's reply, or a turn closing — as an in-process embedder
-  receives it (`Engine::run_observing`);
+  tool event, a party's reply, a judge of a panel deciding (`judge_decided`), or
+  a turn closing — as an in-process embedder receives it
+  (`Engine::run_observing`);
 - `failure_report`: the document `--format json` writes **instead of** a report
   when the run fails (see below).
 
@@ -202,10 +236,11 @@ attribution for. So `onejudge run --format json` writes a versioned
 
 ```jsonc
 {
-  "schema_version": 11,
-  "error": { "message": "run failed: provider error (respond): …", "kind": "auth" },
+  "schema_version": 12,
+  "error": { "message": "run failed: provider error (supervise[command]): …", "kind": "protocol" },
   "telemetry": { /* as above, including `attribution` */ },
-  "processes": [ /* what the failed run had already spawned, as below */ ]
+  "processes": [ /* what the failed run had already spawned, as below */ ],
+  "judge_decisions": [ /* as above, the turn that failed included */ ]
 }
 ```
 

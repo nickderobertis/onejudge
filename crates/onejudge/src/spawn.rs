@@ -193,6 +193,11 @@ pub struct SpawnedProcess {
     /// The embedder-owned group a [`SpawnHook`] reported placing it in.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub group: Option<String>,
+    /// Which judge of a [`JudgePanel`](crate::JudgePanel) spawned it, by label.
+    /// Set only by a panel holding more than one judge; absent otherwise, so a
+    /// single-judge run's records are the ones it has always written.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub judge: Option<String>,
 }
 
 /// The provider-side half of the seam: holds the optional hook and the record of
@@ -269,6 +274,9 @@ impl Spawner {
             program: context.program.to_string(),
             pid: child.id(),
             group,
+            // Stamped by a `JudgePanel` of more than one judge, never here: a
+            // spawner is one backend's and cannot know its place in a panel.
+            judge: None,
         });
         Ok(child)
     }

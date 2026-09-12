@@ -11,6 +11,9 @@ from typing import Literal, Optional, get_type_hints
 
 from onejudge_sdk import (
     EvalConfig,
+    FailureReport,
+    JudgeDecision,
+    JudgedTurn,
     JudgeVerdict,
     ProviderConfig,
     RunConfig,
@@ -43,6 +46,19 @@ class GenerationTests(unittest.TestCase):
         self.assertEqual(report["usage"], Optional[Usage])
         self.assertEqual(get_type_hints(JudgeVerdict)["usage"], Optional[Usage])
         self.assertIs(stream["event"], ToolEvent)
+
+    def test_generated_judge_panel_shapes(self) -> None:
+        """Carry the judge list on the config and each judge's decision on both reports."""
+        provider = get_type_hints(ProviderConfig)
+        self.assertEqual(provider["judges"], Optional[Sequence[ProviderConfig]])
+        self.assertEqual(provider["label"], Optional[str])
+        self.assertEqual(get_type_hints(RunReport)["judge_decisions"], Sequence[JudgedTurn])
+        self.assertEqual(get_type_hints(FailureReport)["judge_decisions"], Sequence[JudgedTurn])
+        self.assertEqual(get_type_hints(JudgedTurn)["decisions"], Sequence[JudgeDecision])
+        self.assertEqual(
+            get_type_hints(JudgeDecision)["decision"],
+            Literal["done", "continue", "no_instruction", "unparseable", "error"],
+        )
 
     def test_generated_nullable_and_literal_types(self) -> None:
         """Represent nullable fields as Optional and schema enums as literals."""

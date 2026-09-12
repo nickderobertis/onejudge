@@ -14,7 +14,7 @@ use crate::provider::{
     Assessment, AssistantTurn, EvidenceContext, JudgeKind, JudgeQuery, JudgeVerdict, Provider,
     SkillRef, SupervisorOutcome, SupervisorQuery,
 };
-use crate::report::{NamedVerdict, Report};
+use crate::report::{Decision, JudgedTurn, NamedVerdict, Report};
 use crate::spawn::SpawnedProcess;
 use crate::telemetry::{aggregate, Telemetry};
 use crate::transcript::{Message, Role, ToolEvent, Transcript};
@@ -337,6 +337,10 @@ pub struct Outcome {
     /// [`Outcome::control`] because the two sides are separately addressable and
     /// separately refusable, so one answer cannot stand for both.
     pub supervisor_control: ControlOutcome,
+    /// What each judge of a [`JudgePanel`](crate::JudgePanel) decided on each
+    /// supervisor turn, in turn order. Empty for a bare provider, which records no
+    /// per-judge decision.
+    pub judge_decisions: Vec<JudgedTurn>,
 }
 
 impl Outcome {
@@ -360,6 +364,7 @@ impl Outcome {
         report.settled_reason = self.settled_reason;
         report.telemetry = self.telemetry;
         report.processes = self.processes;
+        report.judge_decisions = self.judge_decisions;
         report = report.with_control(&self.control);
         report = report.with_supervisor_control(&self.supervisor_control);
         match assessment {
@@ -376,6 +381,10 @@ pub struct Engine<'a> {
     started: RefCell<Option<Instant>>,
     notes: Option<NoteInbox>,
     worktree: RefCell<Option<String>>,
+    /// Every judge's decision on every supervisor turn so far, drained from the
+    /// provider after each supervisor call — kept on the engine like telemetry,
+    /// so a run that fails on a judge still reports what each judge said.
+    judge_decisions: RefCell<Vec<JudgedTurn>>,
 }
 
 impl<'a> Engine<'a> {
@@ -388,6 +397,7 @@ impl<'a> Engine<'a> {
             started: RefCell::new(None),
             notes: None,
             worktree: RefCell::new(None),
+            judge_decisions: RefCell::new(Vec::new()),
         }
     }
 
@@ -569,6 +579,7 @@ impl<'a> Engine<'a> {
         self.provider.reset_telemetry();
         *self.started.borrow_mut() = Some(Instant::now());
         *self.worktree.borrow_mut() = Some(conversation.skill.dir.clone());
+        self.judge_decisions.borrow_mut().clear();
         let skill = conversation.skill.as_ref();
         let max_turns = conversation
             .user
@@ -771,7 +782,30 @@ impl<'a> Engine<'a> {
                     },
                 );
                 self.between_turns();
+                // What each judge of a panel said, drained whichever way the call
+                // ended: recorded on the engine first, so a failed run still reports
+                // it, and observed before the error propagates, so a supervisor
+                // watching the run sees which judge failed and what the others said.
+                let decided = self.record_judge_decisions(turn_index);
+                let mut broke = false;
+                for decision in &decided {
+                    if on_observation(&Observation::JudgeDecided(JudgeDecided {
+                        turn: turn_index,
+                        judge: &decision.judge,
+                        kind: &decision.kind,
+                        decision: decision.decision,
+                        reason: &decision.reason,
+                    }))
+                    .is_break()
+                    {
+                        broke = true;
+                        break;
+                    }
+                }
                 let attempt = attempt?;
+                if broke {
+                    return Ok(self.finish(transcript, totals, true, None, None));
+                }
                 if let Some(u) = &attempt.usage {
                     totals.add(u);
                     turn_usage.get_or_insert_with(Usage::default).add(u);
@@ -903,7 +937,35 @@ impl<'a> Engine<'a> {
             processes: self.spawned_processes(),
             control: self.provider.control(),
             supervisor_control: self.provider.supervisor_control(),
+            judge_decisions: self.judge_decisions(),
         }
+    }
+
+    /// Drain the provider's per-judge decisions onto this run's record under
+    /// `turn`, and hand back the ones just drained. A decision re-taken on the
+    /// same turn (a note arrived while the judge was live) joins that turn's
+    /// entry rather than opening a second one.
+    fn record_judge_decisions(&self, turn: usize) -> Vec<crate::JudgeDecision> {
+        let decided = self.provider.take_judge_decisions();
+        if !decided.is_empty() {
+            let mut turns = self.judge_decisions.borrow_mut();
+            match turns.last_mut() {
+                Some(last) if last.turn == turn => last.decisions.extend(decided.iter().cloned()),
+                _ => turns.push(JudgedTurn {
+                    turn,
+                    decisions: decided.clone(),
+                }),
+            }
+        }
+        decided
+    }
+
+    /// What each judge of a panel decided on each supervisor turn of the run so
+    /// far — readable after a *failed* run too, so the turn that failed is on the
+    /// record with every judge's decision beside the one that failed.
+    #[must_use]
+    pub fn judge_decisions(&self) -> Vec<JudgedTurn> {
+        self.judge_decisions.borrow().clone()
     }
 
     /// Snapshot telemetry from task-loop entry through the current instant.
@@ -1062,6 +1124,33 @@ pub enum Observation<'a> {
     Message(TurnMessage<'a>),
     /// A turn ended, with what it cost and when it ran.
     TurnClosed(TurnClosed<'a>),
+    /// One judge of a panel decided, on a supervisor turn: delivered once per
+    /// decision in the panel's list order, after that turn's
+    /// [`TurnOpened`](Observation::TurnOpened) and before its
+    /// [`Message`](Observation::Message) / [`TurnClosed`](Observation::TurnClosed)
+    /// — and, when the supervisor call failed, before the error propagates.
+    JudgeDecided(JudgeDecided<'a>),
+}
+
+/// One judge's decision on a supervisor turn, as its panel recorded it.
+///
+/// The observed form of [`JudgeDecision`](crate::JudgeDecision), stamped with the
+/// turn it belongs to. Only a [`JudgePanel`](crate::JudgePanel) produces these; a
+/// run judged by a bare provider is observed exactly as before.
+#[derive(serde::Serialize)]
+#[cfg_attr(feature = "sdk-schema", derive(schemars::JsonSchema))]
+pub struct JudgeDecided<'a> {
+    /// 1-based assistant-turn index the supervisor turn belongs to, as
+    /// [`TurnOpened::turn`].
+    pub turn: usize,
+    /// The judge's label within its panel.
+    pub judge: &'a str,
+    /// The judge entry's provider kind.
+    pub kind: &'a str,
+    /// What it decided, or that it failed.
+    pub decision: Decision,
+    /// Its own reason — or, for an `error`, the error's message.
+    pub reason: &'a str,
 }
 
 /// A turn beginning, and the message it was given to answer.
@@ -1943,5 +2032,101 @@ mod tests {
             .judge_boolean("done", &Transcript::default())
             .unwrap();
         assert_eq!(provider.seen.into_inner(), ["/history/agent.jsonl"]);
+    }
+
+    #[test]
+    fn a_sink_that_breaks_on_a_judges_decision_stops_the_run_with_the_decision_recorded() {
+        /// A provider that reports one per-judge decision per supervisor call — the
+        /// shape a panel has — so the engine's draining and observing can be driven
+        /// without a subprocess.
+        struct Deciding;
+
+        impl Provider for Deciding {
+            fn take_judge_decisions(&self) -> Vec<crate::JudgeDecision> {
+                vec![crate::JudgeDecision {
+                    judge: "only".into(),
+                    kind: "command".into(),
+                    decision: Decision::Continue,
+                    reason: "more".into(),
+                }]
+            }
+
+            fn respond(
+                &self,
+                _: &SkillRef<'_>,
+                _: &[Message],
+                _: Option<&str>,
+            ) -> Result<AssistantTurn> {
+                Ok(assistant("working", false))
+            }
+
+            fn simulate_user(&self, _: &str, _: &[Message], _: Option<&str>) -> Result<UserTurn> {
+                unreachable!()
+            }
+
+            fn supervise(
+                &self,
+                _: &SupervisorQuery<'_>,
+                _: &[Message],
+                _: Option<&str>,
+            ) -> Result<SupervisorTurn> {
+                Ok(SupervisorTurn {
+                    outcome: SupervisorOutcome::Continue {
+                        message: "go on".into(),
+                        reason: "more".into(),
+                    },
+                    usage: None,
+                })
+            }
+
+            fn judge(&self, _: &JudgeQuery<'_>, _: &[Message]) -> Result<JudgeVerdict> {
+                unreachable!()
+            }
+
+            fn assess(&self, _: &str, _: &[Message]) -> Result<Assessment> {
+                unreachable!()
+            }
+        }
+
+        let provider = Deciding;
+        let engine = Engine::new(&provider, settings());
+        let mut seen = Vec::new();
+        let outcome = engine
+            .run_observing(
+                &Conversation::multi_turn(skill(), "go", SimulatedUser::new("p").max_turns(3)),
+                &mut |observation| {
+                    let (kind, stop) = match observation {
+                        Observation::JudgeDecided(d) => (format!("judged/{}", d.judge), true),
+                        Observation::TurnOpened(o) => (format!("opened/{:?}", o.role), false),
+                        Observation::Message(m) => (format!("said/{:?}", m.role), false),
+                        Observation::TurnClosed(c) => (format!("closed/{:?}", c.role), false),
+                        Observation::Tool(_) => ("tool".into(), false),
+                    };
+                    seen.push(kind);
+                    if stop {
+                        ControlFlow::Break(())
+                    } else {
+                        ControlFlow::Continue(())
+                    }
+                },
+            )
+            .unwrap();
+        // Nothing follows the observation that asked to stop, the run is stopped
+        // early, and the decision it broke on is still on the record.
+        assert_eq!(
+            seen,
+            [
+                "opened/Assistant",
+                "said/Assistant",
+                "closed/Assistant",
+                "opened/User",
+                "judged/only"
+            ]
+        );
+        assert!(outcome.stopped_early);
+        assert_eq!(outcome.transcript.assistant_turns(), 1);
+        assert_eq!(outcome.judge_decisions.len(), 1);
+        assert_eq!(outcome.judge_decisions[0].decisions[0].reason, "more");
+        assert_eq!(engine.judge_decisions(), outcome.judge_decisions);
     }
 }

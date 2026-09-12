@@ -1805,6 +1805,9 @@ user:
             Observation::Tool(e) => format!("tool/{}", e.event.summary()),
             Observation::Message(m) => format!("said/{:?}/{}", m.role, m.text),
             Observation::TurnClosed(c) => format!("closed/{:?}/{}", c.role, c.usage.is_some()),
+            Observation::JudgeDecided(d) => {
+                format!("judged/{}/{}/{}", d.judge, d.decision.as_str(), d.reason)
+            }
         });
         ControlFlow::Continue(())
     })
@@ -1860,4 +1863,589 @@ fn an_observing_plan_run_that_fails_reports_the_failure_after_the_turn_it_opened
         "{}",
         failure.error
     );
+}
+
+// --- The judge side as a list: `judges:` through the plan and the binary ------
+//
+// Every journey here drives the same panel the engine e2e proves, through the
+// two entry points a CLI consumer has — a `Plan` in process and the built binary
+// — asserting on what each surface prints or returns for it.
+
+/// A `split` over the echo double on both sides whose judge side is `judges`,
+/// each entry a YAML mapping body (`kind: command` and the argv are supplied).
+fn panel_config_yaml(judges: &[(&str, &[&str])], body: &str) -> String {
+    let echo = serde_json::to_string(&echo_bin()).unwrap();
+    let mut yaml = format!(
+        "provider:\n  kind: split\n  skill:\n    kind: command\n    command: [{echo}]\n  judges:\n"
+    );
+    for (label, markers) in judges {
+        let argv: Vec<String> = std::iter::once(echo.clone())
+            .chain(markers.iter().map(|m| serde_json::to_string(m).unwrap()))
+            .collect();
+        yaml.push_str(&format!(
+            "    - kind: command\n      label: {label}\n      command: [{}]\n",
+            argv.join(", ")
+        ));
+    }
+    yaml.push_str(body);
+    yaml
+}
+
+/// The two-judge panel most journeys drive: `reviewer` passes the work, `lint`
+/// sends the worker back once and then passes it.
+fn reviewer_and_lint(body: &str) -> String {
+    panel_config_yaml(
+        &[
+            ("reviewer", &["[[supervisor-complete:looks right]]"]),
+            ("lint", &[]),
+        ],
+        body,
+    )
+}
+
+const TWO_TURN_BODY: &str = "\
+task: please commit
+system_prompt: Commit it.
+user:
+  persona: A tester.
+  done_when: next step
+  max_turns: 4
+";
+
+#[test]
+fn binary_run_json_reports_each_judges_decision_and_labels_the_judge_side() {
+    // The report a real run writes: `judge_decisions` one entry per supervisor
+    // turn with each judge attributed, and the panel label riding every judge-side
+    // process record — absent from the agent side's.
+    let config = Path::new(env!("CARGO_TARGET_TMPDIR")).join("panel.yaml");
+    std::fs::write(&config, reviewer_and_lint(TWO_TURN_BODY)).unwrap();
+    let output = Command::new(onejudge_bin())
+        .args(["run", config.to_str().unwrap(), "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: onejudge::Report = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report.schema_version, onejudge::SCHEMA_VERSION);
+    // Turn 1: the echo judge asks for the next step while the reviewer passes; the
+    // worker is handed the lint judge's block alone. Turn 2: both pass.
+    assert_eq!(
+        report.transcript.messages[2].content,
+        "## Judge `lint` (command)\n\nThanks — and what about the next step?"
+    );
+    /// One supervisor turn's decisions as `(judge, kind, decision)`.
+    type Decided<'a> = Vec<(&'a str, &'a str, onejudge::Decision)>;
+    let decided: Vec<(usize, Decided<'_>)> = report
+        .judge_decisions
+        .iter()
+        .map(|turn| {
+            (
+                turn.turn,
+                turn.decisions
+                    .iter()
+                    .map(|d| (d.judge.as_str(), d.kind.as_str(), d.decision))
+                    .collect(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        decided,
+        vec![
+            (
+                1,
+                vec![
+                    ("reviewer", "command", onejudge::Decision::Done),
+                    ("lint", "command", onejudge::Decision::Continue),
+                ]
+            ),
+            (
+                2,
+                vec![
+                    ("reviewer", "command", onejudge::Decision::Done),
+                    ("lint", "command", onejudge::Decision::Done),
+                ]
+            ),
+        ]
+    );
+    assert_eq!(
+        report.completion_reason.as_deref(),
+        Some("[reviewer] looks right; [lint] completion criterion found in transcript")
+    );
+    // The label rides the judge side's process records and none of the agent's.
+    for process in &report.processes {
+        match process.role {
+            onejudge::TelemetryRole::Agent => assert_eq!(process.judge, None, "{process:?}"),
+            onejudge::TelemetryRole::Judge if process.op == "supervisor" => assert!(
+                matches!(process.judge.as_deref(), Some("reviewer" | "lint")),
+                "{process:?}"
+            ),
+            // The final re-judge of `done_when` is a panel call too.
+            onejudge::TelemetryRole::Judge => assert!(process.judge.is_some(), "{process:?}"),
+        }
+    }
+    let raw: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(raw["judge_decisions"].is_array());
+}
+
+#[test]
+fn binary_run_human_prints_each_judges_decision_beside_its_turn() {
+    let config = Path::new(env!("CARGO_TARGET_TMPDIR")).join("panel-human.yaml");
+    std::fs::write(&config, reviewer_and_lint(TWO_TURN_BODY)).unwrap();
+    let output = Command::new(onejudge_bin())
+        .args(["run", config.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let conversation = stdout
+        .split("\n\n=== Result ===")
+        .next()
+        .expect("the conversation section");
+    assert_eq!(
+        conversation,
+        "=== Conversation ===\n\
+         User: please commit\n\
+         Assistant: echo: please commit\n\
+         \x20 [judge reviewer (command)] done — looks right\n\
+         \x20 [judge lint (command)] continue — completion criterion not yet met\n\
+         User: ## Judge `lint` (command)\n\nThanks — and what about the next step?\n\
+         Assistant: echo: ## Judge `lint` (command)\n\nThanks — and what about the next step?\n\
+         \x20 [judge reviewer (command)] done — looks right\n\
+         \x20 [judge lint (command)] done — completion criterion found in transcript",
+        "{stdout}"
+    );
+    assert!(stdout.contains("Status: completed"), "{stdout}");
+}
+
+#[test]
+fn binary_stream_result_line_carries_the_judge_decisions() {
+    // The NDJSON protocol is unchanged — `event* result EOF` — and the decisions
+    // reach a consumer on the `result` line's report.
+    let config = Path::new(env!("CARGO_TARGET_TMPDIR")).join("panel-stream.yaml");
+    std::fs::write(&config, reviewer_and_lint(TWO_TURN_BODY)).unwrap();
+    let output = Command::new(onejudge_bin())
+        .args([
+            "run",
+            config.to_str().unwrap(),
+            "--format",
+            "json",
+            "--stream",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let lines: Vec<serde_json::Value> = stdout
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(lines.len(), 1, "no tool events, so the result line alone");
+    assert_eq!(lines[0]["type"], "result");
+    let report: onejudge::Report = serde_json::from_value(lines[0]["report"].clone()).unwrap();
+    assert_eq!(report.judge_decisions.len(), 2);
+    assert_eq!(report.judge_decisions[0].decisions[1].judge, "lint");
+}
+
+#[test]
+fn binary_run_json_writes_both_judges_decisions_into_the_failure_report() {
+    // One judge fails its supervisor call while the other decides: the run fails
+    // (exit 2) naming the judge, and the failure document carries the turn that
+    // failed with BOTH judges' decisions — the failed one as `error`.
+    let config = Path::new(env!("CARGO_TARGET_TMPDIR")).join("panel-failure.yaml");
+    std::fs::write(
+        &config,
+        panel_config_yaml(
+            &[
+                ("reviewer", &["[[supervisor-exit]]"]),
+                (
+                    "lint",
+                    &[
+                        "[[supervisor-sleep:300]]",
+                        "[[supervisor-continue:Fix it.]]",
+                    ],
+                ),
+            ],
+            TWO_TURN_BODY,
+        ),
+    )
+    .unwrap();
+    let output = Command::new(onejudge_bin())
+        .args(["run", config.to_str().unwrap(), "--format", "json"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains("provider error (supervise[reviewer])"),
+        "{stderr}"
+    );
+    let failure: onejudge::cli::FailureReport = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(failure.schema_version, onejudge::SCHEMA_VERSION);
+    assert_eq!(
+        failure.error.kind,
+        Some(onejudge::ProviderErrorKind::Protocol)
+    );
+    assert_eq!(failure.judge_decisions.len(), 1);
+    let turn = &failure.judge_decisions[0];
+    assert_eq!(turn.turn, 1);
+    assert_eq!(turn.decisions[0].judge, "reviewer");
+    assert_eq!(turn.decisions[0].decision, onejudge::Decision::Error);
+    assert_eq!(turn.decisions[1].judge, "lint");
+    assert_eq!(turn.decisions[1].decision, onejudge::Decision::Continue);
+    // The judge-side processes of the failed run are labelled too.
+    assert!(failure
+        .processes
+        .iter()
+        .filter(|p| p.role == onejudge::TelemetryRole::Judge)
+        .all(|p| p.judge.is_some()));
+}
+
+#[test]
+fn binary_refuses_a_malformed_judge_list_naming_the_field() {
+    let echo = serde_json::to_string(&echo_bin()).unwrap();
+    for (name, judges, needle) in [
+        (
+            "both",
+            format!(
+                "  judge:\n    kind: command\n    command: [{echo}]\n  judges:\n    - kind: command\n      command: [{echo}]\n"
+            ),
+            "`judge` and `judges` are exclusive",
+        ),
+        ("empty", "  judges: []\n".to_string(), "`judges` must name at least one judge"),
+        (
+            "dup",
+            format!(
+                "  judges:\n    - kind: command\n      command: [{echo}]\n      label: same\n    - kind: command\n      command: [{echo}]\n      label: same\n"
+            ),
+            "`label` `same` is used by more than one judge",
+        ),
+        (
+            "label-on-skill",
+            format!("  judge:\n    kind: command\n    command: [{echo}]\n"),
+            "`label` is only valid on a judge entry",
+        ),
+    ] {
+        let skill_label = if name == "label-on-skill" {
+            "    label: agent\n"
+        } else {
+            ""
+        };
+        let yaml = format!(
+            "provider:\n  kind: split\n  skill:\n    kind: command\n    command: [{echo}]\n{skill_label}{judges}task: go\n"
+        );
+        let config = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("panel-bad-{name}.yaml"));
+        std::fs::write(&config, yaml).unwrap();
+        let output = Command::new(onejudge_bin())
+            .args(["run", config.to_str().unwrap()])
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(2), "{name}");
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert!(stderr.contains(needle), "{name}: {stderr}");
+    }
+}
+
+#[test]
+fn a_plans_spawn_hook_reaches_every_judge_of_the_panel() {
+    let hook = std::sync::Arc::new(OneGroup::default());
+    let installed: onejudge::SharedSpawnHook = hook.clone();
+    let plan = Config::from_yaml(&reviewer_and_lint(TWO_TURN_BODY))
+        .unwrap()
+        .into_plan()
+        .unwrap()
+        .with_spawn_hook(installed);
+    let mut sink = |_: &str| {};
+    let summary = run_plan(plan, Format::Json, &mut sink).unwrap();
+    let seen = hook.seen.lock().unwrap().clone();
+    // Every process of the run — the agent's and each judge's — was offered and
+    // grouped, and the report names each judge's beside its group.
+    assert_eq!(summary.report.processes.len(), seen.len());
+    // Records are collected judge by judge (each judge keeps its own spawner), so
+    // two supervisor turns give each judge two labelled records.
+    let judged: Vec<&str> = summary
+        .report
+        .processes
+        .iter()
+        .filter(|p| p.op == "supervisor")
+        .map(|p| p.judge.as_deref().unwrap())
+        .collect();
+    assert_eq!(judged, ["reviewer", "reviewer", "lint", "lint"]);
+    assert!(summary
+        .report
+        .processes
+        .iter()
+        .all(|p| p.group.as_deref() == Some("job:plan-1")));
+}
+
+#[test]
+fn an_observing_plan_run_delivers_each_judges_decision_inside_the_supervisor_turn() {
+    // Contract C's ordering, through the plan-level observer: after the supervisor
+    // turn opens, one `judge_decided` per judge in list order, then the turn's
+    // message (when it continued) and its close.
+    let plan = Config::from_yaml(&reviewer_and_lint(TWO_TURN_BODY))
+        .unwrap()
+        .into_plan()
+        .unwrap();
+    let mut seen: Vec<String> = Vec::new();
+    let summary = run_plan_observing_reporting_failure(plan, &mut |observation| {
+        seen.push(match observation {
+            Observation::TurnOpened(o) => format!("opened/{:?}", o.role),
+            Observation::Tool(e) => format!("tool/{}", e.event.summary()),
+            Observation::Message(m) => format!("said/{:?}", m.role),
+            Observation::TurnClosed(c) => format!("closed/{:?}", c.role),
+            Observation::JudgeDecided(d) => {
+                format!("judged/{}/{}/{}", d.turn, d.judge, d.decision.as_str())
+            }
+        });
+        ControlFlow::Continue(())
+    })
+    .unwrap();
+    assert!(summary.completed);
+    assert_eq!(
+        seen,
+        vec![
+            "opened/Assistant",
+            "said/Assistant",
+            "closed/Assistant",
+            "opened/User",
+            "judged/1/reviewer/done",
+            "judged/1/lint/continue",
+            "said/User",
+            "closed/User",
+            "opened/Assistant",
+            "said/Assistant",
+            "closed/Assistant",
+            "opened/User",
+            "judged/2/reviewer/done",
+            "judged/2/lint/done",
+            "closed/User",
+        ]
+    );
+
+    // …and when the supervisor call fails, every decision is delivered before the
+    // error propagates, and the failure carries them too.
+    let plan = Config::from_yaml(&panel_config_yaml(
+        &[
+            ("reviewer", &["[[supervisor-exit]]"]),
+            ("lint", &["[[supervisor-continue:Fix it.]]"]),
+        ],
+        TWO_TURN_BODY,
+    ))
+    .unwrap()
+    .into_plan()
+    .unwrap();
+    let mut seen: Vec<String> = Vec::new();
+    let Err(failure) = run_plan_observing_reporting_failure(plan, &mut |observation| {
+        seen.push(match observation {
+            Observation::TurnOpened(o) => format!("opened/{:?}", o.role),
+            Observation::JudgeDecided(d) => format!("judged/{}/{}", d.judge, d.decision.as_str()),
+            Observation::Message(m) => format!("said/{:?}", m.role),
+            Observation::TurnClosed(c) => format!("closed/{:?}", c.role),
+            Observation::Tool(_) => "tool".to_string(),
+        });
+        ControlFlow::Continue(())
+    }) else {
+        panic!("a judge that exits non-zero fails the run")
+    };
+    assert_eq!(
+        seen[3..],
+        [
+            "opened/User",
+            "judged/reviewer/error",
+            "judged/lint/continue"
+        ],
+        "{seen:?}"
+    );
+    assert_eq!(failure.judge_decisions.len(), 1);
+    assert_eq!(
+        failure.judge_decisions[0].decisions[0].decision,
+        onejudge::Decision::Error
+    );
+    assert!(failure.error.to_string().contains("supervise[reviewer]"));
+}
+
+#[test]
+fn a_single_judge_config_runs_exactly_as_the_released_0_8_1_did() {
+    // The replay of the checked-in baseline: the same `split` with one `judge:`
+    // that `scripts/capture-single-judge-baseline.sh` ran through the released
+    // 0.8.1 binary, run through this build, must produce the same transcript,
+    // verdicts, usage, control addresses and completion — and hand the judge the
+    // same supervisor requests, bare session name included. Only the volatile
+    // fields (wall clock, pids) and the v12 `judge_decisions` may differ.
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden/single-judge");
+    let record = scratch_path("single-judge-baseline.jsonl");
+    let template = std::fs::read_to_string(fixture.join("config.yaml")).unwrap();
+    let echo = serde_json::to_string(&echo_bin()).unwrap();
+    let yaml = template
+        .replace("{{ECHO}}", &echo)
+        .replace("{{RECORD}}", &record.display().to_string());
+    let config = Path::new(env!("CARGO_TARGET_TMPDIR")).join("single-judge-baseline.yaml");
+    std::fs::write(&config, yaml).unwrap();
+
+    let output = Command::new(onejudge_bin())
+        .args(["run", config.to_str().unwrap(), "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let mut actual: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let object = actual.as_object_mut().unwrap();
+    // Present, and the one thing the release did not write.
+    let decisions = object
+        .remove("judge_decisions")
+        .expect("a panel of one still records its decisions");
+    assert_eq!(decisions.as_array().unwrap().len(), 2);
+    for volatile in ["schema_version", "telemetry", "processes"] {
+        object.remove(volatile);
+    }
+    let expected: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(fixture.join("report.json")).unwrap())
+            .unwrap();
+    assert_eq!(
+        actual, expected,
+        "the report differs from what onejudge 0.8.1 wrote for this config"
+    );
+
+    // The judge was handed byte-for-byte the requests 0.8.1 handed it — the same
+    // bare `<session>-user` name, persona, transcript and criterion.
+    let escaped = serde_json::to_string(&record.display().to_string()).unwrap();
+    let escaped = &escaped[1..escaped.len() - 1];
+    let requests = std::fs::read_to_string(&record)
+        .unwrap()
+        .replace(escaped, "{{RECORD}}");
+    let baseline = std::fs::read_to_string(fixture.join("supervisor-requests.jsonl")).unwrap();
+    assert_eq!(requests, baseline);
+    assert!(
+        !requests.contains("-user-"),
+        "a panel of one hands the bare session through"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_single_judge_controlled_config_runs_as_0_8_1_did_except_the_supervisor_address_it_omitted() {
+    // The controlled baseline: the same one-`judge:` split with `control: true` on
+    // both sides, captured from 0.8.1. Everything but `supervisor_control` /
+    // `supervisor_control_unavailable` is identical — transcript, usage, the agent's
+    // `control` address, the judge prompts. Those two now carry the first judge's
+    // answer (Contract B); 0.8.1's CLI wrote `null` for every config because
+    // `AnyProvider` never forwarded the judge side's answer — a defect against
+    // docs/control.md, ruled so by the planner rather than preserved.
+    //
+    // The paths ride the judge prompt, whose length the fake oneharness bills as
+    // `input_tokens`, so they are spelled at the same fixed width the capture
+    // script used (`/tmp/oj-ctl-<8-digit pid>/…`) rather than taken from
+    // `control_store` — a wider temp dir would change the usage, not the behaviour.
+    use oneharness_core::io::session as session_io;
+
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden/single-judge-control");
+    let ctl = std::path::PathBuf::from(format!("/tmp/oj-ctl-{:08}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&ctl);
+    let agent_store = ctl.join("agent-store");
+    let judge_store = ctl.join("judge-store");
+    std::fs::create_dir_all(&agent_store).unwrap();
+    std::fs::create_dir_all(&judge_store).unwrap();
+    let record = ctl.join("prompts.log");
+    let template = std::fs::read_to_string(fixture.join("config.yaml")).unwrap();
+    let yaml = template
+        .replace(
+            "{{ONEHARNESS}}",
+            &serde_json::to_string(&fake_oneharness_bin()).unwrap(),
+        )
+        .replace("{{AGENT_STORE}}", agent_store.to_str().unwrap())
+        .replace("{{JUDGE_STORE}}", judge_store.to_str().unwrap())
+        .replace("{{RECORD}}", record.to_str().unwrap());
+    let config = Path::new(env!("CARGO_TARGET_TMPDIR")).join("single-judge-control.yaml");
+    std::fs::write(&config, yaml).unwrap();
+
+    let output = Command::new(onejudge_bin())
+        .args(["run", config.to_str().unwrap(), "--format", "json"])
+        .output()
+        .unwrap();
+    // Incomplete (the cap ends it), exactly as 0.8.1's run was.
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let normalize = |text: &str| {
+        let mut text = text.to_string();
+        for (real, placeholder) in [
+            (record.clone(), "{{RECORD}}"),
+            (agent_store.clone(), "{{AGENT_STORE}}"),
+            (judge_store.clone(), "{{JUDGE_STORE}}"),
+        ] {
+            for spelling in [real.canonicalize().unwrap(), real] {
+                text = text.replace(spelling.to_str().unwrap(), placeholder);
+            }
+        }
+        text
+    };
+    let mut actual: serde_json::Value =
+        serde_json::from_str(&normalize(&String::from_utf8(output.stdout).unwrap())).unwrap();
+    let object = actual.as_object_mut().unwrap();
+    assert_eq!(
+        object
+            .remove("judge_decisions")
+            .expect("a panel of one records its decision")
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    for volatile in ["schema_version", "telemetry", "processes"] {
+        object.remove(volatile);
+    }
+    // The one deliberate difference: the judge's address, which 0.8.1 omitted.
+    let supervisor = object
+        .remove("supervisor_control")
+        .expect("always on the wire");
+    assert!(
+        object.remove("supervisor_control_unavailable").is_none(),
+        "the ask was honoured, so no refusal reason"
+    );
+    assert_eq!(
+        supervisor,
+        serde_json::json!({
+            "session": "ctl-baseline-user",
+            "session_dir": "{{JUDGE_STORE}}",
+            "cwd": ".",
+        })
+    );
+    // …and it is a real address: the record `oneharness interrupt` reads before it
+    // dials is at it.
+    let dir = session_io::resolve_dir(judge_store.canonicalize().unwrap().to_str()).unwrap();
+    session_io::read(&session_io::session_path(
+        &dir,
+        Path::new("."),
+        "ctl-baseline-user",
+    ))
+    .expect("the judge's session record is where the address says");
+
+    let mut expected: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(fixture.join("report.json")).unwrap())
+            .unwrap();
+    let baseline = expected.as_object_mut().unwrap();
+    assert_eq!(
+        baseline.remove("supervisor_control"),
+        Some(serde_json::Value::Null),
+        "0.8.1 wrote null here: the defect this replay documents"
+    );
+    assert_eq!(
+        actual, expected,
+        "the report differs from what onejudge 0.8.1 wrote for this config"
+    );
+
+    // The judge was handed byte-for-byte the prompts 0.8.1 handed it.
+    let prompts = normalize(&std::fs::read_to_string(&record).unwrap());
+    let baseline = std::fs::read_to_string(fixture.join("supervisor-prompts.log")).unwrap();
+    assert_eq!(prompts, baseline);
+    let _ = std::fs::remove_dir_all(&ctl);
 }

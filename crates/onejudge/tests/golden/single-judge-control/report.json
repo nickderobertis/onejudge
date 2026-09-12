@@ -1,0 +1,35 @@
+{
+  "transcript": {
+    "messages": [
+      {
+        "role": "user",
+        "content": "start the long job"
+      },
+      {
+        "role": "assistant",
+        "content": "on it"
+      },
+      {
+        "role": "user",
+        "content": "Understood — please continue."
+      },
+      {
+        "role": "assistant",
+        "content": "on it"
+      }
+    ]
+  },
+  "usage": {
+    "input_tokens": 1943,
+    "output_tokens": 3,
+    "cache_read_tokens": 21,
+    "cache_write_tokens": 6
+  },
+  "control": {
+    "session": "ctl-baseline-skill",
+    "session_dir": "{{AGENT_STORE}}",
+    "cwd": "."
+  },
+  "supervisor_control": null,
+  "stopped_early": false
+}

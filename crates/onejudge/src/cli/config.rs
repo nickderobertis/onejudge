@@ -155,15 +155,28 @@ pub struct ProviderConfig {
     /// `split`: the backend that runs the agent's turns.
     #[serde(default)]
     pub skill: Option<Box<ProviderConfig>>,
-    /// `split`: the backend that judges and plays the simulated user.
+    /// `split`: the one judge that judges and plays the simulated user — the
+    /// one-element shorthand for `judges: [<this>]`. Exclusive with `judges`.
     #[serde(default)]
     pub judge: Option<Box<ProviderConfig>>,
+    /// `split`: the judges, one or more, every one run concurrently against each
+    /// worker turn and combined into one attributed answer (see `docs/judges.md`).
+    /// Exclusive with `judge`; must not be empty.
+    #[serde(default)]
+    pub judges: Option<Vec<ProviderConfig>>,
+    /// A judge entry only: this judge's name on every surface — the `## Judge`
+    /// header the worker reads, the `[<label>]` reason prefix, the report's
+    /// `judge_decisions`, and the `-<label>` session suffix. `[A-Za-z0-9_-]+`,
+    /// unique within the list; defaults to the entry's `kind` for the first judge
+    /// of that kind and `<kind>-<n>` for repeats.
+    #[serde(default)]
+    pub label: Option<String>,
 }
 
 /// The provider backends the CLI can build. One enum is the single source for
 /// both the YAML `kind:` (via `Deserialize`) and the `--provider` flag (via
 /// clap's `ValueEnum`), so the two surfaces cannot drift.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, clap::ValueEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Deserialize, clap::ValueEnum)]
 #[cfg_attr(feature = "sdk-schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "lowercase")]
 pub enum ProviderKind {
@@ -333,7 +346,7 @@ impl Config {
             )
         })?;
 
-        let provider = self.provider.resolve()?;
+        let provider = self.provider.resolve(Place::Top)?;
 
         let mut settings = Settings::new();
         if let Some(session) = self.session.filter(|s| !s.is_empty()) {
@@ -370,6 +383,27 @@ impl Config {
 
         let assessment = self.assessment.filter(|prompt| !prompt.trim().is_empty());
 
+        // Nothing in a judge list that can neither score a number nor write prose
+        // can answer a numeric eval or an assessment, so asking is refused up
+        // front rather than failing at the end of a paid run.
+        if let ProviderSpec::Split { judges, .. } = &provider {
+            let wants_number = evals
+                .iter()
+                .any(|eval| matches!(eval.kind, EvalKind::Numeric { .. }));
+            if (wants_number || assessment.is_some())
+                && !judges.iter().any(JudgeSpec::scores_and_writes)
+            {
+                let what = if wants_number {
+                    "a numeric eval"
+                } else {
+                    "an `assessment`"
+                };
+                return Err(CliError::Config(format!(
+                    "the config names {what}, but no judge in `provider.judges` can score a                      number or write prose (that needs an `oneharness` or `command` judge)"
+                )));
+            }
+        }
+
         Ok(Plan {
             provider,
             settings,
@@ -387,10 +421,20 @@ impl Config {
     }
 }
 
+/// Where in the config a [`ProviderConfig`] sits: the top-level `provider`, a
+/// split's `skill:` child, or one entry of its judge list. A `label` belongs to
+/// a judge entry and nowhere else.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Place {
+    Top,
+    Skill,
+    Judge,
+}
+
 impl ProviderConfig {
     /// Validate the flat config into a typed [`ProviderSpec`], rejecting fields
-    /// that do not belong to the chosen `kind`.
-    fn resolve(self) -> Result<ProviderSpec, CliError> {
+    /// that do not belong to the chosen `kind` — or, for `label`, to this place.
+    fn resolve(self, place: Place) -> Result<ProviderSpec, CliError> {
         let ProviderConfig {
             kind,
             bin,
@@ -401,7 +445,19 @@ impl ProviderConfig {
             command,
             skill,
             judge,
+            judges,
+            label,
         } = self;
+
+        // A label names one judge of a list; anywhere else there is nothing for
+        // it to name. Checked first, and against the place rather than the kind,
+        // so `label: x` on the top-level provider is refused whatever kind it is.
+        if label.is_some() && place != Place::Judge {
+            return Err(CliError::Config(
+                "`label` is only valid on a judge entry (under `provider.judges:` or                  `provider.judge:`)"
+                    .into(),
+            ));
+        }
 
         // Which fields belong to which kind; anything else set is an error.
         let reject = |present: bool, field: &str| -> Result<(), CliError> {
@@ -420,6 +476,7 @@ impl ProviderConfig {
                 reject(command.is_some(), "command")?;
                 reject(skill.is_some(), "skill")?;
                 reject(judge.is_some(), "judge")?;
+                reject(judges.is_some(), "judges")?;
                 Ok(ProviderSpec::Oneharness {
                     // Unset means the in-process engine, which is the default and
                     // needs nothing on PATH. Naming one is the explicit opt-in to
@@ -439,6 +496,7 @@ impl ProviderConfig {
                 reject(mock_harness.is_some(), "mock_harness")?;
                 reject(skill.is_some(), "skill")?;
                 reject(judge.is_some(), "judge")?;
+                reject(judges.is_some(), "judges")?;
                 let command = command.filter(|c| !c.is_empty()).ok_or_else(|| {
                     CliError::Config("provider kind `command` needs a non-empty `command`".into())
                 })?;
@@ -460,21 +518,84 @@ impl ProviderConfig {
                 let skill = skill.ok_or_else(|| {
                     CliError::Config("provider kind `split` needs a `skill` provider".into())
                 })?;
-                let judge = judge.ok_or_else(|| {
-                    CliError::Config("provider kind `split` needs a `judge` provider".into())
-                })?;
+                // `judge:` is the one-element shorthand for `judges:`; both are
+                // normalized here into ONE list, so there is exactly one judge-panel
+                // code path downstream.
+                let judges = match (judge, judges) {
+                    (Some(_), Some(_)) => {
+                        return Err(CliError::Config(
+                            "`judge` and `judges` are exclusive under provider kind `split`: \
+                             `judge:` is the one-element shorthand for `judges: [..]`"
+                                .into(),
+                        ))
+                    }
+                    (Some(judge), None) => vec![*judge],
+                    (None, Some(judges)) if judges.is_empty() => {
+                        return Err(CliError::Config(
+                            "`judges` must name at least one judge under provider kind `split`"
+                                .into(),
+                        ))
+                    }
+                    (None, Some(judges)) => judges,
+                    (None, None) => {
+                        return Err(CliError::Config(
+                            "provider kind `split` needs a `judge` (or `judges`) provider".into(),
+                        ))
+                    }
+                };
                 Ok(ProviderSpec::Split {
-                    skill: Box::new(skill.resolve()?),
-                    judge: Box::new(judge.resolve()?),
+                    skill: Box::new(skill.resolve(Place::Skill)?),
+                    judges: resolve_judges(judges)?,
                 })
             }
         }
     }
 }
 
+/// Resolve a judge list, labelling each entry: the explicit `label` where one is
+/// given, else the entry's `kind` for the first judge of that kind and
+/// `<kind>-<n>` (n ≥ 2, counting judges of that kind in list order) for repeats.
+/// A label is refused when it is not `[A-Za-z0-9_-]+` or is already taken —
+/// whether by another explicit label or by a defaulted one.
+fn resolve_judges(judges: Vec<ProviderConfig>) -> Result<Vec<JudgeSpec>, CliError> {
+    let mut resolved: Vec<JudgeSpec> = Vec::with_capacity(judges.len());
+    let mut seen_of_kind: std::collections::HashMap<ProviderKind, usize> =
+        std::collections::HashMap::new();
+    for judge in judges {
+        let kind = judge.kind;
+        let n = seen_of_kind.entry(kind).or_insert(0);
+        *n += 1;
+        let label = match judge.label.clone() {
+            Some(label) => {
+                if !crate::is_valid_label(&label) {
+                    return Err(CliError::Config(format!(
+                        "judge `label` `{label}` is invalid: a label is `[A-Za-z0-9_-]+`"
+                    )));
+                }
+                label
+            }
+            None if *n == 1 => kind.as_str().to_string(),
+            None => format!("{}-{n}", kind.as_str()),
+        };
+        if resolved.iter().any(|earlier| earlier.label == label) {
+            return Err(CliError::Config(format!(
+                "judge `label` `{label}` is used by more than one judge; labels are unique \
+                 within `judges`"
+            )));
+        }
+        resolved.push(JudgeSpec {
+            label,
+            provider: judge.resolve(Place::Judge)?,
+        });
+    }
+    Ok(resolved)
+}
+
 impl ProviderKind {
-    /// The stable YAML spelling.
-    fn as_str(self) -> &'static str {
+    /// The stable YAML spelling — also the `kind` a judge's decision is recorded
+    /// under.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
         match self {
             ProviderKind::Oneharness => "oneharness",
             ProviderKind::Command => "command",
@@ -542,13 +663,50 @@ pub enum ProviderSpec {
         /// The provider argv.
         command: Vec<String>,
     },
-    /// A composed skill-runner + judge backend.
+    /// A composed skill-runner + judge-panel backend.
     Split {
         /// Runs the agent's turns.
         skill: Box<ProviderSpec>,
-        /// Judges and plays the simulated user.
-        judge: Box<ProviderSpec>,
+        /// The judges, in list order — one or more, every one run concurrently
+        /// against each worker turn. A single `judge:` resolves to a list of one.
+        judges: Vec<JudgeSpec>,
     },
+}
+
+impl ProviderSpec {
+    /// Which backend this spec builds.
+    #[must_use]
+    pub fn kind(&self) -> ProviderKind {
+        match self {
+            ProviderSpec::Oneharness { .. } => ProviderKind::Oneharness,
+            ProviderSpec::Command { .. } => ProviderKind::Command,
+            ProviderSpec::Split { .. } => ProviderKind::Split,
+        }
+    }
+}
+
+/// One judge of a `split`'s panel: its resolved label and the backend that
+/// judges under it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct JudgeSpec {
+    /// The label every surface names this judge by.
+    pub label: String,
+    /// The backend.
+    pub provider: ProviderSpec,
+}
+
+impl JudgeSpec {
+    /// Whether this judge can score a number and write prose — an `oneharness`
+    /// or `command` judge (or a nested split judged by one), which is every kind
+    /// this build can name. A judge that cannot is left out of numeric evals and
+    /// assessments, and a config that asks for one with no such judge is refused.
+    #[must_use]
+    pub fn scores_and_writes(&self) -> bool {
+        matches!(
+            self.provider.kind(),
+            ProviderKind::Oneharness | ProviderKind::Command | ProviderKind::Split
+        )
+    }
 }
 
 /// The kind of a resolved eval, carrying only the data that kind needs — so a
@@ -1187,7 +1345,7 @@ user:
             .unwrap_err();
         assert!(matches!(err, CliError::Config(m) if m.contains("judge")));
 
-        let only_judge = "task: x\nprovider:\n  kind: split\n  judge:\n    kind: oneharness\n";
+        let only_judge = "task: x\nprovider:\n  kind: split\n  judges:\n    - kind: oneharness\n";
         let err = Config::from_yaml(only_judge)
             .unwrap()
             .into_plan()
@@ -1256,12 +1414,136 @@ provider:
 "#;
         let plan = Config::from_yaml(yaml).unwrap().into_plan().unwrap();
         match plan.provider {
-            ProviderSpec::Split { skill, judge } => {
+            ProviderSpec::Split { skill, judges } => {
                 assert!(matches!(*skill, ProviderSpec::Oneharness { .. }));
-                assert!(matches!(*judge, ProviderSpec::Command { .. }));
+                // `judge:` is the one-element list, labelled by its kind.
+                assert_eq!(judges.len(), 1);
+                assert_eq!(judges[0].label, "command");
+                assert!(matches!(judges[0].provider, ProviderSpec::Command { .. }));
             }
             other => panic!("expected split, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn judge_and_judges_resolve_through_one_path_to_the_same_panel() {
+        let one = "task: x\nprovider:\n  kind: split\n  skill:\n    kind: oneharness\n  \
+                   judge:\n    kind: command\n    command: [judge-prov]\n";
+        let list = "task: x\nprovider:\n  kind: split\n  skill:\n    kind: oneharness\n  \
+                    judges:\n    - kind: command\n      command: [judge-prov]\n";
+        let one = Config::from_yaml(one).unwrap().into_plan().unwrap();
+        let list = Config::from_yaml(list).unwrap().into_plan().unwrap();
+        assert_eq!(one.provider, list.provider);
+    }
+
+    #[test]
+    fn a_judge_list_labels_each_entry_by_kind_and_order_unless_named() {
+        let yaml = "task: x\nprovider:\n  kind: split\n  skill:\n    kind: oneharness\n  \
+                    judges:\n    - kind: oneharness\n      judge_config: a.toml\n    \
+                    - kind: command\n      command: [lint]\n      label: lint_run\n    \
+                    - kind: command\n      command: [other]\n    \
+                    - kind: oneharness\n";
+        let plan = Config::from_yaml(yaml).unwrap().into_plan().unwrap();
+        let ProviderSpec::Split { judges, .. } = plan.provider else {
+            panic!("a split");
+        };
+        let labels: Vec<&str> = judges.iter().map(|j| j.label.as_str()).collect();
+        // The first judge of a kind is the bare kind, a repeat is `<kind>-<n>`
+        // counting every judge of that kind in list order — a labelled one
+        // included, so the third entry is the *second* command — and an explicit
+        // label is taken verbatim.
+        assert_eq!(
+            labels,
+            ["oneharness", "lint_run", "command-2", "oneharness-2"]
+        );
+        assert!(matches!(
+            &judges[0].provider,
+            ProviderSpec::Oneharness { judge_config: Some(p), .. } if p == std::path::Path::new("a.toml")
+        ));
+        assert!(judges.iter().all(JudgeSpec::scores_and_writes));
+    }
+
+    #[test]
+    fn judge_list_shape_errors_name_the_field() {
+        let split = |judges: &str| {
+            format!("task: x\nprovider:\n  kind: split\n  skill:\n    kind: oneharness\n{judges}")
+        };
+        let refused = |yaml: &str, needle: &str| {
+            let err = Config::from_yaml(yaml).unwrap().into_plan().unwrap_err();
+            assert!(
+                matches!(&err, CliError::Config(m) if m.contains(needle)),
+                "{yaml}\n{err}"
+            );
+        };
+        // Both spellings at once.
+        refused(
+            &split("  judge:\n    kind: oneharness\n  judges:\n    - kind: oneharness\n"),
+            "`judge` and `judges` are exclusive",
+        );
+        // An empty list.
+        refused(
+            &split("  judges: []\n"),
+            "`judges` must name at least one judge",
+        );
+        // Neither.
+        refused(&split(""), "`judge` (or `judges`)");
+        // A malformed label, and a duplicate one — explicit, and colliding with a
+        // defaulted one.
+        refused(
+            &split("  judges:\n    - kind: oneharness\n      label: 'no spaces'\n"),
+            "`label` `no spaces` is invalid",
+        );
+        refused(
+            &split(
+                "  judges:\n    - kind: oneharness\n      label: same\n    \
+                 - kind: command\n      command: [j]\n      label: same\n",
+            ),
+            "`label` `same` is used by more than one judge",
+        );
+        refused(
+            &split(
+                "  judges:\n    - kind: oneharness\n    \
+                 - kind: command\n      command: [j]\n      label: oneharness\n",
+            ),
+            "`label` `oneharness` is used by more than one judge",
+        );
+        // A label anywhere but a judge entry.
+        refused(
+            "task: x\nprovider:\n  kind: oneharness\n  label: top\n",
+            "`label` is only valid on a judge entry",
+        );
+        refused(
+            &split("  label: top\n  judge:\n    kind: oneharness\n"),
+            "`label` is only valid on a judge entry",
+        );
+        refused(
+            "task: x\nprovider:\n  kind: split\n  skill:\n    kind: oneharness\n    \
+             label: agent\n  judge:\n    kind: oneharness\n",
+            "`label` is only valid on a judge entry",
+        );
+        // `judges` under a kind that has no judge side.
+        refused(
+            "task: x\nprovider:\n  kind: oneharness\n  judges:\n    - kind: oneharness\n",
+            "`judges` is not valid under provider kind `oneharness`",
+        );
+        refused(
+            "task: x\nprovider:\n  kind: command\n  command: [p]\n  judges:\n    - kind: oneharness\n",
+            "`judges` is not valid under provider kind `command`",
+        );
+    }
+
+    #[test]
+    fn a_judge_list_that_can_score_accepts_numeric_evals_and_an_assessment() {
+        // Every kind this build can name scores numbers and writes prose, so the
+        // refusal for a list that cannot is not reachable yet; what is provable
+        // is that a list holding a `command` judge is accepted beside both.
+        let yaml = "task: x\nprovider:\n  kind: split\n  skill:\n    kind: oneharness\n  \
+                    judges:\n    - kind: command\n      command: [j]\n\
+                    evals:\n  - criterion: q\n    kind: numeric\n\
+                    assessment: follow-ups\n";
+        let plan = Config::from_yaml(yaml).unwrap().into_plan().unwrap();
+        assert_eq!(plan.assessment.as_deref(), Some("follow-ups"));
+        assert_eq!(plan.evals.len(), 1);
     }
 
     #[test]

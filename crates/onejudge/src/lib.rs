@@ -17,7 +17,10 @@
 //!   protocol (see `docs/protocol.md`) for the deterministic test doubles and any
 //!   custom backend; and [`SplitProvider`] composes a skill-running provider with a
 //!   separate judge / simulated-user provider (e.g. run the skill on one harness
-//!   and judge on another).
+//!   and judge on another). The judge side is a **list**: a [`JudgePanel`] runs
+//!   every judge concurrently against the same worker turn, waits for all of
+//!   them, and hands the worker one combined, attributed message, recording each
+//!   judge's [`JudgeDecision`] on the report (see `docs/judges.md`).
 //! - [`Engine`] runs a [`Conversation`] (a [`Skill`] plus an initial input and an
 //!   optional [`SimulatedUser`]) into a [`Transcript`], bounded by `max_turns` /
 //!   `done_when` / the skill declaring itself done, threading one caller-owned
@@ -80,6 +83,7 @@ mod engine;
 mod error;
 pub mod note;
 mod oneharness;
+mod panel;
 mod provider;
 mod report;
 #[cfg(feature = "skill")]
@@ -94,8 +98,8 @@ mod usage;
 pub use command::CommandProvider;
 pub use control::{ControlAddress, ControlOutcome};
 pub use engine::{
-    Conversation, Engine, Observation, Outcome, Settings, SimulatedUser, Skill, StreamEvent,
-    TurnClosed, TurnMessage, TurnOpened, NOOP_SETTLE_LIMIT,
+    Conversation, Engine, JudgeDecided, Observation, Outcome, Settings, SimulatedUser, Skill,
+    StreamEvent, TurnClosed, TurnMessage, TurnOpened, NOOP_SETTLE_LIMIT,
 };
 pub use error::{Error, ProviderErrorKind, Result};
 pub use note::{
@@ -103,6 +107,7 @@ pub use note::{
     Note, NoteInbox, NoteRefused, NoteText, Notes, Party, Undelivered,
 };
 pub use oneharness::OneharnessProvider;
+pub use panel::{is_valid_label, JudgeAbilities, JudgeEntry, JudgePanel};
 pub use provider::{
     build_assessment_prompt, build_assessment_prompt_with_evidence, build_judge_prompt,
     build_judge_prompt_with_evidence, build_respond_prompt, build_supervisor_prompt,
@@ -113,7 +118,7 @@ pub use provider::{
     UserTurn, EVIDENCE_PROMPT_MARKER, EVIDENCE_TOOL_RETRY_LIMIT, SUPERVISOR_REASK_LIMIT,
     SUPERVISOR_REASK_NOTE, SUPERVISOR_REDIRECT_NOTE, SUPERVISOR_UNPARSED_NOTE,
 };
-pub use report::{NamedVerdict, Report, SCHEMA_VERSION};
+pub use report::{Decision, JudgeDecision, JudgedTurn, NamedVerdict, Report, SCHEMA_VERSION};
 #[cfg(feature = "sdk-schema")]
 pub mod sdk_schema;
 #[cfg(feature = "skill")]

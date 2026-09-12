@@ -8,6 +8,11 @@
 //! or vice versa. `SplitProvider` routes each [`Provider`] operation to whichever
 //! backend owns it, so the engine sees one provider and neither backend needs to
 //! know the other exists.
+//!
+//! The judge half may itself be a [`JudgePanel`](crate::JudgePanel) — a list of
+//! judges run concurrently and combined — which is how the CLI builds a `judges:`
+//! list; an embedder composing by hand gets the same semantics through this one
+//! path, since the split only forwards.
 
 use std::ops::ControlFlow;
 
@@ -80,6 +85,11 @@ impl<S: Provider, J: Provider> Provider for SplitProvider<S, J> {
 
     fn supervisor_control(&self) -> crate::ControlOutcome {
         self.judge.supervisor_control()
+    }
+
+    // Only the judge side decides, so only it can have recorded a decision.
+    fn take_judge_decisions(&self) -> Vec<crate::JudgeDecision> {
+        self.judge.take_judge_decisions()
     }
 
     fn respond(
