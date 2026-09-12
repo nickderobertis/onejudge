@@ -16,9 +16,7 @@ repo-wide contract; this covers only what differs here.
   each binary's module doc; add a new marker there when a journey needs one. A
   judge of a **panel** is handed the same persona and transcript as every other
   judge, so a journey that needs two judges to differ steers each through its own
-  **argv** (the echo double scans its arguments for markers too:
-  `[[supervisor-continue:MSG]]`, `[[supervisor-exit]]`, `[[supervisor-sleep:MS]]`,
-  `[[supervisor-stamp:PATH]]`, `[[record:PATH]]`).
+  **argv** — the echo double scans its arguments for markers too.
 - **`golden/single-judge/` is a replay fixture, not a hand-written expectation.**
   `cli.rs` runs its `config.yaml` (a `split` with one `judge:`) through the built
   binary and asserts the report and every supervisor request equal what the

@@ -1655,6 +1655,70 @@ fn a_panel_of_one_hands_the_bare_session_through_and_attributes_nothing() {
 }
 
 #[test]
+fn a_panel_of_oneharness_judges_labels_each_judges_attribution_and_session_link() {
+    // The label on `telemetry.attribution[]` / `sessions[]` is stamped by the panel
+    // onto records only an oneharness-backed judge produces, so the judges here
+    // are the fake oneharness double rather than the echo one — and each judge's
+    // native session is linked under its own label.
+    let split = SplitProvider::new(
+        fake_oneharness(),
+        JudgePanel::new(vec![
+            JudgeEntry::new("reviewer", "oneharness", fake_oneharness()),
+            JudgeEntry::new("second", "oneharness", fake_oneharness()),
+        ])
+        .unwrap(),
+    );
+    let engine = Engine::new(&split, settings().with_session_name("labelled"));
+    let outcome = engine
+        .run(&Conversation::multi_turn(
+            skill_with("[[reply:ok]]"),
+            "start",
+            SimulatedUser::new("A patient tester.").max_turns(2),
+        ))
+        .unwrap();
+    assert_eq!(outcome.transcript.assistant_turns(), 2);
+    let telemetry = outcome.telemetry.expect("telemetry");
+    let judged: Vec<(onejudge::TelemetryRole, Option<&str>)> = telemetry
+        .attribution
+        .iter()
+        .map(|a| (a.role, a.judge.as_deref()))
+        .collect();
+    assert_eq!(
+        judged,
+        [
+            (onejudge::TelemetryRole::Agent, None),
+            (onejudge::TelemetryRole::Agent, None),
+            (onejudge::TelemetryRole::Judge, Some("reviewer")),
+            (onejudge::TelemetryRole::Judge, Some("second")),
+        ],
+        "{:#?}",
+        telemetry.attribution
+    );
+    let linked: Vec<(onejudge::TelemetryRole, Option<&str>)> = telemetry
+        .sessions
+        .iter()
+        .map(|s| (s.role, s.judge.as_deref()))
+        .collect();
+    assert_eq!(
+        linked,
+        [
+            (onejudge::TelemetryRole::Agent, None),
+            (onejudge::TelemetryRole::Agent, None),
+            (onejudge::TelemetryRole::Judge, Some("reviewer")),
+            (onejudge::TelemetryRole::Judge, Some("second")),
+        ],
+        "{:#?}",
+        telemetry.sessions
+    );
+    // The same labels ride the processes each judge spawned.
+    assert!(outcome
+        .processes
+        .iter()
+        .filter(|p| p.role == onejudge::TelemetryRole::Judge)
+        .all(|p| matches!(p.judge.as_deref(), Some("reviewer" | "second"))));
+}
+
+#[test]
 fn a_panel_conjoins_boolean_verdicts_and_stacks_assessments_under_headers() {
     let split = SplitProvider::new(echo(), panel(vec![("a", echo()), ("b", echo())]));
     let engine = Engine::new(&split, settings());

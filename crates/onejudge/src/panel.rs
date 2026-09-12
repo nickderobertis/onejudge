@@ -1133,7 +1133,7 @@ mod tests {
             matches!(&error, Error::Provider { context, kind: Some(ProviderErrorKind::Protocol), .. } if context == "supervisor"),
             "{error}"
         );
-        let usage = failing.judge(
+        let verdict = failing.judge(
             &JudgeQuery {
                 kind: JudgeKind::Boolean,
                 criterion: "c",
@@ -1141,7 +1141,7 @@ mod tests {
             },
             &[],
         );
-        assert_eq!(usage.unwrap().reason, "fine");
+        assert_eq!(verdict.unwrap().reason, "fine");
     }
 
     #[test]
