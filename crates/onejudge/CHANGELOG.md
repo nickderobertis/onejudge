@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0](https://github.com/nickderobertis/onejudge/compare/v0.8.1...v0.9.0) - 2026-09-12
+
+### Added
+
+- *(judge)* [**breaking**] stack several judges on one worker, each run in parallel and answered together ([#80](https://github.com/nickderobertis/onejudge/pull/80))
+
 ## [0.8.1](https://github.com/nickderobertis/onejudge/compare/v0.8.0...v0.8.1) - 2026-09-11
 
 ### Fixed
