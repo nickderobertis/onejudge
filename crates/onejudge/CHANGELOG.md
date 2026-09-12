@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0](https://github.com/nickderobertis/onejudge/compare/v0.9.0...v0.10.0) - 2026-09-12
+
+### Added
+
+- *(judge)* add an llmlint judge kind that hands the worker llmlint's own verdict ([#82](https://github.com/nickderobertis/onejudge/pull/82))
+
 ## [0.9.0](https://github.com/nickderobertis/onejudge/compare/v0.8.1...v0.9.0) - 2026-09-12
 
 ### Added
