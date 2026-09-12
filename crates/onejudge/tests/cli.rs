@@ -2267,6 +2267,547 @@ fn an_observing_plan_run_delivers_each_judges_decision_inside_the_supervisor_tur
     assert!(failure.error.to_string().contains("supervise[reviewer]"));
 }
 
+// --- `kind: llmlint`: a judge met at the process boundary ---------------------
+//
+// The llmlint judge through the two entry points a CLI consumer has, over the
+// `onejudge-fake-llmlint` double (a stand-in for the `llmlint` CLI, scripted
+// through the environment the run inherits — see its module doc). Only
+// llmlint's own verdict is faked; the config layer, the panel, the run driver
+// and the built binary are all real.
+
+/// The built fake-llmlint double's path.
+fn fake_llmlint_bin() -> &'static str {
+    env!("CARGO_BIN_EXE_onejudge-fake-llmlint")
+}
+
+/// The argv lines the double recorded at `path`, in arrival order.
+fn recorded_llmlint_argv(path: &Path) -> Vec<Vec<String>> {
+    std::fs::read_to_string(path)
+        .expect("the double recorded its argv")
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect()
+}
+
+/// The report the failing double writes (its module doc), as the provider hands
+/// it on: trailing whitespace trimmed, nothing else touched.
+const LLMLINT_FAILING_REPORT: &str = "\
+FAIL  scripts_are_quiet_on_success
+  scripts/release-probe.sh:12: prints a banner on every successful run
+  rationale: a script that succeeds should print one line or nothing
+1 failed, 3 passed, 0 skipped, 0 not relevant";
+const LLMLINT_FAILING_SUMMARY: &str = "1 failed, 3 passed, 0 skipped, 0 not relevant";
+const LLMLINT_CLEAN_SUMMARY: &str = "0 failed, 4 passed, 0 skipped, 0 not relevant";
+
+/// A `split` over the echo skill whose judges are one LLM judge entry (`llm`, a
+/// YAML mapping body under `- `) and one llmlint judge carrying every field the
+/// kind takes, with `body` appended.
+fn llmlint_panel_yaml(llm: &str, body: &str) -> String {
+    let echo = serde_json::to_string(&echo_bin()).unwrap();
+    let llmlint = serde_json::to_string(fake_llmlint_bin()).unwrap();
+    format!(
+        "provider:\n  kind: split\n  skill:\n    kind: command\n    command: [{echo}]\n  judges:\n\
+         {llm}\
+         \x20   - kind: llmlint\n      label: lint\n      bin: {llmlint}\n\
+         \x20     config: llmlint.strict.yml\n      diff_base: origin/main\n\
+         \x20     args: [--rule, scripts_are_quiet_on_success]\n\
+         {body}"
+    )
+}
+
+/// The one-judge-fails-then-passes body: `done_when` appears in the transcript
+/// from the first message, so the LLM judge finds it satisfied on every turn.
+const LLMLINT_BODY: &str = "\
+task: please commit
+system_prompt: Commit it.
+user:
+  persona: A tester.
+  done_when: commit
+  max_turns: 4
+";
+
+/// Run the built binary over `config` with the double scripted to `exits`,
+/// recording its argv at the returned path.
+fn run_binary_with_llmlint(
+    name: &str,
+    config: &Path,
+    exits: &str,
+) -> (std::process::Output, std::path::PathBuf) {
+    let argv = scratch_path(&format!("cli-llmlint-{name}.argv.jsonl"));
+    let output = Command::new(onejudge_bin())
+        .args(["run", config.to_str().unwrap(), "--format", "json"])
+        .env("ONEJUDGE_FAKE_LLMLINT_ARGV", &argv)
+        .env("ONEJUDGE_FAKE_LLMLINT_EXIT", exits)
+        .env_remove("ONEJUDGE_FAKE_LLMLINT_STDOUT")
+        .env_remove("ONEJUDGE_FAKE_LLMLINT_STDERR")
+        .output()
+        .unwrap();
+    (output, argv)
+}
+
+/// The argv the contract spells for one `lint` run, with every field of the
+/// `lint` entry above rendered exactly where the contract puts it. The worktree
+/// is `.`: a config with no `skill:` runs the agent in the working directory.
+fn llmlint_lint_argv() -> Vec<String> {
+    [
+        "lint",
+        "--cwd",
+        ".",
+        "--format",
+        "human",
+        "--color",
+        "never",
+        "--progress",
+        "never",
+        "-c",
+        "llmlint.strict.yml",
+        "--diff",
+        "--diff-base",
+        "origin/main",
+        "--rule",
+        "scripts_are_quiet_on_success",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect()
+}
+
+/// One judge's decision on one supervisor turn as `(judge, kind, decision, reason)`.
+type DecidedBy = (String, String, onejudge::Decision, String);
+
+/// Every supervisor turn's decisions, by turn.
+fn decided(report: &onejudge::Report) -> Vec<(usize, Vec<DecidedBy>)> {
+    report
+        .judge_decisions
+        .iter()
+        .map(|turn| {
+            (
+                turn.turn,
+                turn.decisions
+                    .iter()
+                    .map(|d| {
+                        (
+                            d.judge.clone(),
+                            d.kind.clone(),
+                            d.decision,
+                            d.reason.clone(),
+                        )
+                    })
+                    .collect(),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn binary_run_hands_the_worker_llmlints_report_under_its_header_and_composes_its_argv() {
+    // A command (echo) reviewer that passes the work beside an llmlint judge whose
+    // first run fails and whose second is clean: the worker's next user turn is
+    // llmlint's report verbatim under its header — nothing from the reviewer —
+    // the run then completes with both reasons attributed, the final `done_when`
+    // re-judge is the conjunction (true), and every `lint` run's argv is exactly
+    // what the contract spells.
+    let echo = serde_json::to_string(&echo_bin()).unwrap();
+    let config = Path::new(env!("CARGO_TARGET_TMPDIR")).join("llmlint-reviewer.yaml");
+    std::fs::write(
+        &config,
+        llmlint_panel_yaml(
+            &format!(
+                "    - kind: command\n      label: reviewer\n      command: [{echo}, \"[[supervisor-complete:looks right]]\"]\n"
+            ),
+            LLMLINT_BODY,
+        ),
+    )
+    .unwrap();
+    let (output, argv) = run_binary_with_llmlint("reviewer", &config, "1,0");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: onejudge::Report = serde_json::from_slice(&output.stdout).unwrap();
+
+    let expected = format!("## Judge `lint` (llmlint)\n\n{LLMLINT_FAILING_REPORT}");
+    assert_eq!(report.transcript.messages[2].content, expected);
+    assert_eq!(
+        report.transcript.messages[3].content,
+        format!("echo: {expected}"),
+        "the worker was handed it"
+    );
+    assert_eq!(
+        decided(&report),
+        vec![
+            (
+                1,
+                vec![
+                    (
+                        "reviewer".into(),
+                        "command".into(),
+                        onejudge::Decision::Done,
+                        "looks right".into()
+                    ),
+                    (
+                        "lint".into(),
+                        "llmlint".into(),
+                        onejudge::Decision::Continue,
+                        LLMLINT_FAILING_SUMMARY.into()
+                    ),
+                ]
+            ),
+            (
+                2,
+                vec![
+                    (
+                        "reviewer".into(),
+                        "command".into(),
+                        onejudge::Decision::Done,
+                        "looks right".into()
+                    ),
+                    (
+                        "lint".into(),
+                        "llmlint".into(),
+                        onejudge::Decision::Done,
+                        LLMLINT_CLEAN_SUMMARY.into()
+                    ),
+                ]
+            ),
+        ]
+    );
+    assert_eq!(
+        report.completion_reason.as_deref(),
+        Some(format!("[reviewer] looks right; [lint] {LLMLINT_CLEAN_SUMMARY}").as_str())
+    );
+    // The authoritative re-judge of `done_when` is the conjunction: the reviewer
+    // finds `commit` in the transcript and llmlint's third run is clean.
+    let done = report
+        .verdicts
+        .iter()
+        .find(|v| v.criterion == "commit")
+        .expect("done_when verdict");
+    assert_eq!(done.verdict.value, onejudge::JudgeValue::Bool(true));
+    assert_eq!(
+        done.verdict.reason,
+        format!("[reviewer] criterion found in transcript; [lint] {LLMLINT_CLEAN_SUMMARY}")
+    );
+
+    // The probe, then one `lint` run per decision: two supervisor turns and the
+    // final re-judge, each with the exact argv.
+    assert_eq!(
+        recorded_llmlint_argv(&argv),
+        vec![
+            vec!["--version".to_string()],
+            llmlint_lint_argv(),
+            llmlint_lint_argv(),
+            llmlint_lint_argv(),
+        ]
+    );
+    // One judge-side process record per run, under the judge's label, and its
+    // wall time on the judge side's telemetry (the echo judge reports none).
+    let lint_processes: Vec<(&str, &str)> = report
+        .processes
+        .iter()
+        .filter(|p| p.judge.as_deref() == Some("lint"))
+        .map(|p| (p.op.as_str(), p.program.as_str()))
+        .collect();
+    assert_eq!(
+        lint_processes,
+        [
+            ("supervise", fake_llmlint_bin()),
+            ("supervise", fake_llmlint_bin()),
+            ("judge", fake_llmlint_bin()),
+        ]
+    );
+    let telemetry = report.telemetry.expect("telemetry");
+    assert!(telemetry.judge.tool_ms.is_some(), "{telemetry:#?}");
+}
+
+#[test]
+fn binary_run_stacks_an_llm_judge_on_an_llmlint_judge_and_hands_the_worker_only_llmlints_output() {
+    // The user's own case: an LLM reviewer (the fake oneharness) that passes the
+    // work stacked on an llmlint judge that does not. Only llmlint's output
+    // reaches the worker, under its header; the report records `done` for one
+    // judge and `continue` for the other on that turn; and the numeric eval and
+    // assessment the config also asks for are answered by the LLM judge alone.
+    let oh = serde_json::to_string(&fake_oneharness_bin()).unwrap();
+    let config = Path::new(env!("CARGO_TARGET_TMPDIR")).join("llmlint-stacked.yaml");
+    std::fs::write(
+        &config,
+        llmlint_panel_yaml(
+            &format!("    - kind: oneharness\n      label: reviewer\n      bin: {oh}\n"),
+            &format!(
+                "{LLMLINT_BODY}\
+                 evals:\n  - criterion: commit\n    kind: numeric\n    scale: [1, 5]\n\
+                 assessment: What was left out?\n"
+            ),
+        ),
+    )
+    .unwrap();
+    let (output, argv) = run_binary_with_llmlint("stacked", &config, "1,0");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: onejudge::Report = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        report.transcript.messages[2].content,
+        format!("## Judge `lint` (llmlint)\n\n{LLMLINT_FAILING_REPORT}")
+    );
+    let turn_one: Vec<(&str, &str, onejudge::Decision)> = report.judge_decisions[0]
+        .decisions
+        .iter()
+        .map(|d| (d.judge.as_str(), d.kind.as_str(), d.decision))
+        .collect();
+    assert_eq!(
+        turn_one,
+        [
+            ("reviewer", "oneharness", onejudge::Decision::Done),
+            ("lint", "llmlint", onejudge::Decision::Continue),
+        ]
+    );
+    assert_eq!(
+        report.completion_reason.as_deref(),
+        Some(
+            format!("[reviewer] fake supervisor found criterion; [lint] {LLMLINT_CLEAN_SUMMARY}")
+                .as_str()
+        )
+    );
+    // The numeric eval and the assessment were answered without llmlint: its argv
+    // record holds exactly the runs it can answer — two supervisor decisions and
+    // the boolean `done_when` re-judge — and nothing for the number or the prose.
+    let numeric = report
+        .verdicts
+        .iter()
+        .find(|v| v.kind == onejudge::JudgeKind::Numeric)
+        .expect("the numeric eval verdict");
+    assert_eq!(numeric.verdict.value, onejudge::JudgeValue::Number(5.0));
+    assert_eq!(numeric.verdict.reason, "[reviewer] fake numeric");
+    assert_eq!(
+        report.assessment.as_deref(),
+        Some("## Judge `reviewer` (oneharness)\n\nNo follow-up work remains.")
+    );
+    assert_eq!(recorded_llmlint_argv(&argv).len(), 1 + 3);
+}
+
+#[test]
+fn an_absent_llmlint_is_a_config_error_at_plan_build_before_any_turn() {
+    // The probe runs where the provider is built, so a missing executable is
+    // refused naming the binary and the `bin` field — with nothing spawned, no
+    // telemetry and no turn — through the plan driver and the binary alike.
+    let echo = serde_json::to_string(&echo_bin()).unwrap();
+    let skill_log = scratch_path("llmlint-absent-skill.jsonl");
+    let missing = "onejudge-no-such-llmlint-zzz";
+    let yaml = format!(
+        "provider:\n  kind: split\n  skill:\n    kind: command\n    command: [{echo}, \"[[record:{}]]\"]\n  \
+         judge:\n    kind: llmlint\n    bin: {missing}\n{LLMLINT_BODY}",
+        skill_log.display()
+    );
+    let plan = Config::from_yaml(&yaml).unwrap().into_plan().unwrap();
+    let mut sink = |_: &str| {};
+    let Err(failure) = onejudge::cli::run_plan_reporting_failure(plan, Format::Json, &mut sink)
+    else {
+        panic!("the provider cannot be built")
+    };
+    let onejudge::cli::CliError::Config(message) = &failure.error else {
+        panic!("a config error, not {}", failure.error)
+    };
+    assert!(message.contains(missing), "{message}");
+    assert!(message.contains("`bin`"), "{message}");
+    assert_eq!(failure.telemetry, None);
+    assert!(failure.processes.is_empty());
+    assert!(failure.judge_decisions.is_empty());
+    assert!(!skill_log.exists(), "the agent never ran a turn");
+
+    let config = Path::new(env!("CARGO_TARGET_TMPDIR")).join("llmlint-absent.yaml");
+    std::fs::write(&config, &yaml).unwrap();
+    let output = Command::new(onejudge_bin())
+        .args(["run", config.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("config error"), "{stderr}");
+    assert!(stderr.contains(missing), "{stderr}");
+    assert!(!skill_log.exists(), "the agent never ran a turn");
+}
+
+#[test]
+fn binary_refuses_llmlint_anywhere_but_a_judge_entry_and_every_foreign_field() {
+    let echo = serde_json::to_string(&echo_bin()).unwrap();
+    let llmlint = serde_json::to_string(fake_llmlint_bin()).unwrap();
+    let split_head =
+        format!("provider:\n  kind: split\n  skill:\n    kind: command\n    command: [{echo}]\n");
+    let judge_entry = |field: &str| {
+        format!("{split_head}  judge:\n    kind: llmlint\n    bin: {llmlint}\n    {field}\n")
+    };
+    let belongs = "put it under `provider.judges:`";
+    let cases: Vec<(&str, String, &str)> = vec![
+        (
+            "top-level",
+            format!("provider:\n  kind: llmlint\n  bin: {llmlint}\n"),
+            belongs,
+        ),
+        (
+            "under-skill",
+            format!(
+                "provider:\n  kind: split\n  skill:\n    kind: llmlint\n    bin: {llmlint}\n  \
+                 judge:\n    kind: command\n    command: [{echo}]\n"
+            ),
+            "not valid as `provider.skill`",
+        ),
+        (
+            "judge-config",
+            judge_entry("judge_config: x.toml"),
+            "`judge_config` is not valid under provider kind `llmlint`",
+        ),
+        (
+            "stream",
+            judge_entry("stream: true"),
+            "`stream` is not valid under provider kind `llmlint`",
+        ),
+        (
+            "control",
+            judge_entry("control: true"),
+            "`control` is not valid under provider kind `llmlint`",
+        ),
+        (
+            "mock-harness",
+            judge_entry("mock_harness: [x]"),
+            "`mock_harness` is not valid under provider kind `llmlint`",
+        ),
+        (
+            "command",
+            judge_entry("command: [x]"),
+            "`command` is not valid under provider kind `llmlint`",
+        ),
+        (
+            "skill",
+            judge_entry("skill: {kind: command, command: [x]}"),
+            "`skill` is not valid under provider kind `llmlint`",
+        ),
+        (
+            "judge",
+            judge_entry("judge: {kind: command, command: [x]}"),
+            "`judge` is not valid under provider kind `llmlint`",
+        ),
+        (
+            "judges",
+            judge_entry("judges: [{kind: command, command: [x]}]"),
+            "`judges` is not valid under provider kind `llmlint`",
+        ),
+        (
+            "blank-bin",
+            judge_entry("bin: ' '").replace(&format!("bin: {llmlint}\n    "), ""),
+            "`bin` under provider kind `llmlint` must name",
+        ),
+        (
+            "config-under-oneharness",
+            "provider:\n  kind: oneharness\n  config: llmlint.yml\n".to_string(),
+            "`config` is not valid under provider kind `oneharness`",
+        ),
+        (
+            "diff-base-under-command",
+            format!("provider:\n  kind: command\n  command: [{echo}]\n  diff_base: main\n"),
+            "`diff_base` is not valid under provider kind `command`",
+        ),
+        (
+            "args-under-split",
+            format!(
+                "{split_head}  judge:\n    kind: command\n    command: [{echo}]\n  args: [x]\n"
+            ),
+            "`args` is not valid under provider kind `split`",
+        ),
+    ];
+    for (name, provider, needle) in cases {
+        let config =
+            Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("llmlint-bad-{name}.yaml"));
+        std::fs::write(&config, format!("{provider}task: go\n")).unwrap();
+        let output = Command::new(onejudge_bin())
+            .args(["run", config.to_str().unwrap()])
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(2), "{name}");
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert!(stderr.contains("config error"), "{name}: {stderr}");
+        assert!(stderr.contains(needle), "{name}: {stderr}");
+    }
+}
+
+#[test]
+fn binary_refuses_llmlint_as_the_provider_override() {
+    // `--provider llmlint` and `ONEJUDGE_PROVIDER=llmlint` land on the top-level
+    // provider, which an llmlint judge can never be.
+    let config = write_config("llmlint-override.yaml", "task: go\n");
+    let flag = Command::new(onejudge_bin())
+        .args(["run", config.to_str().unwrap(), "--provider", "llmlint"])
+        .output()
+        .unwrap();
+    assert_eq!(flag.status.code(), Some(2));
+    let stderr = String::from_utf8(flag.stderr).unwrap();
+    assert!(stderr.contains("config error"), "{stderr}");
+    assert!(
+        stderr.contains("`--provider` / `ONEJUDGE_PROVIDER`"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("put it under `provider.judges:`"),
+        "{stderr}"
+    );
+
+    let env = Command::new(onejudge_bin())
+        .args(["run", config.to_str().unwrap()])
+        .env("ONEJUDGE_PROVIDER", "llmlint")
+        .output()
+        .unwrap();
+    assert_eq!(env.status.code(), Some(2));
+    let stderr = String::from_utf8(env.stderr).unwrap();
+    assert!(
+        stderr.contains("put it under `provider.judges:`"),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn a_judge_list_of_only_llmlint_cannot_answer_a_numeric_eval_or_an_assessment() {
+    // Refused at resolution — before any probe, before any paid turn — because
+    // nothing in the list can score a number or write prose.
+    let echo = serde_json::to_string(&echo_bin()).unwrap();
+    let head = format!(
+        "provider:\n  kind: split\n  skill:\n    kind: command\n    command: [{echo}]\n  \
+         judge:\n    kind: llmlint\n    bin: onejudge-no-such-llmlint-zzz\ntask: go\n"
+    );
+    for (what, body, needle) in [
+        (
+            "numeric",
+            "evals:\n  - criterion: readable\n    kind: numeric\n",
+            "the config names a numeric eval",
+        ),
+        (
+            "assessment",
+            "assessment: Follow-ups?\n",
+            "the config names an `assessment`",
+        ),
+    ] {
+        let err = Config::from_yaml(&format!("{head}{body}"))
+            .unwrap()
+            .into_plan()
+            .unwrap_err();
+        let text = err.to_string();
+        assert!(text.contains(needle), "{what}: {text}");
+        assert!(
+            text.contains("`oneharness` or `command` judge"),
+            "{what}: {text}"
+        );
+    }
+    // A boolean eval is fine: llmlint answers it.
+    let plan = Config::from_yaml(&format!(
+        "{head}evals:\n  - criterion: lint-clean\n    kind: boolean\n"
+    ))
+    .unwrap()
+    .into_plan();
+    assert!(plan.is_ok(), "{:?}", plan.err());
+}
+
 #[test]
 fn a_single_judge_config_runs_exactly_as_the_released_0_8_1_did() {
     // The replay of the checked-in baseline: the same `split` with one `judge:`
