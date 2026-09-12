@@ -2523,8 +2523,8 @@ fn binary_run_hands_the_worker_llmlints_report_under_its_header_and_composes_its
 
 #[test]
 fn binary_run_stacks_an_llm_judge_on_an_llmlint_judge_and_hands_the_worker_only_llmlints_output() {
-    // The user's own case: an LLM reviewer (the fake oneharness) that passes the
-    // work stacked on an llmlint judge that does not. Only llmlint's output
+    // The stack the kind exists for: an LLM reviewer (the fake oneharness) that
+    // passes the work beside an llmlint judge that does not. Only llmlint's output
     // reaches the worker, under its header; the report records `done` for one
     // judge and `continue` for the other on that turn; and the numeric eval and
     // assessment the config also asks for are answered by the LLM judge alone.
