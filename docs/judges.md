@@ -12,8 +12,10 @@ the sum.
 
 A panel of **one** judge — which is what every config written before panels
 existed builds — is byte-identical to a bare provider: the same transcript, the
-same session names, the same control addresses and usage. The only thing it
-adds is the per-judge record below.
+same session names, the same usage and the same agent `control` address. It adds
+the per-judge record below, and — under `control: true` — the judge's own
+`supervisor_control` address, which the release before panels wrote as `null`
+(a defect; see [how a panel decides](#how-a-panel-decides)).
 
 This page is the contract. Three parts: the config shape, how a panel decides,
 and what each surface carries per judge. The library type is
