@@ -2596,11 +2596,12 @@ fn an_absent_llmlint_is_a_config_error_at_plan_build_before_any_turn() {
     // telemetry and no turn — through the plan driver and the binary alike.
     let echo = serde_json::to_string(&echo_bin()).unwrap();
     let skill_log = scratch_path("llmlint-absent-skill.jsonl");
+    // JSON-quoted so a Windows path's backslashes survive the YAML scalar.
+    let record = serde_json::to_string(&format!("[[record:{}]]", skill_log.display())).unwrap();
     let missing = "onejudge-no-such-llmlint-zzz";
     let yaml = format!(
-        "provider:\n  kind: split\n  skill:\n    kind: command\n    command: [{echo}, \"[[record:{}]]\"]\n  \
-         judge:\n    kind: llmlint\n    bin: {missing}\n{LLMLINT_BODY}",
-        skill_log.display()
+        "provider:\n  kind: split\n  skill:\n    kind: command\n    command: [{echo}, {record}]\n  \
+         judge:\n    kind: llmlint\n    bin: {missing}\n{LLMLINT_BODY}"
     );
     let plan = Config::from_yaml(&yaml).unwrap().into_plan().unwrap();
     let mut sink = |_: &str| {};
