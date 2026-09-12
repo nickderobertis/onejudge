@@ -763,6 +763,8 @@ mod tests {
         answer: Option<SupervisorOutcome>,
         verdict: JudgeVerdict,
         sessions: RefCell<Vec<Option<String>>>,
+        /// Fail `judge` and `assess` too, not only `supervise`.
+        broken: bool,
     }
 
     impl Canned {
@@ -775,6 +777,7 @@ mod tests {
                     usage: None,
                 },
                 sessions: RefCell::new(Vec::new()),
+                broken: false,
             }
         }
 
@@ -787,6 +790,14 @@ mod tests {
                     usage: None,
                 },
                 sessions: RefCell::new(Vec::new()),
+                broken: false,
+            }
+        }
+
+        fn broken() -> Self {
+            Self {
+                broken: true,
+                ..Self::failing()
             }
         }
 
@@ -804,6 +815,7 @@ mod tests {
                     }),
                 },
                 sessions: RefCell::new(Vec::new()),
+                broken: false,
             }
         }
     }
@@ -850,10 +862,20 @@ mod tests {
         }
 
         fn judge(&self, _: &JudgeQuery<'_>, _: &[Message]) -> Result<JudgeVerdict> {
+            if self.broken {
+                return Err(Error::provider_classified(
+                    "judge",
+                    "no output",
+                    ProviderErrorKind::Spawn,
+                ));
+            }
             Ok(self.verdict.clone())
         }
 
         fn assess(&self, prompt: &str, _: &[Message]) -> Result<Assessment> {
+            if self.broken {
+                return Err(Error::provider("assess", "no output"));
+            }
             Ok(Assessment {
                 text: format!("about {prompt}"),
                 usage: None,
@@ -1265,6 +1287,46 @@ mod tests {
                 .unwrap_err(),
             Error::Invalid(m) if m.contains("score a number")
         ));
+    }
+
+    #[test]
+    fn a_judge_that_fails_a_verdict_or_an_assessment_fails_the_call_naming_it() {
+        let panel = panel_of(vec![
+            ("a", Canned::scoring(JudgeValue::Bool(true), "yes")),
+            ("b", Canned::broken()),
+        ]);
+        let query = JudgeQuery {
+            kind: JudgeKind::Boolean,
+            criterion: "c",
+            scale: None,
+        };
+        let error = panel.judge(&query, &[]).unwrap_err();
+        let Error::Provider {
+            context,
+            message,
+            kind,
+        } = error
+        else {
+            panic!("a classified provider error")
+        };
+        assert_eq!(context, "judge[b]");
+        // The failing judge's own classification is preserved.
+        assert_eq!(kind, Some(ProviderErrorKind::Spawn));
+        assert_eq!(
+            message,
+            "[a] true: yes; [b] failed: provider error (judge): no output"
+        );
+
+        let error = panel.assess("p", &[]).unwrap_err();
+        assert!(
+            matches!(&error, Error::Provider { context, kind: None, message }
+                if context == "assess[b]"
+                    && message == "[a] wrote an assessment; [b] failed: provider error (assess): no output"),
+            "{error}"
+        );
+        // Verdict and assessment calls record no decision: only the per-turn
+        // supervisor decision is a judge's decision on the work.
+        assert!(panel.take_judge_decisions().is_empty());
     }
 
     #[test]

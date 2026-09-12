@@ -2033,4 +2033,100 @@ mod tests {
             .unwrap();
         assert_eq!(provider.seen.into_inner(), ["/history/agent.jsonl"]);
     }
+
+    #[test]
+    fn a_sink_that_breaks_on_a_judges_decision_stops_the_run_with_the_decision_recorded() {
+        /// A provider that reports one per-judge decision per supervisor call — the
+        /// shape a panel has — so the engine's draining and observing can be driven
+        /// without a subprocess.
+        struct Deciding;
+
+        impl Provider for Deciding {
+            fn take_judge_decisions(&self) -> Vec<crate::JudgeDecision> {
+                vec![crate::JudgeDecision {
+                    judge: "only".into(),
+                    kind: "command".into(),
+                    decision: Decision::Continue,
+                    reason: "more".into(),
+                }]
+            }
+
+            fn respond(
+                &self,
+                _: &SkillRef<'_>,
+                _: &[Message],
+                _: Option<&str>,
+            ) -> Result<AssistantTurn> {
+                Ok(assistant("working", false))
+            }
+
+            fn simulate_user(&self, _: &str, _: &[Message], _: Option<&str>) -> Result<UserTurn> {
+                unreachable!()
+            }
+
+            fn supervise(
+                &self,
+                _: &SupervisorQuery<'_>,
+                _: &[Message],
+                _: Option<&str>,
+            ) -> Result<SupervisorTurn> {
+                Ok(SupervisorTurn {
+                    outcome: SupervisorOutcome::Continue {
+                        message: "go on".into(),
+                        reason: "more".into(),
+                    },
+                    usage: None,
+                })
+            }
+
+            fn judge(&self, _: &JudgeQuery<'_>, _: &[Message]) -> Result<JudgeVerdict> {
+                unreachable!()
+            }
+
+            fn assess(&self, _: &str, _: &[Message]) -> Result<Assessment> {
+                unreachable!()
+            }
+        }
+
+        let provider = Deciding;
+        let engine = Engine::new(&provider, settings());
+        let mut seen = Vec::new();
+        let outcome = engine
+            .run_observing(
+                &Conversation::multi_turn(skill(), "go", SimulatedUser::new("p").max_turns(3)),
+                &mut |observation| {
+                    let (kind, stop) = match observation {
+                        Observation::JudgeDecided(d) => (format!("judged/{}", d.judge), true),
+                        Observation::TurnOpened(o) => (format!("opened/{:?}", o.role), false),
+                        Observation::Message(m) => (format!("said/{:?}", m.role), false),
+                        Observation::TurnClosed(c) => (format!("closed/{:?}", c.role), false),
+                        Observation::Tool(_) => ("tool".into(), false),
+                    };
+                    seen.push(kind);
+                    if stop {
+                        ControlFlow::Break(())
+                    } else {
+                        ControlFlow::Continue(())
+                    }
+                },
+            )
+            .unwrap();
+        // Nothing follows the observation that asked to stop, the run is stopped
+        // early, and the decision it broke on is still on the record.
+        assert_eq!(
+            seen,
+            [
+                "opened/Assistant",
+                "said/Assistant",
+                "closed/Assistant",
+                "opened/User",
+                "judged/only"
+            ]
+        );
+        assert!(outcome.stopped_early);
+        assert_eq!(outcome.transcript.assistant_turns(), 1);
+        assert_eq!(outcome.judge_decisions.len(), 1);
+        assert_eq!(outcome.judge_decisions[0].decisions[0].reason, "more");
+        assert_eq!(engine.judge_decisions(), outcome.judge_decisions);
+    }
 }
