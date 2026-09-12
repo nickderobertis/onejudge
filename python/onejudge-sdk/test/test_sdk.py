@@ -33,6 +33,19 @@ ECHO = ROOT / "target" / "debug" / f"onejudge-echo-provider{SUFFIX}"
 FIXTURE = Path(__file__).with_name("fixture_cli.py")
 
 
+def rust_schema_version() -> int:
+    """The `SCHEMA_VERSION` the crate under test stamps, read off its source.
+
+    Read rather than copied: the copy this replaced said 10 while the crate stamped
+    11, so the real-binary journeys below asserted a version no build could write.
+    """
+    source = (ROOT / "crates" / "onejudge" / "src" / "report.rs").read_text(encoding="utf-8")
+    for line in source.splitlines():
+        if line.startswith("pub const SCHEMA_VERSION: u32 = "):
+            return int(line.split("=")[1].strip().rstrip(";"))
+    raise AssertionError("report.rs declares SCHEMA_VERSION")
+
+
 def command_config(*, incomplete: bool = False) -> RunConfig:
     """Build a config that drives the real command-provider boundary."""
     config: RunConfig = {
@@ -68,7 +81,7 @@ class OneJudgeTests(unittest.IsolatedAsyncioTestCase):
         input_tokens = complete.usage["input_tokens"]
         self.assertIsNotNone(input_tokens)
         self.assertGreater(input_tokens or 0, 0)
-        self.assertEqual(complete.raw["schema_version"], 10)
+        self.assertEqual(complete.raw["schema_version"], rust_schema_version())
         # A run that never asked for turn control reports neither an address nor
         # a reason — the two states `control` alone would collapse.
         self.assertIsNone(complete.control)
@@ -241,7 +254,7 @@ class OneJudgeTests(unittest.IsolatedAsyncioTestCase):
         # The terminal line carries the ordinary, validated result.
         self.assertEqual(result.exit_code, 0)
         self.assertTrue(result.completed)
-        self.assertEqual(result.raw["schema_version"], 10)
+        self.assertEqual(result.raw["schema_version"], rust_schema_version())
         self.assertEqual(result.assistant_turns, 1)
         self.assertEqual(result.verdicts[0]["verdict"]["value"], True)
 

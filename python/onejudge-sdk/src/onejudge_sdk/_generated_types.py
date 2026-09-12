@@ -7,6 +7,7 @@ from typing import Any, Literal, Optional, TypedDict, Union
 
 JudgeKind = Literal["boolean", "numeric"]
 ProviderKind = Literal["oneharness", "command", "split"]
+Decision = Literal["done", "continue", "no_instruction", "unparseable", "error"]
 JudgeValue = Union[bool, float]
 Role = Literal["user", "assistant", "system"]
 TelemetryRole = Literal["agent", "judge"]
@@ -39,7 +40,9 @@ class ProviderConfig(TypedDict, total=False):
     control: Optional[bool]
     judge: Optional[ProviderConfig]
     judge_config: Optional[str]
+    judges: Optional[Sequence[ProviderConfig]]
     kind: ProviderKind
+    label: Optional[str]
     mock_harness: Optional[Sequence[str]]
     skill: Optional[ProviderConfig]
     stream: Optional[bool]
@@ -93,7 +96,15 @@ class _HarnessAttributionRequired(TypedDict):
 class HarnessAttribution(_HarnessAttributionRequired, total=False):
     fell_through: Sequence[FellThrough]
     history_file: Optional[str]
+    judge: Optional[str]
     ran: Optional[str]
+
+
+class JudgeDecision(TypedDict):
+    decision: Decision
+    judge: str
+    kind: str
+    reason: str
 
 
 class _JudgeVerdictRequired(TypedDict):
@@ -103,6 +114,11 @@ class _JudgeVerdictRequired(TypedDict):
 
 class JudgeVerdict(_JudgeVerdictRequired, total=False):
     usage: Optional[Usage]
+
+
+class JudgedTurn(TypedDict):
+    decisions: Sequence[JudgeDecision]
+    turn: int
 
 
 class _MessageRequired(TypedDict):
@@ -138,6 +154,7 @@ class _SessionLinkRequired(TypedDict):
 
 class SessionLink(_SessionLinkRequired, total=False):
     history_id: Optional[str]
+    judge: Optional[str]
 
 
 class _SpawnedProcessRequired(TypedDict):
@@ -149,6 +166,7 @@ class _SpawnedProcessRequired(TypedDict):
 
 class SpawnedProcess(_SpawnedProcessRequired, total=False):
     group: Optional[str]
+    judge: Optional[str]
 
 
 class _TelemetryRequired(TypedDict):
@@ -217,6 +235,7 @@ class RunReport(_RunReportRequired, total=False):
     completion_reason: Optional[str]
     control: Optional[ControlAddress]
     control_unavailable: Optional[str]
+    judge_decisions: Sequence[JudgedTurn]
     processes: Sequence[SpawnedProcess]
     settled_reason: Optional[str]
     supervisor_control: Optional[ControlAddress]
@@ -237,5 +256,6 @@ class _FailureReportRequired(TypedDict):
 
 
 class FailureReport(_FailureReportRequired, total=False):
+    judge_decisions: Sequence[JudgedTurn]
     processes: Sequence[SpawnedProcess]
     telemetry: Optional[Telemetry]

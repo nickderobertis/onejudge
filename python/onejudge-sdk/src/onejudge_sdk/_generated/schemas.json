@@ -111,6 +111,36 @@
         ],
         "type": "object"
       },
+      "Decision": {
+        "description": "What one judge of a [`JudgePanel`](crate::JudgePanel) decided, as a wire token.\n\nThe five outcomes a supervisor call can have, plus `error` for a judge that\ncould not run \u2014 recorded rather than dropped, because a judge that could not\nrun is never read as a pass and a reader has to be able to see that it was\nasked.",
+        "oneOf": [
+          {
+            "const": "done",
+            "description": "The judge declared the work complete.",
+            "type": "string"
+          },
+          {
+            "const": "continue",
+            "description": "The judge handed back a next instruction.",
+            "type": "string"
+          },
+          {
+            "const": "no_instruction",
+            "description": "The judge judged the work incomplete but named no next instruction, even\nasked again.",
+            "type": "string"
+          },
+          {
+            "const": "unparseable",
+            "description": "The judge answered in neither documented shape, even asked again.",
+            "type": "string"
+          },
+          {
+            "const": "error",
+            "description": "The judge's call failed; `reason` is the error's message.",
+            "type": "string"
+          }
+        ]
+      },
       "FailureDetail": {
         "description": "The failure itself, with the classification a caller branches on.",
         "properties": {
@@ -177,6 +207,13 @@
               "null"
             ]
           },
+          "judge": {
+            "description": "Which judge of a [`JudgePanel`](crate::JudgePanel) made the invocation, by\nlabel \u2014 as [`SessionLink::judge`], and absent under the same conditions.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "ran": {
             "description": "The candidate that ran the turn, by composed id; `null` when none could.",
             "type": [
@@ -199,6 +236,57 @@
           "role",
           "turn_index",
           "candidates"
+        ],
+        "type": "object"
+      },
+      "JudgeDecision": {
+        "description": "One judge's decision on one judge-side call, attributed to the judge by its\npanel label and provider kind.\n\nA [`JudgePanel`](crate::JudgePanel) records one per judge per supervisor call\n\u2014 including the call that failed \u2014 and the engine drains them after every\nsupervisor call, `Ok` or `Err`, onto [`Report::judge_decisions`]. A provider\nthat is not a panel records none, so a report carrying no decisions was judged\nby a bare provider; nothing is synthesized.",
+        "properties": {
+          "decision": {
+            "$ref": "#/$defs/Decision",
+            "description": "What it decided, or that it failed."
+          },
+          "judge": {
+            "description": "The judge's label within its panel (`label:` in the config, or the\ndefaulted `<kind>` / `<kind>-<n>`).",
+            "type": "string"
+          },
+          "kind": {
+            "description": "The judge entry's provider kind (`oneharness`, `command`, \u2026).",
+            "type": "string"
+          },
+          "reason": {
+            "description": "Its own reason \u2014 or, for an `error`, the error's message.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "judge",
+          "kind",
+          "decision",
+          "reason"
+        ],
+        "type": "object"
+      },
+      "JudgedTurn": {
+        "description": "Every judge's decision on one supervisor turn.",
+        "properties": {
+          "decisions": {
+            "description": "One decision per judge, in the panel's list order.",
+            "items": {
+              "$ref": "#/$defs/JudgeDecision"
+            },
+            "type": "array"
+          },
+          "turn": {
+            "description": "1-based assistant-turn index the supervisor turn belongs to, as\n[`TurnOpened::turn`](crate::TurnOpened::turn).",
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "turn",
+          "decisions"
         ],
         "type": "object"
       },
@@ -325,6 +413,13 @@
               "null"
             ]
           },
+          "judge": {
+            "description": "Which judge of a [`JudgePanel`](crate::JudgePanel) made the invocation, by\nlabel. Set only by a panel holding more than one judge; absent for a bare\nprovider and for a panel of one, whose records are the ones it has always\nwritten.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "role": {
             "$ref": "#/$defs/TelemetryRole",
             "description": "Which side of the conversation owns the invocation."
@@ -358,6 +453,13 @@
         "properties": {
           "group": {
             "description": "The embedder-owned group a [`SpawnHook`] reported placing it in.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "judge": {
+            "description": "Which judge of a [`JudgePanel`](crate::JudgePanel) spawned it, by label.\nSet only by a panel holding more than one judge; absent otherwise, so a\nsingle-judge run's records are the ones it has always written.",
             "type": [
               "string",
               "null"
@@ -511,6 +613,13 @@
         "$ref": "#/$defs/FailureDetail",
         "description": "Why the run did not complete."
       },
+      "judge_decisions": {
+        "description": "What each judge of a panel decided on each supervisor turn before the\nfailure, the failed turn included. Absent for a bare provider.",
+        "items": {
+          "$ref": "#/$defs/JudgedTurn"
+        },
+        "type": "array"
+      },
       "processes": {
         "description": "The processes the failed run had already spawned, with the embedder-owned\ngroup each was placed in. Absent when nothing was spawned.",
         "items": {
@@ -545,6 +654,71 @@
   },
   "observation": {
     "$defs": {
+      "Decision": {
+        "description": "What one judge of a [`JudgePanel`](crate::JudgePanel) decided, as a wire token.\n\nThe five outcomes a supervisor call can have, plus `error` for a judge that\ncould not run \u2014 recorded rather than dropped, because a judge that could not\nrun is never read as a pass and a reader has to be able to see that it was\nasked.",
+        "oneOf": [
+          {
+            "const": "done",
+            "description": "The judge declared the work complete.",
+            "type": "string"
+          },
+          {
+            "const": "continue",
+            "description": "The judge handed back a next instruction.",
+            "type": "string"
+          },
+          {
+            "const": "no_instruction",
+            "description": "The judge judged the work incomplete but named no next instruction, even\nasked again.",
+            "type": "string"
+          },
+          {
+            "const": "unparseable",
+            "description": "The judge answered in neither documented shape, even asked again.",
+            "type": "string"
+          },
+          {
+            "const": "error",
+            "description": "The judge's call failed; `reason` is the error's message.",
+            "type": "string"
+          }
+        ]
+      },
+      "JudgeDecided": {
+        "description": "One judge's decision on a supervisor turn, as its panel recorded it.\n\nThe observed form of [`JudgeDecision`](crate::JudgeDecision), stamped with the\nturn it belongs to. Only a [`JudgePanel`](crate::JudgePanel) produces these; a\nrun judged by a bare provider is observed exactly as before.",
+        "properties": {
+          "decision": {
+            "$ref": "#/$defs/Decision",
+            "description": "What it decided, or that it failed."
+          },
+          "judge": {
+            "description": "The judge's label within its panel.",
+            "type": "string"
+          },
+          "kind": {
+            "description": "The judge entry's provider kind.",
+            "type": "string"
+          },
+          "reason": {
+            "description": "Its own reason \u2014 or, for an `error`, the error's message.",
+            "type": "string"
+          },
+          "turn": {
+            "description": "1-based assistant-turn index the supervisor turn belongs to, as\n[`TurnOpened::turn`].",
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "turn",
+          "judge",
+          "kind",
+          "decision",
+          "reason"
+        ],
+        "type": "object"
+      },
       "Role": {
         "description": "Who produced a message.",
         "oneOf": [
@@ -835,6 +1009,20 @@
           "type"
         ],
         "type": "object"
+      },
+      {
+        "$ref": "#/$defs/JudgeDecided",
+        "description": "One judge of a panel decided, on a supervisor turn: delivered once per\ndecision in the panel's list order, after that turn's\n[`TurnOpened`](Observation::TurnOpened) and before its\n[`Message`](Observation::Message) / [`TurnClosed`](Observation::TurnClosed)\n\u2014 and, when the supervisor call failed, before the error propagates.",
+        "properties": {
+          "type": {
+            "const": "judge_decided",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "type": "object"
       }
     ],
     "title": "Observation"
@@ -974,6 +1162,36 @@
         ],
         "type": "object"
       },
+      "Decision": {
+        "description": "What one judge of a [`JudgePanel`](crate::JudgePanel) decided, as a wire token.\n\nThe five outcomes a supervisor call can have, plus `error` for a judge that\ncould not run \u2014 recorded rather than dropped, because a judge that could not\nrun is never read as a pass and a reader has to be able to see that it was\nasked.",
+        "oneOf": [
+          {
+            "const": "done",
+            "description": "The judge declared the work complete.",
+            "type": "string"
+          },
+          {
+            "const": "continue",
+            "description": "The judge handed back a next instruction.",
+            "type": "string"
+          },
+          {
+            "const": "no_instruction",
+            "description": "The judge judged the work incomplete but named no next instruction, even\nasked again.",
+            "type": "string"
+          },
+          {
+            "const": "unparseable",
+            "description": "The judge answered in neither documented shape, even asked again.",
+            "type": "string"
+          },
+          {
+            "const": "error",
+            "description": "The judge's call failed; `reason` is the error's message.",
+            "type": "string"
+          }
+        ]
+      },
       "FellThrough": {
         "description": "One candidate a fallback chain fell through, with oneharness's reason token\n(`not-installed`, `spawn-error`, `auth`, `quota`, `model-not-found`,\n`rate-limit`, `session-not-found`, `untrusted-directory`, `input-too-large`,\n`model-mismatch`).",
         "properties": {
@@ -1016,6 +1234,13 @@
               "null"
             ]
           },
+          "judge": {
+            "description": "Which judge of a [`JudgePanel`](crate::JudgePanel) made the invocation, by\nlabel \u2014 as [`SessionLink::judge`], and absent under the same conditions.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "ran": {
             "description": "The candidate that ran the turn, by composed id; `null` when none could.",
             "type": [
@@ -1038,6 +1263,34 @@
           "role",
           "turn_index",
           "candidates"
+        ],
+        "type": "object"
+      },
+      "JudgeDecision": {
+        "description": "One judge's decision on one judge-side call, attributed to the judge by its\npanel label and provider kind.\n\nA [`JudgePanel`](crate::JudgePanel) records one per judge per supervisor call\n\u2014 including the call that failed \u2014 and the engine drains them after every\nsupervisor call, `Ok` or `Err`, onto [`Report::judge_decisions`]. A provider\nthat is not a panel records none, so a report carrying no decisions was judged\nby a bare provider; nothing is synthesized.",
+        "properties": {
+          "decision": {
+            "$ref": "#/$defs/Decision",
+            "description": "What it decided, or that it failed."
+          },
+          "judge": {
+            "description": "The judge's label within its panel (`label:` in the config, or the\ndefaulted `<kind>` / `<kind>-<n>`).",
+            "type": "string"
+          },
+          "kind": {
+            "description": "The judge entry's provider kind (`oneharness`, `command`, \u2026).",
+            "type": "string"
+          },
+          "reason": {
+            "description": "Its own reason \u2014 or, for an `error`, the error's message.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "judge",
+          "kind",
+          "decision",
+          "reason"
         ],
         "type": "object"
       },
@@ -1097,6 +1350,29 @@
         "required": [
           "value",
           "reason"
+        ],
+        "type": "object"
+      },
+      "JudgedTurn": {
+        "description": "Every judge's decision on one supervisor turn.",
+        "properties": {
+          "decisions": {
+            "description": "One decision per judge, in the panel's list order.",
+            "items": {
+              "$ref": "#/$defs/JudgeDecision"
+            },
+            "type": "array"
+          },
+          "turn": {
+            "description": "1-based assistant-turn index the supervisor turn belongs to, as\n[`TurnOpened::turn`](crate::TurnOpened::turn).",
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "turn",
+          "decisions"
         ],
         "type": "object"
       },
@@ -1236,6 +1512,13 @@
               "null"
             ]
           },
+          "judge": {
+            "description": "Which judge of a [`JudgePanel`](crate::JudgePanel) made the invocation, by\nlabel. Set only by a panel holding more than one judge; absent for a bare\nprovider and for a panel of one, whose records are the ones it has always\nwritten.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "role": {
             "$ref": "#/$defs/TelemetryRole",
             "description": "Which side of the conversation owns the invocation."
@@ -1269,6 +1552,13 @@
         "properties": {
           "group": {
             "description": "The embedder-owned group a [`SpawnHook`] reported placing it in.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "judge": {
+            "description": "Which judge of a [`JudgePanel`](crate::JudgePanel) spawned it, by label.\nSet only by a panel holding more than one judge; absent otherwise, so a\nsingle-judge run's records are the ones it has always written.",
             "type": [
               "string",
               "null"
@@ -1512,6 +1802,13 @@
           "null"
         ]
       },
+      "judge_decisions": {
+        "description": "What each judge of a panel decided on each supervisor turn, one entry per\nturn that consulted the supervisor, in turn order. Omitted when empty \u2014 a\nrun judged by a bare provider rather than a [`JudgePanel`](crate::JudgePanel)\nrecords no per-judge decision, and nothing is synthesized for it.",
+        "items": {
+          "$ref": "#/$defs/JudgedTurn"
+        },
+        "type": "array"
+      },
       "processes": {
         "description": "Every process the run spawned, and the embedder-owned group a\n[`SpawnHook`](crate::SpawnHook) placed each one in.\n\nThis is the machine-readable form of what an in-process embedder observes\nthrough the hook, so `onejudge run --format json` reports it too. A record\nwhose `group` is absent is not grouped \u2014 onejudge never names a group it did\nnot observe a hook create.",
         "items": {
@@ -1688,7 +1985,7 @@
                 "type": "null"
               }
             ],
-            "description": "`split`: the backend that judges and plays the simulated user."
+            "description": "`split`: the one judge that judges and plays the simulated user \u2014 the\none-element shorthand for `judges: [<this>]`. Exclusive with `judges`."
           },
           "judge_config": {
             "default": null,
@@ -1698,9 +1995,27 @@
               "null"
             ]
           },
+          "judges": {
+            "description": "`split`: the judges, one or more, every one run concurrently against each\nworker turn and combined into one attributed answer (see `docs/judges.md`).\nExclusive with `judge`; must not be empty.",
+            "items": {
+              "$ref": "#/$defs/ProviderConfig"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "kind": {
             "$ref": "#/$defs/ProviderKind",
             "description": "`oneharness` (default) | `command` | `split`."
+          },
+          "label": {
+            "default": null,
+            "description": "A judge entry only: this judge's name on every surface \u2014 the `## Judge`\nheader the worker reads, the `[<label>]` reason prefix, the report's\n`judge_decisions`, and the `-<label>` session suffix. `[A-Za-z0-9_-]+`,\nunique within the list; defaults to the entry's `kind` for the first judge\nof that kind and `<kind>-<n>` for repeats.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "mock_harness": {
             "default": null,
