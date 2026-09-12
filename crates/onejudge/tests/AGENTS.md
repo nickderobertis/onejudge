@@ -13,7 +13,19 @@ repo-wide contract; this covers only what differs here.
   `e2e.rs` file is `#![cfg(feature = "fake-provider")]`; the gate enables that
   feature, so e2e always runs — it is never `#[ignore]`-d.
   Steer a double's behavior with the `[[marker:arg]]` conventions documented in
-  each binary's module doc; add a new marker there when a journey needs one.
+  each binary's module doc; add a new marker there when a journey needs one. A
+  judge of a **panel** is handed the same persona and transcript as every other
+  judge, so a journey that needs two judges to differ steers each through its own
+  **argv** (the echo double scans its arguments for markers too:
+  `[[supervisor-continue:MSG]]`, `[[supervisor-exit]]`, `[[supervisor-sleep:MS]]`,
+  `[[supervisor-stamp:PATH]]`, `[[record:PATH]]`).
+- **`golden/single-judge/` is a replay fixture, not a hand-written expectation.**
+  `cli.rs` runs its `config.yaml` (a `split` with one `judge:`) through the built
+  binary and asserts the report and every supervisor request equal what the
+  released 0.8.1 wrote — captured by `scripts/capture-single-judge-baseline.sh`
+  from that release's own binaries. It is what proves a panel of one is
+  byte-identical to the judge side before panels existed; recapture it only from
+  a release, never from the tree under test.
 - **`notes.rs` drives the note delivery seam through the library API.** Every case
   goes through `Notes::channel` / `Engine::with_notes` / `Plan::with_notes` and
   never a command line, and the framing each party was handed is asserted against

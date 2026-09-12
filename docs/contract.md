@@ -178,8 +178,10 @@ included, so a judge that could not run is on the record beside the ones that
 decided and is never read as a pass.
 
 Omitted when empty. A run judged by a bare provider — `kind: oneharness`,
-`kind: command`, or a `split` whose one judge is not a panel built by the CLI —
-records no decision, and nothing is synthesized for it. The same label rides
+`kind: command`, or a library `SplitProvider` whose judge half is not a
+`JudgePanel` — records no decision, and nothing is synthesized for it; every CLI
+`split` builds a panel, a single `judge:` included, so it records one decision
+per turn. The same label rides
 `telemetry.attribution[].judge`, `telemetry.sessions[].judge` and
 `processes[].judge`, set only by a panel of **more than one** judge; a panel of
 one writes exactly the records a bare provider writes.

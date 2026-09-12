@@ -86,9 +86,10 @@ simulated user even if the config had none.
 
 ## Output and exit code
 
-- **Human (default):** the conversation (with each turn's tool actions), the
-  completion status (completed / hit the turn cap / settled — see below), usage,
-  and any eval verdicts.
+- **Human (default):** the conversation (with each turn's tool actions, and —
+  under a judge panel — each judge's decision beside the supervisor turn it
+  belongs to), the completion status (completed / hit the turn cap / settled —
+  see below), usage, and any eval verdicts.
   Live tool events stream to **stderr** so a redirected stdout stays clean.
 - **`--format json`:** the versioned [`Report`](contract.md) — transcript +
   verdicts + usage, stamped with `schema_version`. This reuses onejudge's existing
@@ -148,7 +149,7 @@ Top-level keys:
 
 | key | purpose |
 |-----|---------|
-| `provider` | which backend runs the harness: `kind` is `oneharness` (`bin`, `judge_config`, `stream`, `control`, `mock_harness`), `command` (`command: [...]`), or `split` (a `skill:` + `judge:` **sub-provider** pair — distinct from the top-level `skill:` below) |
+| `provider` | which backend runs the harness: `kind` is `oneharness` (`bin`, `judge_config`, `stream`, `control`, `mock_harness`), `command` (`command: [...]`), or `split` (a `skill:` **sub-provider** — distinct from the top-level `skill:` below — plus the judge side as a **list**: `judges: [..]`, one or more entries each with an optional `label`, or `judge:` as the one-element shorthand; see [judges.md](judges.md)) |
 | `skill` | a skill directory (containing `SKILL.md`) whose body seeds the system prompt, resolved relative to the config file; optional |
 | `system_prompt` | extra system-prompt text; used alone, or prepended before a `skill` body when both are set; optional |
 | `task` | the task to drive to completion (or supply via `--task`) |
@@ -163,8 +164,10 @@ moved into oneharness's own config files (`oneharness.toml` for the agent,
 
 The config is validated strictly at the boundary (`deny_unknown_fields`): a typo'd
 key, a missing task, a provider field that does not belong to the chosen `kind`
-(e.g. `bin` or `judge_config` under `kind: command`), or an inverted numeric scale
-is a loud, actionable error — never a silent default.
+(e.g. `bin` or `judge_config` under `kind: command`), a `label` outside a judge
+entry or one that is malformed or repeated, `judge:` beside `judges:` or an empty
+`judges:`, or an inverted numeric scale is a loud, actionable error — never a
+silent default.
 
 ## Providers
 
@@ -189,5 +192,9 @@ call goes through oneharness:
   ([oneharness-library.md](oneharness-library.md)). Script it with the `MOCK_*`
   variables in the environment the run inherits.
 - **`command`** — a custom backend speaking the [JSON-lines protocol](protocol.md).
-- **`split`** — compose a skill-runner with a separate judge / simulated-user
-  backend (e.g. drive the agent on one harness, judge on another).
+- **`split`** — compose a skill-runner with a separate judge side (e.g. drive
+  the agent on one harness, judge on another). The judge side is a **list of
+  judges** — `judges:` — every one run concurrently against each worker turn and
+  combined into one attributed answer, each judge's decision recorded on the
+  report's `judge_decisions` and printed beside its turn in the human format;
+  `judge:` is the one-element shorthand. [judges.md](judges.md) is the contract.

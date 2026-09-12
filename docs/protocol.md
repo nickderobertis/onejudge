@@ -97,7 +97,10 @@ The engine sends exactly one request after each ordinary nonterminal agent turn:
 {"op":"supervisor","task":"fix it","persona":"A strict reviewer.","done_when":"tests pass","worktree":"/repo","history_name":"run-42-skill","messages":[...],"session":"run-42-user"}
 ```
 
-`done_when` is the criterion **actually in force**: the configured one plus every
+`session` is the judge's caller-owned session name — the bare `<base>-user`, or
+`<base>-user-<label>` when this command is one judge of a
+[panel](judges.md) of several, so each judge keeps its own state. `done_when`
+is the criterion **actually in force**: the configured one plus every
 criterion a delivered binding note added, composed by onejudge. `notes` (v5,
 omitted when empty) carries what each party was told, so a command that renders its
 own judge prompt can frame them by the role they address rather than reading them

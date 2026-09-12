@@ -91,7 +91,8 @@ assessment: Identify useful follow-up work left out of scope.
 The harness and model come from oneharness's own config (`oneharness.toml` for the
 agent, `oneharness.judge.toml` for the judge side) — `onejudge init` scaffolds
 them. More keys — `provider` (`oneharness` / `command` / `split`, with the
-oneharness `judge_config` path), `session`, boolean evals. `onejudge init` writes a
+oneharness `judge_config` path, and under `split` the judge side as a `judges:`
+list), `session`, boolean evals. `onejudge init` writes a
 fully-commented starter and `onejudge schema` prints the annotated field reference
 (the single source of truth); it is validated strictly (`deny_unknown_fields`) so a
 typo is a loud error.
@@ -116,8 +117,14 @@ to publish tool events on stdout as they occur, ahead of that same report
     ([docs/streaming.md](docs/streaming.md)).
   - **`CommandProvider`** speaks a small [JSON-lines protocol](docs/protocol.md),
     for a custom backend or a deterministic test double.
+  - **`JudgePanel`** makes the judge side a **list**: every judge runs against the
+    same worker turn at the same time, the panel waits for all of them, and the
+    worker gets one combined, attributed message when any says the work is not
+    done; each judge's decision is recorded on the report. A panel of one is
+    byte-identical to a bare provider. See [docs/judges.md](docs/judges.md).
   - **`SplitProvider`** composes two providers — one that runs the skill, one that
-    judges and role-plays the user (e.g. run the skill on one harness, judge on
+    judges and role-plays the user (a single provider or a `JudgePanel`; e.g. run
+    the skill on one harness, judge on
     another).
 - **`Engine`** runs a **`Conversation`** (a `Skill`, an initial input, and an
   optional `SimulatedUser`) into a **`Transcript`**, bounded by `max_turns` /

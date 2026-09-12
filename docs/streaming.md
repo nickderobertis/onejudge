@@ -94,7 +94,9 @@ run, which the provider upstream has no notion of. `report` is byte-for-byte the
 versioned [`Report`](contract.md) a buffered `--format json` run prints, so a
 consumer parses one contract either way, and the exit code is unchanged (`0`
 completed and every boolean eval passed, `1` otherwise, `2` a bad config or a
-provider failure).
+provider failure). What each judge of a [panel](judges.md) decided reaches a
+consumer there too, on the report's `judge_decisions`: the protocol itself is
+unchanged by a panel.
 
 Each line is flushed as it is written. `--stream` requires `--format json` and
 refuses `--output` — the stream *is* stdout — and either misuse is a loud config
