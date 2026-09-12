@@ -92,7 +92,13 @@ The other judge-side operations:
 - **`simulate_user`** (the legacy op the engine no longer calls): the first judge
   that can play a user.
 - Usage is summed across judges. `supervisor_control` is the first judge's — a
-  lever over another judge's turn is deferred.
+  lever over another judge's turn is deferred. That holds on the CLI path and the
+  library path alike: before panels existed the CLI's runtime provider never
+  forwarded the judge side's answer, so `onejudge run --format json` wrote
+  `"supervisor_control": null` for **every** `control: true` config — a defect
+  against [control.md](control.md), not behaviour the single-judge byte-identity
+  below preserves. The controlled baseline (`tests/golden/single-judge-control/`)
+  documents exactly that one difference from 0.8.1.
 
 **Sessions.** With more than one judge, judge *i*'s caller-owned session name is
 `<user session>-<label>` (`run-42-user-reviewer`), so each judge keeps its own
@@ -162,7 +168,9 @@ error names the judge, both decisions are on the record), two judges genuinely
 overlapping in time (a wall-clock bound below the sum of their sleeps, and their
 stamped intervals intersect), and a panel of one attributing nothing.
 `tests/cli.rs` drives the same panel through the plan driver and the built
-binary, and replays the checked-in single-judge baseline
-(`tests/golden/single-judge/`, captured from the released 0.8.1 by
+binary, and replays the two checked-in single-judge baselines
+(`tests/golden/single-judge/` and, with `control: true` on both sides,
+`tests/golden/single-judge-control/` — both captured from the released 0.8.1 by
 `scripts/capture-single-judge-baseline.sh`) to prove a panel of one is
-byte-identical to what came before it. `panel.rs` unit-tests the decision table.
+byte-identical to what came before it, save the `supervisor_control` the release
+omitted. `panel.rs` unit-tests the decision table.

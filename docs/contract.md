@@ -164,6 +164,10 @@ fact, and the one a supervisor has to route around. See
 `<base>-user`. They are different sockets and are refused independently — a harness
 that can be interrupted on one side is not thereby interruptible on the other — so
 a reader that has one address and assumes the other holds a lever it does not have.
+Under a [judge panel](judges.md) it is the **first** judge's. Through 0.8.1 the CLI
+wrote `null` here for every config, because its runtime provider never forwarded
+the judge side's answer — a defect against this contract, fixed in v12; the
+library path always carried it.
 
 ## `judge_decisions` — what each judge of a panel said, per turn (v12)
 

@@ -2326,3 +2326,126 @@ fn a_single_judge_config_runs_exactly_as_the_released_0_8_1_did() {
         "a panel of one hands the bare session through"
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn a_single_judge_controlled_config_runs_as_0_8_1_did_except_the_supervisor_address_it_omitted() {
+    // The controlled baseline: the same one-`judge:` split with `control: true` on
+    // both sides, captured from 0.8.1. Everything but `supervisor_control` /
+    // `supervisor_control_unavailable` is identical — transcript, usage, the agent's
+    // `control` address, the judge prompts. Those two now carry the first judge's
+    // answer (Contract B); 0.8.1's CLI wrote `null` for every config because
+    // `AnyProvider` never forwarded the judge side's answer — a defect against
+    // docs/control.md, ruled so by the planner rather than preserved.
+    //
+    // The paths ride the judge prompt, whose length the fake oneharness bills as
+    // `input_tokens`, so they are spelled at the same fixed width the capture
+    // script used (`/tmp/oj-ctl-<8-digit pid>/…`) rather than taken from
+    // `control_store` — a wider temp dir would change the usage, not the behaviour.
+    use oneharness_core::io::session as session_io;
+
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden/single-judge-control");
+    let ctl = std::path::PathBuf::from(format!("/tmp/oj-ctl-{:08}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&ctl);
+    let agent_store = ctl.join("agent-store");
+    let judge_store = ctl.join("judge-store");
+    std::fs::create_dir_all(&agent_store).unwrap();
+    std::fs::create_dir_all(&judge_store).unwrap();
+    let record = ctl.join("prompts.log");
+    let template = std::fs::read_to_string(fixture.join("config.yaml")).unwrap();
+    let yaml = template
+        .replace(
+            "{{ONEHARNESS}}",
+            &serde_json::to_string(&fake_oneharness_bin()).unwrap(),
+        )
+        .replace("{{AGENT_STORE}}", agent_store.to_str().unwrap())
+        .replace("{{JUDGE_STORE}}", judge_store.to_str().unwrap())
+        .replace("{{RECORD}}", record.to_str().unwrap());
+    let config = Path::new(env!("CARGO_TARGET_TMPDIR")).join("single-judge-control.yaml");
+    std::fs::write(&config, yaml).unwrap();
+
+    let output = Command::new(onejudge_bin())
+        .args(["run", config.to_str().unwrap(), "--format", "json"])
+        .output()
+        .unwrap();
+    // Incomplete (the cap ends it), exactly as 0.8.1's run was.
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let normalize = |text: &str| {
+        let mut text = text.to_string();
+        for (real, placeholder) in [
+            (record.clone(), "{{RECORD}}"),
+            (agent_store.clone(), "{{AGENT_STORE}}"),
+            (judge_store.clone(), "{{JUDGE_STORE}}"),
+        ] {
+            for spelling in [real.canonicalize().unwrap(), real] {
+                text = text.replace(spelling.to_str().unwrap(), placeholder);
+            }
+        }
+        text
+    };
+    let mut actual: serde_json::Value =
+        serde_json::from_str(&normalize(&String::from_utf8(output.stdout).unwrap())).unwrap();
+    let object = actual.as_object_mut().unwrap();
+    assert_eq!(
+        object
+            .remove("judge_decisions")
+            .expect("a panel of one records its decision")
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    for volatile in ["schema_version", "telemetry", "processes"] {
+        object.remove(volatile);
+    }
+    // The one deliberate difference: the judge's address, which 0.8.1 omitted.
+    let supervisor = object
+        .remove("supervisor_control")
+        .expect("always on the wire");
+    assert!(
+        object.remove("supervisor_control_unavailable").is_none(),
+        "the ask was honoured, so no refusal reason"
+    );
+    assert_eq!(
+        supervisor,
+        serde_json::json!({
+            "session": "ctl-baseline-user",
+            "session_dir": "{{JUDGE_STORE}}",
+            "cwd": ".",
+        })
+    );
+    // …and it is a real address: the record `oneharness interrupt` reads before it
+    // dials is at it.
+    let dir = session_io::resolve_dir(judge_store.canonicalize().unwrap().to_str()).unwrap();
+    session_io::read(&session_io::session_path(
+        &dir,
+        Path::new("."),
+        "ctl-baseline-user",
+    ))
+    .expect("the judge's session record is where the address says");
+
+    let mut expected: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(fixture.join("report.json")).unwrap())
+            .unwrap();
+    let baseline = expected.as_object_mut().unwrap();
+    assert_eq!(
+        baseline.remove("supervisor_control"),
+        Some(serde_json::Value::Null),
+        "0.8.1 wrote null here: the defect this replay documents"
+    );
+    assert_eq!(
+        actual, expected,
+        "the report differs from what onejudge 0.8.1 wrote for this config"
+    );
+
+    // The judge was handed byte-for-byte the prompts 0.8.1 handed it.
+    let prompts = normalize(&std::fs::read_to_string(&record).unwrap());
+    let baseline = std::fs::read_to_string(fixture.join("supervisor-prompts.log")).unwrap();
+    assert_eq!(prompts, baseline);
+    let _ = std::fs::remove_dir_all(&ctl);
+}

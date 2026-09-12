@@ -17,13 +17,18 @@ repo-wide contract; this covers only what differs here.
   judge of a **panel** is handed the same persona and transcript as every other
   judge, so a journey that needs two judges to differ steers each through its own
   **argv** — the echo double scans its arguments for markers too.
-- **`golden/single-judge/` is a replay fixture, not a hand-written expectation.**
-  `cli.rs` runs its `config.yaml` (a `split` with one `judge:`) through the built
-  binary and asserts the report and every supervisor request equal what the
-  released 0.8.1 wrote — captured by `scripts/capture-single-judge-baseline.sh`
-  from that release's own binaries. It is what proves a panel of one is
-  byte-identical to the judge side before panels existed; recapture it only from
-  a release, never from the tree under test.
+- **`golden/single-judge*/` are replay fixtures, not hand-written expectations.**
+  `cli.rs` runs each `config.yaml` (a `split` with one `judge:`; the `-control`
+  one with `control: true` on both sides) through the built binary and asserts the
+  report and every judge-side request/prompt equal what the released 0.8.1 wrote —
+  captured by `scripts/capture-single-judge-baseline.sh` from that release's own
+  binaries. They are what prove a panel of one is byte-identical to the judge side
+  before panels existed (save the `supervisor_control` the release's CLI omitted,
+  which the controlled replay pins on purpose); recapture them only from a
+  release, never from the tree under test. The controlled fixture's paths ride the
+  judge prompt, which the fake oneharness bills by length, so both the script and
+  the test spell them at one fixed width under `/tmp` rather than via
+  `control_store`.
 - **`notes.rs` drives the note delivery seam through the library API.** Every case
   goes through `Notes::channel` / `Engine::with_notes` / `Plan::with_notes` and
   never a command line, and the framing each party was handed is asserted against
