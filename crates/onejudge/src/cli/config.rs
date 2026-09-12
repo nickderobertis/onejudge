@@ -110,10 +110,13 @@ pub struct EvalConfig {
 #[cfg_attr(feature = "sdk-schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct ProviderConfig {
-    /// `oneharness` (default) | `command` | `split`.
+    /// `oneharness` (default) | `command` | `split` | `llmlint` (a judge entry
+    /// only).
     #[serde(default)]
     pub kind: ProviderKind,
-    /// `oneharness`: the `oneharness` binary (default `oneharness`).
+    /// `oneharness`: the `oneharness` binary (default `oneharness`). `llmlint`:
+    /// the `llmlint` executable (default `llmlint`), probed with `--version` when
+    /// the run is built, so an absent one is a config error before any turn.
     #[serde(default)]
     pub bin: Option<String>,
     /// `oneharness`: the oneharness config file the judge / simulated user run
@@ -152,6 +155,21 @@ pub struct ProviderConfig {
     /// `command`: the provider argv (program + args).
     #[serde(default)]
     pub command: Option<Vec<String>>,
+    /// `llmlint`: the llmlint config file, passed as `llmlint lint -c <path>` as
+    /// given. Unset, llmlint discovers its own (`llmlint.yml` up from the
+    /// worktree it lints) — the repository's default.
+    #[serde(default)]
+    pub config: Option<PathBuf>,
+    /// `llmlint`: review only what the worktree changed against this git
+    /// revision (`llmlint lint --diff --diff-base <ref>`). onejudge does no base
+    /// auto-detection: a host wiring a stack passes its own comparison base here.
+    /// Unset, llmlint judges the whole tree.
+    #[serde(default)]
+    pub diff_base: Option<String>,
+    /// `llmlint`: extra arguments appended to every `llmlint lint` invocation
+    /// after the ones onejudge composes (`--rule NAME`, `--agent NAME`, …).
+    #[serde(default)]
+    pub args: Option<Vec<String>>,
     /// `split`: the backend that runs the agent's turns.
     #[serde(default)]
     pub skill: Option<Box<ProviderConfig>>,
@@ -187,6 +205,11 @@ pub enum ProviderKind {
     Command,
     /// Compose a skill-runner with a separate judge / simulated-user backend.
     Split,
+    /// A judge whose whole verdict is one `llmlint` run over the worker's tree
+    /// (`docs/judges.md`). Judge-side only: valid under `judges:` / `judge:` of a
+    /// `split`, refused as the top-level provider, under `skill:`, and as the
+    /// `--provider` / `ONEJUDGE_PROVIDER` override.
+    Llmlint,
 }
 
 // --- Overrides (flags win over env, env wins over file) --------------------
@@ -443,6 +466,9 @@ impl ProviderConfig {
             control,
             mock_harness,
             command,
+            config,
+            diff_base,
+            args,
             skill,
             judge,
             judges,
@@ -457,6 +483,25 @@ impl ProviderConfig {
                 "`label` is only valid on a judge entry (under `provider.judges:` or                  `provider.judge:`)"
                     .into(),
             ));
+        }
+
+        // An llmlint judge decides; it cannot run the agent's turns. So it is a
+        // judge entry and nothing else: refused at the top level (which is also
+        // where `--provider llmlint` / `ONEJUDGE_PROVIDER=llmlint` land) and under
+        // a split's `skill:`, each naming where it belongs.
+        if kind == ProviderKind::Llmlint && place != Place::Judge {
+            let where_ = match place {
+                Place::Top => {
+                    "the top-level `provider` (or the `--provider` / `ONEJUDGE_PROVIDER` override)"
+                }
+                Place::Skill => "`provider.skill`",
+                Place::Judge => unreachable!("a judge entry admits `llmlint`"),
+            };
+            return Err(CliError::Config(format!(
+                "provider kind `llmlint` is a judge and cannot run the agent's turns: it is \
+                 not valid as {where_}; put it under `provider.judges:` (or `provider.judge:`) \
+                 of a `kind: split` provider"
+            )));
         }
 
         // Which fields belong to which kind; anything else set is an error.
@@ -474,6 +519,9 @@ impl ProviderConfig {
         match kind {
             ProviderKind::Oneharness => {
                 reject(command.is_some(), "command")?;
+                reject(config.is_some(), "config")?;
+                reject(diff_base.is_some(), "diff_base")?;
+                reject(args.is_some(), "args")?;
                 reject(skill.is_some(), "skill")?;
                 reject(judge.is_some(), "judge")?;
                 reject(judges.is_some(), "judges")?;
@@ -494,6 +542,9 @@ impl ProviderConfig {
                 reject(stream.is_some(), "stream")?;
                 reject(control.is_some(), "control")?;
                 reject(mock_harness.is_some(), "mock_harness")?;
+                reject(config.is_some(), "config")?;
+                reject(diff_base.is_some(), "diff_base")?;
+                reject(args.is_some(), "args")?;
                 reject(skill.is_some(), "skill")?;
                 reject(judge.is_some(), "judge")?;
                 reject(judges.is_some(), "judges")?;
@@ -515,6 +566,9 @@ impl ProviderConfig {
                 // child that runs them.
                 reject(mock_harness.is_some(), "mock_harness")?;
                 reject(command.is_some(), "command")?;
+                reject(config.is_some(), "config")?;
+                reject(diff_base.is_some(), "diff_base")?;
+                reject(args.is_some(), "args")?;
                 let skill = skill.ok_or_else(|| {
                     CliError::Config("provider kind `split` needs a `skill` provider".into())
                 })?;
@@ -546,6 +600,31 @@ impl ProviderConfig {
                 Ok(ProviderSpec::Split {
                     skill: Box::new(skill.resolve(Place::Skill)?),
                     judges: resolve_judges(judges)?,
+                })
+            }
+            ProviderKind::Llmlint => {
+                reject(judge_config.is_some(), "judge_config")?;
+                reject(stream.is_some(), "stream")?;
+                reject(control.is_some(), "control")?;
+                reject(mock_harness.is_some(), "mock_harness")?;
+                reject(command.is_some(), "command")?;
+                reject(skill.is_some(), "skill")?;
+                reject(judge.is_some(), "judge")?;
+                reject(judges.is_some(), "judges")?;
+                let bin =
+                    match bin {
+                        Some(bin) if bin.trim().is_empty() => return Err(CliError::Config(
+                            "`bin` under provider kind `llmlint` must name the llmlint executable"
+                                .into(),
+                        )),
+                        Some(bin) => bin,
+                        None => crate::DEFAULT_LLMLINT_BIN.to_string(),
+                    };
+                Ok(ProviderSpec::Llmlint {
+                    bin,
+                    config,
+                    diff_base: diff_base.filter(|base| !base.trim().is_empty()),
+                    args: args.unwrap_or_default(),
                 })
             }
         }
@@ -600,6 +679,7 @@ impl ProviderKind {
             ProviderKind::Oneharness => "oneharness",
             ProviderKind::Command => "command",
             ProviderKind::Split => "split",
+            ProviderKind::Llmlint => "llmlint",
         }
     }
 }
@@ -671,6 +751,20 @@ pub enum ProviderSpec {
         /// against each worker turn. A single `judge:` resolves to a list of one.
         judges: Vec<JudgeSpec>,
     },
+    /// A judge whose verdict is one `llmlint` run over the worker's tree
+    /// ([`LlmlintProvider`](crate::LlmlintProvider)). Only ever a judge of a
+    /// `split`: the config layer refuses it anywhere else.
+    Llmlint {
+        /// The `llmlint` executable, probed with `--version` when built.
+        bin: String,
+        /// The llmlint config file (`-c <path>`), or llmlint's own discovery.
+        config: Option<PathBuf>,
+        /// The git revision to review the worktree's changes against
+        /// (`--diff --diff-base <ref>`), or the whole tree.
+        diff_base: Option<String>,
+        /// Extra arguments appended to every run.
+        args: Vec<String>,
+    },
 }
 
 impl ProviderSpec {
@@ -681,6 +775,7 @@ impl ProviderSpec {
             ProviderSpec::Oneharness { .. } => ProviderKind::Oneharness,
             ProviderSpec::Command { .. } => ProviderKind::Command,
             ProviderSpec::Split { .. } => ProviderKind::Split,
+            ProviderSpec::Llmlint { .. } => ProviderKind::Llmlint,
         }
     }
 }
@@ -697,9 +792,10 @@ pub struct JudgeSpec {
 
 impl JudgeSpec {
     /// Whether this judge can score a number and write prose — an `oneharness`
-    /// or `command` judge (or a nested split judged by one), which is every kind
-    /// this build can name. A judge that cannot is left out of numeric evals and
-    /// assessments, and a config that asks for one with no such judge is refused.
+    /// or `command` judge (or a nested split judged by one). An `llmlint` judge
+    /// cannot: a lint run has no opinion on "how readable is this, 1 to 5" and
+    /// writes no prose, so it is left out of numeric evals and assessments, and a
+    /// config that asks for one with no other judge is refused.
     #[must_use]
     pub fn scores_and_writes(&self) -> bool {
         matches!(

@@ -1949,9 +1949,20 @@
         "additionalProperties": false,
         "description": "Which backend runs the harness. A flat, strict struct (rather than an\ninternally-tagged enum, which serde cannot pair with `deny_unknown_fields`):\n[`ProviderConfig::resolve`] checks that only the chosen `kind`'s fields are set\nand turns it into a validated [`ProviderSpec`], so a misplaced-but-spelled-right\nkey (e.g. `bin` under `kind: command`) is still a loud error.",
         "properties": {
+          "args": {
+            "default": null,
+            "description": "`llmlint`: extra arguments appended to every `llmlint lint` invocation\nafter the ones onejudge composes (`--rule NAME`, `--agent NAME`, \u2026).",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "bin": {
             "default": null,
-            "description": "`oneharness`: the `oneharness` binary (default `oneharness`).",
+            "description": "`oneharness`: the `oneharness` binary (default `oneharness`). `llmlint`:\nthe `llmlint` executable (default `llmlint`), probed with `--version` when\nthe run is built, so an absent one is a config error before any turn.",
             "type": [
               "string",
               "null"
@@ -1968,11 +1979,27 @@
               "null"
             ]
           },
+          "config": {
+            "default": null,
+            "description": "`llmlint`: the llmlint config file, passed as `llmlint lint -c <path>` as\ngiven. Unset, llmlint discovers its own (`llmlint.yml` up from the\nworktree it lints) \u2014 the repository's default.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "control": {
             "default": null,
             "description": "`oneharness`: ask for **controllable** turns \u2014 both parties' calls add\n`oneharness run --control`, opening an out-of-band socket each that a\nseparate `oneharness interrupt` process can redirect the in-flight turn\nthrough. Default `false`, and `false` changes nothing about the run. The\naddresses land on the report's `control` (agent) and `supervisor_control`\n(judge) blocks \u2014 separate sockets, separately refusable; onejudge never\ninterrupts anything itself. See `docs/control.md`.",
             "type": [
               "boolean",
+              "null"
+            ]
+          },
+          "diff_base": {
+            "default": null,
+            "description": "`llmlint`: review only what the worktree changed against this git\nrevision (`llmlint lint --diff --diff-base <ref>`). onejudge does no base\nauto-detection: a host wiring a stack passes its own comparison base here.\nUnset, llmlint judges the whole tree.",
+            "type": [
+              "string",
               "null"
             ]
           },
@@ -2007,7 +2034,7 @@
           },
           "kind": {
             "$ref": "#/$defs/ProviderKind",
-            "description": "`oneharness` (default) | `command` | `split`."
+            "description": "`oneharness` (default) | `command` | `split` | `llmlint` (a judge entry\nonly)."
           },
           "label": {
             "default": null,
@@ -2066,6 +2093,11 @@
           {
             "const": "split",
             "description": "Compose a skill-runner with a separate judge / simulated-user backend.",
+            "type": "string"
+          },
+          {
+            "const": "llmlint",
+            "description": "A judge whose whole verdict is one `llmlint` run over the worker's tree\n(`docs/judges.md`). Judge-side only: valid under `judges:` / `judge:` of a\n`split`, refused as the top-level provider, under `skill:`, and as the\n`--provider` / `ONEJUDGE_PROVIDER` override.",
             "type": "string"
           }
         ]

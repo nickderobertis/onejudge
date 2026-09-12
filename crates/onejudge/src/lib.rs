@@ -15,7 +15,9 @@
 //!   Every model call goes through `oneharness`. [`OneharnessProvider`] shells out
 //!   to the `oneharness` CLI; [`CommandProvider`] speaks a small JSON-lines
 //!   protocol (see `docs/protocol.md`) for the deterministic test doubles and any
-//!   custom backend; and [`SplitProvider`] composes a skill-running provider with a
+//!   custom backend; [`LlmlintProvider`] is a judge-side backend whose whole
+//!   verdict is one `llmlint` run over the worker's tree, met at the process
+//!   boundary only; and [`SplitProvider`] composes a skill-running provider with a
 //!   separate judge / simulated-user provider (e.g. run the skill on one harness
 //!   and judge on another). The judge side is a **list**: a [`JudgePanel`] runs
 //!   every judge concurrently against the same worker turn, waits for all of
@@ -81,6 +83,7 @@ mod command;
 mod control;
 mod engine;
 mod error;
+mod llmlint;
 pub mod note;
 mod oneharness;
 mod panel;
@@ -102,6 +105,7 @@ pub use engine::{
     StreamEvent, TurnClosed, TurnMessage, TurnOpened, NOOP_SETTLE_LIMIT,
 };
 pub use error::{Error, ProviderErrorKind, Result};
+pub use llmlint::{LlmlintProvider, DEFAULT_LLMLINT_BIN};
 pub use note::{
     supervisor_block, Accepted, Addressee, Criteria, Criterion, CriterionRefused, DeliveredNote,
     Note, NoteInbox, NoteRefused, NoteText, Notes, Party, Undelivered,

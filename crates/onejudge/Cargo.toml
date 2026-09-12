@@ -113,6 +113,15 @@ name = "onejudge-fake-harness"
 path = "src/bin/fake_harness.rs"
 required-features = ["fake-provider"]
 
+# `onejudge-fake-llmlint` stands in for the `llmlint` CLI the `LlmlintProvider`
+# meets at the process boundary: it answers `--version`, records the argv it was
+# given, and exits 0 / 1 / 2 (or dies by signal) as the test scripts it through
+# the environment. The gate needs no llmlint installed. See its module doc.
+[[bin]]
+name = "onejudge-fake-llmlint"
+path = "src/bin/fake_llmlint.rs"
+required-features = ["fake-provider"]
+
 [lints.rust]
 missing_docs = "warn"
 unsafe_code = "forbid"
