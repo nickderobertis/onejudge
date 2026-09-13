@@ -1,6 +1,7 @@
 {
   "run_config": {
     "args": "args",
+    "artifacts": "artifacts",
     "assessment": "assessment",
     "bin": "bin",
     "command": "command",

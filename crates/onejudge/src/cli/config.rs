@@ -83,6 +83,15 @@ pub struct UserConfig {
     /// `max_turns` instead of being settled on its second quiet exchange.
     #[serde(default)]
     pub settle_on_noop: Option<bool>,
+    /// Files or directories every judge-side prompt names for the evaluator to
+    /// read directly — work that may be untracked or gitignored, which
+    /// `git_status` and `git_diff` cannot show. An absolute path is used as
+    /// written; a relative one is resolved against the skill's working directory.
+    /// A directory is listed newest-modified first, re-read every judge-side
+    /// turn; a path that does not exist is named as such. Replaced by
+    /// `--artifact` / `ONEJUDGE_ARTIFACTS`.
+    #[serde(default)]
+    pub artifacts: Vec<String>,
 }
 
 /// One eval scored against the finished transcript.
@@ -240,6 +249,9 @@ pub struct Overrides {
     pub done_when: Option<String>,
     /// `--max-turns` / `ONEJUDGE_MAX_TURNS`.
     pub max_turns: Option<u32>,
+    /// `--artifact` (repeatable) / `ONEJUDGE_ARTIFACTS` (entries separated by the
+    /// platform path-list separator, as `PATH` is). Replaces `user.artifacts`.
+    pub artifacts: Option<Vec<String>>,
     /// `--session` / `ONEJUDGE_SESSION`.
     pub session: Option<String>,
     /// `--provider` / `ONEJUDGE_PROVIDER` (override just the backend kind).
@@ -291,6 +303,12 @@ impl Overrides {
             persona: get("ONEJUDGE_PERSONA"),
             done_when: get("ONEJUDGE_DONE_WHEN"),
             max_turns,
+            artifacts: get("ONEJUDGE_ARTIFACTS").map(|list| {
+                std::env::split_paths(&list)
+                    .filter(|path| !path.as_os_str().is_empty())
+                    .map(|path| path.to_string_lossy().into_owned())
+                    .collect()
+            }),
             session: get("ONEJUDGE_SESSION"),
             provider_kind,
         })
@@ -319,6 +337,7 @@ impl Config {
             persona,
             done_when,
             max_turns,
+            artifacts,
             session,
             provider_kind,
         } = overrides;
@@ -341,9 +360,9 @@ impl Config {
             self.provider.kind = kind;
         }
         // The user-facing overrides imply a simulated user even if the file had
-        // none — supplying `--persona` / `--done-when` / `--max-turns` on the CLI
-        // is a request to drive the loop.
-        if persona.is_some() || done_when.is_some() || max_turns.is_some() {
+        // none — supplying `--persona` / `--done-when` / `--max-turns` /
+        // `--artifact` on the CLI is a request to drive the loop.
+        if persona.is_some() || done_when.is_some() || max_turns.is_some() || artifacts.is_some() {
             let user = self.user.get_or_insert_with(UserConfig::default);
             if persona.is_some() {
                 user.persona = persona.unwrap_or_default();
@@ -353,6 +372,9 @@ impl Config {
             }
             if max_turns.is_some() {
                 user.max_turns = max_turns;
+            }
+            if let Some(artifacts) = artifacts {
+                user.artifacts = artifacts;
             }
         }
     }
@@ -386,7 +408,7 @@ impl Config {
                 if let Some(settle) = u.settle_on_noop {
                     settings = settings.with_settle_on_noop(settle);
                 }
-                let mut sim = SimulatedUser::new(u.persona);
+                let mut sim = SimulatedUser::new(u.persona).artifacts(u.artifacts);
                 if let Some(dw) = &u.done_when {
                     sim = sim.done_when(dw.clone());
                 }
@@ -1380,6 +1402,47 @@ user:
         assert_eq!(
             plan.conversation.user.map(|u| u.persona).as_deref(),
             Some("an env reviewer")
+        );
+    }
+
+    #[test]
+    fn artifact_overrides_replace_the_configured_list_flag_over_env_over_file() {
+        let file = "task: t\nuser:\n  persona: p\n  artifacts: [from-file.md, .plans]\n";
+        let artifacts_of = |cfg: Config| {
+            cfg.into_plan()
+                .unwrap()
+                .conversation
+                .user
+                .unwrap()
+                .artifacts
+        };
+        assert_eq!(
+            artifacts_of(Config::from_yaml(file).unwrap()),
+            ["from-file.md", ".plans"]
+        );
+
+        let joined = std::env::join_paths(["env-a.md", "dir/env-b"])
+            .unwrap()
+            .into_string()
+            .unwrap();
+        let env = std::collections::HashMap::from([("ONEJUDGE_ARTIFACTS", joined.as_str())]);
+        let from_env = || Overrides::from_env(|k| env.get(k).map(|v| (*v).to_string())).unwrap();
+        let mut cfg = Config::from_yaml(file).unwrap();
+        cfg.apply(from_env());
+        assert_eq!(artifacts_of(cfg.clone()), ["env-a.md", "dir/env-b"]);
+        cfg.apply(Overrides {
+            artifacts: Some(vec!["flag.md".into()]),
+            ..Overrides::default()
+        });
+        assert_eq!(artifacts_of(cfg), ["flag.md"]);
+
+        // Like the persona override, naming artifacts implies a simulated user.
+        let mut bare = Config::from_yaml("task: t\n").unwrap();
+        bare.apply(from_env());
+        assert_eq!(artifacts_of(bare), ["env-a.md", "dir/env-b"]);
+        // An unset list names nothing.
+        assert!(
+            artifacts_of(Config::from_yaml("task: t\nuser:\n  persona: p\n").unwrap()).is_empty()
         );
     }
 

@@ -4,7 +4,8 @@
 //! drives and any custom provider a consumer writes. The wire contract is
 //! documented in `docs/protocol.md`.
 //!
-//! Protocol **v6** adds optional evaluator evidence to judge requests. Protocol **v5** adds `notes` to the supervisor request — the role-addressed
+//! Protocol **v7** adds caller-named `artifacts` to that evidence, omitted when
+//! none are named. Protocol **v6** added optional evaluator evidence to judge requests. Protocol **v5** adds `notes` to the supervisor request — the role-addressed
 //! corrections delivered into the run so far, omitted when there are none, so a v4
 //! double sees a byte-identical request. Protocol **v4** added the unified
 //! supervisor request; v2 dropped
@@ -40,6 +41,10 @@ struct EvidencePayload<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     worktree: Option<&'a str>,
     history_files: &'a [String],
+    /// Caller-named artifacts, resolved against the worktree (protocol v7).
+    /// Omitted when none are named, so a v6 command sees a byte-identical request.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    artifacts: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -297,11 +302,14 @@ impl Provider for CommandProvider {
                 min,
                 max,
                 messages,
-                evidence: (evidence.worktree.is_some() || !evidence.history_files.is_empty())
-                    .then_some(EvidencePayload {
-                        worktree: evidence.worktree,
-                        history_files: evidence.history_files,
-                    }),
+                evidence: (evidence.worktree.is_some()
+                    || !evidence.history_files.is_empty()
+                    || !evidence.artifacts.is_empty())
+                .then(|| EvidencePayload {
+                    worktree: evidence.worktree,
+                    history_files: evidence.history_files,
+                    artifacts: evidence.resolved_artifacts(),
+                }),
             },
             "judge",
         )?;
@@ -490,6 +498,7 @@ mod tests {
             evidence: Some(EvidencePayload {
                 worktree: Some("/repo"),
                 history_files: &histories,
+                artifacts: Vec::new(),
             }),
         };
         let json = serde_json::to_string(&with).unwrap();
@@ -506,8 +515,55 @@ mod tests {
             .unwrap()
             .contains("evidence"));
         let docs = include_str!("../../../docs/protocol.md");
-        assert!(docs.contains("**v6** (current)"));
+        assert!(docs.contains("**v6** additively"));
         assert!(docs.contains("\"evidence\": { \"worktree\": \"/repo\", \"history_files\""));
+    }
+
+    #[test]
+    fn protocol_v7_judge_evidence_carries_resolved_artifacts_only_when_named() {
+        let named = vec!["/abs/design.md".to_string(), ".plans".to_string()];
+        let context = EvidenceContext {
+            worktree: Some("/repo"),
+            history_files: &[],
+            artifacts: &named,
+        };
+        let with = Request::Judge {
+            kind: "boolean",
+            criterion: "done",
+            min: None,
+            max: None,
+            messages: &[],
+            evidence: Some(EvidencePayload {
+                worktree: context.worktree,
+                history_files: context.history_files,
+                artifacts: context.resolved_artifacts(),
+            }),
+        };
+        let resolved = std::path::Path::new("/repo")
+            .join(".plans")
+            .display()
+            .to_string();
+        let value = serde_json::to_value(&with).unwrap();
+        assert_eq!(
+            value["evidence"]["artifacts"],
+            serde_json::json!(["/abs/design.md", resolved])
+        );
+        let docs = include_str!("../../../docs/protocol.md");
+        assert!(docs.contains("**v7** (current)"));
+        // The documented request is the wire shape, member for member.
+        let snippet = docs
+            .lines()
+            .find(|line| line.contains("\"artifacts\""))
+            .expect("protocol.md shows a judge request carrying artifacts");
+        let documented: serde_json::Value = serde_json::from_str(snippet).unwrap();
+        assert_eq!(
+            documented["evidence"]
+                .as_object()
+                .unwrap()
+                .keys()
+                .collect::<Vec<_>>(),
+            ["artifacts", "history_files", "worktree"]
+        );
     }
 
     #[test]

@@ -2021,6 +2021,7 @@ fn an_llmlint_run_that_exits_with_any_other_code_is_the_same_classified_error() 
             EvidenceContext {
                 worktree: Some("/skills/demo"),
                 history_files: &[],
+                artifacts: &[],
             },
         )
         .unwrap_err();
@@ -2119,6 +2120,7 @@ fn an_llmlint_judge_refuses_every_operation_a_lint_run_cannot_answer() {
                 EvidenceContext {
                     worktree: Some("/skills/demo"),
                     history_files: &[],
+                    artifacts: &[],
                 },
             )
             .unwrap_err(),
@@ -3417,6 +3419,7 @@ fn pinned_claude_read_only_mapping_has_no_shell_or_command_capability() {
             EvidenceContext {
                 worktree: Some(dir.to_str().unwrap()),
                 history_files: &[],
+                artifacts: &[],
             },
         )
         .expect("the real oneharness Claude argv must carry exactly the read-only allowlist");
@@ -4199,5 +4202,272 @@ fn breaking_a_supervisor_observation_keeps_its_instruction_out_of_the_transcript
     assert_eq!(
         outcome.usage.as_ref().and_then(|u| u.output_tokens),
         Some(2)
+    );
+}
+
+/// Write `path` and pin its modification time, so a newest-first listing has one
+/// right answer rather than whatever order the writes happened to land in.
+fn write_modified_at(path: &std::path::Path, modified: std::time::SystemTime) {
+    std::fs::write(path, "plan\n").unwrap();
+    std::fs::File::options()
+        .write(true)
+        .open(path)
+        .unwrap()
+        .set_modified(modified)
+        .unwrap();
+}
+
+/// The files a judge-side prompt listed beneath `dir`, in order, and its omission
+/// line when it had one.
+fn listed_under(prompt: &str, dir: &std::path::Path) -> (Vec<String>, Option<String>) {
+    let header = format!(
+        "  - {} (directory; its files, newest-modified first):\n",
+        dir.display()
+    );
+    let body = prompt
+        .split_once(&header)
+        .unwrap_or_else(|| panic!("no listing for {}: {prompt}", dir.display()))
+        .1;
+    let mut files = Vec::new();
+    let mut omitted = None;
+    for line in body.lines() {
+        if let Some(file) = line.strip_prefix("    - ") {
+            files.push(file.to_string());
+        } else {
+            omitted = line.strip_prefix("    ").map(str::to_string);
+            break;
+        }
+    }
+    (files, omitted)
+}
+
+#[test]
+fn named_artifacts_reach_every_judge_side_prompt_and_are_reread_each_turn() {
+    // The defect this closes: a judge whose only mediated evidence is `git_status`
+    // / `git_diff` cannot see a product written under a gitignored path. The
+    // worktree is a real repository whose `.gitignore` hides both artifacts, the
+    // harness is the stand-in reached through ordinary oneharness config, and the
+    // stand-in records every judge-side prompt it was handed.
+    use std::time::{Duration, SystemTime};
+    let dir = harness_project("artifact-evidence");
+    let log = scratch_path("artifact-evidence-prompts.log");
+    let git = |args: &[&str]| {
+        let output = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&dir)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "git {args:?}");
+        String::from_utf8(output.stdout).unwrap()
+    };
+    git(&["init", "-q"]);
+    std::fs::write(dir.join(".gitignore"), "/design.md\n/.plans/\n").unwrap();
+    std::fs::write(dir.join("design.md"), "the design\n").unwrap();
+    let plans = dir.join(".plans");
+    std::fs::create_dir_all(plans.join("nested")).unwrap();
+    let base = SystemTime::now() - Duration::from_secs(3600);
+    // 53 files: three over the bound, the newest one directory down.
+    let seeded = |i: u64| {
+        if i == 52 {
+            plans.join("nested").join("plan-52.md")
+        } else {
+            plans.join(format!("plan-{i:02}.md"))
+        }
+    };
+    for i in 0..53 {
+        write_modified_at(&seeded(i), base + Duration::from_secs(i));
+    }
+    let status = git(&["status", "--porcelain=v1"]);
+    assert!(
+        !status.contains("design.md") && !status.contains(".plans"),
+        "git_status's own command cannot see either artifact: {status}"
+    );
+
+    let design = dir.join("design.md");
+    let provider = OneharnessProvider::new().with_judge_config(dir.join("oneharness.toml"));
+    // The worker gives the same reply every turn; that must not settle the run
+    // before the second supervisor turn this journey compares against the first.
+    let engine = Engine::new(&provider, settings().with_settle_on_noop(false));
+    let skill = Skill::new("demo", dir.to_str().unwrap(), "[[reply:wrote the plan]]");
+    let task = format!(
+        "write the plan [[artifact-evaluator:{}]][[artifact-supervisor-turns:2]]",
+        log.display()
+    );
+    let user = SimulatedUser::new("a design reviewer")
+        .done_when("the plan is written")
+        .max_turns(3)
+        // An absolute file, a relative directory, and a path that does not exist.
+        .artifacts([
+            design.display().to_string(),
+            ".plans".into(),
+            "absent.md".into(),
+        ]);
+    let fresh = plans.join("fresh.md");
+    let outcome = engine
+        .run_observing(
+            &Conversation::multi_turn(skill, task, user),
+            &mut |observation| {
+                // Between the first supervisor turn and the second, the product grows.
+                if let Observation::TurnOpened(opened) = observation {
+                    if matches!(opened.role, Role::User) && opened.turn == 2 {
+                        write_modified_at(&fresh, base + Duration::from_secs(1800));
+                    }
+                }
+                ControlFlow::Continue(())
+            },
+        )
+        .expect("a named path that does not exist never fails the run");
+    assert_eq!(outcome.transcript.assistant_turns(), 2);
+
+    // And again before the judgements scored against the finished transcript.
+    let after_run = plans.join("after-run.md");
+    write_modified_at(&after_run, base + Duration::from_secs(2400));
+    assert_eq!(
+        engine
+            .judge_boolean("the plan is sound", &outcome.transcript)
+            .unwrap()
+            .value,
+        JudgeValue::Bool(true)
+    );
+    assert_eq!(
+        engine
+            .judge_numeric("the plan is sound", 0.0, 10.0, &outcome.transcript)
+            .unwrap()
+            .value,
+        JudgeValue::Number(10.0)
+    );
+    assert_eq!(
+        engine
+            .assess("assess the plan", &outcome.transcript)
+            .unwrap()
+            .text,
+        "artifacts assessed"
+    );
+
+    let recorded = std::fs::read_to_string(&log).unwrap();
+    let prompts: Vec<&str> = recorded
+        .split("=== end of prompt ===")
+        .filter(|prompt| prompt.contains(onejudge::EVIDENCE_PROMPT_MARKER))
+        .collect();
+    let kinds: Vec<&str> = prompts
+        .iter()
+        .map(|prompt| {
+            if prompt.contains("completion supervisor") {
+                "supervisor"
+            } else if prompt.contains("Assessment request:") {
+                "assessment"
+            } else if prompt.contains("Score how well") {
+                "numeric"
+            } else {
+                "boolean"
+            }
+        })
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            "supervisor",
+            "supervisor",
+            "boolean",
+            "numeric",
+            "assessment"
+        ]
+    );
+
+    let seeded_newest_first: Vec<String> = (0..53)
+        .rev()
+        .map(|i| seeded(i).display().to_string())
+        .collect();
+    for (index, prompt) in prompts.iter().enumerate() {
+        assert!(
+            prompt.contains(
+                "They may be untracked or gitignored, so `git_status` and `git_diff` do not \
+                 show them: read them with the file-reading tools."
+            ),
+            "{prompt}"
+        );
+        assert!(
+            prompt.contains(&format!("  - {}\n", design.display())),
+            "{prompt}"
+        );
+        assert!(
+            prompt.contains(&format!(
+                "  - {} (does not exist)\n",
+                dir.join("absent.md").display()
+            )),
+            "{prompt}"
+        );
+        // Each turn lists the directory as it is when that turn's prompt is built.
+        let written_since: Vec<String> = match index {
+            0 => vec![],
+            1 => vec![fresh.display().to_string()],
+            _ => vec![after_run.display().to_string(), fresh.display().to_string()],
+        };
+        let omitted = 3 + written_since.len();
+        let expected: Vec<String> = written_since
+            .into_iter()
+            .chain(seeded_newest_first.iter().cloned())
+            .take(50)
+            .collect();
+        let (files, omission) = listed_under(prompt, &plans);
+        assert_eq!(files, expected, "prompt {index} ({})", kinds[index]);
+        assert_eq!(
+            omission,
+            Some(format!(
+                "({omitted} older files omitted; read the directory to see them)"
+            )),
+            "prompt {index} ({})",
+            kinds[index]
+        );
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_command_judge_receives_resolved_artifacts_only_when_they_are_named() {
+    // Protocol v7 over the real subprocess boundary: the echo double records the
+    // judge request it was sent.
+    let log = scratch_path("command-judge-artifacts.jsonl");
+    let provider = echo();
+    let engine = Engine::new(&provider, settings());
+    let design = std::env::temp_dir().join("design.md").display().to_string();
+    let criterion = format!("[[record:{}]]", log.display());
+    for user in [
+        SimulatedUser::new("a reviewer").artifacts([design.clone(), ".plans".into()]),
+        SimulatedUser::new("a reviewer"),
+    ] {
+        let outcome = engine
+            .run(&Conversation::multi_turn(
+                skill_with("draft it"),
+                "write the design",
+                user.done_when("echo").max_turns(1),
+            ))
+            .unwrap();
+        engine
+            .judge_boolean(&criterion, &outcome.transcript)
+            .unwrap();
+    }
+    let requests: Vec<serde_json::Value> = std::fs::read_to_string(&log)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(
+        requests[0]["evidence"]["artifacts"],
+        serde_json::json!([
+            design,
+            std::path::Path::new("/skills/demo")
+                .join(".plans")
+                .display()
+                .to_string()
+        ])
+    );
+    assert_eq!(requests[1]["evidence"]["worktree"], "/skills/demo");
+    assert!(
+        requests[1]["evidence"].get("artifacts").is_none(),
+        "{}",
+        requests[1]
     );
 }

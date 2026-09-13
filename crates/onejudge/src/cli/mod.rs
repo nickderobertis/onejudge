@@ -131,6 +131,11 @@ pub struct RunArgs {
     /// The assistant-turn cap.
     #[arg(long)]
     pub max_turns: Option<u32>,
+    /// A file or directory the judge side should read directly (repeatable;
+    /// replaces `user.artifacts`). Relative paths resolve against the skill's
+    /// working directory.
+    #[arg(long = "artifact", value_name = "PATH")]
+    pub artifacts: Vec<String>,
     /// The caller-owned session name threaded across turns.
     #[arg(long)]
     pub session: Option<String>,
@@ -203,6 +208,7 @@ fn run_task(args: RunArgs) -> Result<i32, CliError> {
         persona,
         done_when,
         max_turns,
+        artifacts,
         session,
         provider,
         format,
@@ -246,6 +252,7 @@ fn run_task(args: RunArgs) -> Result<i32, CliError> {
         persona,
         done_when,
         max_turns,
+        artifacts: (!artifacts.is_empty()).then_some(artifacts),
         session,
         provider_kind: provider,
     });

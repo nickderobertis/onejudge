@@ -28,6 +28,32 @@ pub struct EvidenceContext<'a> {
     pub worktree: Option<&'a str>,
     /// Exact absolute history artifact paths returned by the producer.
     pub history_files: &'a [String],
+    /// Caller-named artifacts the evaluator should read directly, as named: an
+    /// absolute path is used as written and a relative one is resolved against
+    /// [`worktree`](Self::worktree). They may be untracked or gitignored, which
+    /// is why they are named rather than left to `git_status` to find. Empty adds
+    /// nothing to any prompt.
+    pub artifacts: &'a [String],
+}
+
+impl EvidenceContext<'_> {
+    /// Every named artifact's path, resolved against the worktree.
+    #[must_use]
+    pub fn resolved_artifacts(&self) -> Vec<String> {
+        self.artifacts
+            .iter()
+            .map(|entry| {
+                let path = std::path::Path::new(entry);
+                match self.worktree {
+                    Some(worktree) if !path.is_absolute() => std::path::Path::new(worktree)
+                        .join(path)
+                        .display()
+                        .to_string(),
+                    _ => entry.clone(),
+                }
+            })
+            .collect()
+    }
 }
 
 /// A borrowed view of the skill under test, as sent to the provider.
@@ -590,6 +616,7 @@ pub fn build_supervisor_prompt(query: &SupervisorQuery<'_>, messages: &[Message]
         EvidenceContext {
             worktree: Some(query.worktree),
             history_files: &[],
+            artifacts: &[],
         },
     )
 }
@@ -957,8 +984,85 @@ fn evidence_prompt(context: EvidenceContext<'_>) -> String {
          and this restriction is enforced. Restrictive evaluators must use file-reading or glob tools \
          directly, never a shell command. Before the final answer you may request exactly \
          `{{\"tool\":\"git_status\"}}` or `{{\"tool\":\"git_diff\"}}`; no other member is allowed.\n\
-         Worktree: {worktree}\nHistory files (exact producer-returned paths):\n{histories}\n\n"
+         Worktree: {worktree}\nHistory files (exact producer-returned paths):\n{histories}\n\n{artifacts}",
+        artifacts = artifacts_prompt(&context),
     )
+}
+
+/// The most files listed beneath one named artifact directory.
+pub const ARTIFACT_LISTING_LIMIT: usize = 50;
+
+/// The section naming the caller's artifacts, read from the filesystem as the
+/// prompt is built — so every judge-side turn sees the tree as it is then. Empty
+/// when none are named, which keeps every prompt's bytes what they were before
+/// artifacts existed.
+fn artifacts_prompt(context: &EvidenceContext<'_>) -> String {
+    if context.artifacts.is_empty() {
+        return String::new();
+    }
+    let mut section = String::from(
+        "ARTIFACTS TO READ DIRECTLY\n\
+         The caller named these artifacts as work under evaluation. They may be untracked or \
+         gitignored, so `git_status` and `git_diff` do not show them: read them with the \
+         file-reading tools.\n",
+    );
+    for resolved in context.resolved_artifacts() {
+        let path = std::path::Path::new(&resolved);
+        match std::fs::metadata(path) {
+            Err(_) => section.push_str(&format!("  - {resolved} (does not exist)\n")),
+            Ok(meta) if meta.is_dir() => {
+                let mut files = Vec::new();
+                collect_files(path, &mut files);
+                // Newest first; the path breaks a tie so the listing is stable.
+                files.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+                section.push_str(&format!(
+                    "  - {resolved} (directory; its files, newest-modified first):\n"
+                ));
+                for (file, _) in files.iter().take(ARTIFACT_LISTING_LIMIT) {
+                    section.push_str(&format!("    - {}\n", file.display()));
+                }
+                if files.is_empty() {
+                    section.push_str("    (no files)\n");
+                }
+                if let Some(omitted) = files.len().checked_sub(ARTIFACT_LISTING_LIMIT) {
+                    if omitted > 0 {
+                        section.push_str(&format!(
+                            "    ({omitted} older files omitted; read the directory to see them)\n"
+                        ));
+                    }
+                }
+            }
+            Ok(_) => section.push_str(&format!("  - {resolved}\n")),
+        }
+    }
+    section.push('\n');
+    section
+}
+
+/// Every file beneath `dir` with its modification time. A symlinked directory is
+/// not descended into, so a link cycle cannot loop, and an entry that cannot be
+/// read is skipped rather than failing the judge-side turn it is listed for.
+fn collect_files(
+    dir: &std::path::Path,
+    files: &mut Vec<(std::path::PathBuf, std::time::SystemTime)>,
+) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Ok(kind) = entry.file_type() else {
+            continue;
+        };
+        if kind.is_dir() {
+            collect_files(&path, files);
+        } else if let Ok(meta) = std::fs::metadata(&path) {
+            if meta.is_file() {
+                let modified = meta.modified().unwrap_or(std::time::UNIX_EPOCH);
+                files.push((path, modified));
+            }
+        }
+    }
 }
 
 /// The most recent user message — the next-turn prompt when continuing a session.
@@ -1179,6 +1283,7 @@ mod tests {
         let evidence = EvidenceContext {
             worktree: Some("/worktree"),
             history_files: &histories,
+            artifacts: &[],
         };
         let messages = transcript_with_event();
         let boolean = build_judge_prompt_with_evidence(
@@ -1640,6 +1745,122 @@ mod tests {
     }
 
     #[test]
+    fn no_named_artifacts_leave_the_evidence_contract_byte_identical() {
+        let histories = vec!["/h.jsonl".to_string()];
+        let prompt = evidence_prompt(EvidenceContext {
+            worktree: Some("/w"),
+            history_files: &histories,
+            artifacts: &[],
+        });
+        assert_eq!(
+            prompt,
+            format!(
+                "{EVIDENCE_PROMPT_MARKER}\n`[tool]` lines are abbreviated summaries; absence there \
+                 is not evidence of absence. Only read-only tools may inspect files, git state, and \
+                 full history; no change is permitted, and this restriction is enforced. \
+                 Restrictive evaluators must use file-reading or glob tools directly, never a shell \
+                 command. Before the final answer you may request exactly \
+                 `{{\"tool\":\"git_status\"}}` or `{{\"tool\":\"git_diff\"}}`; no other member is \
+                 allowed.\nWorktree: /w\nHistory files (exact producer-returned paths):\n  - \
+                 /h.jsonl\n\n"
+            )
+        );
+    }
+
+    #[test]
+    fn the_evidence_tool_retry_limit_is_unchanged() {
+        assert_eq!(EVIDENCE_TOOL_RETRY_LIMIT, 4);
+    }
+
+    #[test]
+    fn named_artifacts_are_resolved_listed_newest_first_and_bounded() {
+        use std::fs;
+        use std::time::{Duration, SystemTime, UNIX_EPOCH};
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root =
+            std::env::temp_dir().join(format!("onejudge-artifacts-{}-{nonce}", std::process::id()));
+        let plans = root.join(".plans");
+        fs::create_dir_all(plans.join("nested")).unwrap();
+        fs::create_dir_all(root.join("empty")).unwrap();
+        let base = SystemTime::now() - Duration::from_secs(3600);
+        let total = ARTIFACT_LISTING_LIMIT + 2;
+        for i in 0..total {
+            // The newest file sits one directory down, so the listing is recursive.
+            let path = if i == total - 1 {
+                plans.join("nested").join(format!("plan-{i:02}.md"))
+            } else {
+                plans.join(format!("plan-{i:02}.md"))
+            };
+            fs::write(&path, "plan\n").unwrap();
+            fs::File::options()
+                .write(true)
+                .open(&path)
+                .unwrap()
+                .set_modified(base + Duration::from_secs(i as u64))
+                .unwrap();
+        }
+        fs::write(root.join("design.md"), "design\n").unwrap();
+        let design = root.join("design.md").display().to_string();
+        let named = vec![
+            design.clone(),
+            ".plans".to_string(),
+            "absent.md".to_string(),
+            "empty".to_string(),
+        ];
+        let worktree = root.display().to_string();
+        let prompt = evidence_prompt(EvidenceContext {
+            worktree: Some(&worktree),
+            history_files: &[],
+            artifacts: &named,
+        });
+
+        let section = prompt
+            .split_once("ARTIFACTS TO READ DIRECTLY\n")
+            .expect("a named artifact adds the section after the contract")
+            .1;
+        assert!(section.contains(
+            "They may be untracked or gitignored, so `git_status` and `git_diff` do not show \
+             them: read them with the file-reading tools."
+        ));
+        assert!(section.contains(&format!("  - {design}\n")));
+        assert!(section.contains(&format!(
+            "  - {} (does not exist)\n",
+            root.join("absent.md").display()
+        )));
+        assert!(section.contains(&format!(
+            "  - {} (directory; its files, newest-modified first):\n    (no files)\n",
+            root.join("empty").display()
+        )));
+        let listed: Vec<&str> = section
+            .split_once(&format!(
+                "  - {} (directory; its files, newest-modified first):\n",
+                plans.display()
+            ))
+            .unwrap()
+            .1
+            .lines()
+            .map_while(|line| line.strip_prefix("    - "))
+            .collect();
+        let mut expected = vec![plans
+            .join("nested")
+            .join(format!("plan-{:02}.md", total - 1))
+            .display()
+            .to_string()];
+        expected.extend(
+            (2..total - 1)
+                .rev()
+                .map(|i| plans.join(format!("plan-{i:02}.md")).display().to_string()),
+        );
+        assert_eq!(listed, expected);
+        assert!(section.contains("    (2 older files omitted; read the directory to see them)\n"));
+        assert!(prompt.ends_with("\n\n"));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn parse_verdict_rejects_bad_shapes() {
         for text in [
             "no json here",
@@ -1697,6 +1918,7 @@ mod tests {
         let evidence = EvidenceContext {
             worktree: Some(worktree),
             history_files: &[],
+            artifacts: &[],
         };
         let status = resolve_evidence_request("{\"tool\":\"git_status\"}", evidence)
             .unwrap()
@@ -1738,6 +1960,7 @@ mod tests {
         let missing_worktree = EvidenceContext {
             worktree: Some("/onejudge/evidence/worktree/does-not-exist"),
             history_files: &[],
+            artifacts: &[],
         };
         let error =
             resolve_evidence_request("{\"tool\":\"git_status\"}", missing_worktree).unwrap_err();

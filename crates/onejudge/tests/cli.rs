@@ -2991,3 +2991,70 @@ fn a_single_judge_controlled_config_runs_as_0_8_1_did_except_the_supervisor_addr
     assert_eq!(prompts, baseline);
     let _ = std::fs::remove_dir_all(&ctl);
 }
+
+#[test]
+fn artifact_flag_and_env_replace_the_configured_list_like_the_persona_overrides() {
+    // The built binary, three ways: the config's `user.artifacts` alone, then
+    // `ONEJUDGE_ARTIFACTS` over it, then `--artifact` over both — the precedence
+    // `--persona` / `ONEJUDGE_PERSONA` have over `user.persona`. What each judge-
+    // side turn was actually shown is read off the harness stand-in.
+    let dir = in_process_project("cli-artifacts", "[[reply:wrote the plan]]");
+    let log = scratch_path("cli-artifacts-prompts.log");
+    let quote = |text: &str| serde_json::to_string(text).unwrap();
+    let config = dir.join("onejudge.yaml");
+    std::fs::write(
+        &config,
+        format!(
+            "provider:\n  kind: oneharness\n  judge_config: {}\nskill: {}\ntask: {}\nuser:\n  persona: a reviewer\n  done_when: the plan is written\n  max_turns: 2\n  artifacts: [from-config.md]\n",
+            quote(&dir.join("oneharness.toml").display().to_string()),
+            quote(&dir.display().to_string()),
+            quote(&format!("write the plan [[artifact-evaluator:{}]]", log.display())),
+        ),
+    )
+    .unwrap();
+    let named = |name: &str| format!("  - {} (does not exist)\n", dir.join(name).display());
+    let run = |env: Option<&str>, flags: &[&str]| -> Vec<String> {
+        let _ = std::fs::remove_file(&log);
+        let mut command = Command::new(onejudge_bin());
+        command.arg("run").arg(&config).args(flags);
+        match env {
+            Some(list) => command.env("ONEJUDGE_ARTIFACTS", list),
+            None => command.env_remove("ONEJUDGE_ARTIFACTS"),
+        };
+        let output = command.output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let prompts: Vec<String> = std::fs::read_to_string(&log)
+            .unwrap()
+            .split("=== end of prompt ===")
+            .filter(|prompt| prompt.contains(onejudge::EVIDENCE_PROMPT_MARKER))
+            .map(str::to_string)
+            .collect();
+        assert!(!prompts.is_empty(), "no judge-side turn was recorded");
+        prompts
+    };
+
+    for prompt in run(None, &[]) {
+        assert!(prompt.contains(&named("from-config.md")), "{prompt}");
+    }
+
+    let env = std::env::join_paths(["from-env-a.md", "from-env-b.md"])
+        .unwrap()
+        .into_string()
+        .unwrap();
+    for prompt in run(Some(&env), &[]) {
+        assert!(prompt.contains(&named("from-env-a.md")), "{prompt}");
+        assert!(prompt.contains(&named("from-env-b.md")), "{prompt}");
+        assert!(!prompt.contains("from-config.md"), "{prompt}");
+    }
+
+    for prompt in run(Some(&env), &["--artifact", "from-flag.md"]) {
+        assert!(prompt.contains(&named("from-flag.md")), "{prompt}");
+        assert!(!prompt.contains("from-env-"), "{prompt}");
+        assert!(!prompt.contains("from-config.md"), "{prompt}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
