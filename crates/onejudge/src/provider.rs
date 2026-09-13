@@ -1860,6 +1860,57 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn a_listing_never_follows_a_directory_link_and_skips_what_it_cannot_read() {
+        use std::fs;
+        use std::os::unix::fs::{symlink, PermissionsExt};
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "onejudge-artifact-links-{}-{nonce}",
+            std::process::id()
+        ));
+        let plans = root.join(".plans");
+        fs::create_dir_all(plans.join("locked")).unwrap();
+        fs::write(plans.join("kept.md"), "kept\n").unwrap();
+        fs::write(plans.join("locked").join("hidden.md"), "hidden\n").unwrap();
+        // A link back up to the worktree: followed, the walk would never end.
+        symlink(&root, plans.join("loop")).unwrap();
+        // A link to a file is still a file to read.
+        symlink(plans.join("kept.md"), plans.join("alias.md")).unwrap();
+        fs::set_permissions(plans.join("locked"), fs::Permissions::from_mode(0o000)).unwrap();
+        // Only a process whose privileges ignore mode bits can still read it.
+        let readable = fs::read_dir(plans.join("locked")).is_ok();
+        let named = vec![".plans".to_string()];
+        let worktree = root.display().to_string();
+        let prompt = evidence_prompt(EvidenceContext {
+            worktree: Some(&worktree),
+            history_files: &[],
+            artifacts: &named,
+        });
+        fs::set_permissions(plans.join("locked"), fs::Permissions::from_mode(0o755)).unwrap();
+
+        let mut listed: Vec<&str> = prompt
+            .lines()
+            .filter_map(|line| line.strip_prefix("    - "))
+            .collect();
+        listed.sort_unstable();
+        let mut expected = vec![
+            plans.join("alias.md").display().to_string(),
+            plans.join("kept.md").display().to_string(),
+        ];
+        if readable {
+            expected.push(plans.join("locked").join("hidden.md").display().to_string());
+        }
+        expected.sort();
+        assert_eq!(listed, expected);
+        let _ = fs::remove_dir_all(&root);
+    }
+
     #[test]
     fn parse_verdict_rejects_bad_shapes() {
         for text in [

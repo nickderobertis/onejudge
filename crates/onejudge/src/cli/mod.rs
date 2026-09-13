@@ -1354,4 +1354,37 @@ mod tests {
         assert!(cfg.task.is_some());
         assert!(cfg.user.is_some());
     }
+
+    #[test]
+    fn docs_cli_md_names_every_run_flag_env_override_and_the_artifact_bound() {
+        use clap::CommandFactory as _;
+        let docs = include_str!("../../../../docs/cli.md");
+        for arg in RunArgs::command().get_arguments() {
+            if let Some(long) = arg.get_long().filter(|l| !matches!(*l, "help" | "version")) {
+                assert!(
+                    docs.contains(&format!("`--{long}")),
+                    "docs/cli.md does not document `--{long}`"
+                );
+            }
+        }
+        // Every variable the env layer actually reads, not a transcribed list.
+        let asked = std::cell::RefCell::new(Vec::new());
+        crate::cli::config::Overrides::from_env(|key| {
+            asked.borrow_mut().push(key.to_string());
+            None
+        })
+        .unwrap();
+        let asked = asked.into_inner();
+        assert!(asked.iter().any(|key| key == "ONEJUDGE_ARTIFACTS"));
+        for key in asked {
+            assert!(
+                docs.contains(&format!("`{key}`")),
+                "docs/cli.md does not document `{key}`"
+            );
+        }
+        assert!(
+            docs.contains(&format!("at most {}", crate::ARTIFACT_LISTING_LIMIT)),
+            "docs/cli.md restates the artifact listing bound; keep it equal to ARTIFACT_LISTING_LIMIT"
+        );
+    }
 }

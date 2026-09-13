@@ -75,7 +75,9 @@ file, which beats the built-in default**:
 | `--stream` | — | publish the run on stdout as the [streamed protocol](streaming.md) (needs `--format json`, refuses `--output`) |
 | `--output`, `-o` | — | write the result to a file instead of stdout |
 
-Each `ONEJUDGE_*` variable is the flag name in upper-snake-case. An empty value
+Each `ONEJUDGE_*` variable is the flag name in upper-snake-case, except that the
+repeatable `--artifact` takes its whole list from the plural `ONEJUDGE_ARTIFACTS`.
+An empty value
 is treated as unset. Like the flags, they are validated at the boundary: a
 non-integer `ONEJUDGE_MAX_TURNS` or an unknown `ONEJUDGE_PROVIDER` is a loud
 error (exit 2), never a silent fallback. This mirrors oneharness's own

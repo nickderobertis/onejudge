@@ -266,7 +266,9 @@ impl Overrides {
     /// exported-but-blank variable never forces an empty override.
     ///
     /// The env surface mirrors the flags one-for-one: `ONEJUDGE_<FLAG>` in
-    /// upper-snake-case (`--judge-config` → `ONEJUDGE_JUDGE_CONFIG`, and so on).
+    /// upper-snake-case (`--judge-config` → `ONEJUDGE_JUDGE_CONFIG`, and so on),
+    /// except that the repeatable `--artifact` reads its whole list from
+    /// `ONEJUDGE_ARTIFACTS`, split like `PATH`.
     ///
     /// # Errors
     /// [`CliError::Config`] if `ONEJUDGE_MAX_TURNS` is not a non-negative integer
@@ -1444,6 +1446,12 @@ user:
         assert!(
             artifacts_of(Config::from_yaml("task: t\nuser:\n  persona: p\n").unwrap()).is_empty()
         );
+        // A leading, doubled or trailing separator names no empty path.
+        let sep = if cfg!(windows) { ";" } else { ":" };
+        let ragged = format!("{sep}env-a.md{sep}{sep}env-b.md{sep}");
+        let ov =
+            Overrides::from_env(|k| (k == "ONEJUDGE_ARTIFACTS").then(|| ragged.clone())).unwrap();
+        assert_eq!(ov.artifacts.unwrap(), ["env-a.md", "env-b.md"]);
     }
 
     #[test]

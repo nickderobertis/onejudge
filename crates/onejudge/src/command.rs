@@ -4,8 +4,8 @@
 //! drives and any custom provider a consumer writes. The wire contract is
 //! documented in `docs/protocol.md`.
 //!
-//! Protocol **v7** adds caller-named `artifacts` to that evidence, omitted when
-//! none are named. Protocol **v6** added optional evaluator evidence to judge requests. Protocol **v5** adds `notes` to the supervisor request — the role-addressed
+//! Protocol **v7** adds caller-named `artifacts` to the judge request's `evidence`,
+//! which **v6** introduced. Protocol **v6** added optional evaluator evidence to judge requests. Protocol **v5** adds `notes` to the supervisor request — the role-addressed
 //! corrections delivered into the run so far, omitted when there are none, so a v4
 //! double sees a byte-identical request. Protocol **v4** added the unified
 //! supervisor request; v2 dropped
