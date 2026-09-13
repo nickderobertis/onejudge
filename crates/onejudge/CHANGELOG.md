@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0](https://github.com/nickderobertis/onejudge/compare/v0.10.0...v0.11.0) - 2026-09-13
+
+### Added
+
+- *(evidence)* name the artifacts a judge reads directly, gitignored ones included ([#86](https://github.com/nickderobertis/onejudge/pull/86))
+
 ## [0.10.0](https://github.com/nickderobertis/onejudge/compare/v0.9.0...v0.10.0) - 2026-09-12
 
 ### Added
