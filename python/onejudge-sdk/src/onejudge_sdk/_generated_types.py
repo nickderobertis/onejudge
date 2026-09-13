@@ -52,6 +52,7 @@ class ProviderConfig(TypedDict, total=False):
 
 
 class UserConfig(TypedDict, total=False):
+    artifacts: Sequence[str]
     done_when: Optional[str]
     max_turns: Optional[int]
     persona: str

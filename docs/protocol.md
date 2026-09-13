@@ -17,7 +17,13 @@ report line. See [streaming.md](streaming.md). The two are independent — a
 
 ## Protocol version
 
-**v6** (current) — additively permits an optional `evidence` member on `judge`
+**v7** (current) — adds `artifacts` to a `judge` request's `evidence`: the files
+and directories the caller named for the evaluator to read directly (the
+simulated user's `artifacts`, `user.artifacts` on the CLI), each resolved against
+the worktree. They may be untracked or gitignored, which `git_status` and
+`git_diff` cannot show. The member is omitted when none are named, so a v6
+command sees a byte-identical request and needs no change.
+**v6** additively permits an optional `evidence` member on `judge`
 requests. It carries the producer-supplied worktree and exact absolute history
 artifact paths; it is omitted when neither is available, and older providers may
 ignore it. The response object is unchanged. **v5** added `notes` to the `supervisor` request: the role-addressed
@@ -170,6 +176,12 @@ Request:
 - `kind` is `boolean` or `numeric`; a numeric query also carries `min` and `max`.
 - `evidence` is omitted without context. Its paths are producer-supplied artifact
   handles, never reconstructed from oneharness storage layout.
+- `evidence.artifacts` (v7) lists the caller-named artifacts, already resolved,
+  and is omitted when none are named:
+
+```json
+{ "op": "judge", "kind": "boolean", "criterion": "the design is sound", "messages": [], "evidence": { "worktree": "/repo", "history_files": [], "artifacts": ["/repo/.plans/design.md", "/repo/.plans"] } }
+```
 
 Response:
 

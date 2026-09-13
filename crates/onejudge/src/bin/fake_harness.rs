@@ -54,6 +54,15 @@
 //!   silently started over and one that genuinely continued are otherwise the
 //!   same successful turn, and telling them apart is the whole point of the
 //!   session-and-control journeys.
+//! * `[[artifact-evaluator:PATH]]` — on a judge-side turn (one whose prompt
+//!   carries the evidence contract), append everything the turn was told to
+//!   `PATH`, followed by `=== end of prompt ===`, and answer in that turn's shape:
+//!   a completed supervisor decision, a passing boolean or top numeric verdict,
+//!   or assessment prose. A worker turn is left to the other markers. It refuses
+//!   to answer unless the read-only tool allowlist is exactly today's, so a run
+//!   naming artifacts cannot have widened it. `[[artifact-supervisor-turns:N]]`
+//!   makes the supervisor continue until it has been asked `N` times (default 1),
+//!   so a journey gets more than one judge-side turn to compare.
 
 use std::io::Write as _;
 use std::path::Path;
@@ -104,6 +113,7 @@ fn main() {
             .any(|w| w[0] == "--format" && w[1] == "json");
 
     let mut reply = restrictive_evaluator_reply(&prompt, &args)
+        .or_else(|| artifact_evaluator_reply(&prompt, &args))
         .or_else(|| marker(&prompt, "reply"))
         .unwrap_or_else(|| "ok".to_string());
     if prompt.contains("[[echo-resume]]") {
@@ -225,6 +235,47 @@ fn restrictive_evaluator_reply(prompt: &str, args: &[String]) -> Option<String> 
     })
 }
 
+/// Record a judge-side turn's prompt and answer it in its own shape; see the
+/// `[[artifact-evaluator:PATH]]` marker.
+fn artifact_evaluator_reply(prompt: &str, args: &[String]) -> Option<String> {
+    let log = marker(prompt, "artifact-evaluator")?;
+    if !prompt.contains("EVIDENCE CONTRACT (READ-ONLY, ENFORCED)") {
+        return None;
+    }
+    if !exact_read_only_tools(args) {
+        return Some("read-only tool allowlist drifted".into());
+    }
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log)
+        .ok()?;
+    write!(file, "{prompt}\n=== end of prompt ===\n").ok()?;
+    drop(file);
+    if prompt.contains("completion supervisor") {
+        let wanted = marker(prompt, "artifact-supervisor-turns")
+            .and_then(|n| n.parse::<usize>().ok())
+            .unwrap_or(1);
+        let asked = std::fs::read_to_string(&log)
+            .unwrap_or_default()
+            .split("=== end of prompt ===")
+            .filter(|recorded| recorded.contains("completion supervisor"))
+            .count();
+        return Some(if asked < wanted {
+            r#"{"completion":false,"message":"keep going","reason":"not yet"}"#.into()
+        } else {
+            r#"{"completion":true,"reason":"artifacts named"}"#.into()
+        });
+    }
+    Some(if prompt.contains("Assessment request:") {
+        "artifacts assessed".into()
+    } else if prompt.contains("Score how well") {
+        r#"{"value":10,"reason":"artifacts named"}"#.into()
+    } else {
+        r#"{"value":true,"reason":"artifacts named"}"#.into()
+    })
+}
+
 fn exact_read_only_tools(args: &[String]) -> bool {
     let tools = args.iter().position(|arg| arg == "--tools").map(|index| {
         args[index + 1..]
@@ -246,16 +297,22 @@ fn exact_read_only_tools(args: &[String]) -> bool {
 /// (`--input-format text`), and every `--control` turn, whose prompt is a JSON
 /// frame on stdin so the handle can stay open for the interrupt frame afterwards.
 ///
-/// **One line, never to EOF.** A controlled turn's stdin is held open by
-/// oneharness for the whole turn precisely so it can deliver that interrupt — so
-/// a read to EOF here waits for a close that waits for this process to answer,
-/// and the turn deadlocks. One line is the whole prompt frame either way: both
-/// input formats oneharness writes are line-delimited.
+/// **One line, never to EOF, for a control stream.** A controlled turn's stdin is
+/// held open by oneharness for the whole turn precisely so it can deliver that
+/// interrupt — so a read to EOF there waits for a close that waits for this
+/// process to answer, and the turn deadlocks; its prompt frame is one line. A
+/// large prompt (`--input-format text`) is a plain blob whose stdin oneharness
+/// closes after writing, and whose newlines are the prompt's own, so it is read
+/// whole.
 fn steering(args: &[String]) -> String {
     let mut text = args.join("\u{1f}");
-    if args.windows(2).any(|w| w[0] == "--input-format") {
+    if let Some(format) = args.windows(2).find(|w| w[0] == "--input-format") {
         let mut buffer = String::new();
-        let _ = std::io::BufRead::read_line(&mut std::io::stdin().lock(), &mut buffer);
+        if format[1] == "text" {
+            let _ = std::io::Read::read_to_string(&mut std::io::stdin().lock(), &mut buffer);
+        } else {
+            let _ = std::io::BufRead::read_line(&mut std::io::stdin().lock(), &mut buffer);
+        }
         text.push('\u{1f}');
         text.push_str(&buffer);
     }

@@ -68,21 +68,24 @@ file, which beats the built-in default**:
 | `--persona` | `ONEJUDGE_PERSONA` | the simulated user's persona |
 | `--done-when` | `ONEJUDGE_DONE_WHEN` | the completion condition |
 | `--max-turns` | `ONEJUDGE_MAX_TURNS` | the assistant-turn cap |
+| `--artifact` (repeatable) | `ONEJUDGE_ARTIFACTS` (separated like `PATH`: `:` on unix, `;` on Windows) | replaces `user.artifacts`, the files/directories the judge side reads directly |
 | `--session` | `ONEJUDGE_SESSION` | the caller-owned session name |
 | `--provider` | `ONEJUDGE_PROVIDER` | just the backend kind (`oneharness`/`command`/`split`; `llmlint` is a judge entry only and is refused here) |
 | `--format` | — | `human` (default) or `json` |
 | `--stream` | — | publish the run on stdout as the [streamed protocol](streaming.md) (needs `--format json`, refuses `--output`) |
 | `--output`, `-o` | — | write the result to a file instead of stdout |
 
-Each `ONEJUDGE_*` variable is the flag name in upper-snake-case. An empty value
+Each `ONEJUDGE_*` variable is the flag name in upper-snake-case, except that the
+repeatable `--artifact` takes its whole list from the plural `ONEJUDGE_ARTIFACTS`.
+An empty value
 is treated as unset. Like the flags, they are validated at the boundary: a
 non-integer `ONEJUDGE_MAX_TURNS` or an unknown `ONEJUDGE_PROVIDER` is a loud
 error (exit 2), never a silent fallback. This mirrors oneharness's own
 `ONEHARNESS_*` overrides — note the two prefixes are distinct: `ONEJUDGE_*`
 configures the loop, `ONEHARNESS_*` configures the harness/model underneath it.
 
-Supplying `--persona` / `--done-when` / `--max-turns` (by flag or env) implies a
-simulated user even if the config had none.
+Supplying `--persona` / `--done-when` / `--max-turns` / `--artifact` (by flag or
+env) implies a simulated user even if the config had none.
 
 ## Output and exit code
 
@@ -153,7 +156,19 @@ Top-level keys:
 | `skill` | a skill directory (containing `SKILL.md`) whose body seeds the system prompt, resolved relative to the config file; optional |
 | `system_prompt` | extra system-prompt text; used alone, or prepended before a `skill` body when both are set; optional |
 | `task` | the task to drive to completion (or supply via `--task`) |
-| `user` | the simulated supervisor: `persona`, `done_when`, `max_turns`, `settle_on_noop` (omit for a single-turn run) |
+| `user` | the simulated supervisor: `persona`, `done_when`, `max_turns`, `settle_on_noop`, `artifacts` (omit for a single-turn run) |
+
+`user.artifacts` names the work a judge should read directly when `git_status` and
+`git_diff` cannot show it — a design document under a gitignored `.plans/`, say.
+Each entry is a file or directory; an absolute path is used as written and a
+relative one resolves against the skill's working directory. Every judge-side
+prompt (supervisor, eval judge, assessment) then lists each resolved path, says
+the artifacts may be untracked or gitignored and are read with the file-reading
+tools, names an entry that does not exist as not existing (the run continues),
+and lists a directory's files newest-modified first — at most 50, with a line
+counting the rest. The listing is re-read on every judge-side turn. Empty (the
+default) leaves every prompt unchanged; the read-only tool allowlist and the
+`git_status` / `git_diff` requests are the same either way.
 | `session` | the caller-owned session name threaded across turns |
 | `evals` | optional criteria to score the finished transcript: each has a `criterion`, a `kind` (`boolean` / `numeric`), and — for numeric — a `scale: [min, max]` |
 | `assessment` | optional prompt for one free-text judgement over the finished transcript and its tool actions |

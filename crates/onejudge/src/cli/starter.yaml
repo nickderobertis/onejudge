@@ -63,6 +63,11 @@ user:                         # one unified supervisor call decides done or supp
   max_turns: 12
   settle_on_noop: true        # false: reporting nothing IS this conversation's contract,
                               # so quiet repeated exchanges never settle it early
+  artifacts: []               # files/directories every judge-side prompt names to read
+                              # directly, e.g. [.plans/design.md, .plans]: work that may be
+                              # gitignored, which git_status/git_diff never show. Relative
+                              # paths resolve against the skill's working directory.
+                              # Replaced by --artifact / ONEJUDGE_ARTIFACTS
 
 session: onejudge             # caller-owned session name, threaded across turns
 

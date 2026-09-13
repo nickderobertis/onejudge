@@ -2106,6 +2106,14 @@
         "additionalProperties": false,
         "description": "The simulated user that supervises the agent and drives the loop.",
         "properties": {
+          "artifacts": {
+            "default": [],
+            "description": "Files or directories every judge-side prompt names for the evaluator to\nread directly \u2014 work that may be untracked or gitignored, which\n`git_status` and `git_diff` cannot show. An absolute path is used as\nwritten; a relative one is resolved against the skill's working directory.\nA directory is listed newest-modified first, re-read every judge-side\nturn; a path that does not exist is named as such. Replaced by\n`--artifact` / `ONEJUDGE_ARTIFACTS`.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
           "done_when": {
             "default": null,
             "description": "A plain-English completion condition; when the judge decides it holds, the\nloop ends. Without it the loop ends at `max_turns` or when the agent\ndeclares itself done.",

@@ -169,6 +169,12 @@ pub struct SimulatedUser {
     pub done_when: Option<String>,
     /// Per-conversation override of the engine's assistant-turn cap.
     pub max_turns: Option<u32>,
+    /// Paths to files or directories every judge-side prompt names for the
+    /// evaluator to read directly — work that may be untracked or gitignored and
+    /// so invisible to `git_status` / `git_diff`. A relative path is resolved
+    /// against the skill's working directory. See
+    /// [`EvidenceContext::artifacts`].
+    pub artifacts: Vec<String>,
 }
 
 impl SimulatedUser {
@@ -178,7 +184,15 @@ impl SimulatedUser {
             persona: persona.into(),
             done_when: None,
             max_turns: None,
+            artifacts: Vec::new(),
         }
+    }
+
+    /// Name the artifacts the judge side should read directly (builder style).
+    #[must_use]
+    pub fn artifacts(mut self, paths: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.artifacts = paths.into_iter().map(Into::into).collect();
+        self
     }
 
     /// Set the end condition (builder style).
@@ -381,6 +395,9 @@ pub struct Engine<'a> {
     started: RefCell<Option<Instant>>,
     notes: Option<NoteInbox>,
     worktree: RefCell<Option<String>>,
+    /// The artifacts the last run's simulated user named, for the judgements
+    /// scored against its transcript afterwards.
+    artifacts: RefCell<Vec<String>>,
     /// Every judge's decision on every supervisor turn so far, drained from the
     /// provider after each supervisor call — kept on the engine like telemetry,
     /// so a run that fails on a judge still reports what each judge said.
@@ -397,6 +414,7 @@ impl<'a> Engine<'a> {
             started: RefCell::new(None),
             notes: None,
             worktree: RefCell::new(None),
+            artifacts: RefCell::new(Vec::new()),
             judge_decisions: RefCell::new(Vec::new()),
         }
     }
@@ -579,6 +597,11 @@ impl<'a> Engine<'a> {
         self.provider.reset_telemetry();
         *self.started.borrow_mut() = Some(Instant::now());
         *self.worktree.borrow_mut() = Some(conversation.skill.dir.clone());
+        *self.artifacts.borrow_mut() = conversation
+            .user
+            .as_ref()
+            .map(|u| u.artifacts.clone())
+            .unwrap_or_default();
         self.judge_decisions.borrow_mut().clear();
         let skill = conversation.skill.as_ref();
         let max_turns = conversation
@@ -779,6 +802,7 @@ impl<'a> Engine<'a> {
                     EvidenceContext {
                         worktree: Some(&conversation.skill.dir),
                         history_files: &history_files,
+                        artifacts: &user.artifacts,
                     },
                 );
                 self.between_turns();
@@ -994,6 +1018,7 @@ impl<'a> Engine<'a> {
             scale: None,
         };
         let histories = self.history_files();
+        let artifacts = self.artifacts.borrow();
         let worktree = self.worktree.borrow();
         self.provider.judge_with_evidence(
             &query,
@@ -1001,6 +1026,7 @@ impl<'a> Engine<'a> {
             EvidenceContext {
                 worktree: worktree.as_deref(),
                 history_files: &histories,
+                artifacts: &artifacts,
             },
         )
     }
@@ -1039,6 +1065,7 @@ impl<'a> Engine<'a> {
             scale: Some((min, max)),
         };
         let histories = self.history_files();
+        let artifacts = self.artifacts.borrow();
         let worktree = self.worktree.borrow();
         self.provider.judge_with_evidence(
             &query,
@@ -1046,6 +1073,7 @@ impl<'a> Engine<'a> {
             EvidenceContext {
                 worktree: worktree.as_deref(),
                 history_files: &histories,
+                artifacts: &artifacts,
             },
         )
     }
@@ -1057,6 +1085,7 @@ impl<'a> Engine<'a> {
     /// Propagates a provider failure.
     pub fn assess(&self, prompt: &str, transcript: &Transcript) -> Result<Assessment> {
         let histories = self.history_files();
+        let artifacts = self.artifacts.borrow();
         let worktree = self.worktree.borrow();
         self.provider.assess_with_evidence(
             prompt,
@@ -1064,6 +1093,7 @@ impl<'a> Engine<'a> {
             EvidenceContext {
                 worktree: worktree.as_deref(),
                 history_files: &histories,
+                artifacts: &artifacts,
             },
         )
     }
