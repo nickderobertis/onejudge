@@ -1,3 +1,4 @@
+// llmlint: ignore[new_code_lands_in_a_project] This repository is one Cargo workspace with no Nx project graph at all (no nx.json, project.json or package.json anywhere); a file under `crates/onejudge/tests/` belongs to the `onejudge` package by Cargo's own integration-test layout, which is what builds and runs it, exactly as for the sibling suites beside it.
 //! onejudge's command-provider frames, held to the `onejudge` codec the released
 //! `onemessagebus-agent` carries.
 //!
@@ -424,6 +425,71 @@ mod through_the_released_codec {
         assert!(
             protocol.contains("is not an operation this codec serves"),
             "docs/protocol.md does not document the refusal an unserved operation meets"
+        );
+    }
+
+    #[test]
+    fn the_frames_onejudge_registers_check_the_frames_it_writes_in_a_real_bus_registry() {
+        use onejudge::sdk_schema::{frame_schemas, register_frames};
+        use onemessagebus::{Registry, SchemaId};
+
+        let log = scratch("frames-registered.log");
+        let provider = recording(&log);
+        let named = ["/repo/.plans/design.md".to_string()];
+        provider
+            .judge_with_evidence(
+                &JudgeQuery {
+                    kind: JudgeKind::Boolean,
+                    criterion: "the design is sound",
+                    scale: None,
+                },
+                &transcript(),
+                EvidenceContext {
+                    worktree: Some("/repo"),
+                    history_files: &[],
+                    artifacts: &named,
+                },
+            )
+            .unwrap();
+        let judge: Value = serde_json::from_str(&frames(&log)[0]).unwrap();
+
+        // Registered beside everything the agent profile registers, the codec's own
+        // frames included: onejudge's ids are its own, and each holds what it generates.
+        let mut registry = onemessagebus_agent::registry();
+        register_frames(&mut registry).expect("onejudge's frame ids are free in the profile");
+        for (id, schema) in frame_schemas() {
+            assert_eq!(
+                registry.schema(&id),
+                Some(&schema.to_value()),
+                "{id} is not registered as generated"
+            );
+        }
+
+        // A frame onejudge wrote checks against the schema it registers — and the
+        // v7 member it names is what the codec's v6 schema refuses.
+        let ours: SchemaId = "agent.onejudge-frame.judge@7".parse().unwrap();
+        registry
+            .check(&ours, &judge)
+            .expect("a judge frame onejudge wrote checks against the schema it registers");
+        let released: SchemaId = format!("agent.onejudge-frame.judge@{}", codec::PROTOCOL_VERSION)
+            .parse()
+            .unwrap();
+        assert!(
+            registry.check(&released, &judge).is_err(),
+            "the codec's v6 schema admitted a v7 frame naming artifacts"
+        );
+
+        // Registering the same documents again changes nothing; a registry already
+        // holding a different document under one of the ids refuses.
+        register_frames(&mut registry).expect("the same documents register again");
+        let (taken_id, _) = frame_schemas().remove(0);
+        let mut taken = Registry::new();
+        taken
+            .register_schema(taken_id, serde_json::json!({"type": "string"}))
+            .unwrap();
+        assert!(
+            register_frames(&mut taken).is_err(),
+            "a different document already under a frame id was overwritten"
         );
     }
 }

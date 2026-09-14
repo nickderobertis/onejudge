@@ -229,8 +229,8 @@ named JSON Schema roots:
 - `frames`: the command-provider request frames, one per operation, keyed by the
   id each is registered under — `agent.onejudge-frame.<op>@7` for `respond`,
   `user`, `supervisor`, `judge` and `assess`. They are the declaration of the
-  frames ([protocol.md](protocol.md#schemas)), and `sdk_schema::register_frames`
-  registers them in a `onemessagebus` registry.
+  frames, and `sdk_schema::register_frames` registers them in a `onemessagebus`
+  registry.
 
 ## Note shapes are `onemessagebus-agent`'s
 

@@ -52,7 +52,7 @@ writes it with:
 
 `onejudge::sdk_schema::frame_schemas()` answers them, `register_frames` registers
 them in a `onemessagebus` registry, and the SDK schema bundle carries them under
-`frames` (see [contract.md](contract.md#sdk-schema-bundle)).
+`frames`.
 
 `onemessagebus serve --codec onejudge` reads the same frames through its own
 transcription, which the released `onemessagebus-agent` registers at

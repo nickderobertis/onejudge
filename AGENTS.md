@@ -343,9 +343,8 @@ journey to a capture from the tree before the move below (`tests/golden/notes/`)
 `onemessagebus-agent`'s note contract (`agent.note@1`) over the `onemessagebus`
 core's `Sender`/`Inbox`, re-exported at `onejudge::note`, so a shape change is a
 proposal to that contract's owner. onejudge owns the routing above and nothing else
-of it. The command-provider frames are declared the same way: registered as
-`agent.onejudge-frame.<op>@7`, and `tests/frames.rs` holds them to the bus's
-`onejudge` codec, both by schema and by a real frame of every op read through it.
+of it. The command-provider frames' schemas are registered with the bus the same
+way (`docs/protocol.md`), and a frame change is a change to that declaration.
 
 **A named session and `--control` must agree about what a turn is.** A mechanism
 that drives the turn over its own protocol builds no argv, so the harness's
