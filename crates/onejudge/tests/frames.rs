@@ -169,6 +169,63 @@ fn every_frame_schema_differs_from_the_released_codec_only_where_it_is_known_to(
     }
 }
 
+/// Every frame schema id a doc spells out, as `(op word or "<op>", version)`.
+fn documented_frame_ids(doc: &str) -> Vec<(String, u32)> {
+    const PREFIX: &str = "agent.onejudge-frame.";
+    doc.match_indices(PREFIX)
+        .filter_map(|(at, _)| {
+            let rest = &doc[at + PREFIX.len()..];
+            let (op, rest) = rest.split_once('@')?;
+            let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+            Some((op.to_string(), digits.parse().ok()?))
+        })
+        .collect()
+}
+
+#[test]
+fn the_docs_name_the_frame_schema_ids_onejudge_registers() {
+    let generated: Vec<onemessagebus::SchemaId> = onejudge::sdk_schema::frame_schemas()
+        .into_iter()
+        .map(|(id, _)| id)
+        .collect();
+    let version = generated[0].version();
+    let protocol = include_str!("../../../docs/protocol.md");
+    let contract = include_str!("../../../docs/contract.md");
+
+    // docs/protocol.md's table names each registered id in full.
+    for id in &generated {
+        assert!(
+            protocol.contains(&format!("`{id}`")),
+            "docs/protocol.md does not name the registered frame schema `{id}`"
+        );
+    }
+    // docs/contract.md names the id's form at the registered version, and every op.
+    assert!(
+        contract.contains(&format!("`agent.onejudge-frame.<op>@{version}`")),
+        "docs/contract.md does not state the frame ids at protocol version {version}"
+    );
+    for id in &generated {
+        let op = id.name().trim_start_matches("onejudge-frame.");
+        assert!(
+            contract.contains(&format!("`{op}`")),
+            "docs/contract.md's `frames` entry does not name the `{op}` frame"
+        );
+    }
+    // No doc names a frame id at a version that is neither onejudge's nor the
+    // released codec's it is compared against.
+    for (doc, text) in [("protocol", protocol), ("contract", contract)] {
+        for (op, documented) in documented_frame_ids(text) {
+            assert!(
+                documented == version || documented == codec::PROTOCOL_VERSION,
+                "docs/{doc}.md names `agent.onejudge-frame.{op}@{documented}`, which is \
+                 neither onejudge's frame version ({version}) nor the codec's \
+                 ({})",
+                codec::PROTOCOL_VERSION
+            );
+        }
+    }
+}
+
 #[cfg(feature = "fake-provider")]
 mod through_the_released_codec {
     use std::path::{Path, PathBuf};
