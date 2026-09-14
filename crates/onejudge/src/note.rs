@@ -85,6 +85,12 @@
 
 pub use onemessagebus_agent::note::{
     prelude, supervisor_block, worker_block, Accepted, Addressee, Criteria, Criterion,
-    CriterionRefused, DeliveredNote, Note, NoteInbox, NoteInboxExt, NoteRefused, NoteText, Notes,
-    Party, Undelivered,
+    CriterionRefused, DeliveredNote, Note, NoteInbox, NoteInboxExt, NoteRefused, NoteText, Party,
+    Undelivered,
 };
+
+/// **`Notes::send` blocks until a turn takes the note**, including a note sent
+/// before the run has started, which is answered `Accepted::Queued` only once the
+/// first turn opens. Send from a thread other than the one driving the engine.
+#[doc(inline)]
+pub use onemessagebus_agent::note::Notes;

@@ -14,7 +14,7 @@
 use std::collections::BTreeMap;
 
 use onemessagebus_agent::codec::onejudge as codec;
-use serde_json::{Map, Value};
+use serde_json::{json, Map, Value};
 
 /// A schema reduced to the shape it admits: every `$ref` inlined from `$defs`, each
 /// `required` list sorted, and prose (`description`, `title`) and the dialect marker
@@ -95,41 +95,75 @@ fn by_id(schemas: Vec<(onemessagebus::SchemaId, schemars::Schema)>) -> BTreeMap<
         .collect()
 }
 
-/// The differences between a frame shape of onejudge's and the released codec's
-/// that are known, at `at` (the frame, or one `kind` of a `judge` frame), each
-/// asserted rather than fixed — so any other drift fails, and a fix on either side
-/// flips this test:
+/// One known difference between onejudge's `@7` frame shape and the released
+/// codec's `@6` one: the JSON pointer it sits at, and what each side holds there
+/// (`None` where that side has no such member).
+struct Known {
+    pointer: String,
+    onejudge: Option<Value>,
+    codec: Option<Value>,
+}
+
+/// The five differences between onejudge's frame schemas and the released codec's,
+/// at `at` (the frame, or one `kind` of a `judge` frame):
 ///
-/// * `evidence.artifacts` — protocol **v7** added it; the codec is transcribed at
-///   v6. Asserted only while it is.
-/// * the four below are in the transcript members every frame carries, and on
-///   onejudge's side they are the Report contract's own `Message` / `ToolEvent`
-///   (report schema v12), the one source of that shape. The codec's transcription
-///   narrowed them: (a) a message admits no other members, (b) nor does a tool
-///   event, (c) a tool event's `index` is a `uint64` rather than a `uint`, and (d) its
-///   `kind` is closed to `tool_call` / `tool_result`. They move with the codec's v7
-///   transcription, which is taken from these schemas; whether onejudge's own
-///   transcript should close them is a Report schema decision, not this gate's.
-fn known_differences(at: &str, judged: bool) -> Vec<String> {
+/// 1. `evidence.artifacts` — on onejudge's `judge` shapes (protocol v7), absent from
+///    the codec's (transcribed at v6);
+/// 2. a transcript message is open in onejudge and closed (`additionalProperties:
+///    false`) in the codec;
+/// 3. a tool event likewise;
+/// 4. a tool event's `index` is a `uint` in onejudge and a `uint64` in the codec;
+/// 5. a tool event's `kind` is a string in onejudge and a closed `tool_call` /
+///    `tool_result` choice in the codec.
+///
+/// 2–5 sit in the transcript members every frame carries. Each is asserted rather
+/// than fixed because the codec is transcribed from onejudge's generated schemas, so
+/// the codec is what moves: its next transcription takes these documents as they
+/// stand, and when it does each assertion here fails and is deleted.
+fn known_differences(at: &str, judged: bool) -> Vec<Known> {
     let message = format!("{at}/properties/messages/items");
     let event = format!("{message}/properties/events/items");
     let mut known = vec![
-        format!("{message}/additionalProperties: codec only: false"),
-        format!("{event}/additionalProperties: codec only: false"),
-        format!("{event}/properties/index/format: onejudge \"uint\", codec \"uint64\""),
-        format!(
-            "{event}/properties/kind/oneOf: codec only: \
-             [{{\"type\":\"string\",\"const\":\"tool_call\"}},{{\"type\":\"string\",\"const\":\"tool_result\"}}]"
-        ),
-        format!("{event}/properties/kind/type: onejudge only: \"string\""),
+        Known {
+            pointer: format!("{message}/additionalProperties"),
+            onejudge: None,
+            codec: Some(json!(false)),
+        },
+        Known {
+            pointer: format!("{event}/additionalProperties"),
+            onejudge: None,
+            codec: Some(json!(false)),
+        },
+        Known {
+            pointer: format!("{event}/properties/index/format"),
+            onejudge: Some(json!("uint")),
+            codec: Some(json!("uint64")),
+        },
+        Known {
+            pointer: format!("{event}/properties/kind"),
+            onejudge: Some(json!({"type": "string"})),
+            codec: Some(json!({"oneOf": [
+                {"type": "string", "const": "tool_call"},
+                {"type": "string", "const": "tool_result"},
+            ]})),
+        },
     ];
-    if judged && codec::PROTOCOL_VERSION < 7 {
-        known.push(format!(
-            "{at}/properties/evidence/anyOf/0/properties/artifacts: onejudge only: \
-             {{\"type\":\"array\",\"items\":{{\"type\":\"string\"}}}}"
-        ));
+    if judged {
+        known.push(Known {
+            pointer: format!("{at}/properties/evidence/anyOf/0/properties/artifacts"),
+            onejudge: Some(json!({"type": "array", "items": {"type": "string"}})),
+            codec: None,
+        });
     }
     known
+}
+
+/// Drop the member `pointer` names from `document`, when it has one.
+fn remove(document: &mut Value, pointer: &str) {
+    let (parent, member) = pointer.rsplit_once('/').expect("a pointer names a member");
+    if let Some(Value::Object(members)) = document.pointer_mut(parent) {
+        members.remove(member);
+    }
 }
 
 #[test]
@@ -148,11 +182,14 @@ fn every_frame_schema_differs_from_the_released_codec_only_where_it_is_known_to(
         "onejudge registers exactly one frame schema per operation, at the protocol version"
     );
     for op in codec::op::ALL {
-        let mine = &ours[&format!("agent.onejudge-frame.{op}@7")];
-        let released = &theirs[&format!("agent.onejudge-frame.{op}@{}", codec::PROTOCOL_VERSION)];
-        let mut found = Vec::new();
-        differences(&shape(mine), &shape(released), "", &mut found);
-        let mut expected = if op == codec::op::JUDGE {
+        let codec_id = format!("agent.onejudge-frame.{op}@6");
+        let mut mine = shape(&ours[&format!("agent.onejudge-frame.{op}@7")]);
+        let mut released = shape(
+            theirs
+                .get(&codec_id)
+                .unwrap_or_else(|| panic!("the released codec carries no `{codec_id}`")),
+        );
+        let known = if op == codec::op::JUDGE {
             // One document per `kind`: boolean, then numeric.
             let mut both = known_differences("/oneOf/0", true);
             both.extend(known_differences("/oneOf/1", true));
@@ -160,11 +197,28 @@ fn every_frame_schema_differs_from_the_released_codec_only_where_it_is_known_to(
         } else {
             known_differences("", false)
         };
-        found.sort();
-        expected.sort();
-        assert_eq!(
-            found, expected,
-            "`{op}`'s frame schema drifted from the released codec's beyond the known differences"
+        for Known {
+            pointer,
+            onejudge,
+            codec,
+        } in &known
+        {
+            assert_eq!(
+                (mine.pointer(pointer), released.pointer(pointer)),
+                (onejudge.as_ref(), codec.as_ref()),
+                "`{op}` no longer differs from the released codec as known at `{pointer}` \
+                 (onejudge, codec)"
+            );
+            remove(&mut mine, pointer);
+            remove(&mut released, pointer);
+        }
+        let mut found = Vec::new();
+        differences(&mine, &released, "", &mut found);
+        assert!(
+            found.is_empty(),
+            "`{op}`'s frame schema drifted from the released codec's beyond the known \
+             differences:\n{}",
+            found.join("\n")
         );
     }
 }
