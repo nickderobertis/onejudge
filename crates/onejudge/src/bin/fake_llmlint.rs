@@ -121,8 +121,13 @@ fn record(args: &[String]) -> usize {
         .append(true)
         .open(&path)
         .expect("the argv record is writable");
-    let line = serde_json::to_string(args).expect("argv serializes");
-    writeln!(file, "{line}").expect("the argv record is writable");
+    // One `write_all` of the whole line, newline included. The judges of a panel
+    // run at the same time, so two doubles append to this record at once; append
+    // mode keeps each single write whole, but `writeln!` issues the text and its
+    // newline as two, which interleave into two arrays on one line.
+    let line = serde_json::to_string(args).expect("argv serializes") + "\n";
+    file.write_all(line.as_bytes())
+        .expect("the argv record is writable");
     so_far
 }
 

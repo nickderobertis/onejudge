@@ -1,0 +1,167 @@
+{
+  "delivered": [
+    {
+      "delivered_to": "supervisor",
+      "note": {
+        "addressee": "worker",
+        "text": "the reviewer asked for a smaller diff before this lands"
+      }
+    }
+  ],
+  "judge_a_requests": [
+    {
+      "history_name": "onejudge-skill",
+      "messages": [
+        {
+          "content": "start the job",
+          "role": "user"
+        },
+        {
+          "content": "echo: start the job",
+          "role": "assistant"
+        }
+      ],
+      "op": "supervisor",
+      "persona": "A reviewer. [[judge-dwell:600:{{TMP}}/notes-panel-live.marker]]",
+      "session": "onejudge-user-a",
+      "task": "start the job",
+      "worktree": "/skills/demo"
+    },
+    {
+      "history_name": "onejudge-skill",
+      "messages": [
+        {
+          "content": "start the job",
+          "role": "user"
+        },
+        {
+          "content": "echo: start the job",
+          "role": "assistant"
+        }
+      ],
+      "notes": [
+        {
+          "delivered_to": "supervisor",
+          "note": {
+            "addressee": "worker",
+            "text": "the reviewer asked for a smaller diff before this lands"
+          }
+        }
+      ],
+      "op": "supervisor",
+      "persona": "A reviewer. [[judge-dwell:600:{{TMP}}/notes-panel-live.marker]]",
+      "session": "onejudge-user-a",
+      "task": "start the job",
+      "worktree": "/skills/demo"
+    }
+  ],
+  "judge_b_requests": [
+    {
+      "history_name": "onejudge-skill",
+      "messages": [
+        {
+          "content": "start the job",
+          "role": "user"
+        },
+        {
+          "content": "echo: start the job",
+          "role": "assistant"
+        }
+      ],
+      "op": "supervisor",
+      "persona": "A reviewer. [[judge-dwell:600:{{TMP}}/notes-panel-live.marker]]",
+      "session": "onejudge-user-b",
+      "task": "start the job",
+      "worktree": "/skills/demo"
+    },
+    {
+      "history_name": "onejudge-skill",
+      "messages": [
+        {
+          "content": "start the job",
+          "role": "user"
+        },
+        {
+          "content": "echo: start the job",
+          "role": "assistant"
+        }
+      ],
+      "notes": [
+        {
+          "delivered_to": "supervisor",
+          "note": {
+            "addressee": "worker",
+            "text": "the reviewer asked for a smaller diff before this lands"
+          }
+        }
+      ],
+      "op": "supervisor",
+      "persona": "A reviewer. [[judge-dwell:600:{{TMP}}/notes-panel-live.marker]]",
+      "session": "onejudge-user-b",
+      "task": "start the job",
+      "worktree": "/skills/demo"
+    }
+  ],
+  "outcome": {
+    "completion_reason": null,
+    "judge_decisions": [
+      {
+        "decisions": [
+          {
+            "decision": "continue",
+            "judge": "a",
+            "kind": "command",
+            "reason": "completion criterion not yet met"
+          },
+          {
+            "decision": "continue",
+            "judge": "b",
+            "kind": "command",
+            "reason": "completion criterion not yet met"
+          },
+          {
+            "decision": "continue",
+            "judge": "a",
+            "kind": "command",
+            "reason": "completion criterion not yet met"
+          },
+          {
+            "decision": "continue",
+            "judge": "b",
+            "kind": "command",
+            "reason": "completion criterion not yet met"
+          }
+        ],
+        "turn": 1
+      }
+    ],
+    "settled_reason": null,
+    "stopped_early": false,
+    "transcript": {
+      "messages": [
+        {
+          "content": "start the job",
+          "role": "user"
+        },
+        {
+          "content": "echo: start the job",
+          "role": "assistant"
+        },
+        {
+          "content": "## Notes delivered to you during this run\n\nThe following were delivered to YOU, the worker, after this run began. Each is an update to your task and takes precedence over anything earlier that disagrees with it. Act on it as part of the work.\n\n- the reviewer asked for a smaller diff before this lands\n\n## Judge `a` (command)\n\nThanks — and what about the next step?\n\n## Judge `b` (command)\n\nThanks — and what about the next step?",
+          "role": "user"
+        },
+        {
+          "content": "echo: ## Notes delivered to you during this run\n\nThe following were delivered to YOU, the worker, after this run began. Each is an update to your task and takes precedence over anything earlier that disagrees with it. Act on it as part of the work.\n\n- the reviewer asked for a smaller diff before this lands\n\n## Judge `a` (command)\n\nThanks — and what about the next step?\n\n## Judge `b` (command)\n\nThanks — and what about the next step?",
+          "role": "assistant"
+        }
+      ]
+    },
+    "usage": {
+      "cache_read_tokens": 6,
+      "cache_write_tokens": 2,
+      "input_tokens": 450,
+      "output_tokens": 6
+    }
+  }
+}

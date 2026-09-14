@@ -1,0 +1,43 @@
+{
+  "outcome": {
+    "completion_reason": null,
+    "judge_decisions": [],
+    "settled_reason": "the agent and the supervisor repeated 2 no-op exchanges (no tool activity, and the same agent reply each time); settled on the work already done",
+    "stopped_early": false,
+    "transcript": {
+      "messages": [
+        {
+          "content": "release the dispatch",
+          "role": "user"
+        },
+        {
+          "content": "echo: release the dispatch",
+          "role": "assistant"
+        },
+        {
+          "content": "No further action; keep this dispatch released.",
+          "role": "user"
+        },
+        {
+          "content": "echo: No further action; keep this dispatch released.",
+          "role": "assistant"
+        },
+        {
+          "content": "No further action; keep this dispatch released.",
+          "role": "user"
+        },
+        {
+          "content": "echo: No further action; keep this dispatch released.",
+          "role": "assistant"
+        }
+      ]
+    },
+    "usage": {
+      "cache_read_tokens": 9,
+      "cache_write_tokens": 3,
+      "input_tokens": 116,
+      "output_tokens": 5
+    }
+  },
+  "refused": "MemberSettled { outcome: \"the agent and the supervisor repeated 2 no-op exchanges (no tool activity, and the same agent reply each time); settled on the work already done\" }"
+}

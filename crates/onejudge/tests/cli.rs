@@ -1714,8 +1714,12 @@ fn binary_run_publishes_the_control_address_in_the_json_report() {
     );
     let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     let control = report["control"].as_object().expect("an address");
+    // The member set: a parsed object's iteration order follows how `serde_json`
+    // was built, not what the binary wrote.
+    let mut members: Vec<&String> = control.keys().collect();
+    members.sort();
     assert_eq!(
-        control.keys().collect::<Vec<_>>(),
+        members,
         ["cwd", "session", "session_dir"],
         "exactly the three values `oneharness interrupt` takes"
     );

@@ -12,15 +12,28 @@ Everything here is on the **library surface**. No command line is required at an
 layer.
 
 ```rust
-use onejudge::{Addressee, Conversation, Engine, Note, Notes, Settings};
+use onejudge::{Addressee, Conversation, Engine, Note, Notes, Settings, Undelivered};
 
 let (notes, inbox) = Notes::channel();
 let engine = Engine::new(&provider, Settings::new()).with_notes(inbox);
 // …or, driving the run through a plan: `plan.with_notes(inbox)`.
 
 // From whatever supervises the run, on another thread:
-notes.send(Note::to(Addressee::Worker, "the reviewer asked for a smaller diff"))?;
+notes
+    .send(Note::to(Addressee::Worker, "the reviewer asked for a smaller diff"))
+    .map_err(Undelivered::from)?;
 ```
+
+**Where the shapes are declared.** Not here. `Note`, `NoteText`, `Criterion`,
+`Addressee`, `Party`, `DeliveredNote`, `Accepted`, `Undelivered`, `Criteria` and the
+two renderings (`supervisor_block`, `worker_block`) are `onemessagebus-agent`'s note
+contract — the message `agent.note@1` — re-exported at `onejudge::note` so
+`onejudge`, `oneagentgraph` and `onepipeline` carry one declaration. `Notes` and
+`NoteInbox` are the `onemessagebus` core's `Sender` and `Inbox` over it, so
+`Notes::send` answers the core's `onemessagebus::Undelivered`, which
+`Undelivered::from` reads back into the note refusal it carries. What this document
+states that the bus does not — which party a note reaches, and what its sender is
+answered — is onejudge's routing, and stays here.
 
 ## The rules
 
@@ -43,7 +56,8 @@ an error.
 **Between turns, the next turn gets it** (`Accepted::Queued`).
 
 **A note that arrives once the conversation has completed raises.** `Notes::send`
-answers `Err(Undelivered::…)`, naming that it was not delivered and why, so the
+answers `Err`, which `Undelivered::from` reads as `Undelivered::…`, naming that it
+was not delivered and why, so the
 caller chooses relaunch, tweak or follow-up. The silent half is worse than the loud
 half: a note that is accepted and never delivered leaves the caller believing the
 correction landed. One measured node accepted a note after its worker had reported
@@ -62,11 +76,20 @@ completion report that preceded its own subsequent commits.
 
 Two costs, stated where an implementer meets them. A redirected judge turn is a
 **second judge invocation**, so a caller sending notes into a tight loop pays per
-note. And `Notes::send` blocks until the disposition is known — immediately when
-nothing is live, and for a live turn until that party has been handed the note
-(for the judge, until its re-taken decision comes back, because that decision is
-what distinguishes the last two rows). Send from a thread other than the one
-driving the engine.
+note. And **`Notes::send` blocks until a turn takes the note** and its disposition
+is known: for a note sent between turns — *or before the run has started* — until
+the next turn opens; for a live turn until that party has been handed the note (for
+the judge, until its re-taken decision comes back, because that decision is what
+distinguishes the last two rows). A caller that sends and then starts the run on the
+same thread waits forever. Send from a thread other than the one driving the engine.
+
+**A channel nothing ever read.** An `Engine` holding a note channel that is dropped
+without running, and a `Plan` whose provider could not be built, close the channel
+so a note sent to it answers `Undelivered::NoConversation`. A bare `NoteInbox` a
+caller drops *without* handing it to onejudge is closed by the released
+`onemessagebus` 0.4.0 core, and the released `onemessagebus-agent` 0.4.0 profile
+reads that close as `Undelivered::MemberSettled` — a known wrong answer, since no
+member ran, pinned by `tests/notes.rs` until the profile's mapping is fixed.
 
 ## What "live delivery" means
 

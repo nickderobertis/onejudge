@@ -275,3 +275,159 @@ fn generated_report_schema_matches_the_schema_v12_golden() {
          SCHEMA_VERSION and update the versioned schema golden"
     );
 }
+
+/// The body of the one fenced block in `docs/contract.md` opened with `info`.
+fn fenced(info: &str) -> &'static str {
+    let doc = include_str!("../../../docs/contract.md");
+    let opening = format!("```{info}\n");
+    let mut blocks = doc.match_indices(&opening);
+    let (start, _) = blocks
+        .next()
+        .unwrap_or_else(|| panic!("docs/contract.md has no ```{info} block"));
+    assert!(
+        blocks.next().is_none(),
+        "docs/contract.md has more than one ```{info} block"
+    );
+    let body = &doc[start + opening.len()..];
+    &body[..body.find("```").expect("the block is closed")]
+}
+
+#[test]
+fn the_note_shape_the_contract_doc_copies_reads_through_the_re_exports_unchanged() {
+    let copy = fenced("json");
+    let read: onejudge::note::DeliveredNote =
+        serde_json::from_str(copy).expect("the copy is a note the declaration reads");
+    // Read through onejudge's path, held as the profile's own type: one declaration.
+    let declared: onemessagebus_agent::note::DeliveredNote = read;
+    assert_eq!(
+        serde_json::to_value(&declared).unwrap(),
+        serde_json::from_str::<serde_json::Value>(copy).unwrap(),
+        "the note shape docs/contract.md copies is not the one onemessagebus-agent declares"
+    );
+    assert_eq!(declared.note.addressee, onejudge::Addressee::Worker);
+    assert!(declared.note.binds());
+}
+
+#[test]
+fn every_note_item_onejudge_exported_at_0_8_1_is_the_agent_profiles_at_the_same_path() {
+    use onejudge::note as here;
+    use onemessagebus_agent::note as there;
+
+    // Each coercion compiles only when both paths name one type.
+    fn same<T>(value: T) -> T {
+        value
+    }
+    let _: fn(here::Addressee) -> there::Addressee = same;
+    let _: fn(here::Party) -> there::Party = same;
+    let _: fn(here::Criterion) -> there::Criterion = same;
+    let _: fn(here::CriterionRefused) -> there::CriterionRefused = same;
+    let _: fn(here::NoteText) -> there::NoteText = same;
+    let _: fn(here::Note) -> there::Note = same;
+    let _: fn(here::NoteRefused) -> there::NoteRefused = same;
+    let _: fn(here::DeliveredNote) -> there::DeliveredNote = same;
+    let _: fn(here::Accepted) -> there::Accepted = same;
+    let _: fn(here::Undelivered) -> there::Undelivered = same;
+    let _: fn(here::Criteria) -> there::Criteria = same;
+    let _: fn(here::Notes) -> there::Notes = same;
+    let _: fn(here::NoteInbox) -> there::NoteInbox = same;
+    let _: fn(&[here::DeliveredNote]) -> Option<String> = here::supervisor_block;
+
+    // The channel keeps the calls a caller makes on it.
+    let (notes, inbox): (here::Notes, here::NoteInbox) = here::Notes::channel();
+    let _: fn(&here::Notes, here::Note) -> Result<here::Accepted, onemessagebus::Undelivered> =
+        here::Notes::send;
+    use here::prelude::*;
+    let delivered: Vec<here::DeliveredNote> = inbox.delivered();
+    assert!(delivered.is_empty());
+    drop(notes);
+
+    // …and the rendering is the profile's, word for word.
+    let handed = [here::DeliveredNote {
+        note: here::Note::to(here::Addressee::Both, "the ruling applies to both of you"),
+        delivered_to: here::Party::Supervisor,
+    }];
+    assert_eq!(
+        here::supervisor_block(&handed),
+        there::supervisor_block(&handed)
+    );
+}
+
+/// The prose naming the note's message id is a copy of the profile's declaration,
+/// so it is read against `Note`'s own `Message::SCHEMA` rather than trusted: a
+/// profile that bumps the id fails here until every copy says the new one.
+#[test]
+fn every_doc_naming_the_note_message_id_names_the_one_the_profile_declares() {
+    let declared = <onejudge::note::Note as onemessagebus::Message>::SCHEMA.to_string();
+    for (site, text) in [
+        ("AGENTS.md", include_str!("../../../AGENTS.md")),
+        ("docs/notes.md", include_str!("../../../docs/notes.md")),
+        (
+            "docs/contract.md",
+            include_str!("../../../docs/contract.md"),
+        ),
+        (
+            "crates/onejudge/src/note.rs",
+            include_str!("../src/note.rs"),
+        ),
+    ] {
+        assert!(
+            text.contains(&format!("`{declared}`")),
+            "{site} does not name the note message id the profile declares, `{declared}`"
+        );
+        for (at, _) in text.match_indices("agent.note@") {
+            let named: String = text[at..]
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '@'))
+                .collect();
+            assert_eq!(
+                named, declared,
+                "{site} names the note message id `{named}`, not the declared `{declared}`"
+            );
+        }
+    }
+}
+
+#[test]
+fn the_contract_doc_generates_the_bundle_with_the_example_the_crate_declares() {
+    assert_eq!(
+        fenced("console").trim(),
+        "cargo run -q -p onejudge --features sdk-schema --example generate_sdk_schema"
+    );
+    assert!(include_str!("../Cargo.toml")
+        .contains("name = \"generate_sdk_schema\"\nrequired-features = [\"sdk-schema\"]"));
+}
+
+#[cfg(feature = "fake-provider")]
+#[test]
+fn the_contract_doc_builds_a_report_the_way_the_api_does() {
+    use onejudge::{CommandProvider, Conversation, Engine, Settings, Skill};
+
+    let example = fenced("rust");
+    for call in [
+        "engine.run(&conversation)?",
+        "engine.judge_boolean(\"the change was committed\", &outcome.transcript)?",
+        "outcome.into_report(",
+        "onejudge::NamedVerdict::new(\"the change was committed\", onejudge::JudgeKind::Boolean, verdict)",
+        "assert_eq!(report.schema_version, onejudge::SCHEMA_VERSION);",
+    ] {
+        assert!(example.contains(call), "the example no longer makes `{call}`");
+    }
+    // The same calls, over the echo double.
+    let provider =
+        CommandProvider::new(vec![env!("CARGO_BIN_EXE_onejudge-echo-provider").into()]).unwrap();
+    let engine = Engine::new(&provider, Settings::new());
+    let conversation = Conversation::single_turn(
+        Skill::new("demo", "/skills/demo", ""),
+        "the change was committed",
+    );
+    let outcome = engine.run(&conversation).unwrap();
+    let verdict = engine
+        .judge_boolean("the change was committed", &outcome.transcript)
+        .unwrap();
+    let report = outcome.into_report(vec![NamedVerdict::new(
+        "the change was committed",
+        JudgeKind::Boolean,
+        verdict,
+    )]);
+    assert_eq!(report.schema_version, SCHEMA_VERSION);
+}

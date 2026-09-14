@@ -35,6 +35,38 @@ dropped `platform` and `model` from every request: harness and
 model **selection** is the command's own concern now (onejudge no longer passes
 it). v1 carried `platform`/`model` on `respond` and `model` on `user`/`judge`.
 
+## Schemas
+
+**The schemas are the declaration of the request frames**; the prose and examples
+below describe them. Each frame is registered as `agent.onejudge-frame.<op>@7` —
+the version is the protocol version — generated from the type `CommandProvider`
+writes it with:
+
+| op | schema id |
+| --- | --- |
+| `respond` | `agent.onejudge-frame.respond@7` |
+| `user` | `agent.onejudge-frame.user@7` |
+| `supervisor` | `agent.onejudge-frame.supervisor@7` |
+| `judge` | `agent.onejudge-frame.judge@7` |
+| `assess` | `agent.onejudge-frame.assess@7` |
+
+`onejudge::sdk_schema::frame_schemas()` answers them, `register_frames` registers
+them in a `onemessagebus` registry, and the SDK schema bundle carries them under
+`frames`.
+
+`onemessagebus serve --codec onejudge` reads the same frames through its own
+transcription, which the released `onemessagebus-agent` registers at
+`agent.onejudge-frame.<op>@6`. `tests/frames.rs` compares every one of these
+schemas with the codec's, and reads a real frame of every operation, as
+`CommandProvider` writes it, through the codec and back. Two refusals are the
+codec's, and a command author meets them there:
+
+- it serves `supervisor` and `judge` alone, and refuses any other frame by name —
+  `` `respond` is not an operation this codec serves ``;
+- it reads protocol v6, so a v7 `judge` frame that names `evidence.artifacts` is
+  refused — `` the `judge` frame is not a onejudge protocol v6 frame: unknown field `artifacts` ``.
+  A frame naming no artifacts is byte-identical to v6 and is served.
+
 ## `respond` — run one skill turn
 
 Request:

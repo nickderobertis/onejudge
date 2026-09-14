@@ -1,0 +1,3 @@
+{
+  "refused": "MemberSettled { outcome: \"the conversation failed: provider error (respond): provider exited with exit status: 1: echo-provider: deliberate non-zero exit for the e2e error path\" }"
+}

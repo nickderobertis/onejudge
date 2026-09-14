@@ -1,0 +1,27 @@
+{
+  "outcome": {
+    "completion_reason": null,
+    "judge_decisions": [],
+    "settled_reason": null,
+    "stopped_early": false,
+    "transcript": {
+      "messages": [
+        {
+          "content": "start the job",
+          "role": "user"
+        },
+        {
+          "content": "echo: start the job",
+          "role": "assistant"
+        }
+      ]
+    },
+    "usage": {
+      "cache_read_tokens": 3,
+      "cache_write_tokens": 1,
+      "input_tokens": 13,
+      "output_tokens": 1
+    }
+  },
+  "refused": "MemberSettled { outcome: \"the conversation ended without a completion decision\" }"
+}

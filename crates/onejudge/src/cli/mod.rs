@@ -709,9 +709,14 @@ fn execute(
     // where its spawn hook has to reach the processes the run creates — every one of
     // them, including both sides of a two-party `split`. Without a hook the backend
     // is built exactly as before.
+    let built = AnyProvider::build(&provider);
+    if let (Err(_), Some(inbox)) = (&built, &notes) {
+        // No conversation will ever read the plan's note channel.
+        crate::engine::close_unread(inbox);
+    }
     let backend = match spawn_hook {
-        Some(hook) => AnyProvider::build(&provider)?.with_spawn_hook(hook),
-        None => AnyProvider::build(&provider)?,
+        Some(hook) => built?.with_spawn_hook(hook),
+        None => built?,
     };
     let engine = match notes {
         Some(inbox) => Engine::new(&backend, settings).with_notes(inbox),

@@ -1,5 +1,9 @@
-//! Rust-owned JSON Schema roots consumed by generated language SDKs.
+//! Rust-owned JSON Schema roots consumed by generated language SDKs, and the
+//! command-provider frame schemas onejudge registers in a `onemessagebus` registry.
 
+use std::collections::BTreeMap;
+
+use onemessagebus::{Registry, RegistryError, SchemaId};
 use schemars::{generate::SchemaSettings, JsonSchema, Schema};
 use serde::Serialize;
 
@@ -24,6 +28,9 @@ pub struct SdkSchemaBundle {
     /// run fails, carrying the classified error and the harness attribution the
     /// run had recorded.
     pub failure_report: Schema,
+    /// The command-provider request frames (`docs/protocol.md`), one per operation,
+    /// keyed by the id each is registered under: `agent.onejudge-frame.<op>@7`.
+    pub frames: BTreeMap<String, Schema>,
 }
 
 /// Generate a schema for a serialized output value.
@@ -35,6 +42,30 @@ pub fn schema_for_serialize<T: ?Sized + JsonSchema>() -> Schema {
         .into_root_schema_for::<T>()
 }
 
+/// Every command-provider request frame's schema — `respond`, `user`, `supervisor`,
+/// `judge`, `assess` — with the id it is registered under,
+/// `agent.onejudge-frame.<op>@<protocol version>`.
+///
+/// These are the declaration of the frames `CommandProvider` writes: each is
+/// generated from the frame type that writes it.
+#[must_use]
+pub fn frame_schemas() -> Vec<(SchemaId, Schema)> {
+    crate::command::frame_schemas()
+}
+
+/// Register every command-provider frame schema in `registry`, so a bus that checks
+/// records against it checks onejudge's frames against onejudge's own declaration.
+///
+/// # Errors
+/// [`RegistryError`] when `registry` already holds a different document under one
+/// of the ids.
+pub fn register_frames(registry: &mut Registry) -> Result<(), RegistryError> {
+    for (id, schema) in frame_schemas() {
+        registry.register_schema(id, schema.to_value())?;
+    }
+    Ok(())
+}
+
 /// Build the named schema bundle in stable field order.
 #[must_use]
 pub fn bundle() -> SdkSchemaBundle {
@@ -44,5 +75,9 @@ pub fn bundle() -> SdkSchemaBundle {
         stream_event: schema_for_serialize::<StreamEvent<'static>>(),
         observation: schema_for_serialize::<Observation<'static>>(),
         failure_report: schema_for_serialize::<FailureReport>(),
+        frames: frame_schemas()
+            .into_iter()
+            .map(|(id, schema)| (id.to_string(), schema))
+            .collect(),
     }
 }

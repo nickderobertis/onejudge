@@ -225,7 +225,29 @@ named JSON Schema roots:
   a turn closing — as an in-process embedder receives it
   (`Engine::run_observing`);
 - `failure_report`: the document `--format json` writes **instead of** a report
-  when the run fails (see below).
+  when the run fails (see below);
+- `frames`: the command-provider request frames, one per operation, keyed by the
+  id each is registered under — `agent.onejudge-frame.<op>@7` for `respond`,
+  `user`, `supervisor`, `judge` and `assess`. They are the declaration of the
+  frames, and `sdk_schema::register_frames` registers them in a `onemessagebus`
+  registry.
+
+## Note shapes are `onemessagebus-agent`'s
+
+A report carries no note, but the conversation it describes may have been handed
+some, and every shape a note takes on a wire onejudge speaks — `Notes::send`, and
+the `notes` of a `supervisor` request — is **declared by `onemessagebus-agent`'s
+note contract** (`onemessagebus_agent::note`, the message `agent.note@1`), not by
+onejudge. `onejudge::note` re-exports it at the same path, and a change to it is a
+proposal to the planner who owns that contract rather than an edit here.
+
+The example below is a **copy** of that declaration, kept so a reader of this page
+sees the shape; `tests/contract.rs` reads it through the re-exports, so a copy that
+stops matching the declaration fails the gate:
+
+```json
+{"note":{"addressee":"worker","text":"the reviewer asked for a smaller diff","criterion":"the diff touches only the migration"},"delivered_to":"worker"}
+```
 
 ## When a run fails
 

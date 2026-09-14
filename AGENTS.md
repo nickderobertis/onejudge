@@ -337,7 +337,14 @@ raises `Undelivered`, naming that it was not delivered and why, because a caller
 choose what to do about a refusal and can do nothing at all about a silence.
 `docs/notes.md` is the contract; `tests/notes.rs` drives each of the four arrival
 cases through the library API over the real subprocess doubles, holding a party's
-turn open so the arrival is genuinely live rather than between turns.
+turn open so the arrival is genuinely live rather than between turns, and holds each
+journey to a capture from the tree before the move below (`tests/golden/notes/`).
+**The note's shapes and its channel are not onejudge's**: they are
+`onemessagebus-agent`'s note contract (`agent.note@1`) over the `onemessagebus`
+core's `Sender`/`Inbox`, re-exported at `onejudge::note`, so a shape change is a
+proposal to that contract's owner. onejudge owns the routing above and nothing else
+of it. The command-provider frames' schemas are registered with the bus the same
+way (`docs/protocol.md`), and a frame change is a change to that declaration.
 
 **A named session and `--control` must agree about what a turn is.** A mechanism
 that drives the turn over its own protocol builds no argv, so the harness's
