@@ -122,7 +122,9 @@ const NOTE: &str = "the reviewer asked for a smaller diff before this lands";
 /// `ONEJUDGE_CAPTURE_NOTES_BASELINE=1` to rewrite a capture — only ever from a tree
 /// whose behaviour *is* the baseline.
 fn assert_baseline(name: &str, produced: &serde_json::Value) {
-    let mut text = serde_json::to_string_pretty(produced).unwrap();
+    let mut produced = produced.clone();
+    normalize_input_tokens(&mut produced);
+    let mut text = serde_json::to_string_pretty(&produced).unwrap();
     for (path, placeholder) in [
         (env!("CARGO_TARGET_TMPDIR"), "{{TMP}}"),
         (env!("CARGO_BIN_EXE_onejudge-echo-provider"), "{{ECHO}}"),
@@ -150,6 +152,33 @@ fn assert_baseline(name: &str, produced: &serde_json::Value) {
         produced, expected,
         "the `{name}` journey no longer produces what the tree before the move produced"
     );
+}
+
+/// Count the outcome's input tokens as though every recorded prompt carried the
+/// `{{TMP}}` placeholder rather than this host's scratch dir.
+///
+/// The fake-oneharness double reports a prompt's byte length as its input tokens,
+/// and a party told to `[[record-prompt:…]]` is handed that path inside its prompt,
+/// so the raw count grows with the length of `CARGO_TARGET_TMPDIR`: a capture taken
+/// here would hold only on a host whose tmp dir is exactly as long. Each occurrence
+/// in the prompts the doubles recorded is one the count included, so it is
+/// normalized by the same placeholder the text is.
+fn normalize_input_tokens(produced: &mut serde_json::Value) {
+    let tmp = env!("CARGO_TARGET_TMPDIR");
+    let occurrences: usize = ["judge_prompts", "agent_prompts"]
+        .iter()
+        .filter_map(|field| produced.get(field).and_then(serde_json::Value::as_str))
+        .map(|prompts| prompts.matches(tmp).count())
+        .sum();
+    if occurrences == 0 {
+        return;
+    }
+    let excess = occurrences as i64 * (tmp.len() as i64 - "{{TMP}}".len() as i64);
+    let tokens = produced
+        .pointer_mut("/outcome/usage/input_tokens")
+        .expect("a journey that records prompts reports the usage they cost");
+    let counted = tokens.as_i64().expect("input tokens are a count");
+    *tokens = json!(counted - excess);
 }
 
 /// Send `note` from another thread, and return once the channel holds it — before

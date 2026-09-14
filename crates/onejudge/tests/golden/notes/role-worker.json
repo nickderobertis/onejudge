@@ -43,7 +43,7 @@
     "usage": {
       "cache_read_tokens": 21,
       "cache_write_tokens": 6,
-      "input_tokens": 2898,
+      "input_tokens": 2788,
       "output_tokens": 3
     }
   }

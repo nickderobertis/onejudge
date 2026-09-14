@@ -44,7 +44,7 @@
     "usage": {
       "cache_read_tokens": 21,
       "cache_write_tokens": 6,
-      "input_tokens": 3959,
+      "input_tokens": 3849,
       "output_tokens": 3
     }
   }
