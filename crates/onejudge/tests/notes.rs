@@ -124,7 +124,9 @@ const NOTE: &str = "the reviewer asked for a smaller diff before this lands";
 fn assert_baseline(name: &str, produced: &serde_json::Value) {
     let mut produced = produced.clone();
     normalize_input_tokens(&mut produced);
-    let text = normalize_paths(&serde_json::to_string_pretty(&produced).unwrap());
+    let text = normalize_exit_status(&normalize_paths(
+        &serde_json::to_string_pretty(&produced).unwrap(),
+    ));
     let golden = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/golden/notes")
         .join(format!("{name}.json"));
@@ -183,6 +185,27 @@ fn a_capture_names_a_scratch_file_the_same_way_whatever_separator_the_host_joins
                 "judge_prompts": "A reviewer. [[record-prompt:{{TMP}}/notes-criteria-judge.log]]",
             }),
             "a scratch path joined with `{separator}` is not the path the capture holds"
+        );
+    }
+}
+
+/// Render a provider's exit the way the captures hold it, whatever host ran it.
+///
+/// A provider that exits non-zero is reported through `std`'s `ExitStatus` display,
+/// which reads `exit status: 1` on Unix and `exit code: 1` on Windows. The captures
+/// were taken on Unix, so without this every journey whose failure names the exit
+/// fails on Windows alone, with only that wording differing.
+fn normalize_exit_status(serialized: &str) -> String {
+    serialized.replace("exited with exit code: ", "exited with exit status: ")
+}
+
+#[test]
+fn a_capture_names_a_provider_exit_the_same_way_whatever_host_rendered_it() {
+    for rendered in ["exit status: 1", "exit code: 1"] {
+        assert_eq!(
+            normalize_exit_status(&format!("provider exited with {rendered}: echo-provider")),
+            "provider exited with exit status: 1: echo-provider",
+            "an exit rendered `{rendered}` is not the exit the capture holds"
         );
     }
 }
