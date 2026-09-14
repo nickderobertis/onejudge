@@ -1126,6 +1126,95 @@ fn a_bare_note_inbox_dropped_unread_answers_member_settled_against_the_released_
     assert!(refused.to_string().contains("was not delivered"));
 }
 
+// --- A note already handed over stays delivered ---------------------------
+
+#[test]
+fn a_note_handed_to_the_judges_live_turn_is_answered_as_delivered_when_the_run_then_fails() {
+    let live = scratch_path("notes-judge-then-fails.marker");
+    let (notes, inbox) = Notes::channel();
+
+    let sender = std::thread::spawn({
+        let live = live.clone();
+        move || {
+            await_path(&live, "the judge's turn never opened");
+            notes
+                .send(Note::to(Addressee::Worker, NOTE))
+                .map_err(Undelivered::from)
+        }
+    });
+
+    let provider = echo();
+    let engine = Engine::new(&provider, Settings::new()).with_notes(inbox);
+    // The judge holds its turn open while the note arrives, and exits non-zero on
+    // the decision re-taken with the note in hand: the note was delivered, and the
+    // run fails after.
+    let error = engine
+        .run(&Conversation::multi_turn(
+            Skill::new("demo", "/skills/demo", ""),
+            "start the job",
+            SimulatedUser::new(format!(
+                "A reviewer. [[judge-dwell:600:{}]][[supervisor-exit-on-note]]",
+                live.display()
+            ))
+            .max_turns(3),
+        ))
+        .expect_err("the decision re-taken with the note fails the run");
+
+    let accepted = sender
+        .join()
+        .expect("the sending thread finished")
+        .expect("the note reached the judge before the run failed, so it was accepted");
+    assert_eq!(
+        accepted,
+        Accepted::Interrupted {
+            party: Party::Supervisor
+        },
+        "a note handed to a party reports that party, whatever became of the run afterwards"
+    );
+    let delivered = engine.delivered_notes();
+    assert_eq!(delivered.len(), 1);
+    assert_eq!(delivered[0].delivered_to, Party::Supervisor);
+    assert_baseline(
+        "judge-live-then-failed",
+        &json!({
+            "accepted": format!("{accepted:?}"),
+            "error": error.to_string(),
+            "delivered": delivered,
+        }),
+    );
+}
+
+#[test]
+fn a_note_arriving_after_a_run_that_panicked_raises_naming_the_dropped_channel() {
+    let (notes, inbox) = Notes::channel();
+    let provider = echo();
+    let engine = Engine::new(&provider, Settings::new()).with_notes(inbox);
+
+    // An observer that panics mid-run unwinds through the engine, so no run closes
+    // the channel: the engine going away is what answers it.
+    let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+        let mut panics =
+            |_: &Observation<'_>| -> ControlFlow<()> { panic!("an observer that panics mid-run") };
+        let _ = engine.run_observing(
+            &Conversation::single_turn(Skill::new("demo", "/skills/demo", ""), "start the job"),
+            &mut panics,
+        );
+    }));
+    assert!(unwound.is_err(), "the observer's panic unwound the run");
+
+    let refused = notes
+        .send(Note::to(Addressee::Worker, NOTE))
+        .map_err(Undelivered::from)
+        .expect_err("a note arriving after the run unwound is not delivered");
+    assert_eq!(
+        refused,
+        Undelivered::MemberSettled {
+            outcome: "the conversation's note inbox was dropped".into()
+        }
+    );
+    assert_baseline("after-panic", &json!({ "refused": format!("{refused:?}") }));
+}
+
 // --- A binding note is held to being a criterion --------------------------
 
 #[test]

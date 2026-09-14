@@ -23,6 +23,9 @@
 //! * `[[complete-on-note]]` in the persona makes the supervisor answer
 //!   `completion:true` exactly once it has been shown a delivered note — the judge
 //!   passing the work with the note in hand.
+//! * `[[supervisor-exit-on-note]]` in the persona makes the supervisor exit
+//!   non-zero exactly once it has been shown a delivered note — a run that fails on
+//!   the decision re-taken with the note in hand.
 //! * `judge` returns `true` (or the numeric high) iff the criterion text appears
 //!   in the transcript it is given — **including the rendered tool events** — so an
 //!   events-backed criterion is genuinely decided by what the skill did.
@@ -219,6 +222,15 @@ fn supervisor(request: &Value, argv: &str) -> Value {
     }
     if let Some(reason) = marker(argv, "supervisor-complete") {
         return json!({"completion": true, "reason": reason, "usage": {"input_tokens": 1, "output_tokens": 1}});
+    }
+    // The judge failing on the decision re-taken carrying the note.
+    if persona.contains("[[supervisor-exit-on-note]]")
+        && request
+            .get("notes")
+            .and_then(Value::as_array)
+            .is_some_and(|notes| !notes.is_empty())
+    {
+        fail("deliberate non-zero exit on the supervisor op shown a note");
     }
     // The judge passing the work with the note in hand: completion is answered only
     // on the decision that was re-taken carrying the note, never the one before it.

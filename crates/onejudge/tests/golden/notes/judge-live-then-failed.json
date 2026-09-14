@@ -1,0 +1,13 @@
+{
+  "accepted": "Interrupted { party: Supervisor }",
+  "delivered": [
+    {
+      "delivered_to": "supervisor",
+      "note": {
+        "addressee": "worker",
+        "text": "the reviewer asked for a smaller diff before this lands"
+      }
+    }
+  ],
+  "error": "provider error (supervisor): provider exited with exit status: 1: echo-provider: deliberate non-zero exit on the supervisor op shown a note"
+}
