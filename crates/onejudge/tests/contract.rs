@@ -352,6 +352,41 @@ fn every_note_item_onejudge_exported_at_0_8_1_is_the_agent_profiles_at_the_same_
     );
 }
 
+/// The prose naming the note's message id is a copy of the profile's declaration,
+/// so it is read against `Note`'s own `Message::SCHEMA` rather than trusted: a
+/// profile that bumps the id fails here until every copy says the new one.
+#[test]
+fn every_doc_naming_the_note_message_id_names_the_one_the_profile_declares() {
+    let declared = <onejudge::note::Note as onemessagebus::Message>::SCHEMA.to_string();
+    for (site, text) in [
+        ("AGENTS.md", include_str!("../../../AGENTS.md")),
+        ("docs/notes.md", include_str!("../../../docs/notes.md")),
+        (
+            "docs/contract.md",
+            include_str!("../../../docs/contract.md"),
+        ),
+        (
+            "crates/onejudge/src/note.rs",
+            include_str!("../src/note.rs"),
+        ),
+    ] {
+        assert!(
+            text.contains(&format!("`{declared}`")),
+            "{site} does not name the note message id the profile declares, `{declared}`"
+        );
+        for (at, _) in text.match_indices("agent.note@") {
+            let named: String = text[at..]
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '@'))
+                .collect();
+            assert_eq!(
+                named, declared,
+                "{site} names the note message id `{named}`, not the declared `{declared}`"
+            );
+        }
+    }
+}
+
 #[test]
 fn the_contract_doc_generates_the_bundle_with_the_example_the_crate_declares() {
     assert_eq!(
