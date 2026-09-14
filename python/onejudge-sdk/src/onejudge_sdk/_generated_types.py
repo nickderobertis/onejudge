@@ -5,11 +5,11 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any, Literal, Optional, TypedDict, Union
 
-JudgeKind = Literal["boolean", "numeric"]
 ProviderKind = Literal["oneharness", "command", "split", "llmlint"]
-Decision = Literal["done", "continue", "no_instruction", "unparseable", "error"]
-JudgeValue = Union[bool, float]
+JudgeKind = Literal["boolean", "numeric"]
 Role = Literal["user", "assistant", "system"]
+JudgeValue = Union[bool, float]
+Decision = Literal["done", "continue", "no_instruction", "unparseable", "error"]
 TelemetryRole = Literal["agent", "judge"]
 ProviderErrorKind = Literal[
     "auth",
@@ -25,6 +25,31 @@ ProviderErrorKind = Literal[
 ]
 
 
+class ProviderConfig(TypedDict, total=False):
+    kind: ProviderKind
+    bin: Optional[str]
+    judge_config: Optional[str]
+    stream: Optional[bool]
+    control: Optional[bool]
+    mock_harness: Optional[Sequence[str]]
+    command: Optional[Sequence[str]]
+    config: Optional[str]
+    diff_base: Optional[str]
+    args: Optional[Sequence[str]]
+    skill: Optional[ProviderConfig]
+    judge: Optional[ProviderConfig]
+    judges: Optional[Sequence[ProviderConfig]]
+    label: Optional[str]
+
+
+class UserConfig(TypedDict, total=False):
+    persona: str
+    done_when: Optional[str]
+    max_turns: Optional[int]
+    settle_on_noop: Optional[bool]
+    artifacts: Sequence[str]
+
+
 class _EvalConfigRequired(TypedDict):
     criterion: str
 
@@ -34,104 +59,29 @@ class EvalConfig(_EvalConfigRequired, total=False):
     scale: Optional[Sequence[float]]
 
 
-class ProviderConfig(TypedDict, total=False):
-    args: Optional[Sequence[str]]
-    bin: Optional[str]
-    command: Optional[Sequence[str]]
-    config: Optional[str]
-    control: Optional[bool]
-    diff_base: Optional[str]
-    judge: Optional[ProviderConfig]
-    judge_config: Optional[str]
-    judges: Optional[Sequence[ProviderConfig]]
-    kind: ProviderKind
-    label: Optional[str]
-    mock_harness: Optional[Sequence[str]]
-    skill: Optional[ProviderConfig]
-    stream: Optional[bool]
-
-
-class UserConfig(TypedDict, total=False):
-    artifacts: Sequence[str]
-    done_when: Optional[str]
-    max_turns: Optional[int]
-    persona: str
-    settle_on_noop: Optional[bool]
-
-
-class _CandidateAttemptRequired(TypedDict):
-    available: bool
-    harness: str
-    harness_id: str
-    ran: bool
-    status: str
-
-
-class CandidateAttempt(_CandidateAttemptRequired, total=False):
-    duration_ms: Optional[int]
-    error: Optional[str]
-    exit_code: Optional[int]
-    failure_kind: Optional[str]
-    failure_kind_source: Optional[str]
-    history_id: Optional[str]
-    model: Optional[str]
-    session_id: Optional[str]
-    usage: Optional[Usage]
-    variant: Optional[str]
-
-
-class ControlAddress(TypedDict):
-    cwd: str
-    session: str
-    session_dir: str
-
-
-class FellThrough(TypedDict):
-    harness: str
-    reason: str
-
-
-class _HarnessAttributionRequired(TypedDict):
-    candidates: Sequence[CandidateAttempt]
-    role: TelemetryRole
-    turn_index: int
-
-
-class HarnessAttribution(_HarnessAttributionRequired, total=False):
-    fell_through: Sequence[FellThrough]
-    history_file: Optional[str]
-    judge: Optional[str]
-    ran: Optional[str]
-
-
-class JudgeDecision(TypedDict):
-    decision: Decision
-    judge: str
-    kind: str
-    reason: str
-
-
-class _JudgeVerdictRequired(TypedDict):
-    reason: str
-    value: JudgeValue
-
-
-class JudgeVerdict(_JudgeVerdictRequired, total=False):
-    usage: Optional[Usage]
-
-
-class JudgedTurn(TypedDict):
-    decisions: Sequence[JudgeDecision]
-    turn: int
+class Transcript(TypedDict):
+    messages: Sequence[Message]
 
 
 class _MessageRequired(TypedDict):
-    content: str
     role: Role
+    content: str
 
 
 class Message(_MessageRequired, total=False):
     events: Sequence[ToolEvent]
+
+
+class _ToolEventRequired(TypedDict):
+    kind: str
+    index: int
+
+
+class ToolEvent(_ToolEventRequired, total=False):
+    name: Optional[str]
+    input: Any
+    output: Optional[str]
+    tool_call_id: Optional[str]
 
 
 class NamedVerdict(TypedDict):
@@ -140,20 +90,61 @@ class NamedVerdict(TypedDict):
     verdict: JudgeVerdict
 
 
-class PartyTelemetry(TypedDict, total=False):
-    model_ms: Optional[int]
-    session_ids: Sequence[str]
-    time_to_first_token_ms: Optional[int]
-    tool_ms: Optional[int]
+class _JudgeVerdictRequired(TypedDict):
+    value: JudgeValue
+    reason: str
+
+
+class JudgeVerdict(_JudgeVerdictRequired, total=False):
     usage: Optional[Usage]
 
 
+class Usage(TypedDict, total=False):
+    input_tokens: Optional[int]
+    output_tokens: Optional[int]
+    cache_read_tokens: Optional[int]
+    cache_write_tokens: Optional[int]
+    cost_usd: Optional[float]
+
+
+class JudgedTurn(TypedDict):
+    turn: int
+    decisions: Sequence[JudgeDecision]
+
+
+class JudgeDecision(TypedDict):
+    judge: str
+    kind: str
+    decision: Decision
+    reason: str
+
+
+class _TelemetryRequired(TypedDict):
+    wall_ms: int
+    agent: PartyTelemetry
+    judge: PartyTelemetry
+    orchestration_ms: int
+    sessions: Sequence[SessionLink]
+
+
+class Telemetry(_TelemetryRequired, total=False):
+    attribution: Sequence[HarnessAttribution]
+
+
+class PartyTelemetry(TypedDict, total=False):
+    model_ms: Optional[int]
+    tool_ms: Optional[int]
+    time_to_first_token_ms: Optional[int]
+    usage: Optional[Usage]
+    session_ids: Sequence[str]
+
+
 class _SessionLinkRequired(TypedDict):
-    finished_at: Optional[str]
-    role: TelemetryRole
     session_id: str
-    started_at: str
+    role: TelemetryRole
     turn_index: int
+    started_at: str
+    finished_at: Optional[str]
 
 
 class SessionLink(_SessionLinkRequired, total=False):
@@ -161,11 +152,50 @@ class SessionLink(_SessionLinkRequired, total=False):
     judge: Optional[str]
 
 
-class _SpawnedProcessRequired(TypedDict):
-    op: str
-    pid: int
-    program: str
+class _HarnessAttributionRequired(TypedDict):
     role: TelemetryRole
+    turn_index: int
+    candidates: Sequence[CandidateAttempt]
+
+
+class HarnessAttribution(_HarnessAttributionRequired, total=False):
+    ran: Optional[str]
+    fell_through: Sequence[FellThrough]
+    history_file: Optional[str]
+    judge: Optional[str]
+
+
+class FellThrough(TypedDict):
+    harness: str
+    reason: str
+
+
+class _CandidateAttemptRequired(TypedDict):
+    harness: str
+    harness_id: str
+    status: str
+    available: bool
+    ran: bool
+
+
+class CandidateAttempt(_CandidateAttemptRequired, total=False):
+    variant: Optional[str]
+    model: Optional[str]
+    failure_kind: Optional[str]
+    failure_kind_source: Optional[str]
+    exit_code: Optional[int]
+    duration_ms: Optional[int]
+    error: Optional[str]
+    session_id: Optional[str]
+    history_id: Optional[str]
+    usage: Optional[Usage]
+
+
+class _SpawnedProcessRequired(TypedDict):
+    role: TelemetryRole
+    op: str
+    program: str
+    pid: int
 
 
 class SpawnedProcess(_SpawnedProcessRequired, total=False):
@@ -173,40 +203,10 @@ class SpawnedProcess(_SpawnedProcessRequired, total=False):
     judge: Optional[str]
 
 
-class _TelemetryRequired(TypedDict):
-    agent: PartyTelemetry
-    judge: PartyTelemetry
-    orchestration_ms: int
-    sessions: Sequence[SessionLink]
-    wall_ms: int
-
-
-class Telemetry(_TelemetryRequired, total=False):
-    attribution: Sequence[HarnessAttribution]
-
-
-class _ToolEventRequired(TypedDict):
-    index: int
-    kind: str
-
-
-class ToolEvent(_ToolEventRequired, total=False):
-    input: Any
-    name: Optional[str]
-    output: Optional[str]
-    tool_call_id: Optional[str]
-
-
-class Transcript(TypedDict):
-    messages: Sequence[Message]
-
-
-class Usage(TypedDict, total=False):
-    cache_read_tokens: Optional[int]
-    cache_write_tokens: Optional[int]
-    cost_usd: Optional[float]
-    input_tokens: Optional[int]
-    output_tokens: Optional[int]
+class ControlAddress(TypedDict):
+    session: str
+    session_dir: str
+    cwd: str
 
 
 class _FailureDetailRequired(TypedDict):
@@ -218,48 +218,48 @@ class FailureDetail(_FailureDetailRequired, total=False):
 
 
 class RunConfig(TypedDict, total=False):
-    assessment: Optional[str]
-    evals: Sequence[EvalConfig]
     provider: ProviderConfig
-    session: Optional[str]
     skill: Optional[str]
     system_prompt: Optional[str]
     task: Optional[str]
     user: Optional[UserConfig]
+    session: Optional[str]
+    evals: Sequence[EvalConfig]
+    assessment: Optional[str]
 
 
 class _RunReportRequired(TypedDict):
     schema_version: int
-    stopped_early: bool
     transcript: Transcript
+    stopped_early: bool
 
 
 class RunReport(_RunReportRequired, total=False):
+    verdicts: Sequence[NamedVerdict]
     assessment: Optional[str]
     completion_reason: Optional[str]
+    settled_reason: Optional[str]
+    judge_decisions: Sequence[JudgedTurn]
+    usage: Optional[Usage]
+    telemetry: Optional[Telemetry]
+    processes: Sequence[SpawnedProcess]
     control: Optional[ControlAddress]
     control_unavailable: Optional[str]
-    judge_decisions: Sequence[JudgedTurn]
-    processes: Sequence[SpawnedProcess]
-    settled_reason: Optional[str]
     supervisor_control: Optional[ControlAddress]
     supervisor_control_unavailable: Optional[str]
-    telemetry: Optional[Telemetry]
-    usage: Optional[Usage]
-    verdicts: Sequence[NamedVerdict]
 
 
 class StreamEvent(TypedDict):
-    event: ToolEvent
     turn: int
+    event: ToolEvent
 
 
 class _FailureReportRequired(TypedDict):
-    error: FailureDetail
     schema_version: int
+    error: FailureDetail
 
 
 class FailureReport(_FailureReportRequired, total=False):
-    judge_decisions: Sequence[JudgedTurn]
-    processes: Sequence[SpawnedProcess]
     telemetry: Optional[Telemetry]
+    processes: Sequence[SpawnedProcess]
+    judge_decisions: Sequence[JudgedTurn]
