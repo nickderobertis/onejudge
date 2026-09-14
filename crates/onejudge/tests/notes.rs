@@ -124,16 +124,7 @@ const NOTE: &str = "the reviewer asked for a smaller diff before this lands";
 fn assert_baseline(name: &str, produced: &serde_json::Value) {
     let mut produced = produced.clone();
     normalize_input_tokens(&mut produced);
-    let mut text = serde_json::to_string_pretty(&produced).unwrap();
-    for (path, placeholder) in [
-        (env!("CARGO_TARGET_TMPDIR"), "{{TMP}}"),
-        (env!("CARGO_BIN_EXE_onejudge-echo-provider"), "{{ECHO}}"),
-    ] {
-        let escaped = serde_json::to_string(path).unwrap();
-        text = text
-            .replace(&escaped[1..escaped.len() - 1], placeholder)
-            .replace(path, placeholder);
-    }
+    let text = normalize_paths(&serde_json::to_string_pretty(&produced).unwrap());
     let golden = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/golden/notes")
         .join(format!("{name}.json"));
@@ -152,6 +143,48 @@ fn assert_baseline(name: &str, produced: &serde_json::Value) {
         produced, expected,
         "the `{name}` journey no longer produces what the tree before the move produced"
     );
+}
+
+/// Replace this host's scratch dir and double path in a journey's serialized output
+/// with the placeholders the captures hold.
+///
+/// Every scratch file a journey names sits directly under `CARGO_TARGET_TMPDIR`,
+/// and the separator joining it is the host's: `\` on Windows, which serializes as
+/// `\\`. The captures hold `/`, so that separator is normalized too — without it
+/// every capture naming a scratch file fails on Windows alone, with the transcript,
+/// criteria and dispositions identical and only `{{TMP}}\\` against `{{TMP}}/`
+/// differing.
+fn normalize_paths(serialized: &str) -> String {
+    let mut text = serialized.to_string();
+    for (path, placeholder) in [
+        (env!("CARGO_TARGET_TMPDIR"), "{{TMP}}"),
+        (env!("CARGO_BIN_EXE_onejudge-echo-provider"), "{{ECHO}}"),
+    ] {
+        let escaped = serde_json::to_string(path).unwrap();
+        text = text
+            .replace(&escaped[1..escaped.len() - 1], placeholder)
+            .replace(path, placeholder);
+    }
+    text.replace("{{TMP}}\\\\", "{{TMP}}/")
+}
+
+#[test]
+fn a_capture_names_a_scratch_file_the_same_way_whatever_separator_the_host_joins_it_with() {
+    let tmp = env!("CARGO_TARGET_TMPDIR");
+    for separator in ['/', '\\'] {
+        let produced = json!({
+            "judge_prompts": format!("A reviewer. [[record-prompt:{tmp}{separator}notes-criteria-judge.log]]"),
+        });
+        let text = normalize_paths(&serde_json::to_string_pretty(&produced).unwrap());
+        let normalized: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(
+            normalized,
+            json!({
+                "judge_prompts": "A reviewer. [[record-prompt:{{TMP}}/notes-criteria-judge.log]]",
+            }),
+            "a scratch path joined with `{separator}` is not the path the capture holds"
+        );
+    }
 }
 
 /// Count the outcome's input tokens as though every recorded prompt carried the
@@ -910,6 +943,114 @@ fn a_delivered_note_enters_the_acceptance_criteria_rather_than_only_the_narratio
             "judge_prompts": judge,
         }),
     );
+}
+
+/// Which side of the first turn's opening a binding note is sent on.
+#[derive(Debug, Clone, Copy)]
+enum Arrival {
+    /// Queued before the run starts, so the first turn takes it as it opens.
+    BeforeTheFirstTurn,
+    /// Sent once the worker's first turn is live, so that turn is reopened with it.
+    DuringTheFirstTurn,
+}
+
+/// Send a binding note on `arrival`'s side of the first turn, and return the
+/// disposition its sender was answered, the `done_when` the first supervisor call
+/// carried, and the criteria the engine reports once the run is over.
+fn bind_a_criterion(arrival: Arrival) -> (Accepted, String, onejudge::Criteria) {
+    let log = scratch_path(&format!("notes-arrival-{arrival:?}.log"));
+    let live = scratch_path(&format!("notes-arrival-{arrival:?}.marker"));
+    let (notes, inbox) = Notes::channel();
+    let note = Note::to(
+        Addressee::Worker,
+        "the reviewer wants the migration covered",
+    )
+    .binding("the migration path is covered by a test")
+    .expect("a property, not a procedure");
+    let sending = match arrival {
+        Arrival::BeforeTheFirstTurn => queue_before_the_run(&notes, &inbox, note),
+        Arrival::DuringTheFirstTurn => std::thread::spawn({
+            let live = live.clone();
+            move || {
+                await_path(&live, "the worker's first turn never opened");
+                notes.send(note).map_err(Undelivered::from)
+            }
+        }),
+    };
+
+    let provider = echo();
+    let engine = Engine::new(&provider, Settings::new()).with_notes(inbox);
+    engine
+        .run(&Conversation::multi_turn(
+            Skill::new(
+                "demo",
+                "/skills/demo",
+                format!(
+                    "[[worker-dwell:300:{}]][[record:{}]]",
+                    live.display(),
+                    log.display()
+                ),
+            ),
+            "ship the change",
+            SimulatedUser::new(format!("A reviewer. [[record:{}]]", log.display()))
+                .done_when("every acceptance criterion stated in the task is met")
+                // A worker turn reopened with the note counts as a turn, so the
+                // supervisor is consulted only if a third is allowed.
+                .max_turns(3),
+        ))
+        .expect("a run with a binding note is an ordinary run");
+    let accepted = sending
+        .join()
+        .expect("the sending thread finished")
+        .expect("nothing had completed, so the note was accepted");
+
+    let supervisors = of_op(&requests(&log), "supervisor");
+    let done_when = supervisors
+        .first()
+        .expect("the supervisor was consulted")
+        .get("done_when")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let criteria = engine.criteria(Some("every acceptance criterion stated in the task is met"));
+    (accepted, done_when, criteria)
+}
+
+#[test]
+fn a_bound_criterion_enters_the_acceptance_criteria_whichever_side_of_the_first_turn_it_arrives_on()
+{
+    for (arrival, expected) in [
+        (Arrival::BeforeTheFirstTurn, Accepted::Queued),
+        (
+            Arrival::DuringTheFirstTurn,
+            Accepted::Interrupted {
+                party: Party::Worker,
+            },
+        ),
+    ] {
+        let (accepted, done_when, criteria) = bind_a_criterion(arrival);
+        // The disposition is what proves the ordering really was the one named:
+        // a note the first turn took as it opened is queued, one that arrived
+        // while it was live reopens it.
+        assert_eq!(
+            accepted, expected,
+            "{arrival:?}: the note did not arrive on the side of the first turn it was sent on"
+        );
+        assert!(
+            done_when.contains("## Additional acceptance criteria delivered during this run")
+                && done_when.contains("1. the migration path is covered by a test"),
+            "{arrival:?}: the first judge decision was taken without the bound criterion: {done_when}"
+        );
+        assert_eq!(
+            criteria
+                .bound()
+                .iter()
+                .map(|bound| bound.as_str())
+                .collect::<Vec<_>>(),
+            vec!["the migration path is covered by a test"],
+            "{arrival:?}: the bound criterion is missing from the criteria the engine reports"
+        );
+    }
 }
 
 #[cfg(feature = "cli")]
