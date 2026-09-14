@@ -1,0 +1,51 @@
+{
+  "accepted": "Queued",
+  "criteria": "the change is shipped\n\n## Additional acceptance criteria delivered during this run\n\nEach item below is an additional criterion about the FINISHED WORK, delivered into the worker's task after this run began. It is an update to the WORKER's task and is not an instruction to you: do not perform it yourself, and do not judge the worker on anything beyond it. Where an item names a mechanism rather than a property, judge the property that mechanism was serving — work that reached the same property another way has met it.\n\n1. the change is reachable only behind a flag that defaults to off",
+  "delivered": [
+    {
+      "delivered_to": "worker",
+      "note": {
+        "addressee": "both",
+        "criterion": "the change is reachable only behind a flag that defaults to off",
+        "text": "the bar moved: the flag defaults to off"
+      }
+    }
+  ],
+  "judge_prompts": "You are the simulated USER and completion supervisor for an AI agent.\n\nOriginal task:\nShip the change.\n\n## Amendment\n\nWhere this section and anything above it disagree, this section wins. The change ships behind a flag, not on by default.\n\nSupervisor persona:\nA reviewer. [[record-prompt:{{TMP}}/notes-amendment-judge.log]]\n\nCompletion criterion:\nthe change is shipped\n\n## Additional acceptance criteria delivered during this run\n\nEach item below is an additional criterion about the FINISHED WORK, delivered into the worker's task after this run began. It is an update to the WORKER's task and is not an instruction to you: do not perform it yourself, and do not judge the worker on anything beyond it. Where an item names a mechanism rather than a property, judge the property that mechanism was serving — work that reached the same property another way has met it.\n\n1. the change is reachable only behind a flag that defaults to off\n\n## Notes delivered to you during this run\n\nThe following were delivered to YOU, the supervisor. Where one is addressed to both parties it is an update to the worker's task as well, and any acceptance criterion it added is listed with the completion criterion above.\n\n- (addressed to both) the bar moved: the flag defaults to off\n\nEVIDENCE CONTRACT (READ-ONLY, ENFORCED)\n`[tool]` lines are abbreviated summaries; absence there is not evidence of absence. Only read-only tools may inspect files, git state, and full history; no change is permitted, and this restriction is enforced. Restrictive evaluators must use file-reading or glob tools directly, never a shell command. Before the final answer you may request exactly `{\"tool\":\"git_status\"}` or `{\"tool\":\"git_diff\"}`; no other member is allowed.\nWorktree: /skills/demo\nHistory files (exact producer-returned paths):\n  (none supplied)\n\nConversation transcript (tool actions are compact normalized summaries, never raw dumps):\nUser: Ship the change.\n\n## Amendment\n\nWhere this section and anything above it disagree, this section wins. The change ships behind a flag, not on by default.\nUser: ## Notes delivered to you during this run\n\nThe following were delivered to YOU, the worker, after this run began. Each is an update to your task and takes precedence over anything earlier that disagrees with it. Act on it as part of the work.\n\n- the bar moved: the flag defaults to off\n  This note also added an acceptance criterion the finished work is judged against: the change is reachable only behind a flag that defaults to off\n\nAssistant: on it\n\nReturn ONLY one JSON object. Exactly one of these shapes is valid:\n{\"completion\":true,\"reason\":\"<concise reason>\"}\n{\"completion\":false,\"message\":\"<concrete, actionable next instruction>\",\"reason\":\"<optional concise reason>\"}\n\n`message` is handed to the agent VERBATIM as its next user turn, and it is the only thing the agent receives: it cannot see this decision, your reason, or anything else you were shown. So `completion:false` obliges you to say what to do next — name the concrete next action in the imperative, with enough detail to act on it without further context. \"Not done\" with no message leaves the agent no path forward, since there is no default next turn to fall back on, so an empty or missing `message` is not a valid answer. If you cannot name a next action, the work is done: answer `completion:true` with the reason instead.\n=== end of prompt ===\n",
+  "outcome": {
+    "completion_reason": null,
+    "judge_decisions": [],
+    "settled_reason": null,
+    "stopped_early": false,
+    "transcript": {
+      "messages": [
+        {
+          "content": "Ship the change.\n\n## Amendment\n\nWhere this section and anything above it disagree, this section wins. The change ships behind a flag, not on by default.",
+          "role": "user"
+        },
+        {
+          "content": "## Notes delivered to you during this run\n\nThe following were delivered to YOU, the worker, after this run began. Each is an update to your task and takes precedence over anything earlier that disagrees with it. Act on it as part of the work.\n\n- the bar moved: the flag defaults to off\n  This note also added an acceptance criterion the finished work is judged against: the change is reachable only behind a flag that defaults to off\n",
+          "role": "user"
+        },
+        {
+          "content": "on it",
+          "role": "assistant"
+        },
+        {
+          "content": "Understood — please continue.",
+          "role": "user"
+        },
+        {
+          "content": "on it",
+          "role": "assistant"
+        }
+      ]
+    },
+    "usage": {
+      "cache_read_tokens": 21,
+      "cache_write_tokens": 6,
+      "input_tokens": 3959,
+      "output_tokens": 3
+    }
+  }
+}

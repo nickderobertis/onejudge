@@ -1,0 +1,98 @@
+{
+  "accepted": "JudgedWith { completion_reason: \"the note was in hand when the work was passed\" }",
+  "delivered": [
+    {
+      "delivered_to": "supervisor",
+      "note": {
+        "addressee": "worker",
+        "text": "the reviewer asked for a smaller diff before this lands"
+      }
+    }
+  ],
+  "outcome": {
+    "completion_reason": "the note was in hand when the work was passed",
+    "judge_decisions": [],
+    "settled_reason": null,
+    "stopped_early": false,
+    "transcript": {
+      "messages": [
+        {
+          "content": "start the job",
+          "role": "user"
+        },
+        {
+          "content": "echo: start the job",
+          "role": "assistant"
+        }
+      ]
+    },
+    "usage": {
+      "cache_read_tokens": 3,
+      "cache_write_tokens": 1,
+      "input_tokens": 15,
+      "output_tokens": 3
+    }
+  },
+  "requests": [
+    {
+      "messages": [
+        {
+          "content": "start the job",
+          "role": "user"
+        }
+      ],
+      "op": "respond",
+      "session": "onejudge-skill",
+      "skill": {
+        "instructions": "[[record:{{TMP}}/notes-judged-with.log]]",
+        "name": "demo",
+        "path": "/skills/demo"
+      }
+    },
+    {
+      "history_name": "onejudge-skill",
+      "messages": [
+        {
+          "content": "start the job",
+          "role": "user"
+        },
+        {
+          "content": "echo: start the job",
+          "role": "assistant"
+        }
+      ],
+      "op": "supervisor",
+      "persona": "A reviewer. [[judge-dwell:600:{{TMP}}/notes-judged-with.marker]][[complete-on-note]][[record:{{TMP}}/notes-judged-with.log]]",
+      "session": "onejudge-user",
+      "task": "start the job",
+      "worktree": "/skills/demo"
+    },
+    {
+      "history_name": "onejudge-skill",
+      "messages": [
+        {
+          "content": "start the job",
+          "role": "user"
+        },
+        {
+          "content": "echo: start the job",
+          "role": "assistant"
+        }
+      ],
+      "notes": [
+        {
+          "delivered_to": "supervisor",
+          "note": {
+            "addressee": "worker",
+            "text": "the reviewer asked for a smaller diff before this lands"
+          }
+        }
+      ],
+      "op": "supervisor",
+      "persona": "A reviewer. [[judge-dwell:600:{{TMP}}/notes-judged-with.marker]][[complete-on-note]][[record:{{TMP}}/notes-judged-with.log]]",
+      "session": "onejudge-user",
+      "task": "start the job",
+      "worktree": "/skills/demo"
+    }
+  ]
+}

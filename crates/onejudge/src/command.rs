@@ -556,14 +556,12 @@ mod tests {
             .find(|line| line.contains("\"artifacts\""))
             .expect("protocol.md shows a judge request carrying artifacts");
         let documented: serde_json::Value = serde_json::from_str(snippet).unwrap();
-        assert_eq!(
-            documented["evidence"]
-                .as_object()
-                .unwrap()
-                .keys()
-                .collect::<Vec<_>>(),
-            ["artifacts", "history_files", "worktree"]
-        );
+        // The member set, not the map's iteration order: that follows how
+        // `serde_json` was built, not what the doc says.
+        let mut members: Vec<&String> =
+            documented["evidence"].as_object().unwrap().keys().collect();
+        members.sort();
+        assert_eq!(members, ["artifacts", "history_files", "worktree"]);
     }
 
     #[test]

@@ -3,13 +3,15 @@
 //! simulated-interaction loop — single-turn for a bare input, or a simulated-user
 //! loop bounded by `max_turns` / `done_when` / the skill declaring itself done.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::ops::ControlFlow;
 use std::time::Instant;
 
+use onemessagebus::{Closed, Delivered};
+
 use crate::control::ControlOutcome;
 use crate::error::Result;
-use crate::note::{Accepted, Criteria, DeliveredNote, Note, NoteInbox, Party};
+use crate::note::{Accepted, Criteria, DeliveredNote, Note, NoteInbox, Party, Undelivered};
 use crate::provider::{
     Assessment, AssistantTurn, EvidenceContext, JudgeKind, JudgeQuery, JudgeVerdict, Provider,
     SkillRef, SupervisorOutcome, SupervisorQuery,
@@ -394,6 +396,15 @@ pub struct Engine<'a> {
     settings: Settings,
     started: RefCell<Option<Instant>>,
     notes: Option<NoteInbox>,
+    /// Every note handed to a party so far, in delivery order — what the judge is
+    /// shown and what [`Criteria`] is composed from. Kept here rather than read back
+    /// from the inbox, whose record holds a note only once its sender is answered:
+    /// a note reaching the judge's live turn is part of the conversation from the
+    /// moment it is handed over, which is before the decision that answers it.
+    delivered: RefCell<Vec<DeliveredNote>>,
+    /// Whether a run has opened the note channel, which decides what a channel this
+    /// engine drops unclosed tells its senders.
+    conversed: Cell<bool>,
     worktree: RefCell<Option<String>>,
     /// The artifacts the last run's simulated user named, for the judgements
     /// scored against its transcript afterwards.
@@ -402,6 +413,58 @@ pub struct Engine<'a> {
     /// provider after each supervisor call — kept on the engine like telemetry,
     /// so a run that fails on a judge still reports what each judge said.
     judge_decisions: RefCell<Vec<JudgedTurn>>,
+}
+
+/// Notes handed to the judge's live turn, whose senders cannot be answered until
+/// the re-taken decision says whether it was completion.
+///
+/// Dropped unsettled — a run that fails, or is short-circuited, before the decision
+/// comes back — each is answered as the delivery it really was, whatever became of
+/// the run afterwards.
+struct AwaitingDecision(Vec<Delivered<Note, Accepted>>);
+
+impl AwaitingDecision {
+    fn settle(mut self, accepted: &Accepted) {
+        for delivered in self.0.drain(..) {
+            delivered.answer(accepted.clone());
+        }
+    }
+}
+
+impl Drop for AwaitingDecision {
+    fn drop(&mut self) {
+        for delivered in self.0.drain(..) {
+            delivered.answer(Accepted::Interrupted {
+                party: Party::Supervisor,
+            });
+        }
+    }
+}
+
+/// Close a note channel no conversation ever read, so a note sent to it is refused
+/// as [`Undelivered::NoConversation`] — never as a member that settled, which did
+/// not happen.
+pub(crate) fn close_unread(inbox: &NoteInbox) {
+    inbox.close(Closed::from(&Undelivered::NoConversation {
+        reason: "the conversation's note inbox was dropped before any turn opened".into(),
+    }));
+}
+
+impl Drop for Engine<'_> {
+    fn drop(&mut self) {
+        // A run closes the channel on how it ended, and a second close changes
+        // nothing; this answers the two ways a channel is left unclosed — an engine
+        // that never ran, and one whose run never returned.
+        if let Some(inbox) = &self.notes {
+            if self.conversed.get() {
+                inbox.close(Closed::from(&Undelivered::MemberSettled {
+                    outcome: "the conversation's note inbox was dropped".into(),
+                }));
+            } else {
+                close_unread(inbox);
+            }
+        }
+    }
 }
 
 impl<'a> Engine<'a> {
@@ -413,6 +476,8 @@ impl<'a> Engine<'a> {
             settings,
             started: RefCell::new(None),
             notes: None,
+            delivered: RefCell::new(Vec::new()),
+            conversed: Cell::new(false),
             worktree: RefCell::new(None),
             artifacts: RefCell::new(Vec::new()),
             judge_decisions: RefCell::new(Vec::new()),
@@ -448,10 +513,7 @@ impl<'a> Engine<'a> {
     /// Every note delivered into this run so far, in delivery order.
     #[must_use]
     pub fn delivered_notes(&self) -> Vec<DeliveredNote> {
-        self.notes
-            .as_ref()
-            .map(NoteInbox::delivered_notes)
-            .unwrap_or_default()
+        self.delivered.borrow().clone()
     }
 
     /// The engine's settings.
@@ -460,50 +522,40 @@ impl<'a> Engine<'a> {
         &self.settings
     }
 
-    /// Everything accepted on the note channel and not yet handed to a party.
-    fn take_notes(&self) -> Vec<(u64, Note)> {
-        self.notes
-            .as_ref()
-            .map(NoteInbox::take_pending)
-            .unwrap_or_default()
+    /// Everything that has arrived on the note channel and not yet been handed to a
+    /// party, in arrival order.
+    fn take_notes(&self) -> Vec<Delivered<Note, Accepted>> {
+        match &self.notes {
+            Some(inbox) => std::iter::from_fn(|| inbox.take()).collect(),
+            None => Vec::new(),
+        }
     }
 
-    /// Hand `notes` to `party`. `accepted` answers their senders now; `None` leaves
-    /// them awaiting a disposition only the redirected turn's answer can decide.
+    /// Hand `taken` to `party`, and answer each sender with `accepted`.
     fn deliver(
         &self,
-        notes: Vec<(u64, Note)>,
+        taken: Vec<Delivered<Note, Accepted>>,
         party: Party,
-        accepted: Option<Accepted>,
+        accepted: &Accepted,
     ) -> Vec<DeliveredNote> {
-        self.notes
-            .as_ref()
-            .map(|inbox| inbox.record_delivery(notes, party, accepted))
-            .unwrap_or_default()
+        taken
+            .into_iter()
+            .map(|delivered| {
+                let handed = self.record(delivered.message().clone(), party);
+                delivered.answer(accepted.clone());
+                handed
+            })
+            .collect()
     }
 
-    fn settle_notes(&self, ids: &[u64], accepted: &Accepted) {
-        if let Some(inbox) = &self.notes {
-            inbox.settle(ids, accepted);
-        }
-    }
-
-    fn enter_worker_turn(&self) {
-        if let Some(inbox) = &self.notes {
-            inbox.enter_worker_turn();
-        }
-    }
-
-    fn enter_supervisor_turn(&self) {
-        if let Some(inbox) = &self.notes {
-            inbox.enter_supervisor_turn();
-        }
-    }
-
-    fn between_turns(&self) {
-        if let Some(inbox) = &self.notes {
-            inbox.between_turns();
-        }
+    /// Record that `note` was handed to `party`.
+    fn record(&self, note: Note, party: Party) -> DeliveredNote {
+        let handed = DeliveredNote {
+            note,
+            delivered_to: party,
+        };
+        self.delivered.borrow_mut().push(handed.clone());
+        handed
     }
 
     /// Drive `conversation` to completion (buffered turns), returning the
@@ -572,18 +624,25 @@ impl<'a> Engine<'a> {
         streaming: bool,
         on_observation: &mut dyn FnMut(&Observation<'_>) -> ControlFlow<()>,
     ) -> Result<Outcome> {
-        if let Some(inbox) = &self.notes {
-            inbox.begin();
-        }
+        self.conversed.set(true);
         let result = self.drive(conversation, streaming, on_observation);
         if let Some(inbox) = &self.notes {
-            match &result {
+            // The close carries the refusal itself, so every sender still waiting —
+            // and every later one — reads back exactly this variant.
+            let refusal = match &result {
                 Ok(outcome) => match &outcome.completion_reason {
-                    Some(reason) => inbox.complete(reason),
-                    None => inbox.end(&ended_because(outcome)),
+                    Some(reason) => Undelivered::ConversationCompleted {
+                        completion_reason: reason.clone(),
+                    },
+                    None => Undelivered::MemberSettled {
+                        outcome: ended_because(outcome),
+                    },
                 },
-                Err(error) => inbox.end(&format!("the conversation failed: {error}")),
-            }
+                Err(error) => Undelivered::MemberSettled {
+                    outcome: format!("the conversation failed: {error}"),
+                },
+            };
+            inbox.close(Closed::from(&refusal));
         }
         result
     }
@@ -633,7 +692,7 @@ impl<'a> Engine<'a> {
             // A note that arrived between turns reaches the next turn to open.
             let queued = self.take_notes();
             if !queued.is_empty() {
-                let delivered = self.deliver(queued, Party::Worker, Some(Accepted::Queued));
+                let delivered = self.deliver(queued, Party::Worker, &Accepted::Queued);
                 transcript.push(Message::user(crate::note::worker_block(&delivered)));
             }
             let turn_index = transcript.assistant_turns() + 1;
@@ -657,7 +716,6 @@ impl<'a> Engine<'a> {
                 return Ok(self.finish(transcript, totals, true, None, None));
             }
             let mut broke = false;
-            self.enter_worker_turn();
             let turn = if streaming {
                 self.provider.respond_streaming(
                     &skill,
@@ -676,7 +734,6 @@ impl<'a> Engine<'a> {
                 self.provider
                     .respond(&skill, &transcript.messages, Some(skill_session.as_str()))
             };
-            self.between_turns();
             let turn = turn?;
             let AssistantTurn {
                 message,
@@ -752,9 +809,9 @@ impl<'a> Engine<'a> {
                 let delivered = self.deliver(
                     arrived,
                     Party::Worker,
-                    Some(Accepted::Interrupted {
+                    &Accepted::Interrupted {
                         party: Party::Worker,
-                    }),
+                    },
                 );
                 transcript.push(Message::user(crate::note::worker_block(&delivered)));
                 continue;
@@ -780,13 +837,12 @@ impl<'a> Engine<'a> {
             // while it is live: a decision taken without the note is exactly the
             // decision the note exists to change. Each round is a real judge
             // invocation, so a caller sending notes into a tight loop pays per note.
-            let mut redirected: Vec<u64> = Vec::new();
+            let mut redirected = AwaitingDecision(Vec::new());
             let mut turn_usage: Option<Usage> = None;
             let decision = loop {
                 let delivered = self.delivered_notes();
                 let criteria = Criteria::compose(user.done_when.as_deref(), &delivered);
                 let rendered = criteria.rendered();
-                self.enter_supervisor_turn();
                 let history_files = self.history_files();
                 let attempt = self.provider.supervise_with_evidence(
                     &SupervisorQuery {
@@ -805,7 +861,6 @@ impl<'a> Engine<'a> {
                         artifacts: &user.artifacts,
                     },
                 );
-                self.between_turns();
                 // What each judge of a panel said, drained whichever way the call
                 // ended: recorded on the engine first, so a failed run still reports
                 // it, and observed before the error propagates, so a supervisor
@@ -838,25 +893,27 @@ impl<'a> Engine<'a> {
                 if arrived.is_empty() {
                     break attempt;
                 }
-                redirected.extend(arrived.iter().map(|(id, _)| *id));
-                for_worker.extend(self.deliver(arrived, Party::Supervisor, None));
+                // Handed to the judge now, so the re-taken decision is shown them;
+                // answered only once that decision says which answer it is.
+                for delivered in arrived {
+                    for_worker.push(self.record(delivered.message().clone(), Party::Supervisor));
+                    redirected.0.push(delivered);
+                }
             };
             let usage = turn_usage;
             // Answer every sender whose note reached the judge's live turn. Settled
             // here rather than at the bottom of the loop because an observation that
             // breaks returns before that, and a delivered note whose sender is never
             // answered is the silence this seam exists to refuse.
-            if !redirected.is_empty() {
-                let accepted = match &decision.outcome {
-                    SupervisorOutcome::Completed { reason } => Accepted::JudgedWith {
-                        completion_reason: reason.clone(),
-                    },
-                    _ => Accepted::Interrupted {
-                        party: Party::Supervisor,
-                    },
-                };
-                self.settle_notes(&redirected, &accepted);
-            }
+            let accepted = match &decision.outcome {
+                SupervisorOutcome::Completed { reason } => Accepted::JudgedWith {
+                    completion_reason: reason.clone(),
+                },
+                _ => Accepted::Interrupted {
+                    party: Party::Supervisor,
+                },
+            };
+            redirected.settle(&accepted);
             let finished_at = observed_at();
             // The supervisor's own words are the next instruction, when it gave one.
             // A completion or a settled decision appends nothing to the transcript,

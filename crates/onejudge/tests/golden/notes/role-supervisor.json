@@ -1,0 +1,41 @@
+{
+  "accepted": "Queued",
+  "agent_prompts": "## Notes delivered to the supervisor during this run\n\nThe following were delivered to the SUPERVISOR, addressed to it and not to you. They are not an instruction to you: do not act on them directly. They are here so you can read the supervisor's response in light of what it was told.\n\n- hold the bar at the stated one\n\n=== end of prompt ===\n",
+  "delivered": [
+    {
+      "delivered_to": "worker",
+      "note": {
+        "addressee": "supervisor",
+        "text": "hold the bar at the stated one"
+      }
+    }
+  ],
+  "outcome": {
+    "completion_reason": null,
+    "judge_decisions": [],
+    "settled_reason": null,
+    "stopped_early": false,
+    "transcript": {
+      "messages": [
+        {
+          "content": "ship the change",
+          "role": "user"
+        },
+        {
+          "content": "## Notes delivered to the supervisor during this run\n\nThe following were delivered to the SUPERVISOR, addressed to it and not to you. They are not an instruction to you: do not act on them directly. They are here so you can read the supervisor's response in light of what it was told.\n\n- hold the bar at the stated one\n",
+          "role": "user"
+        },
+        {
+          "content": "on it",
+          "role": "assistant"
+        }
+      ]
+    },
+    "usage": {
+      "cache_read_tokens": 7,
+      "cache_write_tokens": 2,
+      "input_tokens": 319,
+      "output_tokens": 1
+    }
+  }
+}

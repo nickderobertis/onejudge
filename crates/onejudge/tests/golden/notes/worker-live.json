@@ -1,0 +1,158 @@
+{
+  "accepted": "Interrupted { party: Worker }",
+  "delivered": [
+    {
+      "delivered_to": "worker",
+      "note": {
+        "addressee": "worker",
+        "text": "the reviewer asked for a smaller diff before this lands"
+      }
+    }
+  ],
+  "outcome": {
+    "completion_reason": null,
+    "judge_decisions": [],
+    "settled_reason": null,
+    "stopped_early": false,
+    "transcript": {
+      "messages": [
+        {
+          "content": "start the long job",
+          "role": "user"
+        },
+        {
+          "content": "echo: start the long job",
+          "role": "assistant"
+        },
+        {
+          "content": "## Notes delivered to you during this run\n\nThe following were delivered to YOU, the worker, after this run began. Each is an update to your task and takes precedence over anything earlier that disagrees with it. Act on it as part of the work.\n\n- the reviewer asked for a smaller diff before this lands\n",
+          "role": "user"
+        },
+        {
+          "content": "echo: ## Notes delivered to you during this run\n\nThe following were delivered to YOU, the worker, after this run began. Each is an update to your task and takes precedence over anything earlier that disagrees with it. Act on it as part of the work.\n\n- the reviewer asked for a smaller diff before this lands\n",
+          "role": "assistant"
+        },
+        {
+          "content": "Thanks — and what about the next step?",
+          "role": "user"
+        },
+        {
+          "content": "echo: Thanks — and what about the next step?",
+          "role": "assistant"
+        }
+      ]
+    },
+    "usage": {
+      "cache_read_tokens": 9,
+      "cache_write_tokens": 3,
+      "input_tokens": 361,
+      "output_tokens": 4
+    }
+  },
+  "requests": [
+    {
+      "messages": [
+        {
+          "content": "start the long job",
+          "role": "user"
+        }
+      ],
+      "op": "respond",
+      "session": "onejudge-skill",
+      "skill": {
+        "instructions": "[[worker-dwell:600:{{TMP}}/notes-worker-live.marker]][[record:{{TMP}}/notes-worker-live.log]]",
+        "name": "demo",
+        "path": "/skills/demo"
+      }
+    },
+    {
+      "messages": [
+        {
+          "content": "start the long job",
+          "role": "user"
+        },
+        {
+          "content": "echo: start the long job",
+          "role": "assistant"
+        },
+        {
+          "content": "## Notes delivered to you during this run\n\nThe following were delivered to YOU, the worker, after this run began. Each is an update to your task and takes precedence over anything earlier that disagrees with it. Act on it as part of the work.\n\n- the reviewer asked for a smaller diff before this lands\n",
+          "role": "user"
+        }
+      ],
+      "op": "respond",
+      "session": "onejudge-skill",
+      "skill": {
+        "instructions": "[[worker-dwell:600:{{TMP}}/notes-worker-live.marker]][[record:{{TMP}}/notes-worker-live.log]]",
+        "name": "demo",
+        "path": "/skills/demo"
+      }
+    },
+    {
+      "history_name": "onejudge-skill",
+      "messages": [
+        {
+          "content": "start the long job",
+          "role": "user"
+        },
+        {
+          "content": "echo: start the long job",
+          "role": "assistant"
+        },
+        {
+          "content": "## Notes delivered to you during this run\n\nThe following were delivered to YOU, the worker, after this run began. Each is an update to your task and takes precedence over anything earlier that disagrees with it. Act on it as part of the work.\n\n- the reviewer asked for a smaller diff before this lands\n",
+          "role": "user"
+        },
+        {
+          "content": "echo: ## Notes delivered to you during this run\n\nThe following were delivered to YOU, the worker, after this run began. Each is an update to your task and takes precedence over anything earlier that disagrees with it. Act on it as part of the work.\n\n- the reviewer asked for a smaller diff before this lands\n",
+          "role": "assistant"
+        }
+      ],
+      "notes": [
+        {
+          "delivered_to": "worker",
+          "note": {
+            "addressee": "worker",
+            "text": "the reviewer asked for a smaller diff before this lands"
+          }
+        }
+      ],
+      "op": "supervisor",
+      "persona": "A reviewer. [[record:{{TMP}}/notes-worker-live.log]]",
+      "session": "onejudge-user",
+      "task": "start the long job",
+      "worktree": "/skills/demo"
+    },
+    {
+      "messages": [
+        {
+          "content": "start the long job",
+          "role": "user"
+        },
+        {
+          "content": "echo: start the long job",
+          "role": "assistant"
+        },
+        {
+          "content": "## Notes delivered to you during this run\n\nThe following were delivered to YOU, the worker, after this run began. Each is an update to your task and takes precedence over anything earlier that disagrees with it. Act on it as part of the work.\n\n- the reviewer asked for a smaller diff before this lands\n",
+          "role": "user"
+        },
+        {
+          "content": "echo: ## Notes delivered to you during this run\n\nThe following were delivered to YOU, the worker, after this run began. Each is an update to your task and takes precedence over anything earlier that disagrees with it. Act on it as part of the work.\n\n- the reviewer asked for a smaller diff before this lands\n",
+          "role": "assistant"
+        },
+        {
+          "content": "Thanks — and what about the next step?",
+          "role": "user"
+        }
+      ],
+      "op": "respond",
+      "session": "onejudge-skill",
+      "skill": {
+        "instructions": "[[worker-dwell:600:{{TMP}}/notes-worker-live.marker]][[record:{{TMP}}/notes-worker-live.log]]",
+        "name": "demo",
+        "path": "/skills/demo"
+      }
+    }
+  ]
+}

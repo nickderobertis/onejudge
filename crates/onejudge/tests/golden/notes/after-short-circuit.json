@@ -1,0 +1,18 @@
+{
+  "outcome": {
+    "completion_reason": null,
+    "judge_decisions": [],
+    "settled_reason": null,
+    "stopped_early": true,
+    "transcript": {
+      "messages": [
+        {
+          "content": "start the job",
+          "role": "user"
+        }
+      ]
+    },
+    "usage": null
+  },
+  "refused": "MemberSettled { outcome: \"the run was short-circuited before it reached a completion decision\" }"
+}

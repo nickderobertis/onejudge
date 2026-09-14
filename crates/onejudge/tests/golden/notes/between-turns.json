@@ -1,0 +1,135 @@
+{
+  "accepted": "Queued",
+  "delivered": [
+    {
+      "delivered_to": "worker",
+      "note": {
+        "addressee": "worker",
+        "text": "the reviewer asked for a smaller diff before this lands"
+      }
+    }
+  ],
+  "outcome": {
+    "completion_reason": null,
+    "judge_decisions": [],
+    "settled_reason": null,
+    "stopped_early": false,
+    "transcript": {
+      "messages": [
+        {
+          "content": "start the job",
+          "role": "user"
+        },
+        {
+          "content": "echo: start the job",
+          "role": "assistant"
+        },
+        {
+          "content": "Thanks — and what about the next step?",
+          "role": "user"
+        },
+        {
+          "content": "## Notes delivered to you during this run\n\nThe following were delivered to YOU, the worker, after this run began. Each is an update to your task and takes precedence over anything earlier that disagrees with it. Act on it as part of the work.\n\n- the reviewer asked for a smaller diff before this lands\n",
+          "role": "user"
+        },
+        {
+          "content": "echo: ## Notes delivered to you during this run\n\nThe following were delivered to YOU, the worker, after this run began. Each is an update to your task and takes precedence over anything earlier that disagrees with it. Act on it as part of the work.\n\n- the reviewer asked for a smaller diff before this lands\n",
+          "role": "assistant"
+        },
+        {
+          "content": "Thanks — and what about the next step?",
+          "role": "user"
+        },
+        {
+          "content": "echo: Thanks — and what about the next step?",
+          "role": "assistant"
+        }
+      ]
+    },
+    "usage": {
+      "cache_read_tokens": 9,
+      "cache_write_tokens": 3,
+      "input_tokens": 357,
+      "output_tokens": 5
+    }
+  },
+  "requests": [
+    {
+      "messages": [
+        {
+          "content": "start the job",
+          "role": "user"
+        }
+      ],
+      "op": "respond",
+      "session": "onejudge-skill",
+      "skill": {
+        "instructions": "[[record:{{TMP}}/notes-between-turns.log]]",
+        "name": "demo",
+        "path": "/skills/demo"
+      }
+    },
+    {
+      "messages": [
+        {
+          "content": "start the job",
+          "role": "user"
+        },
+        {
+          "content": "echo: start the job",
+          "role": "assistant"
+        },
+        {
+          "content": "Thanks — and what about the next step?",
+          "role": "user"
+        },
+        {
+          "content": "## Notes delivered to you during this run\n\nThe following were delivered to YOU, the worker, after this run began. Each is an update to your task and takes precedence over anything earlier that disagrees with it. Act on it as part of the work.\n\n- the reviewer asked for a smaller diff before this lands\n",
+          "role": "user"
+        }
+      ],
+      "op": "respond",
+      "session": "onejudge-skill",
+      "skill": {
+        "instructions": "[[record:{{TMP}}/notes-between-turns.log]]",
+        "name": "demo",
+        "path": "/skills/demo"
+      }
+    },
+    {
+      "messages": [
+        {
+          "content": "start the job",
+          "role": "user"
+        },
+        {
+          "content": "echo: start the job",
+          "role": "assistant"
+        },
+        {
+          "content": "Thanks — and what about the next step?",
+          "role": "user"
+        },
+        {
+          "content": "## Notes delivered to you during this run\n\nThe following were delivered to YOU, the worker, after this run began. Each is an update to your task and takes precedence over anything earlier that disagrees with it. Act on it as part of the work.\n\n- the reviewer asked for a smaller diff before this lands\n",
+          "role": "user"
+        },
+        {
+          "content": "echo: ## Notes delivered to you during this run\n\nThe following were delivered to YOU, the worker, after this run began. Each is an update to your task and takes precedence over anything earlier that disagrees with it. Act on it as part of the work.\n\n- the reviewer asked for a smaller diff before this lands\n",
+          "role": "assistant"
+        },
+        {
+          "content": "Thanks — and what about the next step?",
+          "role": "user"
+        }
+      ],
+      "op": "respond",
+      "session": "onejudge-skill",
+      "skill": {
+        "instructions": "[[record:{{TMP}}/notes-between-turns.log]]",
+        "name": "demo",
+        "path": "/skills/demo"
+      }
+    }
+  ]
+}
