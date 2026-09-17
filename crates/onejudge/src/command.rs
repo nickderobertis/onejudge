@@ -4,7 +4,8 @@
 //! drives and any custom provider a consumer writes. The wire contract is
 //! documented in `docs/protocol.md`.
 //!
-//! Protocol **v7** adds caller-named `artifacts` to the judge request's `evidence`,
+//! Protocol **v8** adds the classified worker-turn outcome to every supervisor
+//! request. Protocol **v7** adds caller-named `artifacts` to the judge request's `evidence`,
 //! which **v6** introduced. Protocol **v6** added optional evaluator evidence to judge requests. Protocol **v5** adds `notes` to the supervisor request — the role-addressed
 //! corrections delivered into the run so far, omitted when there are none, so a v4
 //! double sees a byte-identical request. Protocol **v4** added the unified
@@ -21,7 +22,7 @@ use crate::error::{Error, ProviderErrorKind, Result};
 use crate::provider::{
     supervise_with_reask, Assessment, AssistantTurn, EvidenceContext, JudgeKind, JudgeQuery,
     JudgeValue, JudgeVerdict, Provider, SkillRef, SupervisorOutcome, SupervisorQuery,
-    SupervisorTurn, UserTurn,
+    SupervisorTurn, TurnOutcome, UserTurn,
 };
 use crate::spawn::{role_of, SharedSpawnHook, SpawnContext, SpawnedProcess, Spawner};
 use crate::transcript::{Message, ToolEvent};
@@ -30,14 +31,14 @@ use crate::usage::Usage;
 // --- Wire types (the JSON-lines protocol) ---------------------------------
 //
 // Each request frame is its own type, so under `sdk-schema` it generates the schema
-// it is registered under (`frame_schemas`): `agent.onejudge-frame.<op>@7`, the
+// it is registered under (`frame_schemas`): `agent.onejudge-frame.<op>@8`, the
 // declaration `docs/protocol.md` names. `deny_unknown_fields` and `default` change
 // nothing onejudge writes; they state what a frame admits.
 
 /// The protocol version `docs/protocol.md` calls current, and the version every
 /// registered frame schema carries.
 #[cfg(feature = "sdk-schema")]
-pub(crate) const PROTOCOL_VERSION: u32 = 7;
+pub(crate) const PROTOCOL_VERSION: u32 = 8;
 
 #[derive(Serialize)]
 #[cfg_attr(feature = "sdk-schema", derive(schemars::JsonSchema))]
@@ -98,6 +99,7 @@ struct SupervisorFrame<'a> {
     /// none has been, so a v4 double sees a byte-identical request.
     #[serde(default, skip_serializing_if = "<[_]>::is_empty")]
     notes: &'a [crate::note::DeliveredNote],
+    turn: &'a TurnOutcome,
     messages: &'a [Message],
     #[serde(default, skip_serializing_if = "Option::is_none")]
     session: Option<&'a str>,
@@ -180,7 +182,7 @@ enum Request<'a> {
 }
 
 /// Every request frame's schema, with the id it is registered under:
-/// `agent.onejudge-frame.<op>@7`, the frame type's own document with its `op`
+/// `agent.onejudge-frame.<op>@8`, the frame type's own document with its `op`
 /// pinned to the operation's word.
 #[cfg(feature = "sdk-schema")]
 pub(crate) fn frame_schemas() -> Vec<(onemessagebus::SchemaId, schemars::Schema)> {
@@ -407,6 +409,10 @@ impl CommandProvider {
 }
 
 impl Provider for CommandProvider {
+    fn supervises_lost_turns(&self) -> bool {
+        true
+    }
+
     fn reset_telemetry(&self) {
         self.spawner.reset();
     }
@@ -500,7 +506,7 @@ impl Provider for CommandProvider {
         // The same bounded re-ask, and the same settle on exhaustion, as the
         // prompt-building seam: the protocol carries no correction field, so the
         // re-ask is the identical request rather than a nudged one.
-        supervise_with_reask(|_ask| {
+        let ask_once = |_ask| {
             let payload: SupervisorPayload = self.call(
                 &Request::Supervisor(SupervisorFrame {
                     task: query.task,
@@ -509,6 +515,7 @@ impl Provider for CommandProvider {
                     worktree: query.worktree,
                     history_name: query.history_name,
                     notes: query.notes,
+                    turn: &query.turn,
                     messages,
                     session,
                 }),
@@ -542,7 +549,15 @@ impl Provider for CommandProvider {
                 outcome,
                 usage: payload.usage,
             })
-        })
+        };
+        if matches!(query.turn, TurnOutcome::Lost { .. }) {
+            ask_once(crate::provider::Ask {
+                attempt: 0,
+                reask: None,
+            })
+        } else {
+            supervise_with_reask(ask_once)
+        }
     }
 
     fn judge(&self, query: &JudgeQuery<'_>, messages: &[Message]) -> Result<JudgeVerdict> {
@@ -677,7 +692,8 @@ mod tests {
             serde_json::json!(["/abs/design.md", resolved])
         );
         let docs = include_str!("../../../docs/protocol.md");
-        assert!(docs.contains("**v7** (current)"));
+        assert!(docs.contains("**v8** (current)"));
+        assert!(docs.contains("**v7** added `artifacts`"));
         // The documented request is the wire shape, member for member.
         let snippet = docs
             .lines()

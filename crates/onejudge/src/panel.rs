@@ -602,6 +602,12 @@ fn clone_error(error: &Error) -> Error {
 }
 
 impl<J: Provider + Send> Provider for JudgePanel<J> {
+    fn supervises_lost_turns(&self) -> bool {
+        self.judges
+            .iter()
+            .all(|judge| judge.with(Provider::supervises_lost_turns))
+    }
+
     fn reset_telemetry(&self) {
         for judge in &self.judges {
             judge.with(Provider::reset_telemetry);
@@ -891,6 +897,7 @@ mod tests {
             worktree: "/w",
             history_name: "h",
             notes: &[],
+            turn: crate::TurnOutcome::Taken,
         }
     }
 

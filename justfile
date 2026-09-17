@@ -22,7 +22,7 @@ bootstrap:
 
 # Full quality gate: format, lint, doc, coverage-enforced tests, audit, and the
 # release-target drift gate.
-check: format-check lint doc test audit check-release-targets check-python-sdk-release-trigger
+check: format-check lint doc test audit check-release-targets check-python-sdk-release-trigger check-judge-seat-frames
 
 # `just gate` is the same gate under the name callers outside this repo use for
 # it. An alias, not a second recipe, so the two can never drift apart.
@@ -137,6 +137,10 @@ lint-llm-validate *args:
 # Regenerate Python declarations and runtime schemas from Rust wire types.
 python-sdk-generate:
     uv run --no-project --python 3.9 --with-requirements python/onejudge-sdk/requirements-dev.txt python python/onejudge-sdk/scripts/generate.py
+
+# Verify the committed schema-link bundle is generated from the frame types.
+check-judge-seat-frames:
+    ./scripts/check-judge-seat-frames.sh
 
 # Strict Python SDK gate: generated-contract drift, lint, types, coverage, and
 # an installed-wheel smoke test through the real onejudge subprocess.

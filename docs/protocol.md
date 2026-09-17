@@ -17,7 +17,8 @@ report line. See [streaming.md](streaming.md). The two are independent — a
 
 ## Protocol version
 
-**v7** (current) — adds `artifacts` to a `judge` request's `evidence`: the files
+**v8** (current) — adds the required `turn` outcome to every `supervisor`
+request. **v7** added `artifacts` to a `judge` request's `evidence`: the files
 and directories the caller named for the evaluator to read directly (the
 simulated user's `artifacts`, `user.artifacts` on the CLI), each resolved against
 the worktree. They may be untracked or gitignored, which `git_status` and
@@ -38,34 +39,24 @@ it). v1 carried `platform`/`model` on `respond` and `model` on `user`/`judge`.
 ## Schemas
 
 **The schemas are the declaration of the request frames**; the prose and examples
-below describe them. Each frame is registered as `agent.onejudge-frame.<op>@7` —
+below describe them. Each frame is registered as `agent.onejudge-frame.<op>@8` —
 the version is the protocol version — generated from the type `CommandProvider`
 writes it with:
 
 | op | schema id |
 | --- | --- |
-| `respond` | `agent.onejudge-frame.respond@7` |
-| `user` | `agent.onejudge-frame.user@7` |
-| `supervisor` | `agent.onejudge-frame.supervisor@7` |
-| `judge` | `agent.onejudge-frame.judge@7` |
-| `assess` | `agent.onejudge-frame.assess@7` |
+| `respond` | `agent.onejudge-frame.respond@8` |
+| `user` | `agent.onejudge-frame.user@8` |
+| `supervisor` | `agent.onejudge-frame.supervisor@8` |
+| `judge` | `agent.onejudge-frame.judge@8` |
+| `assess` | `agent.onejudge-frame.assess@8` |
 
 `onejudge::sdk_schema::frame_schemas()` answers them, `register_frames` registers
 them in a `onemessagebus` registry, and the SDK schema bundle carries them under
-`frames`.
-
-`onemessagebus serve --codec onejudge` reads the same frames through its own
-transcription, which the released `onemessagebus-agent` registers at
-`agent.onejudge-frame.<op>@6`. `tests/frames.rs` compares every one of these
-schemas with the codec's, and reads a real frame of every operation, as
-`CommandProvider` writes it, through the codec and back. Two refusals are the
-codec's, and a command author meets them there:
-
-- it serves `supervisor` and `judge` alone, and refuses any other frame by name —
-  `` `respond` is not an operation this codec serves ``;
-- it reads protocol v6, so a v7 `judge` frame that names `evidence.artifacts` is
-  refused — `` the `judge` frame is not a onejudge protocol v6 frame: unknown field `artifacts` ``.
-  A frame naming no artifacts is byte-identical to v6 and is served.
+`frames`. The committed schema-link bundle is
+`schemas/judge-seat-frames.json`. Releases publish it at
+`https://raw.githubusercontent.com/nickderobertis/onejudge/v<release>/schemas/judge-seat-frames.json@<protocol>`;
+for v8, consumers pin the URL with `@8`.
 
 ## `respond` — run one skill turn
 
@@ -132,7 +123,7 @@ Response:
 The engine sends exactly one request after each ordinary nonterminal agent turn:
 
 ```json
-{"op":"supervisor","task":"fix it","persona":"A strict reviewer.","done_when":"tests pass","worktree":"/repo","history_name":"run-42-skill","messages":[...],"session":"run-42-user"}
+{"op":"supervisor","task":"fix it","persona":"A strict reviewer.","done_when":"tests pass","worktree":"/repo","history_name":"run-42-skill","turn":{"outcome":"taken"},"messages":[...],"session":"run-42-user"}
 ```
 
 `session` is the judge's caller-owned session name — the bare `<base>-user`, or
@@ -151,6 +142,29 @@ as instructions to itself:
 `addressee` is who the note is *for* (`worker` / `supervisor` / `both`);
 `delivered_to` is which party was handed it, and the two differ whenever a note
 reached whichever party happened to be live. See [notes.md](notes.md).
+
+`turn` reports the classified outcome of the worker invocation this decision
+follows. A successful invocation is taken even when its reply text is empty:
+
+```json
+{"turn":{"outcome":"taken"}}
+{"turn":{"outcome":"lost","cause":"quota","harness":"codex:alternate"}}
+```
+
+For `lost`, `cause` is the candidate's `failure_kind`, otherwise its `status`,
+or—when no candidate ran—the classified provider-error token. It is non-empty,
+one line, and at most 80 characters. `harness` is the composed id of the
+candidate that ran, otherwise the last attempted candidate, and is omitted only
+when no candidate was attempted.
+
+When a turn is lost, onejudge asks the command supervisor exactly once using the
+transcript as it stood before that turn. A non-zero command exit preserves the
+lost turn's classified failure. A continue answer opens the next worker turn
+with its `message` and counts toward the turn cap; a completion answer completes
+the run with its `reason`. Model-backed and all other non-command supervisors
+are not asked about a lost turn, spend no supervisor turn, and the run fails with
+the original classified error. A panel receives this exchange only when every
+judge is a command provider.
 
 Return exactly one discriminated shape. Completed requires a non-empty reason and
 forbids `message`; continue requires the exact non-empty next user message:

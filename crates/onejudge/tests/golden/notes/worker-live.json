@@ -121,7 +121,10 @@
       "persona": "A reviewer. [[record:{{TMP}}/notes-worker-live.log]]",
       "session": "onejudge-user",
       "task": "start the long job",
-      "worktree": "/skills/demo"
+      "worktree": "/skills/demo",
+      "turn": {
+        "outcome": "taken"
+      }
     },
     {
       "messages": [

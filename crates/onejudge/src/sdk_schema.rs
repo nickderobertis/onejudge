@@ -3,7 +3,8 @@
 
 use std::collections::BTreeMap;
 
-use onemessagebus::{Registry, RegistryError, SchemaId};
+use onemessagebus::sdk_schema::RegistryDocument;
+use onemessagebus::{BundleVersion, Registry, RegistryError, SchemaBundle, SchemaId};
 use schemars::{generate::SchemaSettings, JsonSchema, Schema};
 use serde::Serialize;
 
@@ -29,7 +30,7 @@ pub struct SdkSchemaBundle {
     /// run had recorded.
     pub failure_report: Schema,
     /// The command-provider request frames (`docs/protocol.md`), one per operation,
-    /// keyed by the id each is registered under: `agent.onejudge-frame.<op>@7`.
+    /// keyed by the id each is registered under: `agent.onejudge-frame.<op>@8`.
     pub frames: BTreeMap<String, Schema>,
 }
 
@@ -51,6 +52,52 @@ pub fn schema_for_serialize<T: ?Sized + JsonSchema>() -> Schema {
 #[must_use]
 pub fn frame_schemas() -> Vec<(SchemaId, Schema)> {
     crate::command::frame_schemas()
+}
+
+/// Build the schema-link bundle that publishes the judge-seat frame grammar.
+#[must_use]
+pub fn judge_seat_frame_bundle() -> SchemaBundle {
+    let schemas = frame_schemas()
+        .into_iter()
+        .map(|(id, schema)| RegistryDocument {
+            id,
+            schema: schema.to_value(),
+        })
+        .collect();
+    SchemaBundle::new(
+        crate::command::PROTOCOL_VERSION
+            .to_string()
+            .parse::<BundleVersion>()
+            .expect("the numeric protocol version is a bundle version"),
+        Some("onejudge command-provider request frames".to_string()),
+        schemas,
+    )
+    .expect("the generated frame ids and schemas form a bundle")
+}
+
+/// Whether schema drift between two bundles is accompanied by a version increase.
+#[must_use]
+pub fn frame_bundle_version_allows(base: &SchemaBundle, current: &SchemaBundle) -> bool {
+    base.schemas() == current.schemas() || current.version() > base.version()
+}
+
+/// Check that `path` contains the generated judge-seat bundle byte for byte.
+pub fn check_judge_seat_frame_bundle(path: &std::path::Path) -> Result<(), String> {
+    let generated = format!(
+        "{}\n",
+        serde_json::to_string_pretty(&judge_seat_frame_bundle())
+            .expect("the bus bundle is serializable")
+    );
+    let committed = std::fs::read_to_string(path)
+        .map_err(|failure| format!("could not read {}: {failure}", path.display()))?;
+    if committed == generated {
+        Ok(())
+    } else {
+        Err(format!(
+            "{} differs from generated frames; regenerate with `cargo run -q -p onejudge --features sdk-schema --example generate_judge_seat_frames > schemas/judge-seat-frames.json`",
+            path.display()
+        ))
+    }
 }
 
 /// Register every command-provider frame schema in `registry`, so a bus that checks

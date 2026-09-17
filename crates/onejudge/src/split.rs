@@ -56,6 +56,10 @@ impl<S: Provider, J: Provider> SplitProvider<S, J> {
 }
 
 impl<S: Provider, J: Provider> Provider for SplitProvider<S, J> {
+    fn supervises_lost_turns(&self) -> bool {
+        self.judge.supervises_lost_turns()
+    }
+
     fn reset_telemetry(&self) {
         self.skill.reset_telemetry();
         self.judge.reset_telemetry();

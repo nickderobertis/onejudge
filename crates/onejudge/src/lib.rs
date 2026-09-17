@@ -119,9 +119,9 @@ pub use provider::{
     latest_user_message, parse_supervisor, parse_verdict, render_transcript, supervise_with_reask,
     Ask, Assessment, AssistantTurn, EvidenceContext, JudgeKind, JudgeQuery, JudgeValue,
     JudgeVerdict, Provider, Reask, SkillRef, SupervisorOutcome, SupervisorQuery, SupervisorTurn,
-    UserTurn, ARTIFACT_LISTING_LIMIT, EVIDENCE_PROMPT_MARKER, EVIDENCE_TOOL_RETRY_LIMIT,
-    SUPERVISOR_REASK_LIMIT, SUPERVISOR_REASK_NOTE, SUPERVISOR_REDIRECT_NOTE,
-    SUPERVISOR_UNPARSED_NOTE,
+    TurnOutcome, UserTurn, ARTIFACT_LISTING_LIMIT, EVIDENCE_PROMPT_MARKER,
+    EVIDENCE_TOOL_RETRY_LIMIT, SUPERVISOR_REASK_LIMIT, SUPERVISOR_REASK_NOTE,
+    SUPERVISOR_REDIRECT_NOTE, SUPERVISOR_UNPARSED_NOTE,
 };
 pub use report::{Decision, JudgeDecision, JudgedTurn, NamedVerdict, Report, SCHEMA_VERSION};
 #[cfg(feature = "sdk-schema")]

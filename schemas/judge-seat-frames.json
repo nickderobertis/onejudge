@@ -1,0 +1,922 @@
+{
+  "version": "8",
+  "description": "onejudge command-provider request frames",
+  "schemas": [
+    {
+      "id": "agent.onejudge-frame.respond@8",
+      "schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "op": {
+            "type": "string",
+            "const": "respond",
+            "description": "The operation this frame asks for."
+          },
+          "skill": {
+            "$ref": "#/$defs/SkillPayload"
+          },
+          "messages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/Message"
+            }
+          },
+          "session": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "op",
+          "skill",
+          "messages"
+        ],
+        "description": "`respond`: run one skill turn.",
+        "title": "RespondFrame",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$defs": {
+          "SkillPayload": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              },
+              "instructions": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "path",
+              "instructions"
+            ]
+          },
+          "Message": {
+            "type": "object",
+            "properties": {
+              "role": {
+                "$ref": "#/$defs/Role",
+                "description": "Who produced the turn."
+              },
+              "content": {
+                "type": "string",
+                "description": "The turn's text."
+              },
+              "events": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/ToolEvent"
+                },
+                "description": "The normalized tool events the skill took producing this turn (assistant\nturns only, and only when the harness exposed a tool transcript). Empty\notherwise. Surfaced for post-hoc analysis, streamed live, and rendered\ninto the transcript the judge sees."
+              }
+            },
+            "required": [
+              "role",
+              "content"
+            ],
+            "description": "A single turn in the conversation."
+          },
+          "Role": {
+            "oneOf": [
+              {
+                "type": "string",
+                "const": "user",
+                "description": "The (real or simulated) user driving the skill."
+              },
+              {
+                "type": "string",
+                "const": "assistant",
+                "description": "The skill / assistant under test."
+              },
+              {
+                "type": "string",
+                "const": "system",
+                "description": "System-level framing, if a provider surfaces it."
+              }
+            ],
+            "description": "Who produced a message."
+          },
+          "ToolEvent": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "description": "`tool_call` (the skill invoked a tool) or `tool_result` (the observation)."
+              },
+              "name": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Normalized tool name where knowable (e.g. `bash`, `edit_file`); `None` for\na `tool_result` or when the harness did not name it."
+              },
+              "input": {
+                "description": "Structured tool arguments (the command, the file path); `None` when none."
+              },
+              "output": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The result/observation text, when the transcript exposed it."
+              },
+              "index": {
+                "type": "integer",
+                "format": "uint",
+                "minimum": 0,
+                "description": "Position within the run, so ordering (\"did X before Y\") is expressible.",
+                "default": 0
+              },
+              "tool_call_id": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The harness's own stable identity for this call, joining a `tool_call` to\nits `tool_result`. `None` means the harness exposed no identity — never an\nempty string, which would read as an id that happens to be blank."
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "description": "One normalized tool-call / action event the skill took during a turn, lifted\nfrom `oneharness`'s `events` array (its `--events` output). Harness-agnostic,\nso a consumer can inspect shell commands, file edits, and tool uses across any\nharness, not just the final text. `input` is the structured, tool-shaped args\nso a consumer can match on the command string or file path without re-parsing.\n\n`input` is free-form JSON, so `Message`/`Transcript` are `PartialEq` but not\n`Eq`."
+          }
+        }
+      }
+    },
+    {
+      "id": "agent.onejudge-frame.user@8",
+      "schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "op": {
+            "type": "string",
+            "const": "user",
+            "description": "The operation this frame asks for."
+          },
+          "persona": {
+            "type": "string"
+          },
+          "messages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/Message"
+            }
+          },
+          "session": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "op",
+          "persona",
+          "messages"
+        ],
+        "description": "`user`: produce one simulated-user turn.",
+        "title": "UserFrame",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$defs": {
+          "Message": {
+            "type": "object",
+            "properties": {
+              "role": {
+                "$ref": "#/$defs/Role",
+                "description": "Who produced the turn."
+              },
+              "content": {
+                "type": "string",
+                "description": "The turn's text."
+              },
+              "events": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/ToolEvent"
+                },
+                "description": "The normalized tool events the skill took producing this turn (assistant\nturns only, and only when the harness exposed a tool transcript). Empty\notherwise. Surfaced for post-hoc analysis, streamed live, and rendered\ninto the transcript the judge sees."
+              }
+            },
+            "required": [
+              "role",
+              "content"
+            ],
+            "description": "A single turn in the conversation."
+          },
+          "Role": {
+            "oneOf": [
+              {
+                "type": "string",
+                "const": "user",
+                "description": "The (real or simulated) user driving the skill."
+              },
+              {
+                "type": "string",
+                "const": "assistant",
+                "description": "The skill / assistant under test."
+              },
+              {
+                "type": "string",
+                "const": "system",
+                "description": "System-level framing, if a provider surfaces it."
+              }
+            ],
+            "description": "Who produced a message."
+          },
+          "ToolEvent": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "description": "`tool_call` (the skill invoked a tool) or `tool_result` (the observation)."
+              },
+              "name": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Normalized tool name where knowable (e.g. `bash`, `edit_file`); `None` for\na `tool_result` or when the harness did not name it."
+              },
+              "input": {
+                "description": "Structured tool arguments (the command, the file path); `None` when none."
+              },
+              "output": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The result/observation text, when the transcript exposed it."
+              },
+              "index": {
+                "type": "integer",
+                "format": "uint",
+                "minimum": 0,
+                "description": "Position within the run, so ordering (\"did X before Y\") is expressible.",
+                "default": 0
+              },
+              "tool_call_id": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The harness's own stable identity for this call, joining a `tool_call` to\nits `tool_result`. `None` means the harness exposed no identity — never an\nempty string, which would read as an id that happens to be blank."
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "description": "One normalized tool-call / action event the skill took during a turn, lifted\nfrom `oneharness`'s `events` array (its `--events` output). Harness-agnostic,\nso a consumer can inspect shell commands, file edits, and tool uses across any\nharness, not just the final text. `input` is the structured, tool-shaped args\nso a consumer can match on the command string or file path without re-parsing.\n\n`input` is free-form JSON, so `Message`/`Transcript` are `PartialEq` but not\n`Eq`."
+          }
+        }
+      }
+    },
+    {
+      "id": "agent.onejudge-frame.supervisor@8",
+      "schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "op": {
+            "type": "string",
+            "const": "supervisor",
+            "description": "The operation this frame asks for."
+          },
+          "task": {
+            "type": "string"
+          },
+          "persona": {
+            "type": "string"
+          },
+          "done_when": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "worktree": {
+            "type": "string"
+          },
+          "history_name": {
+            "type": "string"
+          },
+          "notes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/DeliveredNote"
+            },
+            "description": "Every note delivered into this run so far (protocol v5). Omitted when\nnone has been, so a v4 double sees a byte-identical request."
+          },
+          "turn": {
+            "$ref": "#/$defs/TurnOutcome"
+          },
+          "messages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/Message"
+            }
+          },
+          "session": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "op",
+          "task",
+          "persona",
+          "worktree",
+          "history_name",
+          "turn",
+          "messages"
+        ],
+        "description": "`supervisor`: decide completion, or produce the next user turn.",
+        "title": "SupervisorFrame",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$defs": {
+          "DeliveredNote": {
+            "type": "object",
+            "properties": {
+              "note": {
+                "$ref": "#/$defs/Note",
+                "description": "The note itself, addressee included."
+              },
+              "delivered_to": {
+                "$ref": "#/$defs/Party",
+                "description": "The party that was handed it — **not** the same thing as its addressee: a\nnote is delivered to whoever is live, and the addressee is what the\nrecipient is told the note is *for*."
+              }
+            },
+            "required": [
+              "note",
+              "delivered_to"
+            ],
+            "description": "One note as it was handed to a party, with the party it reached."
+          },
+          "Note": {
+            "type": "object",
+            "properties": {
+              "addressee": {
+                "$ref": "#/$defs/Addressee"
+              },
+              "text": {
+                "type": "string"
+              },
+              "criterion": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Criterion"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              }
+            },
+            "required": [
+              "addressee",
+              "text"
+            ],
+            "description": "One note: what the worker reads, who it is for, and the property it binds.\n\nBuilt through [`Note::new`] / [`Note::to`] / [`Note::binding`] and in no other\nway — `non_exhaustive` closes the struct literal, and deserialization goes\nthrough the same conversion — so a note whose text nobody can read, or whose\ncriterion is unusable, is unrepresentable rather than representable and refused\nsomewhere later."
+          },
+          "Addressee": {
+            "oneOf": [
+              {
+                "type": "string",
+                "const": "worker",
+                "description": "An update to the *worker's* task."
+              },
+              {
+                "type": "string",
+                "const": "supervisor",
+                "description": "An update to the *supervisor's* brief."
+              },
+              {
+                "type": "string",
+                "const": "both",
+                "description": "Addressed to both parties."
+              }
+            ],
+            "description": "Who a note is for.\n\nRequired; there is no default, because a note whose addressee is guessed is a\nnote the judge may read as an instruction to itself. One run saw a simulated\nuser compose a four-point \"manager ruling\" in-conversation and instruct the\nworker to post it over the run channel, and the worker complied."
+          },
+          "Criterion": {
+            "type": "string",
+            "description": "The property a bound note requires of the finished work.\n\nA validated newtype, checked in the conversion that builds it, so a [`Note`]\ncarrying an unusable criterion is unrepresentable rather than\nrepresentable-and-refused-somewhere-later. The rules are the ones an\norchestrator already enforces on authored plan criteria\n(`orchestrator/criteria_guard.py` in `nickderobertis/ai-orchestrator`), ported\nhere so the *seam that accepts the note* refuses at the moment of binding\nrather than at render time — after the turn has been composed — or by the\njudge, which has already lost.\n\nWhat the rules cannot catch, stated plainly: \"this is a mechanism the author\npreferred rather than a property the node owes\" needs the author's intent, and\nno pattern has it. What stands in for it is the rendered framing\n([`Criteria::rendered`]), which instructs the judge to evaluate the property a\nnamed mechanism was serving."
+          },
+          "Party": {
+            "oneOf": [
+              {
+                "type": "string",
+                "const": "worker",
+                "description": "The agent under test."
+              },
+              {
+                "type": "string",
+                "const": "supervisor",
+                "description": "The simulated user / completion supervisor."
+              }
+            ],
+            "description": "Which party of the conversation a delivery reached."
+          },
+          "TurnOutcome": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "outcome": {
+                    "type": "string",
+                    "const": "taken"
+                  }
+                },
+                "required": [
+                  "outcome"
+                ],
+                "additionalProperties": false,
+                "description": "The invocation carried no classified failure, including an empty reply."
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "cause": {
+                    "type": "string",
+                    "description": "The invocation's failure-kind token, candidate status, or error kind.",
+                    "minLength": 1,
+                    "maxLength": 80,
+                    "pattern": "^[^\\r\\n]+$"
+                  },
+                  "harness": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "description": "The candidate that ran, or the last candidate attempted."
+                  },
+                  "outcome": {
+                    "type": "string",
+                    "const": "lost"
+                  }
+                },
+                "required": [
+                  "outcome",
+                  "cause"
+                ],
+                "description": "The invocation carried a classified failure."
+              }
+            ],
+            "description": "The classified outcome of the worker turn a supervisor is deciding."
+          },
+          "Message": {
+            "type": "object",
+            "properties": {
+              "role": {
+                "$ref": "#/$defs/Role",
+                "description": "Who produced the turn."
+              },
+              "content": {
+                "type": "string",
+                "description": "The turn's text."
+              },
+              "events": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/ToolEvent"
+                },
+                "description": "The normalized tool events the skill took producing this turn (assistant\nturns only, and only when the harness exposed a tool transcript). Empty\notherwise. Surfaced for post-hoc analysis, streamed live, and rendered\ninto the transcript the judge sees."
+              }
+            },
+            "required": [
+              "role",
+              "content"
+            ],
+            "description": "A single turn in the conversation."
+          },
+          "Role": {
+            "oneOf": [
+              {
+                "type": "string",
+                "const": "user",
+                "description": "The (real or simulated) user driving the skill."
+              },
+              {
+                "type": "string",
+                "const": "assistant",
+                "description": "The skill / assistant under test."
+              },
+              {
+                "type": "string",
+                "const": "system",
+                "description": "System-level framing, if a provider surfaces it."
+              }
+            ],
+            "description": "Who produced a message."
+          },
+          "ToolEvent": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "description": "`tool_call` (the skill invoked a tool) or `tool_result` (the observation)."
+              },
+              "name": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Normalized tool name where knowable (e.g. `bash`, `edit_file`); `None` for\na `tool_result` or when the harness did not name it."
+              },
+              "input": {
+                "description": "Structured tool arguments (the command, the file path); `None` when none."
+              },
+              "output": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The result/observation text, when the transcript exposed it."
+              },
+              "index": {
+                "type": "integer",
+                "format": "uint",
+                "minimum": 0,
+                "description": "Position within the run, so ordering (\"did X before Y\") is expressible.",
+                "default": 0
+              },
+              "tool_call_id": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The harness's own stable identity for this call, joining a `tool_call` to\nits `tool_result`. `None` means the harness exposed no identity — never an\nempty string, which would read as an id that happens to be blank."
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "description": "One normalized tool-call / action event the skill took during a turn, lifted\nfrom `oneharness`'s `events` array (its `--events` output). Harness-agnostic,\nso a consumer can inspect shell commands, file edits, and tool uses across any\nharness, not just the final text. `input` is the structured, tool-shaped args\nso a consumer can match on the command string or file path without re-parsing.\n\n`input` is free-form JSON, so `Message`/`Transcript` are `PartialEq` but not\n`Eq`."
+          }
+        }
+      }
+    },
+    {
+      "id": "agent.onejudge-frame.judge@8",
+      "schema": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "op": {
+                "type": "string",
+                "const": "judge",
+                "description": "The operation this frame asks for."
+              },
+              "criterion": {
+                "type": "string"
+              },
+              "messages": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/Message"
+                }
+              },
+              "evidence": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/EvidencePayload"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "kind": {
+                "type": "string",
+                "const": "boolean"
+              }
+            },
+            "required": [
+              "op",
+              "kind",
+              "criterion",
+              "messages"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "op": {
+                "type": "string",
+                "const": "judge",
+                "description": "The operation this frame asks for."
+              },
+              "criterion": {
+                "type": "string"
+              },
+              "min": {
+                "type": "number",
+                "format": "double"
+              },
+              "max": {
+                "type": "number",
+                "format": "double"
+              },
+              "messages": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/Message"
+                }
+              },
+              "evidence": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/EvidencePayload"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "kind": {
+                "type": "string",
+                "const": "numeric"
+              }
+            },
+            "required": [
+              "op",
+              "kind",
+              "criterion",
+              "min",
+              "max",
+              "messages"
+            ]
+          }
+        ],
+        "description": "`judge`: score a criterion against the transcript. A numeric score carries its\nbounds; a boolean one has none.",
+        "title": "JudgeFrame",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$defs": {
+          "Message": {
+            "type": "object",
+            "properties": {
+              "role": {
+                "$ref": "#/$defs/Role",
+                "description": "Who produced the turn."
+              },
+              "content": {
+                "type": "string",
+                "description": "The turn's text."
+              },
+              "events": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/ToolEvent"
+                },
+                "description": "The normalized tool events the skill took producing this turn (assistant\nturns only, and only when the harness exposed a tool transcript). Empty\notherwise. Surfaced for post-hoc analysis, streamed live, and rendered\ninto the transcript the judge sees."
+              }
+            },
+            "required": [
+              "role",
+              "content"
+            ],
+            "description": "A single turn in the conversation."
+          },
+          "Role": {
+            "oneOf": [
+              {
+                "type": "string",
+                "const": "user",
+                "description": "The (real or simulated) user driving the skill."
+              },
+              {
+                "type": "string",
+                "const": "assistant",
+                "description": "The skill / assistant under test."
+              },
+              {
+                "type": "string",
+                "const": "system",
+                "description": "System-level framing, if a provider surfaces it."
+              }
+            ],
+            "description": "Who produced a message."
+          },
+          "ToolEvent": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "description": "`tool_call` (the skill invoked a tool) or `tool_result` (the observation)."
+              },
+              "name": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Normalized tool name where knowable (e.g. `bash`, `edit_file`); `None` for\na `tool_result` or when the harness did not name it."
+              },
+              "input": {
+                "description": "Structured tool arguments (the command, the file path); `None` when none."
+              },
+              "output": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The result/observation text, when the transcript exposed it."
+              },
+              "index": {
+                "type": "integer",
+                "format": "uint",
+                "minimum": 0,
+                "description": "Position within the run, so ordering (\"did X before Y\") is expressible.",
+                "default": 0
+              },
+              "tool_call_id": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The harness's own stable identity for this call, joining a `tool_call` to\nits `tool_result`. `None` means the harness exposed no identity — never an\nempty string, which would read as an id that happens to be blank."
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "description": "One normalized tool-call / action event the skill took during a turn, lifted\nfrom `oneharness`'s `events` array (its `--events` output). Harness-agnostic,\nso a consumer can inspect shell commands, file edits, and tool uses across any\nharness, not just the final text. `input` is the structured, tool-shaped args\nso a consumer can match on the command string or file path without re-parsing.\n\n`input` is free-form JSON, so `Message`/`Transcript` are `PartialEq` but not\n`Eq`."
+          },
+          "EvidencePayload": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "worktree": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "history_files": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "artifacts": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Caller-named artifacts, resolved against the worktree (protocol v7).\nOmitted when none are named, so a v6 command sees a byte-identical request."
+              }
+            },
+            "required": [
+              "history_files"
+            ]
+          }
+        },
+        "properties": {
+          "op": {
+            "type": "string",
+            "const": "judge",
+            "description": "The operation this frame asks for."
+          }
+        },
+        "required": [
+          "op"
+        ]
+      }
+    },
+    {
+      "id": "agent.onejudge-frame.assess@8",
+      "schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "op": {
+            "type": "string",
+            "const": "assess",
+            "description": "The operation this frame asks for."
+          },
+          "prompt": {
+            "type": "string"
+          },
+          "messages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/Message"
+            }
+          }
+        },
+        "required": [
+          "op",
+          "prompt",
+          "messages"
+        ],
+        "description": "`assess`: write a free-text judgement.",
+        "title": "AssessFrame",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$defs": {
+          "Message": {
+            "type": "object",
+            "properties": {
+              "role": {
+                "$ref": "#/$defs/Role",
+                "description": "Who produced the turn."
+              },
+              "content": {
+                "type": "string",
+                "description": "The turn's text."
+              },
+              "events": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/ToolEvent"
+                },
+                "description": "The normalized tool events the skill took producing this turn (assistant\nturns only, and only when the harness exposed a tool transcript). Empty\notherwise. Surfaced for post-hoc analysis, streamed live, and rendered\ninto the transcript the judge sees."
+              }
+            },
+            "required": [
+              "role",
+              "content"
+            ],
+            "description": "A single turn in the conversation."
+          },
+          "Role": {
+            "oneOf": [
+              {
+                "type": "string",
+                "const": "user",
+                "description": "The (real or simulated) user driving the skill."
+              },
+              {
+                "type": "string",
+                "const": "assistant",
+                "description": "The skill / assistant under test."
+              },
+              {
+                "type": "string",
+                "const": "system",
+                "description": "System-level framing, if a provider surfaces it."
+              }
+            ],
+            "description": "Who produced a message."
+          },
+          "ToolEvent": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "description": "`tool_call` (the skill invoked a tool) or `tool_result` (the observation)."
+              },
+              "name": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Normalized tool name where knowable (e.g. `bash`, `edit_file`); `None` for\na `tool_result` or when the harness did not name it."
+              },
+              "input": {
+                "description": "Structured tool arguments (the command, the file path); `None` when none."
+              },
+              "output": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The result/observation text, when the transcript exposed it."
+              },
+              "index": {
+                "type": "integer",
+                "format": "uint",
+                "minimum": 0,
+                "description": "Position within the run, so ordering (\"did X before Y\") is expressible.",
+                "default": 0
+              },
+              "tool_call_id": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The harness's own stable identity for this call, joining a `tool_call` to\nits `tool_result`. `None` means the harness exposed no identity — never an\nempty string, which would read as an id that happens to be blank."
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "description": "One normalized tool-call / action event the skill took during a turn, lifted\nfrom `oneharness`'s `events` array (its `--events` output). Harness-agnostic,\nso a consumer can inspect shell commands, file edits, and tool uses across any\nharness, not just the final text. `input` is the structured, tool-shaped args\nso a consumer can match on the command string or file path without re-parsing.\n\n`input` is free-form JSON, so `Message`/`Transcript` are `PartialEq` but not\n`Eq`."
+          }
+        }
+      }
+    }
+  ]
+}

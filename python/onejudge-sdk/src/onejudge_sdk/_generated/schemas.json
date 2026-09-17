@@ -653,7 +653,7 @@
     "type": "object"
   },
   "frames": {
-    "agent.onejudge-frame.assess@7": {
+    "agent.onejudge-frame.assess@8": {
       "$defs": {
         "Message": {
           "description": "A single turn in the conversation.",
@@ -772,7 +772,7 @@
       "title": "AssessFrame",
       "type": "object"
     },
-    "agent.onejudge-frame.judge@7": {
+    "agent.onejudge-frame.judge@8": {
       "$defs": {
         "EvidencePayload": {
           "additionalProperties": false,
@@ -998,7 +998,7 @@
       ],
       "title": "JudgeFrame"
     },
-    "agent.onejudge-frame.respond@7": {
+    "agent.onejudge-frame.respond@8": {
       "$defs": {
         "Message": {
           "description": "A single turn in the conversation.",
@@ -1143,7 +1143,7 @@
       "title": "RespondFrame",
       "type": "object"
     },
-    "agent.onejudge-frame.supervisor@7": {
+    "agent.onejudge-frame.supervisor@8": {
       "$defs": {
         "Addressee": {
           "description": "Who a note is for.\n\nRequired; there is no default, because a note whose addressee is guessed is a\nnote the judge may read as an instruction to itself. One run saw a simulated\nuser compose a four-point \"manager ruling\" in-conversation and instruct the\nworker to post it over the run channel, and the worker complied.",
@@ -1317,6 +1317,54 @@
             "kind"
           ],
           "type": "object"
+        },
+        "TurnOutcome": {
+          "description": "The classified outcome of the worker turn a supervisor is deciding.",
+          "oneOf": [
+            {
+              "additionalProperties": false,
+              "description": "The invocation carried no classified failure, including an empty reply.",
+              "properties": {
+                "outcome": {
+                  "const": "taken",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "outcome"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "description": "The invocation carried a classified failure.",
+              "properties": {
+                "cause": {
+                  "description": "The invocation's failure-kind token, candidate status, or error kind.",
+                  "maxLength": 80,
+                  "minLength": 1,
+                  "pattern": "^[^\\r\\n]+$",
+                  "type": "string"
+                },
+                "harness": {
+                  "description": "The candidate that ran, or the last candidate attempted.",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "outcome": {
+                  "const": "lost",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "outcome",
+                "cause"
+              ],
+              "type": "object"
+            }
+          ]
         }
       },
       "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -1362,6 +1410,9 @@
         "task": {
           "type": "string"
         },
+        "turn": {
+          "$ref": "#/$defs/TurnOutcome"
+        },
         "worktree": {
           "type": "string"
         }
@@ -1372,12 +1423,13 @@
         "persona",
         "worktree",
         "history_name",
+        "turn",
         "messages"
       ],
       "title": "SupervisorFrame",
       "type": "object"
     },
-    "agent.onejudge-frame.user@7": {
+    "agent.onejudge-frame.user@8": {
       "$defs": {
         "Message": {
           "description": "A single turn in the conversation.",

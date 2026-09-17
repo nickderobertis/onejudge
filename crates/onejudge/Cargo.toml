@@ -87,6 +87,14 @@ sdk-schema = ["dep:schemars", "cli"]
 name = "generate_sdk_schema"
 required-features = ["sdk-schema"]
 
+[[example]]
+name = "generate_judge_seat_frames"
+required-features = ["sdk-schema"]
+
+[[example]]
+name = "check_judge_seat_frame_version"
+required-features = ["sdk-schema"]
+
 # The user-facing standalone binary, behind the `cli` feature. Unlike the two
 # `fake-provider` doubles below, this one IS published and installed
 # (`cargo install onejudge --features cli`, release archives). Its logic lives in

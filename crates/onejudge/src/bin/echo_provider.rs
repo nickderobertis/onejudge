@@ -86,6 +86,15 @@ fn main() {
             .unwrap_or_else(|e| fail(&format!("could not write the request log: {e}")));
     }
     let op = request.get("op").and_then(Value::as_str).unwrap_or("");
+    if op == "respond" {
+        if let Some(path) = marker(&input, "emit-exit-once") {
+            if !std::path::Path::new(path).exists() {
+                std::fs::write(path, b"failed once\n")
+                    .unwrap_or_else(|e| fail(&format!("could not write once marker: {e}")));
+                fail("deliberate one-time non-zero exit for the e2e recovery path");
+            }
+        }
+    }
     let response = match op {
         "respond" => respond(&request),
         "user" => user(&request),
@@ -216,6 +225,16 @@ fn supervisor(request: &Value, argv: &str) -> Value {
     }
     if argv.contains("[[supervisor-exit]]") {
         fail("deliberate non-zero exit on the supervisor op");
+    }
+    if let Some(message) = marker(argv, "supervisor-continue-on-lost") {
+        return if request.pointer("/turn/outcome").and_then(Value::as_str) == Some("lost") {
+            json!({"completion": false, "message": message, "reason": "recover the lost turn"})
+        } else {
+            json!({"completion": true, "reason": "the recovery turn was taken"})
+        };
+    }
+    if argv.contains("[[supervisor-no-instruction]]") {
+        return json!({"completion": false, "reason": "no instruction"});
     }
     if let Some(message) = marker(argv, "supervisor-continue") {
         return json!({"completion": false, "message": message, "reason": format!("continue: {message}"), "usage": {"input_tokens": 1, "output_tokens": 1}});

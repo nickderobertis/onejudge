@@ -301,6 +301,13 @@ fn main() {
         ran.text = None;
         ran.stdout = RAW_PROCESS_OUTPUT.into();
     }
+    if let Some(harness_id) = marker(system, "harness") {
+        let replacement = base_result(harness_id);
+        ran.harness = replacement.harness;
+        ran.variant = replacement.variant;
+        ran.harness_id = replacement.harness_id;
+        ran.bin = replacement.bin;
+    }
     if let Some(native) = session
         .as_deref()
         .or(Some(if is_agent { "agent" } else { "judge" }))

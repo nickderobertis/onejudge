@@ -25,7 +25,10 @@
       "persona": "A reviewer. [[judge-dwell:600:{{TMP}}/notes-panel-live.marker]]",
       "session": "onejudge-user-a",
       "task": "start the job",
-      "worktree": "/skills/demo"
+      "worktree": "/skills/demo",
+      "turn": {
+        "outcome": "taken"
+      }
     },
     {
       "history_name": "onejudge-skill",
@@ -52,7 +55,10 @@
       "persona": "A reviewer. [[judge-dwell:600:{{TMP}}/notes-panel-live.marker]]",
       "session": "onejudge-user-a",
       "task": "start the job",
-      "worktree": "/skills/demo"
+      "worktree": "/skills/demo",
+      "turn": {
+        "outcome": "taken"
+      }
     }
   ],
   "judge_b_requests": [
@@ -72,7 +78,10 @@
       "persona": "A reviewer. [[judge-dwell:600:{{TMP}}/notes-panel-live.marker]]",
       "session": "onejudge-user-b",
       "task": "start the job",
-      "worktree": "/skills/demo"
+      "worktree": "/skills/demo",
+      "turn": {
+        "outcome": "taken"
+      }
     },
     {
       "history_name": "onejudge-skill",
@@ -99,7 +108,10 @@
       "persona": "A reviewer. [[judge-dwell:600:{{TMP}}/notes-panel-live.marker]]",
       "session": "onejudge-user-b",
       "task": "start the job",
-      "worktree": "/skills/demo"
+      "worktree": "/skills/demo",
+      "turn": {
+        "outcome": "taken"
+      }
     }
   ],
   "outcome": {

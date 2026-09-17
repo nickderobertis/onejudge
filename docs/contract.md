@@ -227,7 +227,7 @@ named JSON Schema roots:
 - `failure_report`: the document `--format json` writes **instead of** a report
   when the run fails (see below);
 - `frames`: the command-provider request frames, one per operation, keyed by the
-  id each is registered under — `agent.onejudge-frame.<op>@7` for `respond`,
+  id each is registered under — `agent.onejudge-frame.<op>@8` for `respond`,
   `user`, `supervisor`, `judge` and `assess`. They are the declaration of the
   frames, and `sdk_schema::register_frames` registers them in a `onemessagebus`
   registry.
