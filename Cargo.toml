@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/onejudge"]
 
 [workspace.package]
-version = "0.12.0"
+version = "0.13.0"
 edition = "2021"
 # Floored by `onemessagebus` / `onemessagebus-agent`, whose note contract and
 # frame schemas onejudge re-exports and registers (they declare 1.89; the
