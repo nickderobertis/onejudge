@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.1](https://github.com/nickderobertis/onejudge/compare/v0.13.0...v0.13.1) - 2026-09-17
+
+### Fixed
+
+- *(deps)* relink oneharness-core for the server-overloaded fallback ([#94](https://github.com/nickderobertis/onejudge/pull/94))
+
 ## [0.13.0](https://github.com/nickderobertis/onejudge/compare/v0.12.0...v0.13.0) - 2026-09-17
 
 ### Added
