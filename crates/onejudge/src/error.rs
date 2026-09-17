@@ -58,7 +58,7 @@ impl ProviderErrorKind {
             "rate_limit" => Self::RateLimit,
             "model_not_found" => Self::ModelNotFound,
             "quota" => Self::Quota,
-            "overloaded" => Self::Overloaded,
+            "overloaded" | "server_overloaded" => Self::Overloaded,
             "timeout" => Self::Timeout,
             "cancelled" => Self::Cancelled,
             "spawn" => Self::Spawn,
@@ -177,6 +177,14 @@ mod tests {
         assert_eq!(
             ProviderErrorKind::classify("brand_new_upstream_kind"),
             ProviderErrorKind::Other
+        );
+    }
+
+    #[test]
+    fn classify_maps_oneharness_server_overloaded_to_overloaded() {
+        assert_eq!(
+            ProviderErrorKind::classify("server_overloaded"),
+            ProviderErrorKind::Overloaded
         );
     }
 

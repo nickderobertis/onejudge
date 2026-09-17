@@ -285,7 +285,7 @@ pub(crate) fn classify(kind: FailureKind) -> ProviderErrorKind {
     match kind {
         FailureKind::Auth => ProviderErrorKind::Auth,
         FailureKind::RateLimit => ProviderErrorKind::RateLimit,
-        FailureKind::ServerOverloaded => ProviderErrorKind::Other,
+        FailureKind::ServerOverloaded => ProviderErrorKind::Overloaded,
         FailureKind::ModelNotFound => ProviderErrorKind::ModelNotFound,
         FailureKind::Quota => ProviderErrorKind::Quota,
         // A clean exit that only *deferred* a builtin tool call: a real refusal to
@@ -485,6 +485,7 @@ fn reason_kind(reason: FallThroughReason) -> ProviderErrorKind {
         | FallThroughReason::UntrustedDirectory
         | FallThroughReason::InputTooLarge
         | FallThroughReason::ModelMismatch => ProviderErrorKind::Other,
+        FallThroughReason::ServerOverloaded => ProviderErrorKind::Overloaded,
     }
 }
 
@@ -845,6 +846,10 @@ mod tests {
             ),
             (FallThroughReason::InputTooLarge, ProviderErrorKind::Other),
             (FallThroughReason::ModelMismatch, ProviderErrorKind::Other),
+            (
+                FallThroughReason::ServerOverloaded,
+                ProviderErrorKind::Overloaded,
+            ),
         ] {
             assert_eq!(reason_kind(reason), expected, "{reason:?}");
             assert_eq!(
@@ -860,7 +865,7 @@ mod tests {
         for (kind, expected) in [
             (FailureKind::Auth, ProviderErrorKind::Auth),
             (FailureKind::RateLimit, ProviderErrorKind::RateLimit),
-            (FailureKind::ServerOverloaded, ProviderErrorKind::Other),
+            (FailureKind::ServerOverloaded, ProviderErrorKind::Overloaded),
             (FailureKind::ModelNotFound, ProviderErrorKind::ModelNotFound),
             (FailureKind::Quota, ProviderErrorKind::Quota),
             (FailureKind::ToolDeferred, ProviderErrorKind::Other),

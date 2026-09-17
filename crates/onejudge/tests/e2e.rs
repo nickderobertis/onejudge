@@ -807,7 +807,7 @@ fn oneharness_failure_kind_propagates_classified() {
 }
 
 #[test]
-fn oneharness_server_overloaded_failure_kind_reaches_attribution_unchanged() {
+fn oneharness_server_overloaded_failure_kind_is_classified() {
     let provider = fake_oneharness();
     let engine = Engine::new(&provider, settings());
     let skill = skill_with("[[fail:server_overloaded]]");
@@ -815,12 +815,8 @@ fn oneharness_server_overloaded_failure_kind_reaches_attribution_unchanged() {
         .run(&Conversation::single_turn(skill, "go"))
         .unwrap_err();
 
-    assert_eq!(err.kind(), Some(ProviderErrorKind::Other));
-    let attribution = err.attribution().expect("failed turn is attributable");
-    assert_eq!(
-        attribution.candidates[0].failure_kind.as_deref(),
-        Some("server_overloaded")
-    );
+    assert_eq!(err.kind(), Some(ProviderErrorKind::Overloaded));
+    assert!(err.to_string().contains("server_overloaded"), "{err}");
 }
 
 #[test]
@@ -2264,6 +2260,42 @@ fn a_fallback_chain_advances_past_a_quota_refusal_and_runs_the_next_candidate() 
     );
     assert!(!attribution.candidates[0].ran);
     assert!(attribution.candidates[1].ran);
+}
+
+#[test]
+fn a_fallback_chain_advances_past_a_server_overloaded_candidate() {
+    let provider = fake_oneharness();
+    let engine = Engine::new(&provider, settings());
+    let outcome = engine
+        .run(&Conversation::single_turn(
+            skill_with("[[reply:backup answered]][[fallback:codex|server-overloaded]]"),
+            "go",
+        ))
+        .expect("the overloaded candidate fell through to its backup");
+
+    assert_eq!(outcome.transcript.messages[1].content, "backup answered");
+    let attribution = agent_attribution(&outcome);
+    assert_eq!(attribution.ran.as_deref(), Some("claude-code"));
+    assert_eq!(attribution.fell_through[0].reason, "server-overloaded");
+    assert_eq!(
+        attribution.candidates[0].failure_kind.as_deref(),
+        Some("server_overloaded")
+    );
+}
+
+#[test]
+fn an_exhausted_server_overloaded_chain_is_classified() {
+    let provider = fake_oneharness();
+    let engine = Engine::new(&provider, settings());
+    let err = engine
+        .run(&Conversation::single_turn(
+            skill_with("[[fallback-exhausted:codex|server-overloaded]]"),
+            "go",
+        ))
+        .expect_err("an exhausted fallback chain must fail");
+
+    assert_eq!(err.kind(), Some(ProviderErrorKind::Overloaded));
+    assert!(err.to_string().contains("server-overloaded"), "{err}");
 }
 
 #[test]
