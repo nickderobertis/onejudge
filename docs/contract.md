@@ -101,6 +101,8 @@ passed through verbatim from its closed taxonomy — and `history_id` resolves t
 model the harness itself said it would serve (`observed_model`, the other half
 of a `model_mismatch`) stays on oneharness's own report and history record,
 which onejudge reads typed but does not restate here.
+The `the_restated_failure_kinds_are_oneharnesss_own` test derives the upstream
+closed set and drift-gates this enumeration and the generated schema description.
 
 `verdict.value` is a bool for a `boolean` verdict and a number for a `numeric`
 one. `usage` fields are each independently optional — absent means "no signal",

@@ -95,6 +95,8 @@ pub struct CandidateAttempt {
     /// `server_overloaded`, `model_not_found`, `quota`, `tool_deferred`,
     /// `session_not_found`, `untrusted_directory`, `input_too_large`,
     /// `model_mismatch`), when it classified one.
+    /// `the_restated_failure_kinds_are_oneharnesss_own` derives the upstream
+    /// closed set and drift-gates this schema description and the contract doc.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub failure_kind: Option<String>,
     /// Where that reason was read (`stderr`, `stdout`, `config:env_from`).
@@ -125,6 +127,8 @@ pub struct CandidateAttempt {
 /// (`not-installed`, `spawn-error`, `auth`, `quota`, `model-not-found`,
 /// `rate-limit`, `session-not-found`, `untrusted-directory`, `input-too-large`,
 /// `model-mismatch`, `server-overloaded`).
+/// `the_restated_fall_through_reasons_are_oneharnesss_own` derives the upstream
+/// schema's closed set and drift-gates this schema description.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "sdk-schema", derive(schemars::JsonSchema))]
 pub struct FellThrough {
