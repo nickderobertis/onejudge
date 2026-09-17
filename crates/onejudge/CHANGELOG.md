@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.0](https://github.com/nickderobertis/onejudge/compare/v0.12.0...v0.13.0) - 2026-09-17
+
+### Added
+
+- *(protocol)* [**breaking**] report a supervisor turn's outcome as fields and publish the judge-seat frame grammar ([#92](https://github.com/nickderobertis/onejudge/pull/92))
+
 ## [0.12.0](https://github.com/nickderobertis/onejudge/compare/v0.11.0...v0.12.0) - 2026-09-14
 
 ### Other
