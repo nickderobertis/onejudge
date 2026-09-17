@@ -157,6 +157,29 @@ pub struct SupervisorQuery<'a> {
     /// bound a criterion is *also* in [`SupervisorQuery::done_when`]; this field
     /// is what the worker was told, never the bar on its own.
     pub notes: &'a [crate::note::DeliveredNote],
+    /// The outcome of the worker turn this decision follows.
+    pub turn: TurnOutcome,
+}
+
+/// The classified outcome of the worker turn a supervisor is deciding.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "sdk-schema", derive(schemars::JsonSchema))]
+#[serde(tag = "outcome", rename_all = "lowercase", deny_unknown_fields)]
+pub enum TurnOutcome {
+    /// The invocation carried no classified failure, including an empty reply.
+    Taken,
+    /// The invocation carried a classified failure.
+    Lost {
+        /// The invocation's failure-kind token, candidate status, or error kind.
+        #[cfg_attr(
+            feature = "sdk-schema",
+            schemars(length(min = 1, max = 80), regex(pattern = "^[^\\r\\n]+$"))
+        )]
+        cause: String,
+        /// The candidate that ran, or the last candidate attempted.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        harness: Option<String>,
+    },
 }
 
 /// A unified supervisor decision after an ordinary, nonterminal agent turn.
@@ -334,6 +357,11 @@ pub struct Assessment {
 /// config for the judge side, and a [`CommandProvider`](crate::CommandProvider)
 /// backend chooses however it likes.
 pub trait Provider {
+    /// Whether this provider can decide a worker turn that was lost. The default
+    /// keeps model-backed and third-party providers on the pre-v8 failure path.
+    fn supervises_lost_turns(&self) -> bool {
+        false
+    }
     /// Discard telemetry retained from an earlier run.
     fn reset_telemetry(&self) {}
 
@@ -1312,6 +1340,7 @@ mod tests {
                 worktree: "/worktree",
                 history_name: "unused",
                 notes: &[],
+                turn: TurnOutcome::Taken,
             },
             &messages.messages,
             evidence,
@@ -1352,6 +1381,7 @@ mod tests {
                 worktree: "/repo",
                 history_name: "run-skill",
                 notes: &[],
+                turn: TurnOutcome::Taken,
             },
             &transcript_with_event().messages,
         );
@@ -1383,6 +1413,7 @@ mod tests {
                 worktree: "/repo",
                 history_name: "run-skill",
                 notes: &[],
+                turn: TurnOutcome::Taken,
             },
             &[],
         );
@@ -1662,6 +1693,7 @@ mod tests {
             worktree: "/repo",
             history_name: "run",
             notes: &[],
+            turn: TurnOutcome::Taken,
         };
         let completed = DefaultSupervisor {
             complete: true,
@@ -1690,6 +1722,7 @@ mod tests {
             worktree: "/repo",
             history_name: "run",
             notes: &[],
+            turn: TurnOutcome::Taken,
         };
         let turn = DefaultSupervisor {
             complete: false,

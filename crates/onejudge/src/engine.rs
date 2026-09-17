@@ -14,13 +14,14 @@ use crate::error::Result;
 use crate::note::{Accepted, Criteria, DeliveredNote, Note, NoteInbox, Party, Undelivered};
 use crate::provider::{
     Assessment, AssistantTurn, EvidenceContext, JudgeKind, JudgeQuery, JudgeVerdict, Provider,
-    SkillRef, SupervisorOutcome, SupervisorQuery,
+    SkillRef, SupervisorOutcome, SupervisorQuery, TurnOutcome,
 };
 use crate::report::{Decision, JudgedTurn, NamedVerdict, Report};
 use crate::spawn::SpawnedProcess;
 use crate::telemetry::{aggregate, Telemetry};
 use crate::transcript::{Message, Role, ToolEvent, Transcript};
 use crate::usage::Usage;
+use crate::Error;
 
 /// How many consecutive **no-op exchanges** settle the loop on the work it has.
 ///
@@ -734,7 +735,59 @@ impl<'a> Engine<'a> {
                 self.provider
                     .respond(&skill, &transcript.messages, Some(skill_session.as_str()))
             };
-            let turn = turn?;
+            let turn = match turn {
+                Ok(turn) => turn,
+                Err(error) => {
+                    if !self.provider.supervises_lost_turns() || error.kind().is_none() {
+                        return Err(error);
+                    }
+                    let Some(user) = &conversation.user else {
+                        return Err(error);
+                    };
+                    let delivered = self.delivered_notes();
+                    let criteria = Criteria::compose(user.done_when.as_deref(), &delivered);
+                    let rendered = criteria.rendered();
+                    let history_files = self.history_files();
+                    let decision = self.provider.supervise_with_evidence(
+                        &SupervisorQuery {
+                            task: &conversation.input,
+                            persona: &user.persona,
+                            done_when: rendered.as_deref(),
+                            worktree: &conversation.skill.dir,
+                            history_name: &skill_session,
+                            notes: &delivered,
+                            turn: self.lost_turn(&error),
+                        },
+                        &transcript.messages,
+                        Some(user_session.as_str()),
+                        EvidenceContext {
+                            worktree: Some(&conversation.skill.dir),
+                            history_files: &history_files,
+                            artifacts: &user.artifacts,
+                        },
+                    );
+                    let _ = self.record_judge_decisions(turn_index);
+                    let decision = match decision {
+                        Ok(decision) => decision,
+                        Err(_) => return Err(error),
+                    };
+                    if let Some(usage) = &decision.usage {
+                        totals.add(usage);
+                    }
+                    match decision.outcome {
+                        SupervisorOutcome::Completed { reason } => {
+                            completion_reason = Some(reason);
+                            break;
+                        }
+                        SupervisorOutcome::Continue { message, .. } => {
+                            transcript.push(Message::user(message));
+                            continue;
+                        }
+                        SupervisorOutcome::NoInstruction { .. }
+                        | SupervisorOutcome::Unparseable { .. } => return Err(error),
+                    }
+                }
+            };
             let AssistantTurn {
                 message,
                 done: skill_done,
@@ -852,6 +905,7 @@ impl<'a> Engine<'a> {
                         worktree: &conversation.skill.dir,
                         history_name: &skill_session,
                         notes: &delivered,
+                        turn: TurnOutcome::Taken,
                     },
                     &transcript.messages,
                     Some(user_session.as_str()),
@@ -1019,6 +1073,34 @@ impl<'a> Engine<'a> {
             control: self.provider.control(),
             supervisor_control: self.provider.supervisor_control(),
             judge_decisions: self.judge_decisions(),
+        }
+    }
+
+    fn lost_turn(&self, error: &Error) -> TurnOutcome {
+        let telemetry = self.provider.invocation_telemetry();
+        let invocation = telemetry
+            .iter()
+            .rev()
+            .find(|entry| entry.role == Some(crate::TelemetryRole::Agent));
+        let candidate = invocation.and_then(|entry| {
+            entry
+                .candidates
+                .iter()
+                .find(|candidate| candidate.ran)
+                .or_else(|| entry.candidates.last())
+        });
+        let cause = candidate
+            .map(|candidate| {
+                candidate
+                    .failure_kind
+                    .clone()
+                    .unwrap_or_else(|| candidate.status.clone())
+            })
+            .or_else(|| error.kind().map(|kind| kind.as_str().to_string()))
+            .unwrap_or_else(|| "other".to_string());
+        TurnOutcome::Lost {
+            cause,
+            harness: candidate.map(|candidate| candidate.harness_id.clone()),
         }
     }
 

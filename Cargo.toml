@@ -23,11 +23,10 @@ oneharness-core = "0.13.0"
 # The message bus and its agent profile. The note contract onejudge accepts
 # (`Note`, `Accepted`, `Undelivered`, the `Notes` / `NoteInbox` channel) is
 # declared once in `onemessagebus_agent::note` and re-exported here, and the
-# command-provider frames are registered as schemas in the bus's registry beside
-# the ones its `onejudge` codec carries. Published registry versions, never a git
-# rev.
-onemessagebus = "0.4.0"
-onemessagebus-agent = "0.4.0"
+# command-provider frames are registered as schemas in the bus's registry.
+# Published registry versions, never a git rev.
+onemessagebus = "0.7.0"
+onemessagebus-agent = "0.7.0"
 # Unix only, and for exactly one call: `kill(pid, SIGTERM)` to ask a cancelled
 # `oneharness run` to tear down the harness tree it owns (`oneharness/mod.rs`).
 # A safe wrapper, because this crate forbids `unsafe_code`; already in the tree

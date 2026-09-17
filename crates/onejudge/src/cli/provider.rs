@@ -158,6 +158,14 @@ fn abilities_of(kind: ProviderKind) -> JudgeAbilities {
 }
 
 impl Provider for AnyProvider {
+    fn supervises_lost_turns(&self) -> bool {
+        match self {
+            AnyProvider::Command(provider) => provider.supervises_lost_turns(),
+            AnyProvider::Split { judges, .. } => judges.supervises_lost_turns(),
+            AnyProvider::Oneharness(_) | AnyProvider::Llmlint(_) => false,
+        }
+    }
+
     // Telemetry is collected by the backend that made the call, so this wrapper has
     // to forward both halves — without them the CLI's report carries no telemetry
     // at all, no matter what the backend recorded.

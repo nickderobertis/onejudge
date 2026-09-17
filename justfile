@@ -138,6 +138,10 @@ lint-llm-validate *args:
 python-sdk-generate:
     uv run --no-project --python 3.9 --with-requirements python/onejudge-sdk/requirements-dev.txt python python/onejudge-sdk/scripts/generate.py
 
+# Verify the committed schema-link bundle is generated from the frame types.
+check-judge-seat-frames:
+    ./scripts/check-judge-seat-frames.sh
+
 # Strict Python SDK gate: generated-contract drift, lint, types, coverage, and
 # an installed-wheel smoke test through the real onejudge subprocess.
 python-sdk-check:

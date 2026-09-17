@@ -87,6 +87,23 @@ fn fake_oneharness_bin() -> String {
     env!("CARGO_BIN_EXE_onejudge-fake-oneharness").to_string()
 }
 
+#[cfg(feature = "sdk-schema")]
+fn assert_supervisor_v8_frames_validate(frames: &[serde_json::Value]) {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .join("schemas/judge-seat-frames.json");
+    let link: onemessagebus::SchemaLink = format!("file://{}@8", path.display()).parse().unwrap();
+    let resolved = onemessagebus::LinkResolver::new(None)
+        .resolve(&link, onemessagebus::Freshness::Window)
+        .unwrap();
+    let mut registry = onemessagebus::Registry::new();
+    resolved.bundle().register_into(&mut registry).unwrap();
+    let id = "agent.onejudge-frame.supervisor@8".parse().unwrap();
+    for frame in frames {
+        registry.check(&id, frame).unwrap();
+    }
+}
+
 /// A config whose `command` provider is the echo double, with `body` appended.
 /// The binary path is JSON-encoded into the YAML flow list so a Windows path
 /// (backslashes, a drive-letter colon) stays a valid scalar cross-platform.
@@ -388,6 +405,149 @@ fn split_provider_kind_composes_two_backends() {
     assert_eq!(exit_code(&summary), 1);
     // The agent turns came from the oneharness skill backend (its `[[reply]]`).
     assert_eq!(summary.report.transcript.messages[1].content, "working");
+}
+
+#[test]
+fn protocol_v8_reports_taken_and_lost_turns_to_a_command_supervisor() {
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR"));
+    let echo = serde_json::to_string(&echo_bin()).unwrap();
+    let harness = serde_json::to_string(&fake_oneharness_bin()).unwrap();
+
+    for (name, system_prompt) in [("text", "[[reply:working]]"), ("empty", "[[no-text]]")] {
+        let log = dir.join(format!("protocol-v8-taken-{name}.jsonl"));
+        let _ = std::fs::remove_file(&log);
+        let record = serde_json::to_string(&format!("[[record:{}]]", log.display())).unwrap();
+        let config = dir.join(format!("protocol-v8-taken-{name}.yaml"));
+        std::fs::write(
+            &config,
+            format!(
+                "provider:\n  kind: split\n  skill:\n    kind: oneharness\n    bin: {harness}\n  judge:\n    kind: command\n    command: [{echo}, {record}, '[[supervisor-complete:done]]']\ntask: go\nsystem_prompt: '{system_prompt}'\nuser:\n  persona: reviewer\n  max_turns: 2\n"
+            ),
+        )
+        .unwrap();
+        let output = Command::new(onejudge_bin())
+            .args(["run", config.to_str().unwrap(), "--format", "json"])
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let frame: serde_json::Value = serde_json::from_str(
+            std::fs::read_to_string(&log)
+                .unwrap()
+                .lines()
+                .next()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(frame["turn"], serde_json::json!({"outcome": "taken"}));
+        assert_supervisor_v8_frames_validate(&[frame]);
+    }
+
+    let log = dir.join("protocol-v8-lost.jsonl");
+    let _ = std::fs::remove_file(&log);
+    let record = serde_json::to_string(&format!("[[record:{}]]", log.display())).unwrap();
+    let config = dir.join("protocol-v8-lost.yaml");
+    std::fs::write(
+        &config,
+        format!(
+            "provider:\n  kind: split\n  skill:\n    kind: oneharness\n    bin: {harness}\n  judge:\n    kind: command\n    command: [{echo}, {record}, '[[supervisor-complete:accepted loss]]']\ntask: go\nsystem_prompt: '[[fail:quota]][[harness:codex:alternate]]'\nuser:\n  persona: reviewer\n  max_turns: 2\n"
+        ),
+    )
+    .unwrap();
+    let output = Command::new(onejudge_bin())
+        .args(["run", config.to_str().unwrap(), "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let lines = std::fs::read_to_string(&log).unwrap();
+    let frames: Vec<serde_json::Value> = lines
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(frames.len(), 1);
+    assert_eq!(
+        frames[0]["turn"],
+        serde_json::json!({"outcome": "lost", "cause": "quota", "harness": "codex:alternate"})
+    );
+    assert!(frames[0]["messages"].as_array().unwrap().len() == 1);
+    assert_supervisor_v8_frames_validate(&frames);
+
+    let log = dir.join("protocol-v8-exhausted.jsonl");
+    let _ = std::fs::remove_file(&log);
+    let record = serde_json::to_string(&format!("[[record:{}]]", log.display())).unwrap();
+    let config = dir.join("protocol-v8-exhausted.yaml");
+    std::fs::write(
+        &config,
+        format!(
+            "provider:\n  kind: split\n  skill:\n    kind: oneharness\n    bin: {harness}\n  judge:\n    kind: command\n    command: [{echo}, {record}, '[[supervisor-complete:accepted loss]]']\ntask: go\nsystem_prompt: '[[fallback-exhausted:codex|quota,claude-code:backup|auth]]'\nuser:\n  persona: reviewer\n  max_turns: 2\n"
+        ),
+    )
+    .unwrap();
+    let output = Command::new(onejudge_bin())
+        .args(["run", config.to_str().unwrap(), "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let frame: serde_json::Value =
+        serde_json::from_str(std::fs::read_to_string(&log).unwrap().trim()).unwrap();
+    assert_eq!(
+        frame["turn"],
+        serde_json::json!({"outcome": "lost", "cause": "auth", "harness": "claude-code:backup"})
+    );
+    assert_supervisor_v8_frames_validate(&[frame]);
+}
+
+#[test]
+fn protocol_v8_lost_turn_can_continue_and_command_failure_preserves_the_loss() {
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR"));
+    let echo = serde_json::to_string(&echo_bin()).unwrap();
+    let once = dir.join("protocol-v8-once");
+    let log = dir.join("protocol-v8-recovery.jsonl");
+    let _ = std::fs::remove_file(&once);
+    let _ = std::fs::remove_file(&log);
+    let record = serde_json::to_string(&format!("[[record:{}]]", log.display())).unwrap();
+    let config = dir.join("protocol-v8-recovery.yaml");
+    std::fs::write(
+        &config,
+        format!(
+            "provider:\n  kind: split\n  skill:\n    kind: command\n    command: [{echo}]\n  judge:\n    kind: command\n    command: [{echo}, {record}, '[[supervisor-continue-on-lost:retry now]]']\ntask: '[[emit-exit-once:{}]]'\nsystem_prompt: work\nuser:\n  persona: reviewer\n  max_turns: 3\n",
+            once.display()
+        ),
+    )
+    .unwrap();
+    let output = Command::new(onejudge_bin())
+        .args(["run", config.to_str().unwrap(), "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let frames: Vec<serde_json::Value> = std::fs::read_to_string(&log)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(
+        frames[0]["turn"],
+        serde_json::json!({"outcome": "lost", "cause": "protocol"})
+    );
+    assert_eq!(frames[1]["turn"], serde_json::json!({"outcome": "taken"}));
+    assert_eq!(frames[1]["messages"][1]["content"], "retry now");
+    assert_supervisor_v8_frames_validate(&frames);
+
+    let harness = serde_json::to_string(&fake_oneharness_bin()).unwrap();
+    let config = dir.join("protocol-v8-supervisor-exit.yaml");
+    std::fs::write(
+        &config,
+        format!(
+            "provider:\n  kind: split\n  skill:\n    kind: oneharness\n    bin: {harness}\n  judge:\n    kind: command\n    command: [{echo}, '[[supervisor-exit]]']\ntask: go\nsystem_prompt: '[[fail:quota]]'\nuser:\n  persona: reviewer\n  max_turns: 2\n"
+        ),
+    )
+    .unwrap();
+    let output = Command::new(onejudge_bin())
+        .args(["run", config.to_str().unwrap(), "--format", "json"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    let failure: onejudge::cli::FailureReport = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(failure.error.kind, Some(onejudge::ProviderErrorKind::Quota));
 }
 
 #[test]
