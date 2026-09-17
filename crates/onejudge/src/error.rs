@@ -53,6 +53,9 @@ impl ProviderErrorKind {
     /// become [`ProviderErrorKind::Other`].
     #[must_use]
     pub fn classify(raw: &str) -> Self {
+        if raw == oneharness_core::domain::signals::FailureKind::ServerOverloaded.as_str() {
+            return Self::Overloaded;
+        }
         match raw {
             "auth" => Self::Auth,
             "rate_limit" => Self::RateLimit,
@@ -177,6 +180,16 @@ mod tests {
         assert_eq!(
             ProviderErrorKind::classify("brand_new_upstream_kind"),
             ProviderErrorKind::Other
+        );
+    }
+
+    #[test]
+    fn classify_maps_oneharness_server_overloaded_to_overloaded() {
+        assert_eq!(
+            ProviderErrorKind::classify(
+                oneharness_core::domain::signals::FailureKind::ServerOverloaded.as_str(),
+            ),
+            ProviderErrorKind::Overloaded
         );
     }
 

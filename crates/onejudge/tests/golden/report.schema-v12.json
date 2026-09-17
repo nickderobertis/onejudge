@@ -161,7 +161,7 @@
           "format": "int32"
         },
         "failure_kind": {
-          "description": "oneharness's normalized failure reason (`auth`, `rate_limit`,\n`model_not_found`, `quota`, `tool_deferred`, `session_not_found`,\n`untrusted_directory`, `input_too_large`, `model_mismatch`), when it\nclassified one.",
+          "description": "oneharness's normalized failure reason (`auth`, `rate_limit`,\n`server_overloaded`, `model_not_found`, `quota`, `tool_deferred`,\n`session_not_found`, `untrusted_directory`, `input_too_large`,\n`model_mismatch`), when it classified one.",
           "type": [
             "string",
             "null"
@@ -292,7 +292,7 @@
       ]
     },
     "FellThrough": {
-      "description": "One candidate a fallback chain fell through, with oneharness's reason token\n(`not-installed`, `spawn-error`, `auth`, `quota`, `model-not-found`,\n`rate-limit`, `session-not-found`, `untrusted-directory`, `input-too-large`,\n`model-mismatch`).",
+      "description": "One candidate a fallback chain fell through, with oneharness's reason token\n(`not-installed`, `spawn-error`, `auth`, `quota`, `model-not-found`,\n`rate-limit`, `session-not-found`, `untrusted-directory`, `input-too-large`,\n`model-mismatch`, `server-overloaded`).",
       "type": "object",
       "properties": {
         "harness": {

@@ -12,7 +12,7 @@
 //! separately-configured harness/model — again without `--harness`/`--model`.
 //! Scaffold both with `onejudge init` (which shells out to `oneharness init`).
 //!
-//! It targets **oneharness v0.12.0+** — the release embedding the `oneharness-core`
+//! It targets **oneharness v0.13.0+** — the release embedding the `oneharness-core`
 //! this crate compiles against (pinned in the workspace manifest). v0.6.9 was the
 //! first whose `run` verb answers a cancellation signal by tearing its harness
 //! tree down instead of dying and orphaning it, v0.6.14 added the
