@@ -11,14 +11,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .join("../..")
         .join("schemas/judge-seat-frames.json");
     if std::env::args().nth(1).as_deref() == Some("--check") {
-        let committed = std::fs::read_to_string(&path)?;
-        if committed != generated {
-            return Err(format!(
-                "{} differs from generated frames; regenerate with `cargo run -q -p onejudge --features sdk-schema --example generate_judge_seat_frames > schemas/judge-seat-frames.json`",
-                path.display()
-            )
-            .into());
-        }
+        onejudge::sdk_schema::check_judge_seat_frame_bundle(&path)?;
     } else {
         print!("{generated}");
     }

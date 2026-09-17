@@ -548,6 +548,50 @@ fn protocol_v8_lost_turn_can_continue_and_command_failure_preserves_the_loss() {
     assert_eq!(output.status.code(), Some(2));
     let failure: onejudge::cli::FailureReport = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(failure.error.kind, Some(onejudge::ProviderErrorKind::Quota));
+
+    let log = dir.join("protocol-v8-no-instruction.jsonl");
+    let _ = std::fs::remove_file(&log);
+    let record = serde_json::to_string(&format!("[[record:{}]]", log.display())).unwrap();
+    let config = dir.join("protocol-v8-no-instruction.yaml");
+    std::fs::write(
+        &config,
+        format!(
+            "provider:\n  kind: split\n  skill:\n    kind: oneharness\n    bin: {harness}\n  judge:\n    kind: command\n    command: [{echo}, {record}, '[[supervisor-no-instruction]]']\ntask: go\nsystem_prompt: '[[fail:quota]]'\nuser:\n  persona: reviewer\n  max_turns: 2\n"
+        ),
+    )
+    .unwrap();
+    let output = Command::new(onejudge_bin())
+        .args(["run", config.to_str().unwrap(), "--format", "json"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    let failure: onejudge::cli::FailureReport = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(failure.error.kind, Some(onejudge::ProviderErrorKind::Quota));
+    assert_eq!(std::fs::read_to_string(log).unwrap().lines().count(), 1);
+}
+
+#[test]
+fn protocol_v8_mixed_panel_does_not_supervise_a_lost_turn() {
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR"));
+    let echo = serde_json::to_string(&echo_bin()).unwrap();
+    let harness = serde_json::to_string(&fake_oneharness_bin()).unwrap();
+    let log = dir.join("protocol-v8-mixed-panel.jsonl");
+    let _ = std::fs::remove_file(&log);
+    let record = serde_json::to_string(&format!("[[record:{}]]", log.display())).unwrap();
+    let config = dir.join("protocol-v8-mixed-panel.yaml");
+    std::fs::write(
+        &config,
+        format!(
+            "provider:\n  kind: split\n  skill:\n    kind: oneharness\n    bin: {harness}\n  judges:\n    - label: command\n      kind: command\n      command: [{echo}, {record}]\n    - label: model\n      kind: oneharness\n      bin: {harness}\ntask: go\nsystem_prompt: '[[fail:quota]]'\nuser:\n  persona: reviewer\n  max_turns: 2\n"
+        ),
+    )
+    .unwrap();
+    let output = Command::new(onejudge_bin())
+        .args(["run", config.to_str().unwrap(), "--format", "json"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(!log.exists(), "the command judge was not asked: {output:?}");
 }
 
 #[test]

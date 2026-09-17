@@ -81,6 +81,25 @@ pub fn frame_bundle_version_allows(base: &SchemaBundle, current: &SchemaBundle) 
     base.schemas() == current.schemas() || current.version() > base.version()
 }
 
+/// Check that `path` contains the generated judge-seat bundle byte for byte.
+pub fn check_judge_seat_frame_bundle(path: &std::path::Path) -> Result<(), String> {
+    let generated = format!(
+        "{}\n",
+        serde_json::to_string_pretty(&judge_seat_frame_bundle())
+            .expect("the bus bundle is serializable")
+    );
+    let committed = std::fs::read_to_string(path)
+        .map_err(|failure| format!("could not read {}: {failure}", path.display()))?;
+    if committed == generated {
+        Ok(())
+    } else {
+        Err(format!(
+            "{} differs from generated frames; regenerate with `cargo run -q -p onejudge --features sdk-schema --example generate_judge_seat_frames > schemas/judge-seat-frames.json`",
+            path.display()
+        ))
+    }
+}
+
 /// Register every command-provider frame schema in `registry`, so a bus that checks
 /// records against it checks onejudge's frames against onejudge's own declaration.
 ///

@@ -506,7 +506,7 @@ impl Provider for CommandProvider {
         // The same bounded re-ask, and the same settle on exhaustion, as the
         // prompt-building seam: the protocol carries no correction field, so the
         // re-ask is the identical request rather than a nudged one.
-        supervise_with_reask(|_ask| {
+        let ask_once = |_ask| {
             let payload: SupervisorPayload = self.call(
                 &Request::Supervisor(SupervisorFrame {
                     task: query.task,
@@ -549,7 +549,15 @@ impl Provider for CommandProvider {
                 outcome,
                 usage: payload.usage,
             })
-        })
+        };
+        if matches!(query.turn, TurnOutcome::Lost { .. }) {
+            ask_once(crate::provider::Ask {
+                attempt: 0,
+                reask: None,
+            })
+        } else {
+            supervise_with_reask(ask_once)
+        }
     }
 
     fn judge(&self, query: &JudgeQuery<'_>, messages: &[Message]) -> Result<JudgeVerdict> {

@@ -605,7 +605,7 @@ impl<J: Provider + Send> Provider for JudgePanel<J> {
     fn supervises_lost_turns(&self) -> bool {
         self.judges
             .iter()
-            .all(|judge| judge.provider.lock().unwrap().supervises_lost_turns())
+            .all(|judge| judge.with(Provider::supervises_lost_turns))
     }
 
     fn reset_telemetry(&self) {

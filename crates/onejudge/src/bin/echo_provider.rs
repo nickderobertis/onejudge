@@ -233,6 +233,9 @@ fn supervisor(request: &Value, argv: &str) -> Value {
             json!({"completion": true, "reason": "the recovery turn was taken"})
         };
     }
+    if argv.contains("[[supervisor-no-instruction]]") {
+        return json!({"completion": false, "reason": "no instruction"});
+    }
     if let Some(message) = marker(argv, "supervisor-continue") {
         return json!({"completion": false, "message": message, "reason": format!("continue: {message}"), "usage": {"input_tokens": 1, "output_tokens": 1}});
     }
