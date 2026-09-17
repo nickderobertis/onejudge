@@ -494,6 +494,30 @@ fn protocol_v8_reports_taken_and_lost_turns_to_a_command_supervisor() {
         serde_json::json!({"outcome": "lost", "cause": "auth", "harness": "claude-code:backup"})
     );
     assert_supervisor_v8_frames_validate(&[frame]);
+
+    let log = dir.join("protocol-v8-status-loss.jsonl");
+    let _ = std::fs::remove_file(&log);
+    let record = serde_json::to_string(&format!("[[record:{}]]", log.display())).unwrap();
+    let config = dir.join("protocol-v8-status-loss.yaml");
+    std::fs::write(
+        &config,
+        format!(
+            "provider:\n  kind: split\n  skill:\n    kind: oneharness\n    bin: {harness}\n  judge:\n    kind: command\n    command: [{echo}, {record}, '[[supervisor-complete:accepted loss]]']\ntask: go\nsystem_prompt: '[[status:timeout]]'\nuser:\n  persona: reviewer\n  max_turns: 2\n"
+        ),
+    )
+    .unwrap();
+    let output = Command::new(onejudge_bin())
+        .args(["run", config.to_str().unwrap(), "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let frame: serde_json::Value =
+        serde_json::from_str(std::fs::read_to_string(&log).unwrap().trim()).unwrap();
+    assert_eq!(
+        frame["turn"],
+        serde_json::json!({"outcome": "lost", "cause": "timeout", "harness": "claude-code"})
+    );
+    assert_supervisor_v8_frames_validate(&[frame]);
 }
 
 #[test]
