@@ -81,7 +81,10 @@
       "persona": "A reviewer. [[judge-dwell:600:{{TMP}}/notes-judge-live.marker]][[record:{{TMP}}/notes-judge-live.log]]",
       "session": "onejudge-user",
       "task": "start the job",
-      "worktree": "/skills/demo"
+      "worktree": "/skills/demo",
+      "turn": {
+        "outcome": "taken"
+      }
     },
     {
       "history_name": "onejudge-skill",
@@ -108,7 +111,10 @@
       "persona": "A reviewer. [[judge-dwell:600:{{TMP}}/notes-judge-live.marker]][[record:{{TMP}}/notes-judge-live.log]]",
       "session": "onejudge-user",
       "task": "start the job",
-      "worktree": "/skills/demo"
+      "worktree": "/skills/demo",
+      "turn": {
+        "outcome": "taken"
+      }
     },
     {
       "messages": [
@@ -166,7 +172,10 @@
       "persona": "A reviewer. [[judge-dwell:600:{{TMP}}/notes-judge-live.marker]][[record:{{TMP}}/notes-judge-live.log]]",
       "session": "onejudge-user",
       "task": "start the job",
-      "worktree": "/skills/demo"
+      "worktree": "/skills/demo",
+      "turn": {
+        "outcome": "taken"
+      }
     },
     {
       "messages": [

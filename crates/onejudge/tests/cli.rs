@@ -3062,8 +3062,9 @@ fn a_single_judge_config_runs_exactly_as_the_released_0_8_1_did() {
         "the report differs from what onejudge 0.8.1 wrote for this config"
     );
 
-    // The judge was handed byte-for-byte the requests 0.8.1 handed it — the same
-    // bare `<session>-user` name, persona, transcript and criterion.
+    // The judge is handed the requests 0.8.1 did, plus protocol v8's required
+    // taken-turn field — with the same bare `<session>-user` name, persona,
+    // transcript and criterion.
     let escaped = serde_json::to_string(&record.display().to_string()).unwrap();
     let escaped = &escaped[1..escaped.len() - 1];
     let requests = std::fs::read_to_string(&record)
