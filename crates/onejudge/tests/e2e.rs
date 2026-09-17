@@ -807,6 +807,23 @@ fn oneharness_failure_kind_propagates_classified() {
 }
 
 #[test]
+fn oneharness_server_overloaded_failure_kind_reaches_attribution_unchanged() {
+    let provider = fake_oneharness();
+    let engine = Engine::new(&provider, settings());
+    let skill = skill_with("[[fail:server_overloaded]]");
+    let err = engine
+        .run(&Conversation::single_turn(skill, "go"))
+        .unwrap_err();
+
+    assert_eq!(err.kind(), Some(ProviderErrorKind::Other));
+    let attribution = err.attribution().expect("failed turn is attributable");
+    assert_eq!(
+        attribution.candidates[0].failure_kind.as_deref(),
+        Some("server_overloaded")
+    );
+}
+
+#[test]
 fn oneharness_judge_decides_over_the_transcript() {
     let provider = fake_oneharness();
     let engine = Engine::new(&provider, settings());

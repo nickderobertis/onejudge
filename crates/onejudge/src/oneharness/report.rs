@@ -285,6 +285,7 @@ pub(crate) fn classify(kind: FailureKind) -> ProviderErrorKind {
     match kind {
         FailureKind::Auth => ProviderErrorKind::Auth,
         FailureKind::RateLimit => ProviderErrorKind::RateLimit,
+        FailureKind::ServerOverloaded => ProviderErrorKind::Other,
         FailureKind::ModelNotFound => ProviderErrorKind::ModelNotFound,
         FailureKind::Quota => ProviderErrorKind::Quota,
         // A clean exit that only *deferred* a builtin tool call: a real refusal to
@@ -859,6 +860,7 @@ mod tests {
         for (kind, expected) in [
             (FailureKind::Auth, ProviderErrorKind::Auth),
             (FailureKind::RateLimit, ProviderErrorKind::RateLimit),
+            (FailureKind::ServerOverloaded, ProviderErrorKind::Other),
             (FailureKind::ModelNotFound, ProviderErrorKind::ModelNotFound),
             (FailureKind::Quota, ProviderErrorKind::Quota),
             (FailureKind::ToolDeferred, ProviderErrorKind::Other),
