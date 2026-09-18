@@ -1676,8 +1676,9 @@ mod tests {
         // Harness/model selection is oneharness's config's job now.
         assert!(!args.iter().any(|a| a == "--harness"));
         assert!(!args.iter().any(|a| a == "--model"));
-        // `oneharness run` has no `--format` flag; passing it is a live-path bug.
-        assert!(!args.iter().any(|a| a == "--format"));
+        // onejudge asks for the JSON report by name rather than relying on it
+        // being `oneharness run`'s default, which moves to text in 0.14.0.
+        assert!(args.windows(2).any(|w| w == ["--format", "json"]));
         // A buffered provider never asks for the stream.
         assert!(!args.iter().any(|a| a == "--stream"));
 

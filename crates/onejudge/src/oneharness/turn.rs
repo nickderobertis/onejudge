@@ -87,9 +87,18 @@ pub(crate) fn request(spec: &TurnSpec) -> RunRequest {
 /// transcript under the OS argument ceiling.
 #[must_use]
 pub(crate) fn argv(spec: &TurnSpec) -> Vec<String> {
-    // `oneharness run` emits a JSON report by default; `--compact` makes it a
-    // single line. There is no `--format` flag on `run`.
-    let mut args = vec!["run".into(), "--compact".into()];
+    // onejudge reads oneharness's machine contract, so it asks for it by name
+    // rather than relying on JSON being `run`'s default (oneharness 0.14.0 moves
+    // that default to a human-readable view); `--compact` puts it on one line.
+    // Emitted on the streaming path too, deliberately: `--format` beside
+    // `--stream` leaves the NDJSON protocol unchanged, and one argv shape for
+    // both paths keeps the statement of intent unconditional.
+    let mut args = vec![
+        "run".into(),
+        "--format".into(),
+        "json".into(),
+        "--compact".into(),
+    ];
     if spec.events {
         args.push("--events".into());
     }
@@ -152,12 +161,13 @@ mod tests {
     /// here, and it asserts the field is actually *set* for a spec that emits the
     /// flag — not merely that a field of that name exists.
     ///
-    /// `None` is the one flag with no field, and deliberately so: `RunRequest`'s
+    /// `None` marks the flags with no field, and deliberately so: `RunRequest`'s
     /// own docs exclude `--compact` because it is about how the CLI *prints* a
-    /// report, not how the engine produces one, and an in-process caller is handed
-    /// the report as a value.
+    /// report, not how the engine produces one, and `--format` is the same kind of
+    /// flag; an in-process caller is handed the report as a value.
     type FieldSet = fn(&RunRequest) -> bool;
     const MAPPED_FLAGS: &[(&str, Option<(&str, FieldSet)>)] = &[
+        ("--format", None),
         ("--compact", None),
         ("--events", Some(("events", |r| r.events))),
         ("--history", Some(("history", |r| r.history == Some(true)))),
@@ -238,9 +248,12 @@ mod tests {
         let request = request(&TurnSpec::default());
         let argv = argv(&TurnSpec::default());
         for (flag, field) in MAPPED_FLAGS {
-            // `--compact`, `--history` and `--prompt-file` ride every turn; the
-            // rest are opt-in on both renderings or on neither.
-            if matches!(*flag, "--compact" | "--history" | "--prompt-file") {
+            // `--format`, `--compact`, `--history` and `--prompt-file` ride every
+            // turn; the rest are opt-in on both renderings or on neither.
+            if matches!(
+                *flag,
+                "--format" | "--compact" | "--history" | "--prompt-file"
+            ) {
                 continue;
             }
             assert!(
