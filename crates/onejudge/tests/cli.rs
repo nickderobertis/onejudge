@@ -3291,3 +3291,60 @@ fn artifact_flag_and_env_replace_the_configured_list_like_the_persona_overrides(
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn binary_asks_the_spawned_oneharness_for_its_json_report_by_name() {
+    // oneharness 0.14.0 moves `run`'s default output to a human-readable view, so
+    // onejudge — a program reading the machine contract — asks for JSON with
+    // `--format json` rather than relying on the default. Driven through the real
+    // binary at the spawning seam (`bin:`): both parties record the argv the
+    // double was spawned with, and the run still reads the report it answered.
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR"));
+    let agent_log = dir.join("format-json-agent.argv");
+    let judge_log = dir.join("format-json-judge.argv");
+    let _ = std::fs::remove_file(&agent_log);
+    let _ = std::fs::remove_file(&judge_log);
+    let config = dir.join("format-json.yaml");
+    let bin = serde_json::to_string(&fake_oneharness_bin()).unwrap();
+    std::fs::write(
+        &config,
+        format!(
+            "provider:\n  kind: oneharness\n  bin: {bin}\n\
+             task: go\n\
+             system_prompt: '[[reply:argv recorded]][[record-argv:{}]]'\n\
+             user:\n  persona: 'A tester. [[record-argv:{}]]'\n  done_when: argv recorded\n  max_turns: 3\n",
+            agent_log.display(),
+            judge_log.display(),
+        ),
+    )
+    .unwrap();
+    let output = Command::new(onejudge_bin())
+        .args(["run", config.to_str().unwrap(), "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: onejudge::Report =
+        serde_json::from_str(&String::from_utf8(output.stdout).unwrap()).unwrap();
+    assert_eq!(report.transcript.messages[1].content, "argv recorded");
+
+    for (side, log) in [("agent", &agent_log), ("judge", &judge_log)] {
+        let recorded = std::fs::read_to_string(log)
+            .unwrap_or_else(|e| panic!("the {side} side recorded no argv: {e}"));
+        let invocations: Vec<Vec<&str>> = recorded
+            .split("=== argv ===\n")
+            .filter(|chunk| !chunk.is_empty())
+            .map(|chunk| chunk.lines().collect())
+            .collect();
+        assert!(!invocations.is_empty(), "no {side} invocation was recorded");
+        for argv in invocations {
+            assert!(
+                argv.windows(2).any(|w| w == ["--format", "json"]),
+                "the {side} side was spawned without `--format json`: {argv:?}"
+            );
+        }
+    }
+}

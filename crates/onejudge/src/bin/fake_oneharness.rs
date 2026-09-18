@@ -108,7 +108,10 @@
 //! **What a party was actually given.** `[[record-prompt:PATH]]` — read from
 //! `--system` on the agent side and from the prompt on the judge side — appends the
 //! whole prompt to `PATH`, so a test can assert on the framing onejudge composed
-//! rather than on a re-derivation of it.
+//! rather than on a re-derivation of it. `[[record-argv:PATH]]`, read the same
+//! way, appends the argv the run was spawned with, so a test can assert on what
+//! onejudge asked oneharness for (`--format json`, which this double accepts and
+//! whose only other value, `text`, it refuses as unreadable).
 //!
 //! **A supervisor with nothing to say.** In a *persona* (which the supervisor
 //! prompt inlines), `[[supervisor-silent]]` answers `completion:false` with no
@@ -210,6 +213,13 @@ fn main() {
         emit_error("could not read prompt from stdin");
     }
 
+    // `json` is the only view this double prints; the real `run` would print a
+    // human-readable text view under `--format text`, which no reader parses.
+    if let Some(format) = flags.get("--format").filter(|f| f.as_str() != "json") {
+        emit_error(&format!(
+            "`--format {format}` is not machine-readable (the fake prints only json)"
+        ));
+    }
     let system = flags.get("--system").map_or("", String::as_str);
     let session = flags.get("--session").cloned();
 
@@ -259,6 +269,20 @@ fn main() {
             .unwrap_or_else(|e| emit_error(&format!("could not open the prompt log: {e}")));
         file.write_all(format!("{prompt}\n=== end of prompt ===\n").as_bytes())
             .unwrap_or_else(|e| emit_error(&format!("could not write the prompt log: {e}")));
+    }
+    // The argv this invocation was spawned with, one line per argument, appended
+    // after a `=== argv ===` header — so a test asserts on what onejudge asked
+    // oneharness for, across the real subprocess boundary.
+    if let Some(path) = marker(steering, "record-argv") {
+        use std::io::Write as _;
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .unwrap_or_else(|e| emit_error(&format!("could not open the argv log: {e}")));
+        let args: Vec<String> = std::env::args().skip(1).collect();
+        file.write_all(format!("=== argv ===\n{}\n", args.join("\n")).as_bytes())
+            .unwrap_or_else(|e| emit_error(&format!("could not write the argv log: {e}")));
     }
     if let Some(handle) = marker(steering, "orphan") {
         orphan_harness(handle);
@@ -994,6 +1018,7 @@ fn parse_flags() -> HashMap<String, String> {
         "--prompt",
         "--prompt-file",
         "--output-format",
+        "--format",
         "--cwd",
         "--history-name",
         "--mode",

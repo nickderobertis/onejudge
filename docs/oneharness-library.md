@@ -7,7 +7,8 @@ expressed as a typed call — **including the invocation itself**. A turn is
 
 The pin is in the workspace manifest; everything below is verified against it.
 The **CLI** floor an operator installs is a different number — currently
-**0.13.0+**, the release that embeds the pinned core — because the two crates
+**0.14.0+**, the first release that embeds at least the pinned core and accepts
+the `run --format json` the spawning seam passes — because the two crates
 version independently. Never read one off the other.
 
 One seam still spawns, and this file records exactly why — so the decision is
@@ -86,6 +87,7 @@ field fails the build), and both columns against the rows below.
 | `--mode` | `mode: Option<PermissionMode>` |
 | `--prompt-file` | `prompt: Vec<String>` — an owned value, so the `-`/stdin hop that exists only to dodge the OS argv ceiling disappears; oneharness's own `LARGE_INPUT_THRESHOLD` moves a large prompt off-argv for the harness |
 | `--compact` | **none, deliberately** — `RunRequest`'s own docs exclude it as "about how the shell *prints* the report, not how the engine produces it". An in-process caller is handed the `RunReport` value, so there is nothing to compact. Not a gap. |
+| `--format` | **none, deliberately** — like `--compact`, it chooses how the CLI *prints* the report (`json` for onejudge, which reads the machine contract rather than relying on the default oneharness 0.14.0 moves to text). An in-process caller is handed the `RunReport` value, so there is nothing to format. |
 
 ## The one seam that still spawns, and why
 

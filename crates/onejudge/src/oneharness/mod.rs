@@ -12,8 +12,10 @@
 //! separately-configured harness/model — again without `--harness`/`--model`.
 //! Scaffold both with `onejudge init` (which shells out to `oneharness init`).
 //!
-//! It targets **oneharness v0.13.0+** — the release embedding the `oneharness-core`
-//! this crate compiles against (pinned in the workspace manifest). v0.6.9 was the
+//! It targets **oneharness v0.14.0+** — the first release that embeds an
+//! `oneharness-core` at least as new as the one this crate compiles against (pinned
+//! in the workspace manifest) and accepts the `run --format json` the spawning seam
+//! passes on every turn. v0.6.9 was the
 //! first whose `run` verb answers a cancellation signal by tearing its harness
 //! tree down instead of dying and orphaning it, v0.6.14 added the
 //! `run --control` / `interrupt` pair it reports the address of, and v0.11.0 is
@@ -1676,8 +1678,9 @@ mod tests {
         // Harness/model selection is oneharness's config's job now.
         assert!(!args.iter().any(|a| a == "--harness"));
         assert!(!args.iter().any(|a| a == "--model"));
-        // `oneharness run` has no `--format` flag; passing it is a live-path bug.
-        assert!(!args.iter().any(|a| a == "--format"));
+        // onejudge asks for the JSON report by name rather than relying on it
+        // being `oneharness run`'s default, which moves to text in 0.14.0.
+        assert!(args.windows(2).any(|w| w == ["--format", "json"]));
         // A buffered provider never asks for the stream.
         assert!(!args.iter().any(|a| a == "--stream"));
 
