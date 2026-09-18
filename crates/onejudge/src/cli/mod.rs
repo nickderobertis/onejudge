@@ -32,8 +32,10 @@ const DEFAULT_CONFIG: &str = "onejudge.yaml";
 pub const STARTER_CONFIG: &str = include_str!("starter.yaml");
 
 /// The oldest `oneharness` **CLI** this build works against, as told to an
-/// operator: the release carrying the `oneharness-core` this crate compiles
-/// against, so the report it parses is one that CLI can produce.
+/// operator: the first release that both carries an `oneharness-core` at least
+/// as new as the one this crate compiles against (so the report it parses is one
+/// that CLI can produce) and accepts `run --format json`, which the spawning seam
+/// passes on every turn (`oneharness/turn.rs`).
 ///
 /// One source for every message the CLI prints, and drift-gated in this module's
 /// tests against the `oneharness-core` requirement in the workspace manifest and
@@ -42,28 +44,28 @@ pub const STARTER_CONFIG: &str = include_str!("starter.yaml");
 ///
 /// It is the CLI's own version, which is **not** the pinned core's. The two
 /// crates version independently — there is no `oneharness` 0.6.13, the 0.6.14
-/// CLI carried `oneharness-core` 0.6.13, and the 0.13.0 CLI carries
-/// `oneharness-core` 0.14.0 — so naming the core version here would tell an
+/// CLI carried `oneharness-core` 0.6.13, and the 0.14.0 CLI carries
+/// `oneharness-core` 0.15.0 — so naming the core version here would tell an
 /// operator to install a CLI that was never published. What ties the two is
 /// [`MIN_ONEHARNESS_CORE`], and the gate below is written against that.
-const MIN_ONEHARNESS: &str = "0.13.0";
+const MIN_ONEHARNESS: &str = "0.14.0";
 
 /// The `oneharness-core` version the [`MIN_ONEHARNESS`] CLI release embeds, read
-/// off that release's own `oneharness-core` requirement (`oneharness` 0.13.0
-/// depends on `^0.14.0`).
+/// off that release's own `oneharness-core` requirement (`oneharness` 0.14.0
+/// depends on `^0.15.0`).
 ///
 /// The two constants are one fact and are bumped together. It exists because the
 /// relation the drift gate actually needs — "a CLI an operator installs at the
 /// advertised version has an engine at least as new as the one this build parses
 /// reports from" — is not a comparison of the two *numbers*: they belong to
-/// different crates, and 0.13.0 is the CLI carrying the required 0.14.0 core.
+/// different crates, and 0.14.0 is the CLI carrying a core newer than the pin.
 /// Recording the pairing makes that comparison expressible, and offline.
 ///
 /// Test-only because the gate is the only thing that reads it: nothing an
 /// operator sees names a core version, and a second number in a CLI message
 /// would be one more copy to drift.
 #[cfg(test)]
-const MIN_ONEHARNESS_CORE: &str = "0.14.0";
+const MIN_ONEHARNESS_CORE: &str = "0.15.0";
 
 /// Errors surfaced by the CLI. Config/validation problems are separated from IO
 /// and engine failures so the entrypoint can exit with a fitting code.

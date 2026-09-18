@@ -9,8 +9,9 @@ already finished the wrong work.
 oneharness 0.6.14 provides the lever: `oneharness run --control` opens a unix
 socket for the run's lifetime, and a **separate** `oneharness interrupt` process
 aborts the in-flight turn and delivers a replacement message in one operation.
-onejudge's advertised CLI floor is **0.13.0+** — the release that embeds the
-`oneharness-core` the workspace manifest pins. The two crates version
+onejudge's advertised CLI floor is **0.14.0+** — the first release that embeds
+at least the `oneharness-core` the workspace manifest pins and accepts
+`run --format json`. The two crates version
 independently; never read one number off the other.
 
 onejudge's part is deliberately narrow, and it is all of this page:
