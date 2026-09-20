@@ -281,12 +281,10 @@ tree. The **spawning** seam still escalates through three rungs — close stdout
 SIGTERM, kill — because a spawned producer has to be reached through the OS, and
 each rung reaches a case the one before cannot; two e2e tests gate that pair, one
 per rung. The `oneharness-core` pin lives in the workspace manifest and nowhere
-else — **0.17.0**, the core that writes a per-run history pointer line and reads
-it back typed, which an engine linking this crate takes only through this
-requirement (`tests/e2e.rs` holds the floor by naming the reader; onejudge adds
-nothing to the mechanism); the **CLI** floor an operator installs is a different
-number (**0.16.0+**, the first release embedding at least the pin and accepting
-`run --format json`) because the two crates version independently.
+else (its floor is held by name in `tests/e2e.rs`, which names the newest core
+symbols the crate relies on); the **CLI** floor an operator installs is a
+different number (**0.16.0+**, the first release embedding at least the pin and
+accepting `run --format json`) because the two crates version independently.
 Never infer one from the other — `cli/mod.rs` holds the pairing and gates it. See
 `docs/oneharness-library.md` before touching either.
 
