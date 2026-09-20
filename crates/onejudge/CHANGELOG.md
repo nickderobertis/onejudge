@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.3](https://github.com/nickderobertis/onejudge/compare/v0.13.2...v0.13.3) - 2026-09-20
+
+### Added
+
+- *(deps)* link the oneharness-core that writes a per-run pointer line for every harness run ([#100](https://github.com/nickderobertis/onejudge/pull/100))
+
 ## [0.13.2](https://github.com/nickderobertis/onejudge/compare/v0.13.1...v0.13.2) - 2026-09-18
 
 ### Added
