@@ -286,9 +286,7 @@ the first release writing the report schema the linked core parses and accepting
 `run --format json`) because the two crates version independently — the pin may
 be newer than the core that CLI embeds while the report schema is the same, and
 only a report that moved moves the floor. Never infer one from the other —
-`cli/mod.rs` gates each on its own: the pin by naming the newest core symbols the
-crate relies on, the floor by the report schema. See `docs/oneharness-library.md`
-before touching either.
+`cli/mod.rs` gates each. See `docs/oneharness-library.md` before touching either.
 
 The **free deterministic harness** is reachable through this layer:
 `provider.mock_harness` / `OneharnessProvider::with_mock_harness` forwards

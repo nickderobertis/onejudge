@@ -3331,10 +3331,7 @@ fn an_in_process_turn_runs_the_real_engine_over_a_deterministic_harness() {
 
 #[test]
 fn the_linked_core_writes_a_history_pointer_for_every_run_and_reads_it_back_typed() {
-    // The floor of the `oneharness-core` requirement, driven: `cli/mod.rs`'s
-    // gate holds the requirement by number and names `read_pointers` and
-    // `HistoryPointer` (which arrived in 0.17.0) so a lock resolved below that
-    // release fails to compile; this journey is what those symbols are for.
+    // What the 0.17.0 floor (gated in `cli/mod.rs`) is for, driven end to end.
     // onejudge adds nothing to the mechanism — the pointer file
     // is oneharness's own configuration (`history_pointer_file`), the write is
     // the linked engine's, and the reader is the core's — so what is proven is

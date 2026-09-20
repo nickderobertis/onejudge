@@ -56,15 +56,10 @@ const MIN_ONEHARNESS: &str = "0.14.0";
 
 /// The oneharness **report schema** the [`MIN_ONEHARNESS`] CLI writes, read off
 /// the `oneharness-core` that release embeds (`oneharness` 0.14.0 depends on
-/// `^0.15.0`, whose `domain::report::SCHEMA_VERSION` is `0.11`).
-///
-/// This is the relation the drift gate actually needs — "a CLI an operator
-/// installs at the advertised version writes the report this build parses" — and
-/// it is a property of the report contract, not of either crate's version number:
-/// a newer core that still writes the same schema reads the floor CLI's report
-/// unchanged, and a core whose schema moved does not, however its number
-/// compares. The gate holds the linked core's declared schema equal to this, so a
-/// relink that moves the report fails until the floor (and this constant) follow.
+/// `^0.15.0`, whose `domain::report::SCHEMA_VERSION` is `0.11`). The gate holds
+/// the linked core's declared schema equal to it (see [`MIN_ONEHARNESS`] for why
+/// the schema, not a version, is what ties the two), so a relink that moves the
+/// report fails until the floor and this constant follow.
 ///
 /// Test-only because the gate is the only thing that reads it: nothing an
 /// operator sees names a schema, and a second number in a CLI message would be
@@ -1137,12 +1132,8 @@ mod tests {
         // is the source; this is the gate that keeps the floor and its copies
         // from drifting off it — which they had.
         //
-        // The relation is schema equality, not an ordering of the two crates'
-        // versions: the linked core may be newer than the one the floor CLI
-        // embeds (0.17.0 against 0.15.0 today) so long as both write the same
-        // report, and a core whose report moved fails here however its number
-        // compares — see `MIN_ONEHARNESS_REPORT_SCHEMA` for why the two numbers
-        // cannot be compared to each other.
+        // Schema equality, never an ordering of the two crates' versions — see
+        // `MIN_ONEHARNESS`.
         assert_eq!(
             oneharness_core::domain::report::SCHEMA_VERSION,
             MIN_ONEHARNESS_REPORT_SCHEMA,
