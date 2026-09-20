@@ -12,10 +12,10 @@
 //! separately-configured harness/model — again without `--harness`/`--model`.
 //! Scaffold both with `onejudge init` (which shells out to `oneharness init`).
 //!
-//! It targets **oneharness v0.16.0+** — the first release that embeds an
-//! `oneharness-core` at least as new as the one this crate compiles against (pinned
-//! in the workspace manifest) and accepts the `run --format json` the spawning seam
-//! passes on every turn. v0.6.9 was the
+//! It targets **oneharness v0.14.0+** — the first release that writes the report
+//! schema the `oneharness-core` this crate compiles against (pinned in the
+//! workspace manifest) parses, and accepts the `run --format json` the spawning
+//! seam passes on every turn. v0.6.9 was the
 //! first whose `run` verb answers a cancellation signal by tearing its harness
 //! tree down instead of dying and orphaning it, v0.6.14 added the
 //! `run --control` / `interrupt` pair it reports the address of, and v0.11.0 is
