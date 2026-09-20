@@ -46,5 +46,6 @@ schemars = "1"
 
 [profile.dev]
 # Faster incremental e2e: the suite spawns the test-double binaries many times,
-# so a cheap debug build beats optimizing the doubles.
+# so a cheap debug build beats optimizing the doubles. The profile's debuginfo
+# level (`debug = 1`) lives in `.cargo/config.toml`, and the two tables merge.
 opt-level = 0
