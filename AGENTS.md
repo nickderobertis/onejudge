@@ -282,9 +282,10 @@ SIGTERM, kill — because a spawned producer has to be reached through the OS, a
 each rung reaches a case the one before cannot; two e2e tests gate that pair, one
 per rung. The `oneharness-core` pin lives in the workspace manifest and nowhere
 else; the **CLI** floor an operator installs is a different number (**0.14.0+**,
-the first release embedding at least the pin and accepting `run --format json`) because the two crates version independently.
-Never infer one from the other — `cli/mod.rs` holds the pairing and gates it. See
-`docs/oneharness-library.md` before touching either.
+the first release writing the report schema the linked core parses and accepting
+`run --format json`) because the two crates version independently. Never infer
+one from the other — `cli/mod.rs` gates each. See `docs/oneharness-library.md`
+before touching either.
 
 The **free deterministic harness** is reachable through this layer:
 `provider.mock_harness` / `OneharnessProvider::with_mock_harness` forwards

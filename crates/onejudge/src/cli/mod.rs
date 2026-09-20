@@ -32,40 +32,49 @@ const DEFAULT_CONFIG: &str = "onejudge.yaml";
 pub const STARTER_CONFIG: &str = include_str!("starter.yaml");
 
 /// The oldest `oneharness` **CLI** this build works against, as told to an
-/// operator: the first release that both carries an `oneharness-core` at least
-/// as new as the one this crate compiles against (so the report it parses is one
-/// that CLI can produce) and accepts `run --format json`, which the spawning seam
-/// passes on every turn (`oneharness/turn.rs`).
+/// operator: the first release that both writes the report schema this crate's
+/// linked `oneharness-core` parses (so the report it produces is one this build
+/// reads) and accepts `run --format json`, which the spawning seam passes on
+/// every turn (`oneharness/turn.rs`).
 ///
 /// One source for every message the CLI prints, and drift-gated in this module's
-/// tests against the `oneharness-core` requirement in the workspace manifest and
-/// against the prose that repeats it — so bumping the pin without bumping what an
+/// tests against the linked core's own report schema and against the prose that
+/// repeats it — so relinking a core whose report moved without moving what an
 /// operator is told to install fails the gate instead of shipping a wrong number.
 ///
-/// It is the CLI's own version, which is **not** the pinned core's. The two
-/// crates version independently — there is no `oneharness` 0.6.13, the 0.6.14
-/// CLI carried `oneharness-core` 0.6.13, and the 0.14.0 CLI carries
-/// `oneharness-core` 0.15.0 — so naming the core version here would tell an
-/// operator to install a CLI that was never published. What ties the two is
-/// [`MIN_ONEHARNESS_CORE`], and the gate below is written against that.
+/// It is the CLI's own version, which is **not** the linked core's, and the two
+/// are deliberately **not** ordered against each other. The crates version
+/// independently — there is no `oneharness` 0.6.13, the 0.6.14 CLI carried
+/// `oneharness-core` 0.6.13, and the 0.14.0 CLI carries `oneharness-core` 0.15.0
+/// — so naming the core version here would tell an operator to install a CLI
+/// that was never published, and holding the CLI to embed a core at least as new
+/// as the linked one would move the floor on every relink whether or not the
+/// report changed. The linked core may be newer than the one this floor embeds
+/// so long as both write the same report schema: what ties the two is
+/// [`MIN_ONEHARNESS_REPORT_SCHEMA`], and the gate below is written against that.
 const MIN_ONEHARNESS: &str = "0.14.0";
 
-/// The `oneharness-core` version the [`MIN_ONEHARNESS`] CLI release embeds, read
-/// off that release's own `oneharness-core` requirement (`oneharness` 0.14.0
-/// depends on `^0.15.0`).
-///
-/// The two constants are one fact and are bumped together. It exists because the
-/// relation the drift gate actually needs — "a CLI an operator installs at the
-/// advertised version has an engine at least as new as the one this build parses
-/// reports from" — is not a comparison of the two *numbers*: they belong to
-/// different crates, and 0.14.0 is the CLI carrying a core newer than the pin.
-/// Recording the pairing makes that comparison expressible, and offline.
+/// The oneharness **report schema** the [`MIN_ONEHARNESS`] CLI writes, read off
+/// the `oneharness-core` that release embeds (`oneharness` 0.14.0 depends on
+/// `^0.15.0`, whose `domain::report::SCHEMA_VERSION` is `0.11`). The gate holds
+/// the linked core's declared schema equal to it (see [`MIN_ONEHARNESS`] for why
+/// the schema, not a version, is what ties the two), so a relink that moves the
+/// report fails until the floor and this constant follow.
 ///
 /// Test-only because the gate is the only thing that reads it: nothing an
-/// operator sees names a core version, and a second number in a CLI message
-/// would be one more copy to drift.
+/// operator sees names a schema, and a second number in a CLI message would be
+/// one more copy to drift.
 #[cfg(test)]
-const MIN_ONEHARNESS_CORE: &str = "0.15.0";
+const MIN_ONEHARNESS_REPORT_SCHEMA: &str = "0.11";
+
+/// The oldest `oneharness-core` this crate can be built against: the release
+/// that writes a per-run history pointer line and reads it back typed, which a
+/// downstream engine takes only through this crate's requirement. The manifest
+/// requirement is held to it by the gate below, and — so the number cannot lie —
+/// the symbols that arrived in it are named by a test in this module, which a
+/// lock resolved below it fails to compile.
+#[cfg(test)]
+const MIN_ONEHARNESS_CORE: &str = "0.17.0";
 
 /// Errors surfaced by the CLI. Config/validation problems are separated from IO
 /// and engine failures so the entrypoint can exit with a fitting code.
@@ -1090,31 +1099,49 @@ mod tests {
     use crate::Transcript;
 
     #[test]
-    fn the_advertised_oneharness_minimum_tracks_the_pin_and_the_prose() {
-        // The version an operator is told to install is restated in a manifest
-        // requirement, in CLI messages, and in prose. Only the manifest actually
-        // constrains the build, so it is the source; this is the gate that keeps
-        // the other two from drifting off it — which they had.
-        //
-        // The relation is `>=`, not `==`: a pin that moves forward is the ordinary
-        // case, and only a pin that moves PAST what the advertised CLI embeds is
-        // drift. It is checked against `MIN_ONEHARNESS_CORE`, not against
-        // `MIN_ONEHARNESS` — see that constant's doc for why the two numbers
-        // cannot be compared to each other.
-        let manifest = include_str!("../../../../Cargo.toml");
-        let pinned = manifest
-            .lines()
-            .find_map(|line| line.strip_prefix("oneharness-core = "))
-            .expect("the workspace pins oneharness-core")
-            .trim()
-            .trim_matches('"')
-            .to_string();
+    fn the_linked_core_is_at_least_the_release_carrying_the_history_pointer() {
+        // The manifest requirement is the one thing that constrains the build;
+        // this holds it at the floor by number, and the test after it by name.
+        let pinned = pinned_oneharness_core();
         assert!(
-            version_parts(MIN_ONEHARNESS_CORE) >= version_parts(&pinned),
-            "the advertised oneharness minimum {MIN_ONEHARNESS} embeds oneharness-core \
-             {MIN_ONEHARNESS_CORE}, which is older than the pinned oneharness-core {pinned}, so \
-             an operator following it installs a CLI that cannot produce the report this build \
-             parses"
+            version_parts(&pinned) >= version_parts(MIN_ONEHARNESS_CORE),
+            "the workspace requires oneharness-core {pinned}, below the {MIN_ONEHARNESS_CORE} \
+             floor whose history pointer line downstream engines take through this crate"
+        );
+        // Named, not numbered: `read_pointers` and `HistoryPointer` arrived in
+        // 0.17.0, so a lock resolved below that release fails to compile this
+        // test rather than linking a core that writes no pointer line. The
+        // journey that drives them through the engine is in `tests/e2e.rs`.
+        let reader: fn(
+            &std::path::Path,
+        ) -> Result<
+            oneharness_core::io::history::HistoryPointers,
+            oneharness_core::errors::OneharnessError,
+        > = oneharness_core::io::history::read_pointers;
+        let record = std::any::type_name::<oneharness_core::domain::history::HistoryPointer>();
+        assert!(record.ends_with("HistoryPointer"), "{record}");
+        let read = reader(std::path::Path::new("")).expect("a missing file reads as empty");
+        assert!(read.pointers.is_empty() && read.skipped == 0, "{read:?}");
+    }
+
+    #[test]
+    fn the_advertised_oneharness_minimum_tracks_the_report_schema_and_the_prose() {
+        // The version an operator is told to install is restated in CLI messages
+        // and in prose, and what makes it right is the report contract: the
+        // floor CLI has to write the schema the linked core parses. That schema
+        // is the source; this is the gate that keeps the floor and its copies
+        // from drifting off it — which they had.
+        //
+        // Schema equality, never an ordering of the two crates' versions — see
+        // `MIN_ONEHARNESS`.
+        assert_eq!(
+            oneharness_core::domain::report::SCHEMA_VERSION,
+            MIN_ONEHARNESS_REPORT_SCHEMA,
+            "the linked oneharness-core parses report schema {}, but the advertised \
+             oneharness minimum {MIN_ONEHARNESS} writes {MIN_ONEHARNESS_REPORT_SCHEMA}, so an \
+             operator following it installs a CLI whose report this build cannot read; move \
+             the floor to the first CLI writing the new schema and record it here",
+            oneharness_core::domain::report::SCHEMA_VERSION
         );
 
         // Everything else that repeats it — prose and rustdoc alike — so a bump
@@ -1144,6 +1171,17 @@ mod tests {
                 "{name} does not mention the advertised oneharness minimum {MIN_ONEHARNESS}"
             );
         }
+    }
+
+    /// The `oneharness-core` requirement as the workspace manifest states it.
+    fn pinned_oneharness_core() -> String {
+        include_str!("../../../../Cargo.toml")
+            .lines()
+            .find_map(|line| line.strip_prefix("oneharness-core = "))
+            .expect("the workspace pins oneharness-core")
+            .trim()
+            .trim_matches('"')
+            .to_string()
     }
 
     /// A `major.minor.patch` string as comparable numbers. Only used by the drift

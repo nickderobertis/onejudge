@@ -18,10 +18,12 @@ description = "A simulated interaction and evaluation loop over oneharness: driv
 # oneharness's own engine crate. onejudge depends on it for the **wire contract**
 # of the boundary it drives — `RunReport` / `RunResult` / `FailureKind` /
 # `RunStreamEnvelope` — instead of re-declaring shadow serde structs that drift.
-# 0.14.0 is the floor that classifies Codex `server_overloaded`, retries the
-# same candidate as configured, and then falls through. A published registry
-# version, never a git rev.
-oneharness-core = "0.14.0"
+# 0.17.0 is the floor that writes a per-run history pointer line for every
+# harness run and reads it back typed — a line downstream engines take only
+# through this requirement (a `^0.14` lock cannot resolve it). The spawned CLI
+# floor is gated separately, on the report schema, in `cli/mod.rs`. A published
+# registry version, never a git rev.
+oneharness-core = "0.17.0"
 # The message bus and its agent profile. The note contract onejudge accepts
 # (`Note`, `Accepted`, `Undelivered`, the `Notes` / `NoteInbox` channel) is
 # declared once in `onemessagebus_agent::note` and re-exported here, and the

@@ -3330,6 +3330,52 @@ fn an_in_process_turn_runs_the_real_engine_over_a_deterministic_harness() {
 }
 
 #[test]
+fn the_linked_core_writes_a_history_pointer_for_every_run_and_reads_it_back_typed() {
+    // What the 0.17.0 floor (gated in `cli/mod.rs`) is for, driven end to end.
+    // onejudge adds nothing to the mechanism — the pointer file
+    // is oneharness's own configuration (`history_pointer_file`), the write is
+    // the linked engine's, and the reader is the core's — so what is proven is
+    // that the engine a default provider drives is the one that has it.
+    use oneharness_core::domain::history::HistoryPointer;
+    use oneharness_core::io::history::read_pointers;
+
+    let dir = harness_project("in-process-pointer");
+    let pointer_file = scratch_path("in-process-pointer.pointers.jsonl");
+    std::fs::write(
+        dir.join("oneharness.toml"),
+        format!(
+            "harnesses = [\"claude-code\"]\nhistory_dir = {:?}\nhistory_pointer_file = {:?}\n\n\
+             [harness.claude-code]\nbin = {:?}\n",
+            dir.join("history").display().to_string(),
+            pointer_file.display().to_string(),
+            env!("CARGO_BIN_EXE_onejudge-fake-harness"),
+        ),
+    )
+    .unwrap();
+    let provider = OneharnessProvider::new();
+    let engine = Engine::new(&provider, settings());
+    let skill = Skill::new("demo", dir.to_str().unwrap(), "[[reply:pointed reply]]");
+    let outcome = engine
+        .run(&Conversation::single_turn(skill, "do it"))
+        .unwrap();
+    assert_eq!(outcome.transcript.messages[1].content, "pointed reply");
+
+    // One harness run, one pointer line, read back as the typed record and
+    // naming the very history record the run's own attribution carries.
+    let read = read_pointers(&pointer_file).expect("the pointer file is readable");
+    assert_eq!(read.skipped, 0, "every line is one complete pointer");
+    let pointers: &[HistoryPointer] = &read.pointers;
+    assert_eq!(pointers.len(), 1, "{pointers:?}");
+    assert_eq!(pointers[0].harness(), "claude-code");
+    let telemetry = outcome.telemetry.as_ref().expect("the run is measured");
+    let attempt = &telemetry.attribution[0].candidates[0];
+    assert_eq!(
+        attempt.history_id.as_deref(),
+        Some(pointers[0].history_id().to_string().as_str())
+    );
+}
+
+#[test]
 fn restrictive_evaluators_recover_full_history_and_cannot_mutate_or_escape_git_tools() {
     let dir = harness_project("restrictive-evidence");
     let proof = scratch_path("restrictive-evidence-proof");

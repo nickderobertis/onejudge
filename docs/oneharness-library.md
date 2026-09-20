@@ -7,9 +7,11 @@ expressed as a typed call — **including the invocation itself**. A turn is
 
 The pin is in the workspace manifest; everything below is verified against it.
 The **CLI** floor an operator installs is a different number — currently
-**0.14.0+**, the first release that embeds at least the pinned core and accepts
-the `run --format json` the spawning seam passes — because the two crates
-version independently. Never read one off the other.
+**0.14.0+**, the first release that writes the report schema the pinned core
+parses and accepts the `run --format json` the spawning seam passes — because
+the two crates version independently: the pin may be newer than the core that
+CLI embeds so long as the report is the same, and `cli/mod.rs` gates the floor
+on the schema, not on the two numbers. Never read one off the other.
 
 One seam still spawns, and this file records exactly why — so the decision is
 revisitable when oneharness's library surface changes, rather than rediscovered.
