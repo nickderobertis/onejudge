@@ -49,8 +49,8 @@ pub const STARTER_CONFIG: &str = include_str!("starter.yaml");
 /// — so naming the core version here would tell an operator to install a CLI
 /// that was never published, and holding the CLI to embed a core at least as new
 /// as the linked one would move the floor on every relink whether or not the
-/// report changed. The linked core is 0.17.0 and this floor's embedded core is
-/// 0.15.0 because both write report schema `0.11`: what ties the two is
+/// report changed. The linked core may be newer than the one this floor embeds
+/// so long as both write the same report schema: what ties the two is
 /// [`MIN_ONEHARNESS_REPORT_SCHEMA`], and the gate below is written against that.
 const MIN_ONEHARNESS: &str = "0.14.0";
 

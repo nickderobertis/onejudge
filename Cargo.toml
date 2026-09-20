@@ -18,17 +18,11 @@ description = "A simulated interaction and evaluation loop over oneharness: driv
 # oneharness's own engine crate. onejudge depends on it for the **wire contract**
 # of the boundary it drives — `RunReport` / `RunResult` / `FailureKind` /
 # `RunStreamEnvelope` — instead of re-declaring shadow serde structs that drift.
-# 0.17.0 is the floor whose `HistoryWriter` writes a per-run history pointer
-# line for every harness run and reads it back typed
-# (`io::history::read_pointers`, `domain::history::HistoryPointer`) — the
-# visibility line downstream engines take through the core this crate links,
-# which is why the *requirement* moved and not only the lock: pre-1.0, `^0.14`
-# admits no 0.17.x, and onepipeline / oneagentgraph hold this crate to one
-# resolved copy. The spawned `oneharness` CLI floor did NOT move with it: the
-# report schema (`0.11`) is unchanged since the core that CLI embeds, and the
-# floor follows the report contract, not this number (`cli/mod.rs` gates both,
-# and holds this requirement by naming the symbols 0.17.0 introduced). A
-# published registry version, never a git rev.
+# 0.17.0 is the floor that writes a per-run history pointer line for every
+# harness run and reads it back typed — a line downstream engines take only
+# through this requirement (a `^0.14` lock cannot resolve it). The spawned CLI
+# floor is gated separately, on the report schema, in `cli/mod.rs`. A published
+# registry version, never a git rev.
 oneharness-core = "0.17.0"
 # The message bus and its agent profile. The note contract onejudge accepts
 # (`Note`, `Accepted`, `Undelivered`, the `Notes` / `NoteInbox` channel) is

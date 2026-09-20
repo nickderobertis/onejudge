@@ -283,10 +283,9 @@ each rung reaches a case the one before cannot; two e2e tests gate that pair, on
 per rung. The `oneharness-core` pin lives in the workspace manifest and nowhere
 else; the **CLI** floor an operator installs is a different number (**0.14.0+**,
 the first release writing the report schema the linked core parses and accepting
-`run --format json`) because the two crates version independently — the pin may
-be newer than the core that CLI embeds while the report schema is the same, and
-only a report that moved moves the floor. Never infer one from the other —
-`cli/mod.rs` gates each. See `docs/oneharness-library.md` before touching either.
+`run --format json`) because the two crates version independently. Never infer
+one from the other — `cli/mod.rs` gates each. See `docs/oneharness-library.md`
+before touching either.
 
 The **free deterministic harness** is reachable through this layer:
 `provider.mock_harness` / `OneharnessProvider::with_mock_harness` forwards
