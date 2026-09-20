@@ -44,28 +44,35 @@ pub const STARTER_CONFIG: &str = include_str!("starter.yaml");
 ///
 /// It is the CLI's own version, which is **not** the pinned core's. The two
 /// crates version independently — there is no `oneharness` 0.6.13, the 0.6.14
-/// CLI carried `oneharness-core` 0.6.13, and the 0.14.0 CLI carries
-/// `oneharness-core` 0.15.0 — so naming the core version here would tell an
+/// CLI carried `oneharness-core` 0.6.13, and the 0.16.0 CLI carries
+/// `oneharness-core` 0.17.0 — so naming the core version here would tell an
 /// operator to install a CLI that was never published. What ties the two is
 /// [`MIN_ONEHARNESS_CORE`], and the gate below is written against that.
-const MIN_ONEHARNESS: &str = "0.14.0";
+///
+/// 0.16.0 is the first CLI whose embedded core is at least the pinned 0.17.0,
+/// which is what moved it: the report itself did not (schema `0.11` from core
+/// 0.15.0 through 0.17.0, so this build parses a 0.14.0 CLI's report too), but
+/// the gate holds the advertised CLI to embed a core no older than the pin, and
+/// that release is also the first CLI that writes the per-run history pointer
+/// line core 0.17.0 introduced.
+const MIN_ONEHARNESS: &str = "0.16.0";
 
 /// The `oneharness-core` version the [`MIN_ONEHARNESS`] CLI release embeds, read
-/// off that release's own `oneharness-core` requirement (`oneharness` 0.14.0
-/// depends on `^0.15.0`).
+/// off that release's own `oneharness-core` requirement (`oneharness` 0.16.0
+/// depends on `^0.17.0`).
 ///
 /// The two constants are one fact and are bumped together. It exists because the
 /// relation the drift gate actually needs — "a CLI an operator installs at the
 /// advertised version has an engine at least as new as the one this build parses
 /// reports from" — is not a comparison of the two *numbers*: they belong to
-/// different crates, and 0.14.0 is the CLI carrying a core newer than the pin.
+/// different crates, and 0.16.0 is the CLI carrying a core newer than itself.
 /// Recording the pairing makes that comparison expressible, and offline.
 ///
 /// Test-only because the gate is the only thing that reads it: nothing an
 /// operator sees names a core version, and a second number in a CLI message
 /// would be one more copy to drift.
 #[cfg(test)]
-const MIN_ONEHARNESS_CORE: &str = "0.15.0";
+const MIN_ONEHARNESS_CORE: &str = "0.17.0";
 
 /// Errors surfaced by the CLI. Config/validation problems are separated from IO
 /// and engine failures so the entrypoint can exit with a fitting code.

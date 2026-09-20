@@ -7,7 +7,7 @@ expressed as a typed call — **including the invocation itself**. A turn is
 
 The pin is in the workspace manifest; everything below is verified against it.
 The **CLI** floor an operator installs is a different number — currently
-**0.14.0+**, the first release that embeds at least the pinned core and accepts
+**0.16.0+**, the first release that embeds at least the pinned core and accepts
 the `run --format json` the spawning seam passes — because the two crates
 version independently. Never read one off the other.
 

@@ -281,8 +281,12 @@ tree. The **spawning** seam still escalates through three rungs — close stdout
 SIGTERM, kill — because a spawned producer has to be reached through the OS, and
 each rung reaches a case the one before cannot; two e2e tests gate that pair, one
 per rung. The `oneharness-core` pin lives in the workspace manifest and nowhere
-else; the **CLI** floor an operator installs is a different number (**0.14.0+**,
-the first release embedding at least the pin and accepting `run --format json`) because the two crates version independently.
+else — **0.17.0**, the core that writes a per-run history pointer line and reads
+it back typed, which an engine linking this crate takes only through this
+requirement (`tests/e2e.rs` holds the floor by naming the reader; onejudge adds
+nothing to the mechanism); the **CLI** floor an operator installs is a different
+number (**0.16.0+**, the first release embedding at least the pin and accepting
+`run --format json`) because the two crates version independently.
 Never infer one from the other — `cli/mod.rs` holds the pairing and gates it. See
 `docs/oneharness-library.md` before touching either.
 
@@ -305,7 +309,7 @@ Both are serialized even when null; a refused ask is `null` **plus** its
 `*_unavailable` reason, because "never asked" and "asked and refused" are
 different facts. A refusal costs no model tokens (oneharness validates before
 spawning), so the call is retried without the flag rather than failing the run.
-`--control` arrived in oneharness 0.6.14, under the **0.14.0+** floor the crate
+`--control` arrived in oneharness 0.6.14, under the **0.16.0+** floor the crate
 advertises. The stateless `judge` / `assess` calls stay uncontrolled (no session
 to be addressed by) and so does the legacy `user` turn, which shares the
 supervisor's session name — the one place "two runs on one address" is real.

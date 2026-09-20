@@ -12,7 +12,7 @@
 //! separately-configured harness/model — again without `--harness`/`--model`.
 //! Scaffold both with `onejudge init` (which shells out to `oneharness init`).
 //!
-//! It targets **oneharness v0.14.0+** — the first release that embeds an
+//! It targets **oneharness v0.16.0+** — the first release that embeds an
 //! `oneharness-core` at least as new as the one this crate compiles against (pinned
 //! in the workspace manifest) and accepts the `run --format json` the spawning seam
 //! passes on every turn. v0.6.9 was the

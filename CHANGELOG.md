@@ -27,6 +27,17 @@ by the tooling, not by hand.
 
 ### Changed
 
+- The linked `oneharness-core` is **0.17.0** (was 0.14.0): the release whose
+  engine writes a per-run history pointer line for every harness run and reads
+  it back typed (`io::history::read_pointers`, `HistoryPointer`), taken through
+  0.15.0 (`--format` on every JSON verb), 0.16.0 (`run_mode` defaults to
+  `fallback`, CLI stdout to text) and 0.16.1 (a clean-exit rate limit falls
+  through). onejudge adds nothing to the pointer mechanism; the raise is what
+  lets an engine linking this crate take it. The **minimum supported `oneharness`
+  CLI is 0.16.0** (was 0.14.0), the first release embedding that core — the
+  report itself is unchanged (schema `0.11` since 0.14.0), so the floor moves
+  because the crate holds the advertised CLI to a core no older than the one it
+  links, not because an older CLI's report stopped parsing.
 - **Breaking:** the note contract (`onejudge::note`) is `onemessagebus-agent`
   0.4.0's, re-exported at the same paths. `Notes::send` answers the core's
   `onemessagebus::Undelivered` (read it back with `.map_err(Undelivered::from)`)
