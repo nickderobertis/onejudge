@@ -918,9 +918,9 @@ dependencies = [
 
 [[package]]
 name = "onemessagebus"
-version = "0.7.0"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ef4084c23bbfbb9b5765e3fe91862cba826b8ecf6e1f98dbe9a8e080d4501a32"
+checksum = "720b5895ab8c97a23a10b6989b141fd8dba702d975f2bca514fdaf9595e74fea"
 dependencies = [
  "getrandom 0.3.4",
  "jsonschema 0.56.0",
@@ -938,9 +938,9 @@ dependencies = [
 
 [[package]]
 name = "onemessagebus-agent"
-version = "0.7.0"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "80344b1afbb5054e33b01a12318487fd8753a0c03e82429840d2b2115e65360f"
+checksum = "f1291f2b3fc73fc17360932862b28e3aa19ebb129de5b30056745a86859a6426"
 dependencies = [
  "onemessagebus",
  "schemars",
