@@ -4,12 +4,13 @@
 use std::collections::BTreeMap;
 
 use onemessagebus::sdk_schema::RegistryDocument;
-use onemessagebus::{BundleVersion, Registry, RegistryError, SchemaBundle, SchemaId};
+use onemessagebus::{BundleVersion, Message, Registry, RegistryError, SchemaBundle, SchemaId};
 use schemars::{generate::SchemaSettings, JsonSchema, Schema};
 use serde::Serialize;
 
 use crate::{
     cli::{Config, FailureReport},
+    note::Note,
     Observation, Report, StreamEvent,
 };
 
@@ -98,6 +99,77 @@ pub fn check_judge_seat_frame_bundle(path: &std::path::Path) -> Result<(), Strin
             path.display()
         ))
     }
+}
+
+/// The version of the bundle publishing the note contract.
+///
+/// Its own number, not the command-provider protocol's: the two grammars change
+/// for different reasons, and a frame added to `docs/protocol.md` must not tell a
+/// client its note validator went stale.
+pub const NOTE_BUNDLE_VERSION: u32 = 1;
+
+/// The note message's schema, with the id it is registered under, `agent.note@1`.
+///
+/// Generated from [`Note`] itself — the one declaration — so a client in another
+/// language validates an arriving note against what the engine reads it with, and
+/// a shape that moved here is a bundle that no longer matches the committed file.
+#[must_use]
+pub fn note_schema() -> (SchemaId, Schema) {
+    (Note::SCHEMA, schemars::schema_for!(Note))
+}
+
+/// Build the schema-link bundle that publishes the note contract onejudge owns.
+///
+/// Holds `agent.note@1` alone. The command-provider frames are a separate grammar
+/// in a separate bundle ([`judge_seat_frame_bundle`]), versioned separately.
+#[must_use]
+pub fn note_bundle() -> SchemaBundle {
+    let (id, schema) = note_schema();
+    SchemaBundle::new(
+        NOTE_BUNDLE_VERSION
+            .to_string()
+            .parse::<BundleVersion>()
+            .expect("the numeric bundle version is a bundle version"),
+        Some("onejudge note contract".to_string()),
+        vec![RegistryDocument {
+            id,
+            schema: schema.to_value(),
+        }],
+    )
+    .expect("the generated note id and schema form a bundle")
+}
+
+/// Check that `path` contains the generated note bundle byte for byte.
+///
+/// # Errors
+/// A message naming the regeneration command when the committed file differs from
+/// what [`note_bundle`] generates, or when `path` cannot be read.
+pub fn check_note_bundle(path: &std::path::Path) -> Result<(), String> {
+    let generated = format!(
+        "{}\n",
+        serde_json::to_string_pretty(&note_bundle()).expect("the bus bundle is serializable")
+    );
+    let committed = std::fs::read_to_string(path)
+        .map_err(|failure| format!("could not read {}: {failure}", path.display()))?;
+    if committed == generated {
+        Ok(())
+    } else {
+        Err(format!(
+            "{} differs from the generated note schema; regenerate with `cargo run -q -p onejudge --features sdk-schema --example generate_note_schema > schemas/note.json`",
+            path.display()
+        ))
+    }
+}
+
+/// Register the note schema in `registry`, so a bus that checks records against it
+/// checks an arriving note against onejudge's own declaration.
+///
+/// # Errors
+/// [`RegistryError`] when `registry` already holds a different document under
+/// `agent.note@1`.
+pub fn register_note(registry: &mut Registry) -> Result<(), RegistryError> {
+    let (id, schema) = note_schema();
+    registry.register_schema(id, schema.to_value())
 }
 
 /// Register every command-provider frame schema in `registry`, so a bus that checks

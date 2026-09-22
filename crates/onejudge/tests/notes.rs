@@ -113,9 +113,10 @@ fn prompts(path: &std::path::Path) -> String {
 const NOTE: &str = "the reviewer asked for a smaller diff before this lands";
 
 /// Hold what a journey produced to the capture taken from the tree before the note
-/// seam moved onto `onemessagebus-agent` (`tests/golden/notes/<name>.json`).
+/// seam left this crate for `onemessagebus-agent` and came back
+/// (`tests/golden/notes/<name>.json`).
 ///
-/// That move claims behaviour identity, so each journey compares its transcript,
+/// Each move claims behaviour identity, so each journey compares its transcript,
 /// outcome, dispositions and what the doubles received against what the unchanged
 /// tree produced for the same journey. Paths under the integration-test tmp dir and
 /// the double's own path are normalized to placeholders. Set
@@ -1294,13 +1295,12 @@ fn a_note_sent_to_a_plan_whose_provider_never_built_raises_that_no_conversation_
 }
 
 /// **A known wrong answer, pinned rather than hidden.** A bare [`NoteInbox`] dropped
-/// by its caller, never handed to onejudge, is closed by the released
-/// `onemessagebus` 0.4.0 core with its own drop reason, and the released
-/// `onemessagebus-agent` 0.4.0 profile reads that close as a member that settled.
-/// Nothing ran, so the true answer is `NoConversation` — which is what every channel
-/// whose lifetime onejudge owns answers (the two journeys above). The fix is the
-/// profile's mapping, a bus follow-up; when it lands this journey fails, and its
-/// assertion becomes `NoConversation`.
+/// by its caller, never handed to onejudge, is closed by the `onemessagebus` core
+/// with its own drop reason, and `Undelivered`'s `From<onemessagebus::Undelivered>`
+/// reads that close as a member that settled. Nothing ran, so the true answer is
+/// `NoConversation` — which is what every channel whose lifetime onejudge owns
+/// answers (the two journeys above). The fix is that mapping, now this crate's own;
+/// when it lands this journey fails, and its assertion becomes `NoConversation`.
 #[test]
 fn a_bare_note_inbox_dropped_unread_answers_member_settled_against_the_released_bus() {
     let (notes, inbox) = Notes::channel();
