@@ -362,7 +362,7 @@ impl Note {
     /// If `text` is empty or whitespace.
     #[must_use]
     pub fn to(addressee: Addressee, text: impl Into<String>) -> Self {
-        // llmlint: ignore[no_panics_on_recoverable_errors] Contract N preserves `Note::to` with the same signature and its documented panic, for a caller holding a literal where blank text is a programming error; `Note::new` beside it is the `Result` for text from outside, and consumers call `to` today.
+        // llmlint: ignore[no_panics_on_recoverable_errors] `Note::to` keeps the signature and the documented panic it has had since 0.8.1, for a caller holding a literal where blank text is a programming error; `Note::new` beside it is the `Result` for text from outside, and consumers call `to` today.
         Note::new(addressee, text).expect("a note carries text")
     }
 
