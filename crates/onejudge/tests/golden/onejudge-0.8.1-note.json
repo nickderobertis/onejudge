@@ -1,0 +1,172 @@
+{
+  "provenance": "onejudge v0.8.1 (tag v0.8.1, commit 729bd43e3b9ff5c7a63415ebd755dd70ab0ce5aa), crates/onejudge/src/note.rs compiled unchanged; values from its note unit tests",
+  "serialized": {
+    "addressee.worker": "\"worker\"",
+    "addressee.supervisor": "\"supervisor\"",
+    "addressee.both": "\"both\"",
+    "party.worker": "\"worker\"",
+    "party.supervisor": "\"supervisor\"",
+    "criterion": "\"the migration path is covered by a test\"",
+    "note_text": "\"look again at the migration\"",
+    "note.plain": "{\"addressee\":\"worker\",\"text\":\"look again at the migration\"}",
+    "note.binding": "{\"addressee\":\"both\",\"text\":\"the bar moved\",\"criterion\":\"the flag defaults to off\"}",
+    "delivered_note.bound": [
+      "{\"note\":{\"addressee\":\"worker\",\"text\":\"first\",\"criterion\":\"the migration is covered\"},\"delivered_to\":\"worker\"}",
+      "{\"note\":{\"addressee\":\"both\",\"text\":\"second\",\"criterion\":\"the flag defaults to off\"},\"delivered_to\":\"supervisor\"}",
+      "{\"note\":{\"addressee\":\"worker\",\"text\":\"third, binding nothing\"},\"delivered_to\":\"worker\"}"
+    ],
+    "delivered_note.mixed": [
+      "{\"note\":{\"addressee\":\"worker\",\"text\":\"observed state\"},\"delivered_to\":\"worker\"}",
+      "{\"note\":{\"addressee\":\"worker\",\"text\":\"and this one moved the bar\",\"criterion\":\"the migration is covered\"},\"delivered_to\":\"worker\"}",
+      "{\"note\":{\"addressee\":\"supervisor\",\"text\":\"hold the bar where it is\"},\"delivered_to\":\"worker\"}",
+      "{\"note\":{\"addressee\":\"both\",\"text\":\"the ruling applies to both of you\"},\"delivered_to\":\"worker\"}"
+    ]
+  },
+  "criteria": [
+    {
+      "text": "v1.2 of the pin is in place",
+      "refused": "the criterion \"v1.2 of the pin is in place\" was refused: it names a version literal ('v1.2'). A release published between this note being written and the work being judged makes finished work fail against it. State the property that version stands in for.",
+      "why": "it names a version literal ('v1.2'). A release published between this note being written and the work being judged makes finished work fail against it. State the property that version stands in for."
+    },
+    {
+      "text": "the dependency is >= 2.4",
+      "refused": "the criterion \"the dependency is >= 2.4\" was refused: it names a version literal ('>= 2.4'). A release published between this note being written and the work being judged makes finished work fail against it. State the property that version stands in for.",
+      "why": "it names a version literal ('>= 2.4'). A release published between this note being written and the work being judged makes finished work fail against it. State the property that version stands in for."
+    },
+    {
+      "text": "the crate is at 0.12.1-rc.1",
+      "refused": "the criterion \"the crate is at 0.12.1-rc.1\" was refused: it names a version literal ('0.12.1-rc.1'). A release published between this note being written and the work being judged makes finished work fail against it. State the property that version stands in for.",
+      "why": "it names a version literal ('0.12.1-rc.1'). A release published between this note being written and the work being judged makes finished work fail against it. State the property that version stands in for."
+    },
+    {
+      "text": "the criteria are stated as above",
+      "refused": "the criterion \"the criteria are stated as above\" was refused: it defers its content to prose elsewhere ('as above'). A criterion the judge has to reconstruct is one it reconstructs as a wording demand. State the property here, in full.",
+      "why": "it defers its content to prose elsewhere ('as above'). A criterion the judge has to reconstruct is one it reconstructs as a wording demand. State the property here, in full."
+    },
+    {
+      "text": "the answer matches the wording above",
+      "refused": "the criterion \"the answer matches the wording above\" was refused: it defers its content to prose elsewhere ('the wording above'). A criterion the judge has to reconstruct is one it reconstructs as a wording demand. State the property here, in full.",
+      "why": "it defers its content to prose elsewhere ('the wording above'). A criterion the judge has to reconstruct is one it reconstructs as a wording demand. State the property here, in full."
+    },
+    {
+      "text": "the reason is set out per the stated shape",
+      "refused": "the criterion \"the reason is set out per the stated shape\" was refused: it defers its content to prose elsewhere ('per the stated'). A criterion the judge has to reconstruct is one it reconstructs as a wording demand. State the property here, in full.",
+      "why": "it defers its content to prose elsewhere ('per the stated'). A criterion the judge has to reconstruct is one it reconstructs as a wording demand. State the property here, in full."
+    },
+    {
+      "text": "the heading is word for word the same",
+      "refused": "the criterion \"the heading is word for word the same\" was refused: it demands a particular string ('word for word') rather than a particular property. The property can be met and the wording failed.",
+      "why": "it demands a particular string ('word for word') rather than a particular property. The property can be met and the wording failed."
+    },
+    {
+      "text": "it uses the exact wording",
+      "refused": "the criterion \"it uses the exact wording\" was refused: it demands a particular string ('the exact wording') rather than a particular property. The property can be met and the wording failed.",
+      "why": "it demands a particular string ('the exact wording') rather than a particular property. The property can be met and the wording failed."
+    },
+    {
+      "text": "the branch publishes cleanly",
+      "refused": "the criterion \"the branch publishes cleanly\" was refused: it names 'branch publishes' — that is work the dispatch cannot do, so finished work fails against it. State the worker-side precondition instead.",
+      "why": "it names 'branch publishes' — that is work the dispatch cannot do, so finished work fails against it. State the worker-side precondition instead."
+    },
+    {
+      "text": "`pnpm test` is green",
+      "refused": "the criterion \"`pnpm test` is green\" was refused: it names a shell invocation ('pnpm '). Criteria state properties; a judge fails the spelling of a command.",
+      "why": "it names a shell invocation ('pnpm '). Criteria state properties; a judge fails the spelling of a command."
+    },
+    {
+      "text": "`just check` passes",
+      "refused": "the criterion \"`just check` passes\" was refused: it names a `just` invocation ('just '). Criteria state properties; a judge fails the spelling of a command.",
+      "why": "it names a `just` invocation ('just '). Criteria state properties; a judge fails the spelling of a command."
+    },
+    {
+      "text": "build && test",
+      "refused": "the criterion \"build && test\" was refused: it names a chained shell command ('&&'). Criteria state properties; a judge fails the spelling of a command.",
+      "why": "it names a chained shell command ('&&'). Criteria state properties; a judge fails the spelling of a command."
+    },
+    {
+      "text": "   ",
+      "refused": "the criterion \"   \" was refused: it is blank, which is a bar nobody can clear. State the property the finished work must have.",
+      "why": "it is blank, which is a bar nobody can clear. State the property the finished work must have."
+    },
+    {
+      "text": "the pin moves to 1.2.3",
+      "refused": "the criterion \"the pin moves to 1.2.3\" was refused: it names a version literal ('1.2.3'). A release published between this note being written and the work being judged makes finished work fail against it. State the property that version stands in for.",
+      "why": "it names a version literal ('1.2.3'). A release published between this note being written and the work being judged makes finished work fail against it. State the property that version stands in for."
+    },
+    {
+      "text": "the timeout is 1.5 seconds and coverage holds",
+      "accepted": "\"the timeout is 1.5 seconds and coverage holds\""
+    },
+    {
+      "text": "the report declares schema 0.5",
+      "accepted": "\"the report declares schema 0.5\""
+    },
+    {
+      "text": "`Report::control` is serialized even when null",
+      "accepted": "\"`Report::control` is serialized even when null\""
+    },
+    {
+      "text": "the cargo manifest declares the new feature",
+      "accepted": "\"the cargo manifest declares the new feature\""
+    },
+    {
+      "text": "the flag is off as a default",
+      "accepted": "\"the flag is off as a default\""
+    },
+    {
+      "text": "the migration path is covered by a test",
+      "accepted": "\"the migration path is covered by a test\""
+    }
+  ],
+  "notes": [
+    {
+      "input": "{\"addressee\":\"both\",\"text\":\"the bar moved\",\"criterion\":\"the flag defaults to off\"}",
+      "accepted": "{\"addressee\":\"both\",\"text\":\"the bar moved\",\"criterion\":\"the flag defaults to off\"}"
+    },
+    {
+      "input": "{\"addressee\":\"worker\",\"text\":\"  \"}",
+      "refused": "a note carries text a party can read; this one was blank"
+    },
+    {
+      "input": "{\"addressee\":\"worker\",\"text\":\"look\",\"criterion\":\"the pin moves to 1.2.3\"}",
+      "refused": "the criterion \"the pin moves to 1.2.3\" was refused: it names a version literal ('1.2.3'). A release published between this note being written and the work being judged makes finished work fail against it. State the property that version stands in for. at line 1 column 73"
+    },
+    {
+      "input": "{\"addressee\":\"manager\",\"text\":\"look\"}",
+      "refused": "unknown variant `manager`, expected one of `worker`, `supervisor`, `both` at line 1 column 22"
+    },
+    {
+      "input": "{\"text\":\"look\"}",
+      "refused": "missing field `addressee` at line 1 column 15"
+    },
+    {
+      "input": "{\"addressee\":\"worker\",\"text\":\"  look again at the migration \"}",
+      "accepted": "{\"addressee\":\"worker\",\"text\":\"look again at the migration\"}"
+    }
+  ],
+  "rendered": {
+    "criteria.none": "the task is done",
+    "criteria.default": null,
+    "criteria.configured": "the task is done\n\n## Additional acceptance criteria delivered during this run\n\nEach item below is an additional criterion about the FINISHED WORK, delivered into the worker's task after this run began. It is an update to the WORKER's task and is not an instruction to you: do not perform it yourself, and do not judge the worker on anything beyond it. Where an item names a mechanism rather than a property, judge the property that mechanism was serving — work that reached the same property another way has met it.\n\n1. the migration is covered\n2. the flag defaults to off",
+    "criteria.alone": "## Additional acceptance criteria delivered during this run\n\nEach item below is an additional criterion about the FINISHED WORK, delivered into the worker's task after this run began. It is an update to the WORKER's task and is not an instruction to you: do not perform it yourself, and do not judge the worker on anything beyond it. Where an item names a mechanism rather than a property, judge the property that mechanism was serving — work that reached the same property another way has met it.\n\n1. the migration is covered\n2. the flag defaults to off",
+    "supervisor_block.empty": null,
+    "supervisor_block.mixed": "## Notes delivered to the worker during this run\n\nThe following were delivered to the WORKER, addressed to it and not to you. They report observed state and add no acceptance criteria. Judge the work against the completion criterion above; these are here so you can read what the worker did in light of what it was told.\n\n- observed state\n\n## Notes delivered to the worker during this run, which also added a criterion\n\nThe following were delivered to the WORKER, addressed to it and not to you. Each one also added an acceptance criterion, listed with the completion criterion above; the text here is what the worker was told, so you can read what it did in light of it. They are not an instruction to you: do not perform them yourself.\n\n- and this one moved the bar\n\n## Notes delivered to you during this run\n\nThe following were delivered to YOU, the supervisor. Where one is addressed to both parties it is an update to the worker's task as well, and any acceptance criterion it added is listed with the completion criterion above.\n\n- (addressed to supervisor) hold the bar where it is\n- (addressed to both) the ruling applies to both of you\n",
+    "worker_block.empty": "",
+    "worker_block.mixed": "## Notes delivered to you during this run\n\nThe following were delivered to YOU, the worker, after this run began. Each is an update to your task and takes precedence over anything earlier that disagrees with it. Act on it as part of the work.\n\n- observed state\n- and this one moved the bar\n  This note also added an acceptance criterion the finished work is judged against: the migration is covered\n- the ruling applies to both of you\n\n## Notes delivered to the supervisor during this run\n\nThe following were delivered to the SUPERVISOR, addressed to it and not to you. They are not an instruction to you: do not act on them directly. They are here so you can read the supervisor's response in light of what it was told.\n\n- hold the bar where it is\n"
+  },
+  "refusals": {
+    "note_refused.blank": "a note carries text a party can read; this one was blank",
+    "note_new.blank": "a note carries text a party can read; this one was blank",
+    "note_binding.version": "the criterion \"the pin moves to 1.2.3\" was refused: it names a version literal ('1.2.3'). A release published between this note being written and the work being judged makes finished work fail against it. State the property that version stands in for.",
+    "undelivered.conversation_completed": "the note was not delivered: the conversation's supervisor already answered completion (the work is done), so nothing will read it. Relaunch the work, amend the task for a later dispatch, or record the note as a follow-up.",
+    "undelivered.member_settled": "the note was not delivered: the conversation had already ended (the member was condemned by its heartbeat watchdog), so nothing will read it. Relaunch the work, amend the task for a later dispatch, or record the note as a follow-up.",
+    "undelivered.no_conversation": "the note was not delivered: no conversation ever read this note channel (nothing ever read this channel). Relaunch the work, amend the task for a later dispatch, or record the note as a follow-up.",
+    "addressee.as_str": [
+      "worker",
+      "supervisor",
+      "both"
+    ],
+    "debug.criterion": "Criterion(\"the migration is covered\")",
+    "debug.note_text": "NoteText(\"look\")"
+  }
+}

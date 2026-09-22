@@ -293,46 +293,61 @@ fn fenced(info: &str) -> &'static str {
 }
 
 #[test]
-fn the_note_shape_the_contract_doc_copies_reads_through_the_re_exports_unchanged() {
+fn the_note_shape_the_contract_doc_copies_reads_through_the_declaration_unchanged() {
     let copy = fenced("json");
-    let read: onejudge::note::DeliveredNote =
+    let declared: onejudge::note::DeliveredNote =
         serde_json::from_str(copy).expect("the copy is a note the declaration reads");
-    // Read through onejudge's path, held as the profile's own type: one declaration.
-    let declared: onemessagebus_agent::note::DeliveredNote = read;
     assert_eq!(
         serde_json::to_value(&declared).unwrap(),
         serde_json::from_str::<serde_json::Value>(copy).unwrap(),
-        "the note shape docs/contract.md copies is not the one onemessagebus-agent declares"
+        "the note shape docs/contract.md copies is not the one onejudge::note declares"
     );
     assert_eq!(declared.note.addressee, onejudge::Addressee::Worker);
     assert!(declared.note.binds());
 }
 
+/// Every item `onejudge::note` exported at 0.8.1, still exported from the same two
+/// paths — the module and the crate root — now that this crate *declares* them
+/// rather than re-exporting somebody else's. The bytes those items write are held
+/// to the 0.8.1 golden by `tests/note_contract.rs`; this holds the **paths**, which
+/// a golden cannot see and a consumer compiles against.
 #[test]
-fn every_note_item_onejudge_exported_at_0_8_1_is_the_agent_profiles_at_the_same_path() {
+fn every_note_item_onejudge_exported_at_0_8_1_is_still_exported_from_both_paths() {
     use onejudge::note as here;
-    use onemessagebus_agent::note as there;
 
-    // Each coercion compiles only when both paths name one type.
+    // Each annotation compiles only while the path names the item it named then.
+    let _: fn(here::Addressee) -> &'static str = here::Addressee::as_str;
+    let _: fn(here::Party) -> String = |p| format!("{p:?}");
+    let _: fn(&here::Criterion) -> &str = here::Criterion::as_str;
+    let _: fn(here::CriterionRefused) -> String = |r| r.why;
+    let _: fn(&here::NoteText) -> &str = here::NoteText::as_str;
+    let _: fn(&here::Note) -> bool = here::Note::binds;
+    let _: here::NoteRefused = here::NoteRefused::Blank;
+    let _: fn(&[here::DeliveredNote]) -> Option<String> = here::supervisor_block;
+    let _: fn(&[here::DeliveredNote]) -> String = here::worker_block;
+    let _: here::Accepted = here::Accepted::Queued;
+    let _: fn(here::Undelivered) -> String = |u| u.to_string();
+    let _: fn(Option<&str>, &[here::DeliveredNote]) -> here::Criteria = here::Criteria::compose;
+
+    // …and the crate root re-exports the same types, not look-alikes.
     fn same<T>(value: T) -> T {
         value
     }
-    let _: fn(here::Addressee) -> there::Addressee = same;
-    let _: fn(here::Party) -> there::Party = same;
-    let _: fn(here::Criterion) -> there::Criterion = same;
-    let _: fn(here::CriterionRefused) -> there::CriterionRefused = same;
-    let _: fn(here::NoteText) -> there::NoteText = same;
-    let _: fn(here::Note) -> there::Note = same;
-    let _: fn(here::NoteRefused) -> there::NoteRefused = same;
-    let _: fn(here::DeliveredNote) -> there::DeliveredNote = same;
-    let _: fn(here::Accepted) -> there::Accepted = same;
-    let _: fn(here::Undelivered) -> there::Undelivered = same;
-    let _: fn(here::Criteria) -> there::Criteria = same;
-    let _: fn(here::Notes) -> there::Notes = same;
-    let _: fn(here::NoteInbox) -> there::NoteInbox = same;
-    let _: fn(&[here::DeliveredNote]) -> Option<String> = here::supervisor_block;
+    let _: fn(here::Addressee) -> onejudge::Addressee = same;
+    let _: fn(here::Party) -> onejudge::Party = same;
+    let _: fn(here::Criterion) -> onejudge::Criterion = same;
+    let _: fn(here::CriterionRefused) -> onejudge::CriterionRefused = same;
+    let _: fn(here::NoteText) -> onejudge::NoteText = same;
+    let _: fn(here::Note) -> onejudge::Note = same;
+    let _: fn(here::NoteRefused) -> onejudge::NoteRefused = same;
+    let _: fn(here::DeliveredNote) -> onejudge::DeliveredNote = same;
+    let _: fn(here::Accepted) -> onejudge::Accepted = same;
+    let _: fn(here::Undelivered) -> onejudge::Undelivered = same;
+    let _: fn(here::Criteria) -> onejudge::Criteria = same;
+    let _: fn(here::Notes) -> onejudge::Notes = same;
+    let _: fn(here::NoteInbox) -> onejudge::NoteInbox = same;
 
-    // The channel keeps the calls a caller makes on it.
+    // The channel stays the bus's, and keeps the calls a caller makes on it.
     let (notes, inbox): (here::Notes, here::NoteInbox) = here::Notes::channel();
     let _: fn(&here::Notes, here::Note) -> Result<here::Accepted, onemessagebus::Undelivered> =
         here::Notes::send;
@@ -340,23 +355,13 @@ fn every_note_item_onejudge_exported_at_0_8_1_is_the_agent_profiles_at_the_same_
     let delivered: Vec<here::DeliveredNote> = inbox.delivered();
     assert!(delivered.is_empty());
     drop(notes);
-
-    // …and the rendering is the profile's, word for word.
-    let handed = [here::DeliveredNote {
-        note: here::Note::to(here::Addressee::Both, "the ruling applies to both of you"),
-        delivered_to: here::Party::Supervisor,
-    }];
-    assert_eq!(
-        here::supervisor_block(&handed),
-        there::supervisor_block(&handed)
-    );
 }
 
-/// The prose naming the note's message id is a copy of the profile's declaration,
+/// The prose naming the note's message id is a copy of this crate's declaration,
 /// so it is read against `Note`'s own `Message::SCHEMA` rather than trusted: a
-/// profile that bumps the id fails here until every copy says the new one.
+/// bumped id fails here until every copy says the new one.
 #[test]
-fn every_doc_naming_the_note_message_id_names_the_one_the_profile_declares() {
+fn every_doc_naming_the_note_message_id_names_the_one_onejudge_declares() {
     let declared = <onejudge::note::Note as onemessagebus::Message>::SCHEMA.to_string();
     for (site, text) in [
         ("AGENTS.md", include_str!("../../../AGENTS.md")),
@@ -372,7 +377,7 @@ fn every_doc_naming_the_note_message_id_names_the_one_the_profile_declares() {
     ] {
         assert!(
             text.contains(&format!("`{declared}`")),
-            "{site} does not name the note message id the profile declares, `{declared}`"
+            "{site} does not name the note message id onejudge declares, `{declared}`"
         );
         for (at, _) in text.match_indices("agent.note@") {
             let named: String = text[at..]

@@ -157,7 +157,9 @@ to publish tool events on stdout as they occur, ahead of that same report
   acceptance criteria the judge evaluates against; one that arrives after the
   conversation completed raises `Undelivered` rather than being silently accepted.
   Open it with `Notes::channel()` and install the inbox on an `Engine`
-  (`with_notes`) or a `Plan`. See [docs/notes.md](docs/notes.md).
+  (`with_notes`) or a `Plan`. onejudge **declares** these shapes (the message
+  `agent.note@1`); a client in another language validates against
+  [`schemas/note.json`](schemas/note.json). See [docs/notes.md](docs/notes.md).
 
 Two things it improves over the in-skilltest engine:
 

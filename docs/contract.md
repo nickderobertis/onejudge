@@ -234,18 +234,21 @@ named JSON Schema roots:
   frames, and `sdk_schema::register_frames` registers them in a `onemessagebus`
   registry.
 
-## Note shapes are `onemessagebus-agent`'s
+## Note shapes are onejudge's
 
 A report carries no note, but the conversation it describes may have been handed
 some, and every shape a note takes on a wire onejudge speaks — `Notes::send`, and
-the `notes` of a `supervisor` request — is **declared by `onemessagebus-agent`'s
-note contract** (`onemessagebus_agent::note`, the message `agent.note@1`), not by
-onejudge. `onejudge::note` re-exports it at the same path, and a change to it is a
-proposal to the planner who owns that contract rather than an edit here.
+the `notes` of a `supervisor` request — is **declared by `onejudge::note`**, the
+message `agent.note@1`. A client in another language validates against
+[`schemas/note.json`](../schemas/note.json), a `onemessagebus` schema bundle at
+version 1 holding that one id, generated from `Note` itself and held to the type by
+`just check-note-schema`. What onejudge does *not* own is the channel: `Notes` and
+`NoteInbox` are the bus core's generic `Sender` and `Inbox` over these shapes.
 
 The example below is a **copy** of that declaration, kept so a reader of this page
-sees the shape; `tests/contract.rs` reads it through the re-exports, so a copy that
-stops matching the declaration fails the gate:
+sees the shape; `tests/contract.rs` reads it through the declaration, so a copy that
+stops matching fails the gate. `tests/note_contract.rs` holds the declaration itself
+to the bytes onejudge 0.8.1 wrote (`tests/golden/onejudge-0.8.1-note.json`):
 
 ```json
 {"note":{"addressee":"worker","text":"the reviewer asked for a smaller diff","criterion":"the diff touches only the migration"},"delivered_to":"worker"}

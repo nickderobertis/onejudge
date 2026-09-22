@@ -22,7 +22,7 @@ bootstrap:
 
 # Full quality gate: format, lint, doc, coverage-enforced tests, audit, and the
 # release-target drift gate.
-check: format-check lint doc test audit check-release-targets check-python-sdk-release-trigger check-judge-seat-frames
+check: format-check lint doc test audit check-release-targets check-python-sdk-release-trigger check-judge-seat-frames check-note-schema
 
 # `just gate` is the same gate under the name callers outside this repo use for
 # it. An alias, not a second recipe, so the two can never drift apart.
@@ -141,6 +141,10 @@ python-sdk-generate:
 # Verify the committed schema-link bundle is generated from the frame types.
 check-judge-seat-frames:
     ./scripts/check-judge-seat-frames.sh
+
+# Verify the committed note bundle is generated from `note::Note` itself.
+check-note-schema:
+    cargo run -q -p onejudge --features sdk-schema --example generate_note_schema -- --check
 
 # Strict Python SDK gate: generated-contract drift, lint, types, coverage, and
 # an installed-wheel smoke test through the real onejudge subprocess.

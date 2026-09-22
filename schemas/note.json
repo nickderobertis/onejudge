@@ -1,0 +1,64 @@
+{
+  "version": "1",
+  "description": "onejudge note contract",
+  "schemas": [
+    {
+      "id": "agent.note@1",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "addressee": {
+            "$ref": "#/$defs/Addressee"
+          },
+          "text": {
+            "type": "string"
+          },
+          "criterion": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Criterion"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "addressee",
+          "text"
+        ],
+        "description": "One note: what the worker reads, who it is for, and the property it binds.\n\nBuilt through [`Note::new`] / [`Note::to`] / [`Note::binding`] and in no other\nway — `non_exhaustive` closes the struct literal, and deserialization goes\nthrough the same conversion — so a note whose text nobody can read, or whose\ncriterion is unusable, is unrepresentable rather than representable and refused\nsomewhere later.",
+        "title": "Note",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$defs": {
+          "Addressee": {
+            "oneOf": [
+              {
+                "type": "string",
+                "const": "worker",
+                "description": "An update to the *worker's* task."
+              },
+              {
+                "type": "string",
+                "const": "supervisor",
+                "description": "An update to the *supervisor's* brief."
+              },
+              {
+                "type": "string",
+                "const": "both",
+                "description": "Addressed to both parties."
+              }
+            ],
+            "description": "Who a note is for.\n\nRequired; there is no default, because a note whose addressee is guessed is a\nnote the judge may read as an instruction to itself. One run saw a simulated\nuser compose a four-point \"manager ruling\" in-conversation and instruct the\nworker to post it over the run channel, and the worker complied."
+          },
+          "Criterion": {
+            "type": "string",
+            "description": "The property a bound note requires of the finished work.\n\nA validated newtype, checked in the conversion that builds it, so a [`Note`]\ncarrying an unusable criterion is unrepresentable rather than\nrepresentable-and-refused-somewhere-later. The rules are the ones an\norchestrator already enforces on authored plan criteria\n(`orchestrator/criteria_guard.py` in `nickderobertis/ai-orchestrator`), ported\nhere so the *seam that accepts the note* refuses at the moment of binding\nrather than at render time — after the turn has been composed — or by the\njudge, which has already lost.\n\nWhat the rules cannot catch, stated plainly: \"this is a mechanism the author\npreferred rather than a property the node owes\" needs the author's intent, and\nno pattern has it. What stands in for it is the rendered framing\n([`Criteria::rendered`]), which instructs the judge to evaluate the property a\nnamed mechanism was serving."
+          }
+        }
+      }
+    }
+  ]
+}

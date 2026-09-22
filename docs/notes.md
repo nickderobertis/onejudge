@@ -24,16 +24,19 @@ notes
     .map_err(Undelivered::from)?;
 ```
 
-**Where the shapes are declared.** Not here. `Note`, `NoteText`, `Criterion`,
+**Where the shapes are declared.** Here. `Note`, `NoteText`, `Criterion`,
 `Addressee`, `Party`, `DeliveredNote`, `Accepted`, `Undelivered`, `Criteria` and the
-two renderings (`supervisor_block`, `worker_block`) are `onemessagebus-agent`'s note
-contract — the message `agent.note@1` — re-exported at `onejudge::note` so
-`onejudge`, `oneagentgraph` and `onepipeline` carry one declaration. `Notes` and
-`NoteInbox` are the `onemessagebus` core's `Sender` and `Inbox` over it, so
+two renderings (`supervisor_block`, `worker_block`) are **onejudge's own** note
+contract — the message `agent.note@1`, declared in `crates/onejudge/src/note.rs` and
+published as the schema bundle [`schemas/note.json`](../schemas/note.json), which is
+what a client in another language validates an arriving note against. `oneagentgraph`
+and `onepipeline` import them from `onejudge::note`, so there is still one
+declaration. What onejudge does *not* own is the channel: `Notes` and `NoteInbox` are
+the `onemessagebus` core's generic `Sender` and `Inbox` over these shapes, so
 `Notes::send` answers the core's `onemessagebus::Undelivered`, which
-`Undelivered::from` reads back into the note refusal it carries. What this document
-states that the bus does not — which party a note reaches, and what its sender is
-answered — is onejudge's routing, and stays here.
+`Undelivered::from` reads back into the note refusal it carries. The routing this
+document states — which party a note reaches, and what its sender is answered — is
+onejudge's too.
 
 ## The rules
 
@@ -86,10 +89,10 @@ same thread waits forever. Send from a thread other than the one driving the eng
 **A channel nothing ever read.** An `Engine` holding a note channel that is dropped
 without running, and a `Plan` whose provider could not be built, close the channel
 so a note sent to it answers `Undelivered::NoConversation`. A bare `NoteInbox` a
-caller drops *without* handing it to onejudge is closed by the released
-`onemessagebus` 0.4.0 core, and the released `onemessagebus-agent` 0.4.0 profile
-reads that close as `Undelivered::MemberSettled` — a known wrong answer, since no
-member ran, pinned by `tests/notes.rs` until the profile's mapping is fixed.
+caller drops *without* handing it to onejudge is closed by the `onemessagebus`
+core, and this crate's `From<onemessagebus::Undelivered>` reads that close as
+`Undelivered::MemberSettled` — a known wrong answer, since no member ran, pinned by
+`tests/notes.rs` until the mapping is fixed.
 
 ## What "live delivery" means
 

@@ -905,7 +905,6 @@ dependencies = [
  "clap",
  "oneharness-core",
  "onemessagebus",
- "onemessagebus-agent",
  "rustix",
  "schemars",
  "serde",
@@ -918,9 +917,9 @@ dependencies = [
 
 [[package]]
 name = "onemessagebus"
-version = "0.8.0"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "720b5895ab8c97a23a10b6989b141fd8dba702d975f2bca514fdaf9595e74fea"
+checksum = "186f676473f71543635304a5a316e2c43f0ed342ec8b267f9896232f43aecfa7"
 dependencies = [
  "getrandom 0.3.4",
  "jsonschema 0.56.0",
@@ -934,19 +933,6 @@ dependencies = [
  "thiserror",
  "time",
  "ureq",
-]
-
-[[package]]
-name = "onemessagebus-agent"
-version = "0.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f1291f2b3fc73fc17360932862b28e3aa19ebb129de5b30056745a86859a6426"
-dependencies = [
- "onemessagebus",
- "schemars",
- "serde",
- "serde_json",
- "thiserror",
 ]
 
 [[package]]
