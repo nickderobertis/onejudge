@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.5](https://github.com/nickderobertis/onejudge/compare/v0.13.4...v0.13.5) - 2026-09-22
+
+### Added
+
+- *(deps)* link the oneharness core that resolves an extends chain ([#110](https://github.com/nickderobertis/onejudge/pull/110))
+
 ## [0.13.4](https://github.com/nickderobertis/onejudge/compare/v0.13.3...v0.13.4) - 2026-09-21
 
 ### Other
