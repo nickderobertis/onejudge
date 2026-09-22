@@ -308,8 +308,8 @@ fn every_refusal_says_what_onejudge_said() {
 #[cfg(feature = "sdk-schema")]
 #[test]
 fn a_note_is_onejudges_message_and_its_published_schema_is_what_the_engine_reads() {
-    // Scoped here rather than at the top: `Message` (which carries `SCHEMA`) and
-    // `Registry` are this feature's surface, and the crate builds without it.
+    // Scoped here rather than imported at the top: this test is the only user, and
+    // without `sdk-schema` it is compiled out, leaving a top-level import unused.
     use onemessagebus::{Message, Registry};
 
     assert_eq!(Note::SCHEMA.to_string(), "agent.note@1");
