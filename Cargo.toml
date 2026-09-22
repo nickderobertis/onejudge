@@ -26,15 +26,12 @@ description = "A simulated interaction and evaluation loop over oneharness: driv
 # The spawned CLI floor is gated separately, on the report schema, in
 # `cli/mod.rs`. A published registry version, never a git rev.
 oneharness-core = "0.18.0"
-# The message bus core, and nothing of any product's vocabulary: 0.9.0 is the
-# release that retired `onemessagebus-agent`, so the note contract onejudge
-# accepts (`Note`, `Accepted`, `Undelivered`) is declared here, in
-# `onejudge::note`, and published as `schemas/note.json`. What the bus supplies
-# is generic: the `Sender`/`Inbox` channel the notes ride, and the registry the
+# The message bus core, and nothing of any product's vocabulary: what it supplies
+# is generic — the `Sender`/`Inbox` channel notes ride, and the registry the
 # command-provider frames are registered in. A published registry version, never
-# a git rev. Kept on the bus release the crates that link onejudge
-# (oneagentgraph, onepipeline) require: they hold one copy of the bus across
-# their seams and cannot move until onejudge does.
+# a git rev. Whatever this names is what the crates that link onejudge
+# (oneagentgraph, onepipeline) must link too: they hold one copy of the bus
+# across their seams, so moving it here moves it for them.
 onemessagebus = "0.9.0"
 # Unix only, and for exactly one call: `kill(pid, SIGTERM)` to ask a cancelled
 # `oneharness run` to tear down the harness tree it owns (`oneharness/mod.rs`).
