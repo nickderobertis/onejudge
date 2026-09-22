@@ -2012,6 +2012,138 @@ fn an_oneharness_config_that_names_no_bin_runs_the_turn_in_process() {
     assert_eq!(exit_code(&summary), 0);
 }
 
+/// The agent side's `oneharness.toml` written two ways over the same fake-harness
+/// double: `flat` states the harness selection itself, while the other states only
+/// `extends` and its history directory, leaving the harness list and the pinned
+/// `bin` to a parent file it names.
+fn agent_config_project(name: &str, flat: bool) -> std::path::PathBuf {
+    let dir = scratch_path(name);
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("shared")).unwrap();
+    std::fs::write(
+        dir.join("SKILL.md"),
+        "[[reply:committed]][[event:git commit -m fix]]",
+    )
+    .unwrap();
+    let history = format!(
+        "history_dir = {:?}\n",
+        dir.join("history").display().to_string()
+    );
+    let selection = format!(
+        "harnesses = [\"claude-code\"]\n\n[harness.claude-code]\nbin = {:?}\n",
+        env!("CARGO_BIN_EXE_onejudge-fake-harness"),
+    );
+    if flat {
+        std::fs::write(dir.join("oneharness.toml"), history + &selection).unwrap();
+    } else {
+        std::fs::write(dir.join("shared/base.toml"), selection).unwrap();
+        std::fs::write(
+            dir.join("oneharness.toml"),
+            format!("extends = \"shared/base.toml\"\n{history}"),
+        )
+        .unwrap();
+    }
+    dir
+}
+
+/// Spawn the built binary over an in-process, streaming `oneharness` provider whose
+/// agent side runs from `dir`, returning its `--stream` event lines and report.
+fn stream_agent_config_project(dir: &Path) -> (Vec<serde_json::Value>, onejudge::Report) {
+    let config = dir.join("onejudge.yaml");
+    std::fs::write(
+        &config,
+        format!(
+            "provider:\n  kind: oneharness\n  stream: true\nskill: {}\ntask: please commit\n",
+            serde_json::to_string(&dir.display().to_string()).unwrap()
+        ),
+    )
+    .unwrap();
+    let output = Command::new(onejudge_bin())
+        .args([
+            "run",
+            config.to_str().unwrap(),
+            "--format",
+            "json",
+            "--stream",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let mut events = Vec::new();
+    let mut report = None;
+    for line in String::from_utf8(output.stdout).unwrap().lines() {
+        let value: serde_json::Value = serde_json::from_str(line).unwrap();
+        match value["type"].as_str() {
+            Some("event") => events.push(value),
+            Some("result") => {
+                report = Some(serde_json::from_value(value["report"].clone()).unwrap())
+            }
+            other => panic!("unexpected stream line type {other:?}"),
+        }
+    }
+    (
+        events,
+        report.expect("the terminal result line carried the report"),
+    )
+}
+
+#[test]
+fn an_agent_config_that_extends_a_parent_runs_under_the_harness_only_the_parent_names() {
+    // The linked `oneharness-core` resolves `extends` itself, so the agent's turn
+    // runs under the fake harness pinned only in the parent — no harness list, no
+    // `bin` in the file onejudge's run discovers. Against a core that predates
+    // `extends` the child is an unknown-key config error and the run fails.
+    let flat_dir = agent_config_project("cli-agent-config-flat", true);
+    let extends_dir = agent_config_project("cli-agent-config-extends", false);
+    let (flat_events, flat) = stream_agent_config_project(&flat_dir);
+    let (events, report) = stream_agent_config_project(&extends_dir);
+
+    assert_eq!(report.transcript.messages[1].content, "committed");
+    assert_eq!(
+        events.len(),
+        1,
+        "the tool event streamed from the parent's harness"
+    );
+    assert_eq!(events[0]["event"]["name"], "Bash");
+    // Which harness each invocation ran and was offered — the part of the
+    // attribution a run's timings, paths and session ids do not vary.
+    let ran = |report: &onejudge::Report| -> Vec<(Option<String>, Vec<String>)> {
+        let telemetry = report
+            .telemetry
+            .as_ref()
+            .expect("telemetry reaches the report");
+        telemetry
+            .attribution
+            .iter()
+            .map(|a| {
+                let offered = a.candidates.iter().map(|c| c.harness.clone()).collect();
+                (a.ran.clone(), offered)
+            })
+            .collect()
+    };
+    assert_eq!(
+        ran(&report),
+        [(
+            Some("claude-code".to_string()),
+            vec!["claude-code".to_string()]
+        )]
+    );
+
+    // What onejudge parses from the run is what it parses for a flat config.
+    assert_eq!(events, flat_events);
+    assert_eq!(report.transcript, flat.transcript);
+    assert_eq!(report.verdicts, flat.verdicts);
+    assert_eq!(ran(&report), ran(&flat));
+    assert!(report.processes.is_empty() && flat.processes.is_empty());
+
+    let _ = std::fs::remove_dir_all(&flat_dir);
+    let _ = std::fs::remove_dir_all(&extends_dir);
+}
+
 #[test]
 fn an_observing_plan_run_reports_the_conversation_and_still_returns_its_report() {
     // The entry point an embedder that drives a `Plan` — rather than building
