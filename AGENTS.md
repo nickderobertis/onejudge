@@ -340,12 +340,12 @@ choose what to do about a refusal and can do nothing at all about a silence.
 cases through the library API over the real subprocess doubles, holding a party's
 turn open so the arrival is genuinely live rather than between turns, and holds each
 journey to a capture from the tree before the move below (`tests/golden/notes/`).
-**The note's shapes are onejudge's; its channel is not**: `onejudge::note`
-declares the contract (`agent.note@1`, published as the bundle `schemas/note.json`,
-generated from `Note` and gated by `just check-note-schema`), and rides it over the
-`onemessagebus` core's generic `Sender`/`Inbox`. `tests/note_contract.rs` holds the
-declaration to the bytes onejudge 0.8.1 wrote, so a shape that moves is a shape that
-changed. oneagentgraph and onepipeline import these from `onejudge::note`. The command-provider frames' schemas are registered with the bus the same
+**The note's shapes are onejudge's; its channel is not**: `onejudge::note` declares
+the contract (`agent.note@1`) and rides it over the `onemessagebus` core's generic
+`Sender`/`Inbox`, so a shape change is onejudge's to make and a channel change is a
+proposal to the bus (`docs/contract.md`). oneagentgraph and onepipeline import these
+names from `onejudge::note`, so moving one breaks a repository this gate cannot see.
+The command-provider frames' schemas are registered with the bus the same
 way (`docs/protocol.md`), and a frame change is a change to that declaration.
 
 **A named session and `--control` must agree about what a turn is.** A mechanism
