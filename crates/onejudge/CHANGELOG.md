@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.0](https://github.com/nickderobertis/onejudge/compare/v0.13.5...v0.14.0) - 2026-09-22
+
+### Added
+
+- *(note)* [**breaking**] own the note contract and drop the bus agent crate ([#112](https://github.com/nickderobertis/onejudge/pull/112))
+
 ## [0.13.5](https://github.com/nickderobertis/onejudge/compare/v0.13.4...v0.13.5) - 2026-09-22
 
 ### Added
