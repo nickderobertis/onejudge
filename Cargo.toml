@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/onejudge"]
 
 [workspace.package]
-version = "0.13.5"
+version = "0.14.0"
 edition = "2021"
 # Floored by `onemessagebus`, whose bus core carries the note channel and the
 # registry onejudge's frame schemas are registered in (it declares 1.89; the
