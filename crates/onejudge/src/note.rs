@@ -90,6 +90,7 @@ use onemessagebus::{
     Answered, Carried, Closed, Disposition, Inbox, Message, SchemaId, Sender,
     Undelivered as InboxUndelivered,
 };
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// Who a note is for.
@@ -98,8 +99,7 @@ use serde::{Deserialize, Serialize};
 /// note the judge may read as an instruction to itself. One run saw a simulated
 /// user compose a four-point "manager ruling" in-conversation and instruct the
 /// worker to post it over the run channel, and the worker complied.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "sdk-schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum Addressee {
     /// An update to the *worker's* task.
@@ -130,8 +130,7 @@ impl Addressee {
 }
 
 /// Which party of the conversation a delivery reached.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "sdk-schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum Party {
     /// The agent under test.
@@ -156,8 +155,7 @@ pub enum Party {
 /// no pattern has it. What stands in for it is the rendered framing
 /// ([`Criteria::rendered`]), which instructs the judge to evaluate the property a
 /// named mechanism was serving.
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "sdk-schema", derive(schemars::JsonSchema))]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(try_from = "String", into = "String")]
 pub struct Criterion(String);
 
@@ -235,8 +233,7 @@ pub struct CriterionRefused {
 /// can read stays unrepresentable for its whole life and not only at construction.
 /// Trimmed on the way in, so the same words written with stray whitespace are the
 /// same note.
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "sdk-schema", derive(schemars::JsonSchema))]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(try_from = "String", into = "String")]
 pub struct NoteText(String);
 
@@ -299,8 +296,7 @@ impl std::str::FromStr for NoteText {
 /// through the same conversion — so a note whose text nobody can read, or whose
 /// criterion is unusable, is unrepresentable rather than representable and refused
 /// somewhere later.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "sdk-schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(try_from = "NoteWire")]
 #[non_exhaustive]
 pub struct Note {
@@ -320,8 +316,7 @@ pub struct Note {
 
 /// The wire shape a `Note` is deserialized from, so an arriving note is held to the
 /// same rules a locally-built one is.
-#[derive(Deserialize)]
-#[cfg_attr(feature = "sdk-schema", derive(schemars::JsonSchema))]
+#[derive(Deserialize, JsonSchema)]
 struct NoteWire {
     addressee: Addressee,
     text: String,
@@ -395,8 +390,7 @@ pub enum NoteRefused {
 }
 
 /// One note as it was handed to a party, with the party it reached.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "sdk-schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct DeliveredNote {
     /// The note itself, addressee included.
     pub note: Note,

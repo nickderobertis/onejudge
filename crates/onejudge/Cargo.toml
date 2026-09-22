@@ -32,7 +32,13 @@ onemessagebus = { workspace = true }
 # (and the MSRV's) default surface.
 clap = { version = "4", features = ["derive"], optional = true }
 serde_yaml_ng = { version = "0.10", optional = true }
-schemars = { workspace = true, optional = true }
+# Non-optional, because `onemessagebus::Message` is sealed on `JsonSchema` and
+# `Note` implements it (`note.rs`) on every build: the note channel `Sender<Note,
+# Accepted>` does not exist without it, and `Engine::with_notes` is library
+# surface. This costs a bare consumer no new dependency — `onemessagebus` itself
+# requires `schemars` — but it must be a direct one, since the derive is ours.
+# The `sdk-schema` feature is what adds the *rest* of the crate's schema surface.
+schemars = { workspace = true }
 
 # Cancelling a turn signals the `oneharness run` child so it tears down the
 # harness tree it owns (`oneharness/mod.rs`). Unix-only: Windows has no SIGTERM,
@@ -78,9 +84,10 @@ skill = ["dep:serde_yaml_ng"]
 cli = ["dep:clap", "skill"]
 
 # Rust-owned JSON Schema metadata for SDK generators. Config is the CLI's YAML
-# input contract, so this opt-in feature includes `cli`; bare library and CLI
-# consumers do not compile schemars unless they explicitly request this surface.
-sdk-schema = ["dep:schemars", "cli"]
+# input contract, so this opt-in feature includes `cli`. It does not pull
+# `schemars` in — that is non-optional above, for the note contract — it turns on
+# the schema derives and the `sdk_schema` module for everything else.
+sdk-schema = ["cli"]
 
 [[example]]
 name = "generate_sdk_schema"

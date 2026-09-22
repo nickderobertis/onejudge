@@ -15,9 +15,7 @@ use onejudge::note::{
     supervisor_block, worker_block, Accepted, Addressee, Criteria, Criterion, DeliveredNote, Note,
     NoteInbox, NoteRefused, NoteText, Notes, Party, Undelivered,
 };
-use onemessagebus::{
-    BackendError, Carry, Closed, Inbox, Message, Registry, Spool, Undelivered as InboxUndelivered,
-};
+use onemessagebus::{BackendError, Carry, Closed, Inbox, Spool, Undelivered as InboxUndelivered};
 use serde_json::{json, Value};
 
 const GOLDEN: &str = include_str!("golden/onejudge-0.8.1-note.json");
@@ -310,6 +308,10 @@ fn every_refusal_says_what_onejudge_said() {
 #[cfg(feature = "sdk-schema")]
 #[test]
 fn a_note_is_onejudges_message_and_its_published_schema_is_what_the_engine_reads() {
+    // Scoped here rather than at the top: `Message` (which carries `SCHEMA`) and
+    // `Registry` are this feature's surface, and the crate builds without it.
+    use onemessagebus::{Message, Registry};
+
     assert_eq!(Note::SCHEMA.to_string(), "agent.note@1");
 
     let mut registry = Registry::new();
