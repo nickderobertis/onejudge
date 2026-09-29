@@ -884,6 +884,96 @@ fn oneharness_retries_without_session_when_unsupported() {
     assert_eq!(outcome.transcript.messages[1].content, "no-session");
 }
 
+/// Each `--history-name` value the double's argv log recorded, one per spawned
+/// invocation, paired with whether that invocation also carried `--session`.
+fn recorded_history_names(log: &std::path::Path) -> Vec<(Option<String>, bool)> {
+    std::fs::read_to_string(log)
+        .unwrap()
+        .split("=== argv ===\n")
+        .filter(|argv| !argv.is_empty())
+        .map(|argv| {
+            let args: Vec<&str> = argv.lines().collect();
+            let name = args
+                .windows(2)
+                .find(|w| w[0] == "--history-name")
+                .map(|w| w[1].to_string());
+            (name, args.contains(&"--session"))
+        })
+        .collect()
+}
+
+#[test]
+fn judge_side_calls_record_under_names_derived_from_the_run_session() {
+    // Every judge-side party spawns the real `oneharness` argv, recorded by the
+    // double. The supervisor's harness cannot bind a session, so each of its
+    // turns is refused once and retried without `--session` — and the retry must
+    // still carry the name, or the turn is recorded under a prompt-derived one.
+    let log = scratch_path("judge-side-history-names.argv");
+    let _ = std::fs::remove_file(&log);
+    let provider = fake_oneharness();
+    let engine = Engine::new(&provider, settings().with_session_name("run-h"));
+    let steer = format!("[[record-argv:{}]]", log.display());
+    let outcome = engine
+        .run(&Conversation::multi_turn(
+            skill_with("[[reply:done]]"),
+            "go",
+            SimulatedUser::new(format!("A tester. [[reject-session]]{steer}"))
+                .done_when("done")
+                .max_turns(2),
+        ))
+        .unwrap();
+    assert!(outcome.transcript.assistant_turns() >= 1);
+    let supervisor = recorded_history_names(&log);
+    assert!(!supervisor.is_empty(), "the supervisor ran");
+    assert!(
+        supervisor
+            .iter()
+            .all(|call| call == &(Some("run-h-user".to_string()), false)),
+        "every supervisor turn is the sessionless retry, named after the run: {supervisor:?}"
+    );
+
+    std::fs::remove_file(&log).unwrap();
+    engine
+        .judge_boolean(&format!("said done {steer}"), &outcome.transcript)
+        .unwrap();
+    engine
+        .judge_numeric(
+            &format!("said done {steer}"),
+            0.0,
+            10.0,
+            &outcome.transcript,
+        )
+        .unwrap();
+    engine
+        .assess(&format!("anything left? {steer}"), &outcome.transcript)
+        .unwrap();
+    assert_eq!(
+        recorded_history_names(&log),
+        [
+            (Some("run-h-judge".to_string()), false),
+            (Some("run-h-judge".to_string()), false),
+            (Some("run-h-assess".to_string()), false),
+        ]
+    );
+
+    // A library caller invoking the provider directly, with no engine to name a
+    // base session, gets oneharness's own derived name — no `--history-name`.
+    std::fs::remove_file(&log).unwrap();
+    let unscoped = fake_oneharness();
+    unscoped
+        .judge(
+            &onejudge::JudgeQuery {
+                kind: onejudge::JudgeKind::Boolean,
+                criterion: &format!("said done {steer}"),
+                scale: None,
+            },
+            &outcome.transcript.messages,
+        )
+        .unwrap();
+    assert_eq!(recorded_history_names(&log), [(None, false)]);
+    let _ = std::fs::remove_file(&log);
+}
+
 // --- The streamed provider protocol (docs/streaming.md) --------------------
 
 /// A streamed [`OneharnessProvider`]: the same double, driven with `--stream`, so

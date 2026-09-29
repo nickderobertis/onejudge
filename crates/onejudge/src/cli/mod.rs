@@ -147,7 +147,12 @@ pub struct RunArgs {
     /// working directory.
     #[arg(long = "artifact", value_name = "PATH")]
     pub artifacts: Vec<String>,
-    /// The caller-owned session name threaded across turns.
+    /// The caller-owned session name threaded across turns (default
+    /// `onejudge`). Every party's oneharness history is named after it: the
+    /// agent's `<session>-skill`, the supervisor's `<session>-user`, eval verdicts
+    /// `<session>-judge` and the assessment `<session>-assess`, each suffixed
+    /// `-<label>` in a panel of more than one judge — so `oneharness history show
+    /// <session>-user-<label> --project <worktree> --all` finds one judge's turns.
     #[arg(long)]
     pub session: Option<String>,
     /// Override just the provider backend kind.

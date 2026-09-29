@@ -3480,3 +3480,118 @@ fn binary_asks_the_spawned_oneharness_for_its_json_report_by_name() {
         }
     }
 }
+
+/// The names of every history session under `store`, read through oneharness's
+/// own history reader — what `oneharness history list` would print.
+fn history_names(store: &Path) -> std::collections::BTreeSet<String> {
+    oneharness_core::io::history::list_sessions(store, None)
+        .unwrap()
+        .into_iter()
+        .map(|session| session.name)
+        .collect()
+}
+
+/// Run the built binary over a project whose agent and judge configs both pin the
+/// fake-harness double, under `--session <session>`, recording into a fresh
+/// history store. Returns the names the store holds afterwards.
+fn run_with_judge_history(
+    name: &str,
+    provider: &str,
+    extra: &str,
+    session: &str,
+) -> std::collections::BTreeSet<String> {
+    let dir = scratch_path(name);
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("xdg")).unwrap();
+    let harness = format!(
+        "harnesses = [\"claude-code\"]\n\n[harness.claude-code]\nbin = {:?}\n",
+        env!("CARGO_BIN_EXE_onejudge-fake-harness"),
+    );
+    std::fs::write(dir.join("SKILL.md"), "[[reply:wrote the plan]]").unwrap();
+    std::fs::write(dir.join("oneharness.toml"), &harness).unwrap();
+    let judge_config = dir.join("judge.toml");
+    std::fs::write(&judge_config, &harness).unwrap();
+    let store = dir.join("store");
+    let quote = |text: &str| serde_json::to_string(text).unwrap();
+    let config = dir.join("onejudge.yaml");
+    std::fs::write(
+        &config,
+        format!(
+            "{}skill: {}\ntask: {}\nuser:\n  persona: a reviewer\n  done_when: the plan is written\n  max_turns: 2\n{extra}",
+            provider.replace(
+                "JUDGE_CONFIG",
+                &quote(&judge_config.display().to_string())
+            ),
+            quote(&dir.display().to_string()),
+            quote(&format!(
+                "write the plan [[artifact-evaluator:{}]]",
+                dir.join("prompts.log").display()
+            )),
+        ),
+    )
+    .unwrap();
+    let output = Command::new(onejudge_bin())
+        .arg("run")
+        .arg(&config)
+        .args(["--session", session])
+        .env("ONEHARNESS_HISTORY_DIR", &store)
+        // Hermetic: no user-level oneharness config or environment override
+        // reaches either party (a host exporting a pointer file or labels would
+        // otherwise have this run's records written into its own); onejudge
+        // itself asks every call to record.
+        .env("XDG_CONFIG_HOME", dir.join("xdg"))
+        .env_remove("ONEHARNESS_CONFIG")
+        .env_remove("ONEHARNESS_HISTORY")
+        .env_remove("ONEHARNESS_HISTORY_POINTER_FILE")
+        .env_remove("ONEHARNESS_HISTORY_LABELS")
+        .env_remove("ONEJUDGE_SESSION")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let names = history_names(&store);
+    let _ = std::fs::remove_dir_all(&dir);
+    names
+}
+
+fn names(expected: &[&str]) -> std::collections::BTreeSet<String> {
+    expected.iter().map(|name| (*name).to_string()).collect()
+}
+
+#[test]
+fn every_judge_side_turn_is_recorded_under_the_run_session_and_its_label() {
+    // `oneharness history show <session>-user-<label>` must find exactly one
+    // judge's supervisor turns. Read back through oneharness's own reader, every
+    // record the run left is named after `--session`: nothing under the
+    // prompt-derived `you-are-the-...` name every run used to share.
+    let panel = "provider:\n  kind: split\n  skill:\n    kind: oneharness\n  judges:\n    \
+                 - kind: oneharness\n      judge_config: JUDGE_CONFIG\n      label: reviewer\n    \
+                 - kind: oneharness\n      judge_config: JUDGE_CONFIG\n      label: second\n";
+    assert_eq!(
+        run_with_judge_history("cli-history-panel", panel, "", "sess-p"),
+        names(&[
+            "sess-p-skill",
+            "sess-p-user-reviewer",
+            "sess-p-user-second",
+            "sess-p-judge-reviewer",
+            "sess-p-judge-second",
+        ])
+    );
+
+    // A bare judge carries no label, and its verdict and assessment get their own.
+    let bare = "provider:\n  kind: oneharness\n  judge_config: JUDGE_CONFIG\n";
+    let judged = "evals:\n  - criterion: the plan is written\n    kind: boolean\n\
+                  assessment: anything left to do?\n";
+    assert_eq!(
+        run_with_judge_history("cli-history-bare", bare, judged, "sess-b"),
+        names(&[
+            "sess-b-skill",
+            "sess-b-user",
+            "sess-b-judge",
+            "sess-b-assess"
+        ])
+    );
+}

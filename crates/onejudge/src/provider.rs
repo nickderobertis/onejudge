@@ -416,6 +416,21 @@ pub trait Provider {
         Vec::new()
     }
 
+    /// Name this provider's judge-side history records after `scope`'s run.
+    ///
+    /// The engine calls it with the run's base session before any judge-side
+    /// call, so a supervisor turn is recorded as `<base>-user`, a verdict as
+    /// `<base>-judge` and an assessment as `<base>-assess` (see
+    /// [`HistoryScope::name`](crate::HistoryScope::name)); `None` clears it, and a
+    /// provider left unscoped records under whatever name its backend derives. A
+    /// composing provider forwards it to its judge side — a
+    /// [`JudgePanel`](crate::JudgePanel) of more than one judge labels each copy.
+    ///
+    /// Defaulted to do nothing, which is the truth for a backend that writes no
+    /// named history. Whether anything is recorded at all stays the backend's
+    /// own configuration; this only names what it records.
+    fn set_history_scope(&self, _scope: Option<&crate::HistoryScope>) {}
+
     /// Run one assistant/skill turn given the conversation so far.
     ///
     /// `session`, when `Some`, is a **caller-owned session name** the engine

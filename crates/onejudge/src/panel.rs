@@ -226,13 +226,8 @@ impl<J> JudgePanel<J> {
     /// when the panel holds more than one judge, so each keeps its own harness
     /// session, and the bare name for a panel of one.
     fn session_for(&self, i: usize, session: Option<&str>) -> Option<String> {
-        session.map(|session| {
-            if self.multi() {
-                format!("{session}-{}", self.judges[i].label)
-            } else {
-                session.to_string()
-            }
-        })
+        let label = self.multi().then(|| self.judges[i].label.as_str());
+        session.map(|session| crate::history_name::labelled(session, label))
     }
 
     /// `[<label>] <text>` for each part, joined with `; `.
@@ -615,6 +610,23 @@ impl<J: Provider + Send> Provider for JudgePanel<J> {
         self.decisions.borrow_mut().clear();
     }
 
+    // A panel of one hands its judge the scope unchanged, so it records exactly
+    // what a bare provider would; more than one labels each judge's copy, exactly
+    // as each judge's session is labelled.
+    fn set_history_scope(&self, scope: Option<&crate::HistoryScope>) {
+        let multi = self.multi();
+        for judge in &self.judges {
+            let scope = scope.map(|scope| {
+                if multi {
+                    scope.labelled(judge.label.clone())
+                } else {
+                    scope.clone()
+                }
+            });
+            judge.with(|provider| provider.set_history_scope(scope.as_ref()));
+        }
+    }
+
     // Each judge's records, stamped with its label when the panel holds more than
     // one — a panel of one writes exactly the records its judge wrote.
     fn invocation_telemetry(&self) -> Vec<InvocationTelemetry> {
@@ -769,6 +781,8 @@ mod tests {
         answer: Option<SupervisorOutcome>,
         verdict: JudgeVerdict,
         sessions: RefCell<Vec<Option<String>>>,
+        /// The history scope the panel last handed this judge.
+        scope: RefCell<Option<crate::HistoryScope>>,
         /// Fail `judge` and `assess` too, not only `supervise`.
         broken: bool,
     }
@@ -783,6 +797,7 @@ mod tests {
                     usage: None,
                 },
                 sessions: RefCell::new(Vec::new()),
+                scope: RefCell::new(None),
                 broken: false,
             }
         }
@@ -796,6 +811,7 @@ mod tests {
                     usage: None,
                 },
                 sessions: RefCell::new(Vec::new()),
+                scope: RefCell::new(None),
                 broken: false,
             }
         }
@@ -821,12 +837,17 @@ mod tests {
                     }),
                 },
                 sessions: RefCell::new(Vec::new()),
+                scope: RefCell::new(None),
                 broken: false,
             }
         }
     }
 
     impl Provider for Canned {
+        fn set_history_scope(&self, scope: Option<&crate::HistoryScope>) {
+            *self.scope.borrow_mut() = scope.cloned();
+        }
+
         fn respond(
             &self,
             _: &SkillRef<'_>,
@@ -1171,6 +1192,56 @@ mod tests {
         // And no session stays no session.
         panel.supervise(&query(), &[], None).unwrap();
         assert_eq!(sessions(1).last().unwrap(), &None);
+    }
+
+    #[test]
+    fn each_judge_names_its_history_after_the_session_it_is_handed() {
+        use crate::{HistoryScope, JudgeSideCall};
+        let names = |panel: &JudgePanel<Canned>, i: usize| {
+            panel.judges()[i].with(|j| {
+                j.scope.borrow().as_ref().map(|scope| {
+                    [
+                        JudgeSideCall::User,
+                        JudgeSideCall::Judge,
+                        JudgeSideCall::Assess,
+                    ]
+                    .map(|call| scope.name(call))
+                })
+            })
+        };
+
+        let multi = panel_of(vec![
+            ("a", Canned::deciding(done("x"))),
+            ("b", Canned::deciding(done("y"))),
+        ]);
+        multi.set_history_scope(Some(&HistoryScope::new("run")));
+        assert_eq!(
+            names(&multi, 0),
+            Some(["run-user-a", "run-judge-a", "run-assess-a"].map(String::from))
+        );
+        assert_eq!(
+            names(&multi, 1),
+            Some(["run-user-b", "run-judge-b", "run-assess-b"].map(String::from))
+        );
+        // The supervisor's history name is the very session the panel hands it.
+        multi.supervise(&query(), &[], Some("run-user")).unwrap();
+        for i in 0..2 {
+            let session = multi.judges()[i].with(|j| j.sessions.borrow()[0].clone());
+            assert_eq!(session, names(&multi, i).map(|[user, ..]| user));
+        }
+
+        // A panel of one names exactly what a bare provider would.
+        let one = panel_of(vec![("only", Canned::deciding(done("x")))]);
+        one.set_history_scope(Some(&HistoryScope::new("run")));
+        assert_eq!(
+            names(&one, 0),
+            Some(["run-user", "run-judge", "run-assess"].map(String::from))
+        );
+
+        // And no base session names nothing.
+        multi.set_history_scope(None);
+        assert_eq!(names(&multi, 0), None);
+        assert_eq!(names(&multi, 1), None);
     }
 
     #[test]
