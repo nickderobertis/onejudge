@@ -17,8 +17,9 @@ the per-judge record below, and — under `control: true` — the judge's own
 `supervisor_control` address, which the release before panels wrote as `null`
 (a defect; see [how a panel decides](#how-a-panel-decides)).
 
-This page is the contract. Four parts: the config shape, how a panel decides,
-what each surface carries per judge, and the [`llmlint` judge](#the-llmlint-judge)
+This page is the contract. Five parts: the config shape, how a panel decides,
+what each surface carries per judge, [what a judge may do](#posture-what-a-judge-may-do),
+and the [`llmlint` judge](#the-llmlint-judge)
 — a judge that is a lint run rather than a model. The library type is
 [`JudgePanel`](../crates/onejudge/src/panel.rs), composed as the judge half of a
 `SplitProvider`; the CLI builds one from `judges:`.
@@ -58,6 +59,10 @@ provider:
   refused for either, and beside an LLM judge it is simply left out of them.
 - `--judge-config` / `ONEJUDGE_JUDGE_CONFIG` still apply to the top-level
   `provider.judge_config` only; there is no new flag or environment variable.
+- An `oneharness` judge entry may also set `instructions` (appended to its
+  prompts) and `events` (whether it records its tool events), and a `split` may
+  set `allow_writable_judges`; see
+  [what a judge may do](#posture-what-a-judge-may-do).
 
 There is no per-judge `done_when`, `persona`, `max_turns` or note routing: those
 are the conversation's and reach every judge alike. A judge that cannot use one
@@ -153,6 +158,12 @@ supervisor call, `Ok` or `Err`. A provider that is not a panel records none, so 
 report carrying no decisions was judged by a bare provider; nothing is
 synthesized.
 
+**`posture` and `events`** (`schema_version` 14) — for an `oneharness` judge,
+the permission mode its evaluator calls ran under and the configuration layer
+that set it, and the tool events its harness reported deciding when it asked for
+them; see [what a judge may do](#posture-what-a-judge-may-do). Both omitted when
+absent, so every other decision is unchanged.
+
 **Report** (`schema_version` 12): `judge_decisions: Vec<JudgedTurn>` with
 `JudgedTurn { turn, decisions }`, one per supervisor turn, omitted when empty;
 the `FailureReport` carries the same array, the turn that failed included.
@@ -164,11 +175,16 @@ panel of more than one judge. See [contract.md](contract.md).
 `type: judge_decided`, carrying `turn`, `judge`, `kind`, `decision`, `reason`) is
 delivered once per decision in list order after the supervisor turn's
 `TurnOpened` and before its `Message` / `TurnClosed` — and, when the supervisor
-call failed, before the error propagates. An embedder matching `Observation`
-exhaustively adds an arm.
+call failed, before the error propagates. `Observation::JudgeTool` (serialized
+`type: judge_tool`, carrying `turn`, `judge` and `event` — the payload
+`Observation::Tool` carries) is delivered once per tool event a judge reported
+deciding, after the turn's `TurnOpened` and before that judge's `JudgeDecided`;
+a bare provider's arrive under its own label (`oneharness`). An embedder matching
+`Observation` exhaustively adds an arm for each.
 
-**The `--stream` NDJSON protocol is unchanged** (`event* result EOF`); the
-decisions reach an SDK on the `result` line's report ([streaming.md](streaming.md)).
+**The `--stream` NDJSON protocol** is `(event | judge_tool)* result EOF`: a judge
+that recorded events publishes each as a `judge_tool` line, and the decisions
+reach an SDK on the `result` line's report ([streaming.md](streaming.md)).
 The human `--format` prints each judge's decision beside the supervisor turn it
 belongs to — under the assistant turn that turn judged, as
 `[judge <label> (<kind>)] <decision> — <reason>`. The SDK schema bundle
@@ -193,6 +209,73 @@ let provider = SplitProvider::new(OneharnessProvider::new(), panel);
 (numeric scoring, prose, playing a user) — every ability by default, and none of
 the three for an `LlmlintProvider`. An embedder driving a `Plan` gets the panel
 built for it, and `Plan::with_spawn_hook` reaches every judge of it.
+
+## Posture: what a judge may do
+
+An **evaluator** call — a supervisor decision, a verdict or an assessment made
+with the worker's tree in hand — runs read-only by default, and that is a
+*default*, never an override. onejudge writes a oneharness config holding
+`mode = "read-only"` and nothing else (`judge-defaults-v1.toml`, in the user's
+runtime or cache directory) and passes it **first**, then the judge's own
+`judge_config`:
+
+```
+oneharness run … --config <onejudge defaults> --config <judge_config> …   # no --mode
+```
+
+In process it is the same list on `RunRequest.config`, with no `mode`. oneharness
+folds each later file over the ones before it and its `ONEHARNESS_*` overrides
+over every file, so the judge's config, the environment or harness `args` decide
+the judge's posture; with no mode configured anywhere it is still read-only —
+the defaults file's — and the harness argv and prompt are byte-identical to
+0.15.0's. A judge-side call with no worktree (the legacy simulated-user turn)
+passes the judge config alone, as it always has. A `bypass = true` in a judge's
+config does not beat the defaults: oneharness takes a `mode` from any layer
+before a legacy `bypass` from any layer, so say `mode = "bypass"` instead.
+
+**No `judge_config`.** The CLI passes `oneharness.judge.toml` when it is in the
+working directory, exactly as before. When it is not — which 0.15.0 passed
+anyway and oneharness refused — the judge runs behind the defaults followed by
+the files oneharness's own discovery resolves from the worktree (the user file,
+then the project file), so a discovered config's `mode` still applies. The
+library spells this `OneharnessProvider::with_judge_config_discovery()`.
+
+**Where the mode came from.** onejudge resolves that same list with the linked
+core's own loader, environment included, and records it on each judge decision
+and each evaluator call's `telemetry.attribution[]` entry as
+`posture: { mode, source, config_files }` — `source` is the layer that set the
+mode (onejudge's defaults file, the judge's config, a discovered file,
+`environment`, or `default`), and it is the file `oneharness config` over the
+same list attributes the mode to. A list the linked core cannot read is not
+refused by onejudge: the call still passes it, oneharness refuses it with its
+own words as it always has, and onejudge warns, records no posture and frames
+the prompt read-only.
+
+**The prompt follows the posture.** A read-only judge gets today's evidence
+contract byte for byte. Any other mode gets `EVIDENCE CONTRACT (MODE: <mode>)`,
+stating what the mode grants and inviting the judge to verify the work itself
+(read the commit log, run the tests) while leaving the tree as it found it; the
+closed `{"tool":"git_status"}` / `{"tool":"git_diff"}` requests stay offered and
+the JSON answer format is unchanged. A judge's **`instructions`** are appended
+to every evaluator prompt it is handed, as `Instructions for this judge:` — what
+to verify and how — and to no other judge's.
+
+**Events.** A judge's **`events`** (default: on exactly when its effective mode
+is neither `read-only` nor `plan`) asks its harness for tool events; they land
+on its decision's `events`, reach an observer as `Observation::JudgeTool`, and
+are published as `judge_tool` lines under `--stream`. `events: false` silences a
+writable judge; `events: true` records a read-only one's.
+
+**Writable judges in a panel.** Panel judges run **at the same time against one
+worktree**. A judge that can change the tree races the other judges' reads —
+one may judge a tree another is halfway through changing — and it changes the
+tree the worker continues from, so the next worker turn starts from edits no
+worker made. So a panel of more than one judge in which any judge's effective
+mode is writable is **refused when the config resolves**, naming the judge, its
+mode and the layer that set it, before any harness runs — unless the `split`
+sets `allow_writable_judges: true`, which accepts both hazards. A single judge
+has no one to race and is never refused; the worker still continues from
+whatever it left, which its `instructions` should say not to do.
 
 ## The llmlint judge
 
@@ -333,3 +416,15 @@ binary, and replays the two checked-in single-judge baselines
 `scripts/capture-single-judge-baseline.sh`) to prove a panel of one is
 byte-identical to what came before it, save the `supervisor_control` the release
 omitted. `panel.rs` unit-tests the decision table.
+
+The posture journeys in `tests/cli.rs` drive the built binary on both seams —
+the linked engine, and a spawned `onejudge-fake-oneharness` in its engine mode,
+which runs the same core on the argv onejudge spawned it with — down to
+`onejudge-fake-harness`, which records every harness invocation. A judge left at
+its default is held to what the released 0.15.0 produced
+(`tests/golden/judge-posture-0.15.0/`, captured by
+`scripts/capture-judge-posture-baseline.sh`); an `auto` judge's argv, prompt,
+recorded events and `judge_tool` lines, an `ONEHARNESS_MODE` override, the
+discovery fallback, `instructions`, `events` both ways, the writable-panel
+refusal and the order of `JudgeTool` observations are each proven there, with
+`oneharness config` over the same list naming the same source.

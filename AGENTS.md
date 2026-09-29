@@ -228,6 +228,16 @@ like telemetry so a failed run still reports it (`Report::judge_decisions`,
 `Observation::JudgeDecided`, the `judge` label on attribution, session links and
 processes).
 
+**A judge's posture is a default, never an override.** An evaluator call passes
+onejudge's defaults file (`mode = "read-only"`) *first* in its config list and no
+mode on the request, so the judge's config, `ONEHARNESS_*` or a discovered file
+decides; the mode and its source are resolved with the linked core's loader and
+recorded (`oneharness/posture.rs`). Setting `mode` on a judge-side request
+reintroduces the silently-ignored-config defect. The default posture is held to
+0.15.0's harness argv and prompts (`tests/golden/judge-posture-0.15.0/`), and a
+writable judge in a multi-judge panel needs `allow_writable_judges`
+(`docs/judges.md`).
+
 An `oneharness` provider can also **stream** (`provider.stream: true`): tool events
 reach the caller's sink as oneharness observes them, then the finished report, so a
 600–2000s turn is visible while it runs. `onejudge run --stream` republishes the

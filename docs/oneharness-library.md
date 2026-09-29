@@ -87,7 +87,7 @@ field fails the build), and both columns against the rows below.
 | `--session` | `session: Option<String>` |
 | `--stream` | `stream: Option<bool>` |
 | `--control` | `control: bool` |
-| `--mode` | `mode: Option<PermissionMode>` |
+| `--mode` | `mode: Option<PermissionMode>` — rendered so the mapping stays total, but set on no turn onejudge makes: an evaluator judge's read-only default rides **first in `config`** (`oneharness/posture.rs`), where the judge's own config and `ONEHARNESS_*` can override it, which a request mode would beat ([judges.md](judges.md#posture-what-a-judge-may-do)) |
 | `--prompt-file` | `prompt: Vec<String>` — an owned value, so the `-`/stdin hop that exists only to dodge the OS argv ceiling disappears; oneharness's own `LARGE_INPUT_THRESHOLD` moves a large prompt off-argv for the harness |
 | `--compact` | **none, deliberately** — `RunRequest`'s own docs exclude it as "about how the shell *prints* the report, not how the engine produces it". An in-process caller is handed the `RunReport` value, so there is nothing to compact. Not a gap. |
 | `--format` | **none, deliberately** — like `--compact`, it chooses how the CLI *prints* the report (`json` for onejudge, which reads the machine contract rather than relying on the default oneharness 0.14.0 moves to text). An in-process caller is handed the `RunReport` value, so there is nothing to format. |

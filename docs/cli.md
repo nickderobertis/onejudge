@@ -181,7 +181,7 @@ Top-level keys:
 
 | key | purpose |
 |-----|---------|
-| `provider` | which backend runs the harness: `kind` is `oneharness` (`bin`, `judge_config`, `stream`, `control`, `mock_harness`), `command` (`command: [...]`), or `split` (a `skill:` **sub-provider** — distinct from the top-level `skill:` below — plus the judge side as a **list**: `judges: [..]`, one or more entries each with an optional `label`, or `judge:` as the one-element shorthand; see [judges.md](judges.md)). A judge entry may also be `llmlint` (`bin`, `config`, `diff_base`, `args`) — a judge that is one `llmlint` run over the worker's tree, valid nowhere but a judge entry |
+| `provider` | which backend runs the harness: `kind` is `oneharness` (`bin`, `judge_config`, `instructions`, `events`, `stream`, `control`, `mock_harness`), `command` (`command: [...]`), or `split` (a `skill:` **sub-provider** — distinct from the top-level `skill:` below — plus the judge side as a **list**: `judges: [..]`, one or more entries each with an optional `label`, or `judge:` as the one-element shorthand, and `allow_writable_judges`; see [judges.md](judges.md)). A judge entry may also be `llmlint` (`bin`, `config`, `diff_base`, `args`) — a judge that is one `llmlint` run over the worker's tree, valid nowhere but a judge entry |
 | `skill` | a skill directory (containing `SKILL.md`) whose body seeds the system prompt, resolved relative to the config file; optional |
 | `system_prompt` | extra system-prompt text; used alone, or prepended before a `skill` body when both are set; optional |
 | `task` | the task to drive to completion (or supply via `--task`) |
@@ -205,11 +205,28 @@ default) leaves every prompt unchanged; the read-only tool allowlist and the
 There is no `harness` / `model` / `judge_model` key: harness and model selection
 moved into oneharness's own config files (`oneharness.toml` for the agent,
 `provider.judge_config` — default `oneharness.judge.toml` — for the judge side).
+With `judge_config` unset and no `oneharness.judge.toml` in the working
+directory, the judge side runs under oneharness's own discovery (the user file,
+then the project file) behind onejudge's read-only defaults — which replaces
+what was an error in 0.15.0, where the missing default file was passed anyway and
+oneharness refused it. When the default file exists it is passed exactly as
+before.
+
+The judge's **permission mode** is its config's too: an evaluator call layers
+onejudge's defaults (`mode = "read-only"`) *under* `judge_config`, so a `mode` set
+there — or `ONEHARNESS_MODE` — decides whether the judge can run a shell, and
+the report records the mode and the layer that set it. `instructions` appends
+text to that judge's prompts, and `events` (default: on for a writable mode)
+records its tool events on its decision and as `judge_tool` lines under
+`--stream`. A `split` with more than one judge refuses a writable one unless it
+sets `allow_writable_judges: true`. [judges.md](judges.md#posture-what-a-judge-may-do)
+is the contract.
 
 The config is validated strictly at the boundary (`deny_unknown_fields`): a typo'd
 key, a missing task, a provider field that does not belong to the chosen `kind`
 (e.g. `bin` or `judge_config` under `kind: command`), a `label` outside a judge
-entry or one that is malformed or repeated, `judge:` beside `judges:` or an empty
+entry or one that is malformed or repeated, a panel of several judges with a
+writable one and no `allow_writable_judges`, `judge:` beside `judges:` or an empty
 `judges:`, `kind: llmlint` anywhere but a judge entry, a numeric eval or an
 `assessment` with no judge that can answer it, or an inverted numeric scale is a
 loud, actionable error — never a silent default. An `llmlint` judge's executable
