@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.0](https://github.com/nickderobertis/onejudge/compare/v0.15.0...v0.16.0) - 2026-09-29
+
+### Added
+
+- *(judges)* make the judge-side posture a default a judge's config can override ([#128](https://github.com/nickderobertis/onejudge/pull/128))
+
 ## [0.15.0](https://github.com/nickderobertis/onejudge/compare/v0.14.0...v0.15.0) - 2026-09-29
 
 ### Added
