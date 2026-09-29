@@ -63,6 +63,12 @@ test-e2e:
 test-live:
     cargo nextest run --features fake-provider --test live --run-ignored all
 
+# Opt-in real-llmlint tier: the CLI's llmlint judge over the RELEASED llmlint (no
+# model, no credential — its rules match nothing), read back through
+# `llmlint history`. Needs llmlint on PATH at the floor: `just setup-llmlint`.
+test-llmlint:
+    PATH="$HOME/.local/bin:$PATH" cargo nextest run --features {{gate_features}} --test llmlint_real --run-ignored all
+
 # Drives `scripts/release-probe.sh` against the REAL public registries (no
 # credential, just network) for every target `release-targets.toml` declares, and
 # reconciles the canonical release-target schema this repository writes against

@@ -164,6 +164,28 @@ jobs:
           fi
           just lint-llm-diff origin/main
 
+  # The llmlint judge against the RELEASED llmlint, installed at the provider's
+  # floor by the same script sessions use: the labels onejudge passes are ones
+  # llmlint accepts and records, and each decision's `run_id` is the id
+  # `llmlint history` answers with. No model call and no credential.
+  llmlint-real:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned toolchain (from rust-toolchain.toml)
+        run: rustup show
+      - uses: extractions/setup-just@v3
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+      - uses: astral-sh/setup-uv@v6   # setup-llmlint.sh installs llmlint via `uv tool`
+      - name: Install llmlint at the floor
+        run: |
+          ./scripts/setup-llmlint.sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Real-llmlint journey
+        run: just test-llmlint
+
   # Lint the PR title as a required check: under squash-merge it becomes the one
   # commit that lands and that release-plz reads, so a malformed title must not
   # merge. The required context is named `commitlint` in branch protection.
