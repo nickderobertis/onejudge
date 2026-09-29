@@ -3713,3 +3713,318 @@ fn every_judge_side_turn_is_recorded_under_the_run_session_and_its_label() {
         ])
     );
 }
+
+// --- Judge posture: what an evaluator judge runs under ------------------------
+//
+// These journeys drive the built `onejudge` binary on BOTH seams a oneharness
+// judge can run on, and hold the harness each one reaches to what it was spawned
+// with. In process the engine is the linked core; spawned, the provider names
+// `onejudge-fake-oneharness` in its engine mode, which hands the argv onejudge
+// spawned it with to the same linked core. Either way the harness is
+// `onejudge-fake-harness`, pinned as `claude-code` through ordinary oneharness
+// config, and it records every invocation — so what is asserted is the harness
+// argv and the prompt real oneharness code produced, not a re-derivation of them.
+
+/// The fake harness double, reached as `claude-code` through `[harness.*] bin`.
+fn fake_harness_bin() -> &'static str {
+    env!("CARGO_BIN_EXE_onejudge-fake-harness")
+}
+
+/// Which seam a posture journey's providers run on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Seam {
+    /// The linked engine, in the `onejudge` process.
+    InProcess,
+    /// A spawned `oneharness` — the fake in its engine mode.
+    Spawned,
+}
+
+impl Seam {
+    const BOTH: [Seam; 2] = [Seam::InProcess, Seam::Spawned];
+
+    fn name(self) -> &'static str {
+        match self {
+            Seam::InProcess => "in-process",
+            Seam::Spawned => "spawned",
+        }
+    }
+
+    /// The `bin:` line a oneharness provider entry carries on this seam, at
+    /// `indent` spaces, or nothing for the in-process default.
+    fn bin_line(self, indent: usize) -> String {
+        match self {
+            Seam::InProcess => String::new(),
+            Seam::Spawned => format!(
+                "{:indent$}bin: {}\n",
+                "",
+                serde_json::to_string(&fake_oneharness_bin()).unwrap()
+            ),
+        }
+    }
+}
+
+/// The harness selection every posture journey's configs share: the fake harness
+/// as `claude-code`, with history kept inside the run's own directory.
+fn harness_toml(dir: &Path, top: &str) -> String {
+    format!(
+        "{top}harnesses = [\"claude-code\"]\nhistory_dir = {:?}\n\n[harness.claude-code]\nbin = {:?}\n",
+        dir.join("history").display().to_string(),
+        fake_harness_bin(),
+    )
+}
+
+/// One posture journey's working directory — the run's cwd and so the agent's
+/// worktree — and what it ran.
+struct PostureRun {
+    dir: std::path::PathBuf,
+    seam: Seam,
+    env: Vec<(String, String)>,
+}
+
+/// What one posture run produced.
+struct PostureOutcome {
+    code: Option<i32>,
+    stdout: String,
+    stderr: String,
+    /// Every harness invocation, in order: `{"argv": [...], "stdin": "..."}`,
+    /// normalized.
+    harness: Vec<serde_json::Value>,
+    /// Every `oneharness` argv onejudge spawned (the spawned seam only),
+    /// normalized.
+    oneharness: Vec<Vec<String>>,
+}
+
+impl PostureOutcome {
+    /// The judge-side harness invocations: the ones handed an evidence contract.
+    fn judge_side(&self) -> Vec<&serde_json::Value> {
+        self.harness
+            .iter()
+            .filter(|call| call.to_string().contains("EVIDENCE CONTRACT ("))
+            .collect()
+    }
+}
+
+impl PostureRun {
+    /// A fresh run directory named for `name` and `seam`, holding the agent's
+    /// own discovered `oneharness.toml` and an empty user-config home.
+    fn new(name: &str, seam: Seam) -> Self {
+        let dir =
+            Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("posture-{name}-{}", seam.name()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("xdg")).unwrap();
+        std::fs::create_dir_all(dir.join("state")).unwrap();
+        let dir = dir.canonicalize().unwrap();
+        std::fs::write(dir.join("oneharness.toml"), harness_toml(&dir, "")).unwrap();
+        Self {
+            dir,
+            seam,
+            env: Vec::new(),
+        }
+    }
+
+    /// Write a judge config named `file` into the run directory, `top` placed
+    /// above the harness selection, and return its path.
+    fn judge_config(&self, file: &str, top: &str) -> std::path::PathBuf {
+        let path = self.dir.join(file);
+        std::fs::write(&path, harness_toml(&self.dir, top)).unwrap();
+        path
+    }
+
+    /// A split whose skill and every judge are oneharness providers on this
+    /// run's seam; each judge entry's extra lines are its own.
+    fn split(&self, provider_extra: &[&str], judges: &[&[&str]]) -> String {
+        let mut yaml = format!(
+            "provider:\n  kind: split\n  skill:\n    kind: oneharness\n{}  judges:\n",
+            self.seam.bin_line(4)
+        );
+        for judge in judges {
+            yaml.push_str("    - kind: oneharness\n");
+            yaml.push_str(&self.seam.bin_line(6));
+            for line in *judge {
+                yaml.push_str(&format!("      {line}\n"));
+            }
+        }
+        for line in provider_extra {
+            yaml.push_str(&format!("  {line}\n"));
+        }
+        yaml
+    }
+
+    fn run_bin(
+        &self,
+        bin: &str,
+        provider: &str,
+        task_extra: &str,
+        args: &[&str],
+    ) -> PostureOutcome {
+        let record = self.dir.join("harness.jsonl");
+        let argv_log = self.dir.join("oneharness.jsonl");
+        let _ = std::fs::remove_file(&record);
+        let _ = std::fs::remove_file(&argv_log);
+        let task = format!(
+            "do it [[record-harness:{}]] [[evaluate]]{task_extra}",
+            record.display()
+        );
+        let yaml = format!(
+            "{provider}task: {}\nsystem_prompt: '[[reply:done]]'\nuser:\n  persona: a reviewer\n  \
+             done_when: the work is done\n  max_turns: 2\nsession: posture\nevals:\n  - criterion: \
+             done\n    kind: boolean\nassessment: anything left?\n",
+            serde_json::to_string(&task).unwrap()
+        );
+        let config = self.dir.join("onejudge.yaml");
+        std::fs::write(&config, yaml).unwrap();
+        let mut command = Command::new(bin);
+        command
+            .args(["run", config.to_str().unwrap(), "--format", "json"])
+            .args(args)
+            .current_dir(&self.dir)
+            .env("XDG_STATE_HOME", self.dir.join("state"))
+            .env("XDG_CONFIG_HOME", self.dir.join("xdg"));
+        // Hermetic: an `ONEHARNESS_*` override in the environment running the suite
+        // is a config layer above every file, so it would decide what these
+        // journeys assert about. Each journey sets the ones it is about.
+        for (key, _) in std::env::vars().filter(|(key, _)| key.starts_with("ONEHARNESS_")) {
+            command.env_remove(key);
+        }
+        if self.seam == Seam::Spawned {
+            command
+                .env("ONEJUDGE_FAKE_ONEHARNESS_ENGINE", "1")
+                .env("ONEJUDGE_FAKE_ONEHARNESS_ARGV_LOG", &argv_log);
+        }
+        for (key, value) in &self.env {
+            command.env(key, value);
+        }
+        let output = command.output().unwrap();
+        let read_lines = |path: &Path| -> Vec<String> {
+            std::fs::read_to_string(path)
+                .unwrap_or_default()
+                .lines()
+                .map(str::to_string)
+                .collect()
+        };
+        let harness = read_lines(&record)
+            .iter()
+            .map(|line| {
+                let mut call: serde_json::Value = serde_json::from_str(line).unwrap();
+                self.normalize_value(&mut call);
+                call
+            })
+            .collect();
+        let oneharness = read_lines(&argv_log)
+            .iter()
+            .map(|line| {
+                let argv: Vec<String> = serde_json::from_str(line).unwrap();
+                argv.iter().map(|arg| self.normalize(arg)).collect()
+            })
+            .collect();
+        PostureOutcome {
+            code: output.status.code(),
+            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+            harness,
+            oneharness,
+        }
+    }
+
+    /// Replace every per-run spelling in `text` with a placeholder: each history
+    /// file (named by a timestamp and a pid), then the run directory, then the
+    /// harness double's path.
+    fn normalize(&self, text: &str) -> String {
+        let history = format!("{}/history/", self.dir.display());
+        let mut out = String::new();
+        let mut rest = text;
+        while let Some(start) = rest.find(&history) {
+            out.push_str(&rest[..start]);
+            let tail = &rest[start..];
+            let end = tail
+                .find(".jsonl")
+                .map_or(tail.len(), |i| i + ".jsonl".len());
+            out.push_str("{{HISTORY_FILE}}");
+            rest = &tail[end..];
+        }
+        out.push_str(rest);
+        out.replace(&self.dir.display().to_string(), "{{RUN}}")
+            .replace(fake_harness_bin(), "{{HARNESS}}")
+            .replace(&fake_oneharness_bin(), "{{ONEHARNESS}}")
+    }
+
+    fn normalize_value(&self, value: &mut serde_json::Value) {
+        match value {
+            serde_json::Value::String(text) => *text = self.normalize(text),
+            serde_json::Value::Array(items) => {
+                items.iter_mut().for_each(|v| self.normalize_value(v))
+            }
+            serde_json::Value::Object(map) => {
+                map.values_mut().for_each(|v| self.normalize_value(v))
+            }
+            _ => {}
+        }
+    }
+}
+
+/// The baseline a posture journey is held to: what the released onejudge 0.15.0
+/// handed each harness for the same config, captured by
+/// `scripts/capture-judge-posture-baseline.sh`.
+fn posture_baseline(seam: Seam) -> serde_json::Value {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/golden/judge-posture-0.15.0")
+        .join(format!("{}.json", seam.name()));
+    serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+}
+
+/// The default-posture journey: a judge whose config names no mode, anywhere.
+fn default_posture_run(seam: Seam, bin: &str) -> (PostureRun, PostureOutcome) {
+    let run = PostureRun::new("default", seam);
+    let judge = run.judge_config("judge.toml", "");
+    let provider = run.split(
+        &[],
+        &[&[&format!(
+            "judge_config: {}",
+            serde_json::to_string(&judge.display().to_string()).unwrap()
+        )]],
+    );
+    let outcome = run.run_bin(bin, &provider, "", &[]);
+    assert_eq!(outcome.code, Some(0), "{}", outcome.stderr);
+    // The supervisor completed the run in the fake harness's own words.
+    let report: serde_json::Value = serde_json::from_str(&outcome.stdout).unwrap();
+    assert_eq!(report["completion_reason"], "evaluated", "{report}");
+    (run, outcome)
+}
+
+/// Unix only: the recorded prompts carry the run directory's own spelling, which
+/// the placeholders reconcile on a POSIX path and nowhere else.
+#[cfg(unix)]
+#[test]
+fn with_no_mode_configured_the_harness_argv_and_judge_prompts_are_the_0_15_0_ones() {
+    // `ONEJUDGE_CAPTURE_POSTURE_BASELINE=<onejudge 0.15.0>` re-records the
+    // baseline from that binary instead of comparing (the capture script's path).
+    let capture = std::env::var("ONEJUDGE_CAPTURE_POSTURE_BASELINE").ok();
+    for seam in Seam::BOTH {
+        let bin = capture.as_deref().unwrap_or(onejudge_bin());
+        let (_, outcome) = default_posture_run(seam, bin);
+        let recorded = serde_json::json!({
+            "harness": outcome.harness,
+            "oneharness": outcome.oneharness,
+        });
+        if capture.is_some() {
+            let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/golden/judge-posture-0.15.0")
+                .join(format!("{}.json", seam.name()));
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(
+                &path,
+                serde_json::to_string_pretty(&recorded).unwrap() + "\n",
+            )
+            .unwrap();
+            continue;
+        }
+        let baseline = posture_baseline(seam);
+        // Four evaluator invocations — the supervisor's decision, the `done_when`
+        // re-judge, the eval and the assessment — every one read-only.
+        assert_eq!(outcome.judge_side().len(), 4, "{seam:?}");
+        assert_eq!(
+            recorded["harness"], baseline["harness"],
+            "{seam:?}: the harness argv or a judge prompt differs from onejudge 0.15.0's"
+        );
+    }
+}

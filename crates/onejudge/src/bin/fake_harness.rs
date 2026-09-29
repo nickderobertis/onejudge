@@ -63,6 +63,17 @@
 //!   naming artifacts cannot have widened it. `[[artifact-supervisor-turns:N]]`
 //!   makes the supervisor continue until it has been asked `N` times (default 1),
 //!   so a journey gets more than one judge-side turn to compare.
+//! * `[[record-harness:PATH]]` — append one JSON line per invocation to `PATH`:
+//!   `{"argv": [...], "stdin": "..."}`, exactly what oneharness spawned this
+//!   harness with. It is how a journey holds the *harness* argv and the prompt a
+//!   judge was handed to a recorded baseline, on either seam.
+//! * `[[evaluate]]` — on a judge-side turn (one whose prompt carries an evidence
+//!   contract, in any posture), answer in that turn's shape — a completed
+//!   supervisor decision, a passing boolean or top numeric verdict, or assessment
+//!   prose — whatever tools the turn was granted. A worker turn is left alone.
+//! * `[[judge-event:CMD]]` — on a judge-side turn that asked for events, emit one
+//!   `Bash` tool call for `CMD` and its result, in order. Repeatable. Worker turns
+//!   ignore it, which is what lets one task text script both parties.
 
 use std::io::Write as _;
 use std::path::Path;
@@ -99,7 +110,11 @@ fn main() {
         descendant(handle);
         return;
     }
-    let prompt = steering(&args);
+    let (prompt, stdin) = steering(&args);
+    if let Some(path) = marker(&prompt, "record-harness") {
+        record_invocation(&path, &args, &stdin);
+    }
+    let evaluator = prompt.contains("EVIDENCE CONTRACT (");
     let stream = args
         .windows(2)
         .any(|w| w[0] == "--output-format" && w[1] == "stream-json");
@@ -114,12 +129,24 @@ fn main() {
 
     let mut reply = restrictive_evaluator_reply(&prompt, &args)
         .or_else(|| artifact_evaluator_reply(&prompt, &args))
+        .or_else(|| evaluated_reply(&prompt, evaluator))
         .or_else(|| marker(&prompt, "reply"))
         .unwrap_or_else(|| "ok".to_string());
     if prompt.contains("[[echo-resume]]") {
         reply = resumed_on(&args).unwrap_or_else(|| "none".to_string());
     }
-    let events = markers(&prompt, "event");
+    // A judge-side turn plays only its own script: the worker's `[[event:…]]`
+    // markers reach it inlined in the transcript it is judging.
+    let events = if evaluator {
+        Vec::new()
+    } else {
+        markers(&prompt, "event")
+    };
+    let judge_events = if evaluator {
+        markers(&prompt, "judge-event")
+    } else {
+        Vec::new()
+    };
 
     if opencode {
         // OpenCode's `run --format json` answers with one JSON event per line; the
@@ -143,6 +170,15 @@ fn main() {
     }
 
     if stream {
+        for (index, command) in judge_events.iter().enumerate() {
+            emit(&format!(
+                r#"{{"type":"assistant","message":{{"content":[{{"type":"tool_use","id":"j{index}","name":"Bash","input":{{"command":{}}}}}]}}}}"#,
+                json_string(command)
+            ));
+            emit(&format!(
+                r#"{{"type":"user","message":{{"content":[{{"type":"tool_result","tool_use_id":"j{index}","content":"ran"}}]}}}}"#
+            ));
+        }
         for (index, command) in events.iter().enumerate() {
             emit(&format!(
                 r#"{{"type":"assistant","message":{{"content":[{{"type":"tool_use","id":"t{index}","name":"Bash","input":{{"command":{}}}}}]}}}}"#,
@@ -235,6 +271,33 @@ fn restrictive_evaluator_reply(prompt: &str, args: &[String]) -> Option<String> 
     })
 }
 
+/// Append what this invocation was spawned with; see `[[record-harness:PATH]]`.
+fn record_invocation(path: &str, args: &[String], stdin: &str) {
+    let line = serde_json::json!({ "argv": args, "stdin": stdin });
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .expect("the harness record opens");
+    writeln!(file, "{line}").expect("the harness record is written");
+}
+
+/// Answer a judge-side turn in its own shape; see `[[evaluate]]`.
+fn evaluated_reply(prompt: &str, evaluator: bool) -> Option<String> {
+    if !evaluator || !prompt.contains("[[evaluate]]") {
+        return None;
+    }
+    Some(if prompt.contains("completion supervisor") {
+        r#"{"completion":true,"reason":"evaluated"}"#.into()
+    } else if prompt.contains("Assessment request:") {
+        "evaluated".into()
+    } else if prompt.contains("Score how well") {
+        r#"{"value":10,"reason":"evaluated"}"#.into()
+    } else {
+        r#"{"value":true,"reason":"evaluated"}"#.into()
+    })
+}
+
 /// Record a judge-side turn's prompt and answer it in its own shape; see the
 /// `[[artifact-evaluator:PATH]]` marker.
 fn artifact_evaluator_reply(prompt: &str, args: &[String]) -> Option<String> {
@@ -304,10 +367,13 @@ fn exact_read_only_tools(args: &[String]) -> bool {
 /// large prompt (`--input-format text`) is a plain blob whose stdin oneharness
 /// closes after writing, and whose newlines are the prompt's own, so it is read
 /// whole.
-fn steering(args: &[String]) -> String {
+///
+/// The stdin read is returned beside it, so `[[record-harness:…]]` can record the
+/// prompt exactly as it was delivered.
+fn steering(args: &[String]) -> (String, String) {
     let mut text = args.join("\u{1f}");
+    let mut buffer = String::new();
     if let Some(format) = args.windows(2).find(|w| w[0] == "--input-format") {
-        let mut buffer = String::new();
         if format[1] == "text" {
             let _ = std::io::Read::read_to_string(&mut std::io::stdin().lock(), &mut buffer);
         } else {
@@ -316,7 +382,7 @@ fn steering(args: &[String]) -> String {
         text.push('\u{1f}');
         text.push_str(&buffer);
     }
-    text
+    (text, buffer)
 }
 
 /// The native session token this run was told to continue, or `None` when it
