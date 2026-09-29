@@ -3799,6 +3799,17 @@ fn forward_run_paths(text: &str) -> String {
     out
 }
 
+/// `path` without the `\\?\` prefix `canonicalize` gives a Windows path. The
+/// run directory is the harness's working directory, and oneharness's discovery
+/// records a file it finds there by the plain spelling the OS reports for that
+/// directory, so a verbatim run directory would never equal what was recorded.
+fn without_verbatim_prefix(path: std::path::PathBuf) -> std::path::PathBuf {
+    match path.to_str().and_then(|p| p.strip_prefix(r"\\?\")) {
+        Some(plain) if !plain.starts_with("UNC\\") => std::path::PathBuf::from(plain),
+        _ => path,
+    }
+}
+
 /// One posture journey's working directory — the run's cwd and so the agent's
 /// worktree — and what it ran.
 struct PostureRun {
@@ -3924,7 +3935,7 @@ impl PostureRun {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("xdg")).unwrap();
         std::fs::create_dir_all(dir.join("state")).unwrap();
-        let dir = dir.canonicalize().unwrap();
+        let dir = without_verbatim_prefix(dir.canonicalize().unwrap());
         std::fs::write(dir.join("oneharness.toml"), harness_toml(&dir, "")).unwrap();
         Self {
             dir,
