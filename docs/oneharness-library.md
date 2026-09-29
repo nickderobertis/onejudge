@@ -7,8 +7,9 @@ expressed as a typed call — **including the invocation itself**. A turn is
 
 The pin is in the workspace manifest; everything below is verified against it.
 The **CLI** floor an operator installs is a different number — currently
-**0.14.0+**, the first release that writes the report schema the pinned core
-parses and accepts the `run --format json` the spawning seam passes — because
+**0.18.0+**, the first release that accepts the repeated `run --config` the
+judge side passes (onejudge's defaults, then the judge's config), and writes the
+report schema the pinned core parses — because
 the two crates version independently: the pin may be newer than the core that
 CLI embeds so long as the report is the same, and `cli/mod.rs` gates the floor
 on the schema, not on the two numbers. Never read one off the other.
@@ -81,7 +82,7 @@ field fails the build), and both columns against the rows below.
 | `--history-name` | `history_name: Option<String>` |
 | `--system` | `system: Option<String>` |
 | `--cwd` | `cwd: Option<PathBuf>` |
-| `--config` | `config: Option<PathBuf>` |
+| `--config` | `config: Vec<PathBuf>` — repeatable, one flag per file in layering order (later files override earlier ones); empty is discovery |
 | `--mock-harness` | `mock_harness: Vec<String>` — repeatable; runs the named harness against oneharness's own deterministic `MOCK_*` responder instead of a paid model. Rendered on both seams so the mapping stays total, but reachable only on the spawning one (see below) |
 | `--session` | `session: Option<String>` |
 | `--stream` | `stream: Option<bool>` |

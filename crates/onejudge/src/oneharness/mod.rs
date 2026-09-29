@@ -12,10 +12,12 @@
 //! separately-configured harness/model — again without `--harness`/`--model`.
 //! Scaffold both with `onejudge init` (which shells out to `oneharness init`).
 //!
-//! It targets **oneharness v0.14.0+** — the first release that writes the report
-//! schema the `oneharness-core` this crate compiles against (pinned in the
-//! workspace manifest) parses, and accepts the `run --format json` the spawning
-//! seam passes on every turn. v0.6.9 was the
+//! It targets **oneharness v0.18.0+** — the first release that accepts the
+//! repeated `run --config` an evaluator judge's call passes (onejudge's judge-side
+//! defaults, then the judge's own config), and writes the report schema the
+//! `oneharness-core` this crate compiles against (pinned in the workspace
+//! manifest) parses. v0.14.0 was the first to accept the `run --format json` the
+//! spawning seam passes on every turn; v0.6.9 was the
 //! first whose `run` verb answers a cancellation signal by tearing its harness
 //! tree down instead of dying and orphaning it, v0.6.14 added the
 //! `run --control` / `interrupt` pair it reports the address of, and v0.11.0 is
@@ -1193,7 +1195,7 @@ fn respond_spec(
     TurnSpec {
         system: Some(instructions.to_string()),
         cwd: Some(worktree.to_string()),
-        config: None,
+        config: Vec::new(),
         // Folded in by `OneharnessProvider::mocked`, which is the one place that
         // knows whether this run is mocked at all.
         mock_harness: Vec::new(),
@@ -1226,7 +1228,7 @@ fn judge_side_spec(
     TurnSpec {
         system: None,
         cwd: cwd.map(str::to_string),
-        config: judge_config.map(Path::to_path_buf),
+        config: judge_config.map(Path::to_path_buf).into_iter().collect(),
         // As on the agent side: `OneharnessProvider::mocked` folds it in.
         mock_harness: Vec::new(),
         session: session.map(str::to_string),

@@ -1687,7 +1687,8 @@ mod engine {
                 "--history" => request.history = Some(true),
                 "--history-name" => request.history_name = Some(value()),
                 "--system" => request.system = Some(value()),
-                "--config" => set_config(&mut request, PathBuf::from(value())),
+                // Repeatable, in layering order, as on the real CLI.
+                "--config" => request.config.push(PathBuf::from(value())),
                 "--mock-harness" => request.mock_harness.push(value()),
                 "--cwd" => request.cwd = Some(PathBuf::from(value())),
                 "--session" => request.session = Some(value()),
@@ -1753,27 +1754,13 @@ mod engine {
             }
             i += 2;
         }
-        if explicit.len() > 1 {
-            emit_error("this oneharness takes one `--config`");
-        }
-        let layers = oneharness_core::io::config::load_layers(
-            explicit.first().map(PathBuf::as_path),
-            false,
-            Path::new(&cwd),
-        )
-        .unwrap_or_else(|e| emit_error(&e.to_string()));
+        let layers = oneharness_core::io::config::load_layers(&explicit, false, Path::new(&cwd))
+            .unwrap_or_else(|e| emit_error(&e.to_string()));
         let report = oneharness_core::domain::config::explain(&layers);
         println!(
             "{}",
             serde_json::to_string(&report).expect("the config report serializes")
         );
         std::process::exit(0);
-    }
-
-    fn set_config(request: &mut RunRequest, path: PathBuf) {
-        if request.config.is_some() {
-            emit_error("this oneharness takes one `--config`");
-        }
-        request.config = Some(path);
     }
 }
