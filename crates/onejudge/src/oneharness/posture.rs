@@ -127,7 +127,10 @@ fn discovered(worktree: &Path) -> Result<Vec<PathBuf>> {
             })
         });
         if !parent {
-            files.push(PathBuf::from(path));
+            // Absolute, so the list — and the source a posture names — says which
+            // file it is wherever it is read; oneharness resolves it to the same
+            // file it discovered.
+            files.push(std::path::absolute(path).unwrap_or_else(|_| PathBuf::from(path)));
         }
     }
     Ok(files)
