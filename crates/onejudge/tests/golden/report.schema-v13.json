@@ -381,9 +381,23 @@
           "description": "The judge entry's provider kind (`oneharness`, `command`, …).",
           "type": "string"
         },
+        "labels": {
+          "description": "Exactly the labels this judge's backend run was passed (`KEY` → `VALUE`),\nwhen the backend labels its runs — only an `llmlint` judge does, with\n`session`, `judge` and `turn`. Omitted when there are none, and recorded\non an `error` decision too whenever the run was labelled.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
         "reason": {
           "description": "Its own reason — or, for an `error`, the error's message.",
           "type": "string"
+        },
+        "run_id": {
+          "description": "The id this judge's backend run was recorded under in its own history —\nfor an `llmlint` judge, the id `llmlint history <run_id>` shows. Omitted\nwhen the backend reported none (history disabled, or the run died before\nrecording), and recorded on an `error` decision too whenever known.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [

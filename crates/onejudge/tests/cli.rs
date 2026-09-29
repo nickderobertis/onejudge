@@ -2690,29 +2690,60 @@ user:
   max_turns: 4
 ";
 
-/// Run the built binary over `config` with the double scripted to `exits`,
-/// recording its argv at the returned path.
+/// The base session every llmlint binary run below is named after.
+const LLMLINT_SESSION: &str = "lint-loop";
+
+/// Run the built binary over `config` under `--session` [`LLMLINT_SESSION`] and
+/// `--format <format>`, with the double scripted to `exits`, recording its argv
+/// at the returned path.
 fn run_binary_with_llmlint(
     name: &str,
     config: &Path,
     exits: &str,
+    format: &str,
 ) -> (std::process::Output, std::path::PathBuf) {
     let argv = scratch_path(&format!("cli-llmlint-{name}.argv.jsonl"));
     let output = Command::new(onejudge_bin())
-        .args(["run", config.to_str().unwrap(), "--format", "json"])
+        .args(["run", config.to_str().unwrap(), "--format", format])
+        .args(["--session", LLMLINT_SESSION])
         .env("ONEJUDGE_FAKE_LLMLINT_ARGV", &argv)
         .env("ONEJUDGE_FAKE_LLMLINT_EXIT", exits)
         .env_remove("ONEJUDGE_FAKE_LLMLINT_STDOUT")
         .env_remove("ONEJUDGE_FAKE_LLMLINT_STDERR")
+        .env_remove("ONEJUDGE_FAKE_LLMLINT_POINTER")
+        .env_remove("ONEJUDGE_FAKE_LLMLINT_VERSION")
         .output()
         .unwrap();
     (output, argv)
 }
 
-/// The argv the contract spells for one `lint` run, with every field of the
-/// `lint` entry above rendered exactly where the contract puts it. The worktree
-/// is `.`: a config with no `skill:` runs the agent in the working directory.
-fn llmlint_lint_argv() -> Vec<String> {
+/// One decision's link as `(turn, judge, labels, run_id)`.
+type LinkedDecision<'a> = (usize, &'a str, &'a Labels, Option<&'a str>);
+
+/// A decision's `labels`.
+type Labels = std::collections::BTreeMap<String, String>;
+
+/// The labels the `lint` judge's run deciding on `turn` is passed, as the map
+/// its decision records.
+fn llmlint_labels(turn: usize) -> std::collections::BTreeMap<String, String> {
+    [
+        ("session", LLMLINT_SESSION.to_string()),
+        ("judge", "lint".to_string()),
+        ("turn", turn.to_string()),
+    ]
+    .into_iter()
+    .map(|(key, value)| (key.to_string(), value))
+    .collect()
+}
+
+/// The argv the contract spells for one `lint` run deciding on `turn`, with
+/// every field of the `lint` entry above rendered exactly where the contract
+/// puts it: the labels after `-c` / `--diff` and before the entry's own `args`.
+/// The worktree is `.`: a config with no `skill:` runs the agent in the working
+/// directory.
+fn llmlint_lint_argv(turn: usize) -> Vec<String> {
+    let session = format!("session={LLMLINT_SESSION}");
+    let turn = format!("turn={turn}");
     [
         "lint",
         "--cwd",
@@ -2728,6 +2759,12 @@ fn llmlint_lint_argv() -> Vec<String> {
         "--diff",
         "--diff-base",
         "origin/main",
+        "--label",
+        &session,
+        "--label",
+        "judge=lint",
+        "--label",
+        &turn,
         "--rule",
         "scripts_are_quiet_on_success",
     ]
@@ -2783,13 +2820,14 @@ fn binary_run_hands_the_worker_llmlints_report_under_its_header_and_composes_its
         ),
     )
     .unwrap();
-    let (output, argv) = run_binary_with_llmlint("reviewer", &config, "1,0");
+    let (output, argv) = run_binary_with_llmlint("reviewer", &config, "1,0", "json");
     assert!(
         output.status.success(),
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
     let report: onejudge::Report = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report.schema_version, onejudge::SCHEMA_VERSION);
 
     let expected = format!("## Judge `lint` (llmlint)\n\n{LLMLINT_FAILING_REPORT}");
     assert_eq!(report.transcript.messages[2].content, expected);
@@ -2855,16 +2893,54 @@ fn binary_run_hands_the_worker_llmlints_report_under_its_header_and_composes_its
     );
 
     // The probe, then one `lint` run per decision: two supervisor turns and the
-    // final re-judge, each with the exact argv.
+    // final re-judge, each with the exact argv — labelled with the run's
+    // `--session`, the judge's panel label, and the turn it decides on (the
+    // re-judge decides on the last assistant turn, 2).
     assert_eq!(
         recorded_llmlint_argv(&argv),
         vec![
             vec!["--version".to_string()],
-            llmlint_lint_argv(),
-            llmlint_lint_argv(),
-            llmlint_lint_argv(),
+            llmlint_lint_argv(1),
+            llmlint_lint_argv(2),
+            llmlint_lint_argv(2),
         ]
     );
+    // Each llmlint decision links to its run: `judge` is the decision's own
+    // `judge`, `turn` its `JudgedTurn.turn`, and `run_id` the id that run's
+    // stderr pointer named. The reviewer (a command judge) carries neither key —
+    // not even empty — on the wire.
+    let links: Vec<LinkedDecision<'_>> = report
+        .judge_decisions
+        .iter()
+        .flat_map(|turn| {
+            turn.decisions
+                .iter()
+                .map(move |d| (turn.turn, d.judge.as_str(), &d.labels, d.run_id.as_deref()))
+        })
+        .collect();
+    let none = std::collections::BTreeMap::new();
+    assert_eq!(
+        links,
+        [
+            (1, "reviewer", &none, None),
+            (1, "lint", &llmlint_labels(1), Some("fake-lint-1")),
+            (2, "reviewer", &none, None),
+            (2, "lint", &llmlint_labels(2), Some("fake-lint-2")),
+        ]
+    );
+    for turn in &report.judge_decisions {
+        for decision in &turn.decisions {
+            if decision.kind == "llmlint" {
+                assert_eq!(decision.labels["judge"], decision.judge);
+                assert_eq!(decision.labels["turn"], turn.turn.to_string());
+            }
+        }
+    }
+    let wire: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let reviewer = &wire["judge_decisions"][0]["decisions"][0];
+    assert_eq!(reviewer["judge"], "reviewer");
+    assert!(reviewer.get("labels").is_none(), "{reviewer}");
+    assert!(reviewer.get("run_id").is_none(), "{reviewer}");
     // One judge-side process record per run, under the judge's label, and its
     // wall time on the judge side's telemetry (the echo judge reports none).
     let lint_processes: Vec<(&str, &str)> = report
@@ -2883,6 +2959,48 @@ fn binary_run_hands_the_worker_llmlints_report_under_its_header_and_composes_its
     );
     let telemetry = report.telemetry.expect("telemetry");
     assert!(telemetry.judge.tool_ms.is_some(), "{telemetry:#?}");
+}
+
+#[test]
+fn binary_human_output_prints_the_llmlint_history_command_beside_each_llmlint_decision() {
+    // What the wrapper reads a run by: every llmlint decision's `llmlint history
+    // <run_id>` on the line under it, tied to the turn it decided on — and no
+    // such line under the reviewer's.
+    let echo = serde_json::to_string(&echo_bin()).unwrap();
+    let config = Path::new(env!("CARGO_TARGET_TMPDIR")).join("llmlint-human.yaml");
+    std::fs::write(
+        &config,
+        llmlint_panel_yaml(
+            &format!(
+                "    - kind: command\n      label: reviewer\n      command: [{echo}, \"[[supervisor-complete:looks right]]\"]\n"
+            ),
+            LLMLINT_BODY,
+        ),
+    )
+    .unwrap();
+    let (output, _) = run_binary_with_llmlint("human", &config, "1,0", "human");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        stdout.contains(&format!(
+            "  [judge reviewer (command)] done — looks right\n\
+             \x20 [judge lint (llmlint)] continue — {LLMLINT_FAILING_SUMMARY}\n\
+             \x20   llmlint history fake-lint-1\n"
+        )),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains(&format!(
+            "  [judge lint (llmlint)] done — {LLMLINT_CLEAN_SUMMARY}\n\
+             \x20   llmlint history fake-lint-2"
+        )),
+        "{stdout}"
+    );
+    assert_eq!(stdout.matches("llmlint history ").count(), 2, "{stdout}");
 }
 
 #[test]
@@ -2906,7 +3024,7 @@ fn binary_run_stacks_an_llm_judge_on_an_llmlint_judge_and_hands_the_worker_only_
         ),
     )
     .unwrap();
-    let (output, argv) = run_binary_with_llmlint("stacked", &config, "1,0");
+    let (output, argv) = run_binary_with_llmlint("stacked", &config, "1,0", "json");
     assert!(
         output.status.success(),
         "{}",

@@ -137,6 +137,19 @@ pub struct UserTurn {
     pub usage: Option<Usage>,
 }
 
+/// What links one judge-side call to the record its backend kept of it: the
+/// labels the backend's run was passed and the id it was recorded under.
+///
+/// Reported through [`Provider::take_judge_link`] and carried onto that judge's
+/// [`JudgeDecision`](crate::JudgeDecision) as `labels` and `run_id`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct JudgeLink {
+    /// Exactly the labels the run was passed, `KEY` → `VALUE`.
+    pub labels: std::collections::BTreeMap<String, String>,
+    /// The id the run was recorded under, when the backend reported one.
+    pub run_id: Option<String>,
+}
+
 /// Inputs for one per-turn supervisor decision.
 pub struct SupervisorQuery<'a> {
     /// The original task, unchanged from the first user turn.
@@ -159,6 +172,10 @@ pub struct SupervisorQuery<'a> {
     pub notes: &'a [crate::note::DeliveredNote],
     /// The outcome of the worker turn this decision follows.
     pub turn: TurnOutcome,
+    /// The 1-based index of the assistant turn this decision is recorded under
+    /// — the [`JudgedTurn::turn`](crate::JudgedTurn::turn) its judges' decisions
+    /// land on, and the `turn` label an `llmlint` judge's run is passed.
+    pub turn_index: usize,
 }
 
 /// The classified outcome of the worker turn a supervisor is deciding.
@@ -430,6 +447,28 @@ pub trait Provider {
     /// named history. Whether anything is recorded at all stays the backend's
     /// own configuration; this only names what it records.
     fn set_history_scope(&self, _scope: Option<&crate::HistoryScope>) {}
+
+    /// Tell this provider the label it judges under — its
+    /// [`JudgeDecision::judge`](crate::JudgeDecision::judge).
+    ///
+    /// A [`JudgePanel`](crate::JudgePanel) calls it on each judge before every
+    /// call it makes to that judge, a panel of one included, so a backend that
+    /// labels its own runs (an [`LlmlintProvider`](crate::LlmlintProvider)'s
+    /// `judge=<label>`) names the same judge the report does. Defaulted to do
+    /// nothing, which is the truth for a backend that labels nothing.
+    fn set_judge_label(&self, _label: &str) {}
+
+    /// Take what links this provider's latest judge-side call to the record its
+    /// backend kept of it, if that call left one.
+    ///
+    /// A [`JudgePanel`](crate::JudgePanel) takes it after each judge's
+    /// supervisor call — `Ok` or `Err` — and records it on that judge's
+    /// [`JudgeDecision`](crate::JudgeDecision) as `labels` and `run_id`. The
+    /// default is none: only a backend that keeps its own per-run record has a
+    /// link to report.
+    fn take_judge_link(&self) -> Option<JudgeLink> {
+        None
+    }
 
     /// Run one assistant/skill turn given the conversation so far.
     ///
@@ -1356,6 +1395,7 @@ mod tests {
                 history_name: "unused",
                 notes: &[],
                 turn: TurnOutcome::Taken,
+                turn_index: 1,
             },
             &messages.messages,
             evidence,
@@ -1397,6 +1437,7 @@ mod tests {
                 history_name: "run-skill",
                 notes: &[],
                 turn: TurnOutcome::Taken,
+                turn_index: 1,
             },
             &transcript_with_event().messages,
         );
@@ -1429,6 +1470,7 @@ mod tests {
                 history_name: "run-skill",
                 notes: &[],
                 turn: TurnOutcome::Taken,
+                turn_index: 1,
             },
             &[],
         );
@@ -1709,6 +1751,7 @@ mod tests {
             history_name: "run",
             notes: &[],
             turn: TurnOutcome::Taken,
+            turn_index: 1,
         };
         let completed = DefaultSupervisor {
             complete: true,
@@ -1738,6 +1781,7 @@ mod tests {
             history_name: "run",
             notes: &[],
             turn: TurnOutcome::Taken,
+            turn_index: 1,
         };
         let turn = DefaultSupervisor {
             complete: false,

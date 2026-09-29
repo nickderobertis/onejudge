@@ -158,12 +158,30 @@ fn canonical_report() -> Report {
                 kind: "oneharness".into(),
                 decision: Decision::Done,
                 reason: "a git commit ran".into(),
+                labels: Default::default(),
+                run_id: None,
             },
             JudgeDecision {
                 judge: "command".into(),
                 kind: "command".into(),
                 decision: Decision::Done,
                 reason: "the commit script passed".into(),
+                labels: Default::default(),
+                run_id: None,
+            },
+            // The v13 addition: an llmlint judge's decision links to the run
+            // behind it — the labels that run was passed and the llmlint history
+            // id it was recorded under. The two judges above carry neither key.
+            JudgeDecision {
+                judge: "lint".into(),
+                kind: "llmlint".into(),
+                decision: Decision::Done,
+                reason: "0 failed, 4 passed, 0 skipped, 0 not relevant".into(),
+                labels: [("judge", "lint"), ("session", "run-1"), ("turn", "1")]
+                    .into_iter()
+                    .map(|(key, value)| (key.to_string(), value.to_string()))
+                    .collect(),
+                run_id: Some("20260929T064026Z-c80a9".into()),
             },
         ],
     }];
@@ -208,19 +226,19 @@ fn canonical_report() -> Report {
     report
 }
 
-const EXAMPLE_GOLDEN: &str = include_str!("golden/report.example-v12.json");
+const EXAMPLE_GOLDEN: &str = include_str!("golden/report.example-v13.json");
 #[cfg(feature = "sdk-schema")]
-const SCHEMA_GOLDEN: &str = include_str!("golden/report.schema-v12.json");
+const SCHEMA_GOLDEN: &str = include_str!("golden/report.schema-v13.json");
 
 #[test]
-fn report_matches_the_golden_example_v12() {
-    assert_eq!(SCHEMA_VERSION, 12, "golden is for schema v12");
+fn report_matches_the_golden_example_v13() {
+    assert_eq!(SCHEMA_VERSION, 13, "golden is for schema v13");
     let actual = serde_json::to_string_pretty(&canonical_report()).unwrap();
     assert_eq!(
         actual.trim(),
         EXAMPLE_GOLDEN.trim(),
         "the Report wire form changed. If this is intentional, bump SCHEMA_VERSION \
-         and update the v12 contract goldens. Actual serialization:\n{actual}"
+         and update the v13 contract goldens. Actual serialization:\n{actual}"
     );
 }
 
@@ -266,7 +284,7 @@ fn the_contract_doc_states_the_version_this_build_stamps() {
 
 #[cfg(feature = "sdk-schema")]
 #[test]
-fn generated_report_schema_matches_the_schema_v12_golden() {
+fn generated_report_schema_matches_the_schema_v13_golden() {
     let actual = serde_json::to_value(onejudge::sdk_schema::bundle().report).unwrap();
     let golden: serde_json::Value = serde_json::from_str(SCHEMA_GOLDEN).unwrap();
     assert_eq!(

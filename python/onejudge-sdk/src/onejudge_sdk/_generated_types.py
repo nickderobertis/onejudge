@@ -112,11 +112,16 @@ class JudgedTurn(TypedDict):
     decisions: Sequence[JudgeDecision]
 
 
-class JudgeDecision(TypedDict):
+class _JudgeDecisionRequired(TypedDict):
     judge: str
     kind: str
     decision: Decision
     reason: str
+
+
+class JudgeDecision(_JudgeDecisionRequired, total=False):
+    labels: dict[str, str]
+    run_id: Optional[str]
 
 
 class _TelemetryRequired(TypedDict):

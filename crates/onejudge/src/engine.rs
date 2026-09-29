@@ -759,6 +759,7 @@ impl<'a> Engine<'a> {
                             history_name: &skill_session,
                             notes: &delivered,
                             turn: self.lost_turn(&error),
+                            turn_index,
                         },
                         &transcript.messages,
                         Some(user_session.as_str()),
@@ -908,6 +909,7 @@ impl<'a> Engine<'a> {
                         history_name: &skill_session,
                         notes: &delivered,
                         turn: TurnOutcome::Taken,
+                        turn_index,
                     },
                     &transcript.messages,
                     Some(user_session.as_str()),
@@ -2236,6 +2238,8 @@ mod tests {
                     kind: "command".into(),
                     decision: Decision::Continue,
                     reason: "more".into(),
+                    labels: Default::default(),
+                    run_id: None,
                 }]
             }
 

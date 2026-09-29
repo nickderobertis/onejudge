@@ -14,7 +14,13 @@
 //! linked, and the contract is llmlint's documented exit codes — `0` every rule
 //! holds, `1` at least one violation, `2` the run could not complete. The
 //! executable is probed (`<bin> --version`) when the provider is built, so an
-//! absent `llmlint` is a loud error at the boundary and never a silent pass.
+//! absent `llmlint` — or one older than [`LLMLINT_MIN_VERSION`], which cannot take
+//! the `--label`s every run passes — is a loud error at the boundary and never a
+//! silent pass.
+//!
+//! Every run is labelled `session=<base>`, `judge=<label>` and `turn=<n>`, and
+//! the history id llmlint prints on stderr is read back, so each judge decision
+//! links to the `llmlint history <run_id>` record behind it.
 //!
 //! The provider answers only the two judge-side operations a lint run *can*
 //! answer — the per-turn `supervise` decision and a boolean `judge` — and refuses
@@ -25,6 +31,7 @@
 //! those operations. `docs/judges.md` is the contract this module implements.
 
 use std::cell::RefCell;
+use std::collections::BTreeMap;
 use std::io::{self, Read as _};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Output, Stdio};
@@ -32,16 +39,32 @@ use std::time::Instant;
 
 use crate::error::{Error, ProviderErrorKind, Result};
 use crate::provider::{
-    Assessment, AssistantTurn, EvidenceContext, JudgeKind, JudgeQuery, JudgeValue, JudgeVerdict,
-    Provider, SkillRef, SupervisorOutcome, SupervisorQuery, SupervisorTurn, UserTurn,
+    Assessment, AssistantTurn, EvidenceContext, JudgeKind, JudgeLink, JudgeQuery, JudgeValue,
+    JudgeVerdict, Provider, SkillRef, SupervisorOutcome, SupervisorQuery, SupervisorTurn, UserTurn,
 };
 use crate::spawn::{SharedSpawnHook, SpawnContext, SpawnedProcess, Spawner};
 use crate::telemetry::{InvocationTelemetry, TelemetryRole};
-use crate::transcript::{Message, ToolEvent};
+use crate::transcript::{Message, Role, ToolEvent};
 
 /// The `llmlint` executable a provider built without naming one resolves on
 /// `PATH`.
 pub const DEFAULT_LLMLINT_BIN: &str = "llmlint";
+
+/// The oldest `llmlint` release a provider accepts: the first whose `lint` takes
+/// `--label KEY=VALUE`, which every run passes. `scripts/setup-llmlint.sh`
+/// installs at this same floor, and a unit test fails when the two differ.
+pub const LLMLINT_MIN_VERSION: &str = "0.4.3";
+
+/// The judge label a provider outside a [`JudgePanel`](crate::JudgePanel) runs
+/// under — the `kind` a panel defaults an unlabelled llmlint judge to.
+const DEFAULT_JUDGE_LABEL: &str = "llmlint";
+
+/// The prefix of the line llmlint writes on stderr naming the history record a
+/// run was logged under; the id runs to the next backtick.
+const RESULTS_POINTER: &str = "See full results with `llmlint history ";
+
+/// The most code points llmlint accepts in a label value.
+const LABEL_VALUE_MAX: usize = 256;
 
 /// How much of llmlint's stderr and stdout an error of the turn carries. The
 /// message is read by an operator and lands on the failure report; a run that
@@ -64,6 +87,12 @@ pub struct LlmlintProvider {
     args: Vec<String>,
     spawner: Spawner,
     telemetry: RefCell<Vec<InvocationTelemetry>>,
+    /// The run's base session, from the history scope the engine sets.
+    session: RefCell<Option<String>>,
+    /// The label this provider judges under; [`DEFAULT_JUDGE_LABEL`] unset.
+    judge_label: RefCell<Option<String>>,
+    /// What links the latest run to its llmlint history record.
+    link: RefCell<Option<JudgeLink>>,
 }
 
 /// What one `llmlint lint` run decided.
@@ -82,8 +111,9 @@ impl LlmlintProvider {
     /// # Errors
     /// [`Error::Invalid`] if `bin` is blank; [`Error::Provider`] with
     /// [`ProviderErrorKind::Spawn`], naming the binary and the `bin` field, if it
-    /// cannot be run or does not answer `--version` — so an absent or wrong
-    /// executable is refused where the provider is built, before any turn.
+    /// cannot be run, does not answer `--version`, or answers with a version older
+    /// than [`LLMLINT_MIN_VERSION`] — so an absent, wrong or too-old executable is
+    /// refused where the provider is built, before any turn.
     pub fn new(bin: impl Into<String>) -> Result<Self> {
         let bin = bin.into();
         if bin.trim().is_empty() {
@@ -96,6 +126,9 @@ impl LlmlintProvider {
             args: Vec::new(),
             spawner: Spawner::default(),
             telemetry: RefCell::new(Vec::new()),
+            session: RefCell::new(None),
+            judge_label: RefCell::new(None),
+            link: RefCell::new(None),
         };
         provider.probe()?;
         Ok(provider)
@@ -162,8 +195,9 @@ impl LlmlintProvider {
     }
 
     /// `<bin> --version`: the construction-time proof that the executable is
-    /// there and is runnable. Its process record is discarded once it has
-    /// answered — it is a check on the environment, not a process of any run.
+    /// there, is runnable, and is at least [`LLMLINT_MIN_VERSION`]. Its process
+    /// record is discarded once it has answered — it is a check on the
+    /// environment, not a process of any run.
     fn probe(&self) -> Result<()> {
         let mut command = Command::new(&self.bin);
         command.arg("--version");
@@ -181,7 +215,57 @@ impl LlmlintProvider {
                 ProviderErrorKind::Spawn,
             ));
         }
-        Ok(())
+        let answer = String::from_utf8_lossy(&output.stdout);
+        let answer = answer.trim();
+        let installed = answer.split_whitespace().last().unwrap_or_default();
+        match (parse_version(installed), parse_version(LLMLINT_MIN_VERSION)) {
+            (Some(installed), Some(floor)) if installed >= floor => Ok(()),
+            _ => Err(Error::provider_classified(
+                PROBE_OP,
+                format!(
+                    "llmlint `{}` (the provider's `bin`) reports version `{answer}`, but onejudge \
+                     needs llmlint {LLMLINT_MIN_VERSION} or newer (the first release whose `lint` \
+                     takes `--label`). Upgrade it: `uv tool install --upgrade \
+                     'llmlint-cli>={LLMLINT_MIN_VERSION}'`",
+                    self.bin
+                ),
+                ProviderErrorKind::Spawn,
+            )),
+        }
+    }
+
+    /// The labels a run deciding on assistant turn `turn` is passed, in argv
+    /// order: `session` (when the run has a base session), `judge`, `turn`.
+    ///
+    /// # Errors
+    /// A value llmlint's label grammar would refuse — empty, over
+    /// [`LABEL_VALUE_MAX`] code points, or holding a control character — is an
+    /// error of the turn: a label is never silently dropped.
+    fn labels(&self, op: &str, turn: usize) -> Result<Vec<(&'static str, String)>> {
+        let mut labels = Vec::with_capacity(3);
+        if let Some(session) = self.session.borrow().clone() {
+            labels.push(("session", session));
+        }
+        let judge = self
+            .judge_label
+            .borrow()
+            .clone()
+            .unwrap_or_else(|| DEFAULT_JUDGE_LABEL.to_string());
+        labels.push(("judge", judge));
+        labels.push(("turn", turn.to_string()));
+        for (key, value) in &labels {
+            if let Some(problem) = label_value_problem(value) {
+                return Err(Error::provider_classified(
+                    op.to_string(),
+                    format!(
+                        "cannot label the llmlint run `{key}={value:?}`: the value {problem}, \
+                         which llmlint's `--label` refuses"
+                    ),
+                    ProviderErrorKind::Other,
+                ));
+            }
+        }
+        Ok(labels)
     }
 
     /// Spawn `command` under the spawn hook — stdin closed, stdout and stderr
@@ -219,12 +303,18 @@ impl LlmlintProvider {
     }
 
     /// One `llmlint lint` run over `worktree`, under `op` (`supervise` or
-    /// `judge`), recorded on this provider's telemetry and process records.
+    /// `judge`), deciding on assistant turn `turn`, recorded on this provider's
+    /// telemetry and process records, and linked to its history record for
+    /// [`Provider::take_judge_link`].
     ///
     /// The exact argv is the contract in `docs/judges.md`:
     /// `<bin> lint --cwd <worktree> --format human --color never --progress never
-    /// [-c <config>] [--diff --diff-base <ref>] [<args>…]`.
-    fn lint(&self, op: &str, worktree: &str) -> Result<Lint> {
+    /// [-c <config>] [--diff --diff-base <ref>] [--label session=<base>]
+    /// --label judge=<label> --label turn=<n> [<args>…]` — the caller's `args`
+    /// last, so a caller's `--label` of the same key wins.
+    fn lint(&self, op: &str, worktree: &str, turn: usize) -> Result<Lint> {
+        *self.link.borrow_mut() = None;
+        let labels = self.labels(op, turn)?;
         let mut command = Command::new(&self.bin);
         command.arg("lint").arg("--cwd").arg(worktree).args([
             "--format",
@@ -240,10 +330,22 @@ impl LlmlintProvider {
         if let Some(base) = &self.diff_base {
             command.arg("--diff").arg("--diff-base").arg(base);
         }
+        for (key, value) in &labels {
+            command.arg("--label").arg(format!("{key}={value}"));
+        }
         command.args(&self.args);
 
         let started = Instant::now();
         let output = self.run(&mut command, op)?;
+        let mut passed: BTreeMap<String, String> = labels
+            .into_iter()
+            .map(|(key, value)| (key.to_string(), value))
+            .collect();
+        passed.extend(caller_labels(&self.args));
+        *self.link.borrow_mut() = Some(JudgeLink {
+            labels: passed,
+            run_id: run_id(&String::from_utf8_lossy(&output.stderr)),
+        });
         // One judge-side invocation per run: its wall time is the tool time (there
         // is no model call of onejudge's to attribute anything else to), and no
         // candidate identity — llmlint's own harness selection is llmlint's.
@@ -358,6 +460,74 @@ impl Drop for Running {
     }
 }
 
+/// `major.minor.patch` of a version string, ignoring a leading `v` and anything
+/// after the patch number's digits (`0.4.3-rc.1` reads as `0.4.3`).
+fn parse_version(version: &str) -> Option<(u64, u64, u64)> {
+    let mut parts = version.trim().trim_start_matches('v').splitn(3, '.');
+    let mut next = |whole: bool| -> Option<u64> {
+        let part = parts.next()?;
+        let digits: String = part.chars().take_while(char::is_ascii_digit).collect();
+        if digits.is_empty() || (whole && digits.len() != part.len()) {
+            return None;
+        }
+        digits.parse().ok()
+    };
+    Some((next(true)?, next(true)?, next(false)?))
+}
+
+/// Why llmlint's label grammar would refuse `value`, or none: a value is 1 to
+/// [`LABEL_VALUE_MAX`] code points with no control characters.
+fn label_value_problem(value: &str) -> Option<&'static str> {
+    if value.is_empty() {
+        Some("is empty")
+    } else if value.chars().count() > LABEL_VALUE_MAX {
+        Some("is longer than 256 characters")
+    } else if value.chars().any(char::is_control) {
+        Some("contains a control character")
+    } else {
+        None
+    }
+}
+
+/// Every `--label KEY=VALUE` (or `--label=KEY=VALUE`) among a caller's own
+/// arguments, in order — they follow onejudge's, so a repeated key is the
+/// caller's value on the run.
+fn caller_labels(args: &[String]) -> Vec<(String, String)> {
+    let mut labels = Vec::new();
+    let mut args = args.iter();
+    while let Some(arg) = args.next() {
+        let pair = if arg == "--label" {
+            args.next().map(String::as_str)
+        } else {
+            arg.strip_prefix("--label=")
+        };
+        if let Some((key, value)) = pair.and_then(|pair| pair.split_once('=')) {
+            labels.push((key.to_string(), value.to_string()));
+        }
+    }
+    labels
+}
+
+/// The history id in llmlint's results pointer on `stderr`: the text between
+/// [`RESULTS_POINTER`] and the next backtick, on a line beginning with that
+/// prefix. A labelled run's ` (labels: …)` suffix lies past the backtick and is
+/// ignored; no pointer (history disabled, or the run died first) is none.
+fn run_id(stderr: &str) -> Option<String> {
+    stderr.lines().find_map(|line| {
+        let rest = line.strip_prefix(RESULTS_POINTER)?;
+        let (id, _) = rest.split_once('`')?;
+        (!id.is_empty()).then(|| id.to_string())
+    })
+}
+
+/// The 1-based index of the latest assistant turn in `messages`.
+fn latest_assistant_turn(messages: &[Message]) -> usize {
+    messages
+        .iter()
+        .filter(|message| message.role == Role::Assistant)
+        .count()
+}
+
 /// The report's summary line: the last non-empty line of stdout.
 fn summary_line(stdout: &str) -> Option<String> {
     stdout
@@ -411,6 +581,20 @@ impl Provider for LlmlintProvider {
         self.spawner.records()
     }
 
+    // Only the base session is read: it is the `session` label, the same for
+    // every judge of the run.
+    fn set_history_scope(&self, scope: Option<&crate::HistoryScope>) {
+        *self.session.borrow_mut() = scope.map(|scope| scope.base().to_string());
+    }
+
+    fn set_judge_label(&self, label: &str) {
+        *self.judge_label.borrow_mut() = Some(label.to_string());
+    }
+
+    fn take_judge_link(&self) -> Option<JudgeLink> {
+        self.link.borrow_mut().take()
+    }
+
     fn respond(
         &self,
         _skill: &SkillRef<'_>,
@@ -450,7 +634,7 @@ impl Provider for LlmlintProvider {
         _messages: &[Message],
         _session: Option<&str>,
     ) -> Result<SupervisorTurn> {
-        let outcome = match self.lint("supervise", query.worktree)? {
+        let outcome = match self.lint("supervise", query.worktree, query.turn_index)? {
             Lint::Clean { summary } => SupervisorOutcome::Completed { reason: summary },
             Lint::Failing { report, summary } => SupervisorOutcome::Continue {
                 message: report,
@@ -475,7 +659,7 @@ impl Provider for LlmlintProvider {
     fn judge_with_evidence(
         &self,
         query: &JudgeQuery<'_>,
-        _messages: &[Message],
+        messages: &[Message],
         evidence: EvidenceContext<'_>,
     ) -> Result<JudgeVerdict> {
         if query.kind == JudgeKind::Numeric {
@@ -488,7 +672,8 @@ impl Provider for LlmlintProvider {
                     .into(),
             ));
         };
-        let (value, reason) = match self.lint("judge", worktree)? {
+        let turn = latest_assistant_turn(messages);
+        let (value, reason) = match self.lint("judge", worktree, turn)? {
             Lint::Clean { summary } => (true, summary),
             Lint::Failing { summary, .. } => (false, summary),
         };
@@ -521,6 +706,92 @@ mod tests {
         let text = err.to_string();
         assert!(text.contains("definitely-not-llmlint-xyz"), "{text}");
         assert!(text.contains("`bin`"), "{text}");
+    }
+
+    #[test]
+    fn the_floor_is_the_one_setup_llmlint_installs() {
+        // One number, two readers: the probe refuses below it and the setup
+        // script installs at it. A floor raised in one place only is a gate that
+        // installs an llmlint its own provider refuses, or the reverse.
+        let script = include_str!("../../../scripts/setup-llmlint.sh");
+        let installed = script
+            .lines()
+            .find_map(|line| line.strip_prefix("readonly LLMLINT_MIN=\""))
+            .and_then(|rest| rest.strip_suffix('"'))
+            .expect("setup-llmlint.sh declares `readonly LLMLINT_MIN=\"<version>\"`");
+        assert_eq!(installed, LLMLINT_MIN_VERSION);
+        assert!(parse_version(LLMLINT_MIN_VERSION).is_some());
+    }
+
+    #[test]
+    fn a_version_reads_as_its_three_numbers() {
+        assert_eq!(parse_version("0.4.3"), Some((0, 4, 3)));
+        assert_eq!(parse_version("v1.12.0"), Some((1, 12, 0)));
+        assert_eq!(parse_version("0.4.3-rc.1"), Some((0, 4, 3)));
+        assert!(parse_version("0.4.10") > parse_version("0.4.3"));
+        assert!(parse_version("0.4.2") < parse_version("0.4.3"));
+        assert_eq!(parse_version("0.4"), None);
+        assert_eq!(parse_version("x.4.3"), None);
+        assert_eq!(parse_version(""), None);
+    }
+
+    #[test]
+    fn a_label_value_llmlint_would_refuse_is_named() {
+        assert_eq!(label_value_problem("run-7"), None);
+        assert_eq!(label_value_problem(&"é".repeat(LABEL_VALUE_MAX)), None);
+        assert_eq!(label_value_problem(""), Some("is empty"));
+        assert_eq!(
+            label_value_problem(&"x".repeat(LABEL_VALUE_MAX + 1)),
+            Some("is longer than 256 characters")
+        );
+        assert_eq!(
+            label_value_problem("a\tb"),
+            Some("contains a control character")
+        );
+    }
+
+    #[test]
+    fn a_callers_labels_are_read_in_both_spellings() {
+        let args = [
+            "--label",
+            "team=infra",
+            "--no-ignore-check",
+            "--label=turn=9",
+            "--label",
+        ]
+        .map(String::from);
+        assert_eq!(
+            caller_labels(&args),
+            vec![
+                ("team".to_string(), "infra".to_string()),
+                ("turn".to_string(), "9".to_string())
+            ]
+        );
+    }
+
+    #[test]
+    fn the_run_id_is_read_from_either_form_of_the_results_pointer() {
+        assert_eq!(
+            run_id("See full results with `llmlint history 20260929T064031Z-75a2e`\n").as_deref(),
+            Some("20260929T064031Z-75a2e")
+        );
+        assert_eq!(
+            run_id(
+                "warning: something\nSee full results with `llmlint history 20260929T064026Z-c80a9` \
+                 (labels: judge=lint, session=s1, turn=1)\n"
+            )
+            .as_deref(),
+            Some("20260929T064026Z-c80a9")
+        );
+        // Other stderr lines, a pointer not at a line's start, and no pointer at
+        // all (history disabled) are no id.
+        assert_eq!(run_id("error: could not resolve harness\n"), None);
+        assert_eq!(
+            run_id("  See full results with `llmlint history x`\n"),
+            None
+        );
+        assert_eq!(run_id("See full results with `llmlint history `\n"), None);
+        assert_eq!(run_id(""), None);
     }
 
     #[test]

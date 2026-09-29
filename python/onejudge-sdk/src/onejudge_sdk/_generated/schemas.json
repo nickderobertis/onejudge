@@ -33,7 +33,7 @@
             ]
           },
           "failure_kind": {
-            "description": "oneharness's normalized failure reason (`auth`, `rate_limit`,\n`model_not_found`, `quota`, `tool_deferred`, `session_not_found`,\n`untrusted_directory`, `input_too_large`, `model_mismatch`), when it\nclassified one.",
+            "description": "oneharness's normalized failure reason (`auth`, `rate_limit`,\n`server_overloaded`, `model_not_found`, `quota`, `tool_deferred`,\n`session_not_found`, `untrusted_directory`, `input_too_large`,\n`model_mismatch`), when it classified one.",
             "type": [
               "string",
               "null"
@@ -166,7 +166,7 @@
         "type": "object"
       },
       "FellThrough": {
-        "description": "One candidate a fallback chain fell through, with oneharness's reason token\n(`not-installed`, `spawn-error`, `auth`, `quota`, `model-not-found`,\n`rate-limit`, `session-not-found`, `untrusted-directory`, `input-too-large`,\n`model-mismatch`).",
+        "description": "One candidate a fallback chain fell through, with oneharness's reason token\n(`not-installed`, `spawn-error`, `auth`, `quota`, `model-not-found`,\n`rate-limit`, `session-not-found`, `untrusted-directory`, `input-too-large`,\n`model-mismatch`, `server-overloaded`).",
         "properties": {
           "harness": {
             "description": "Canonical harness id.",
@@ -254,9 +254,23 @@
             "description": "The judge entry's provider kind (`oneharness`, `command`, \u2026).",
             "type": "string"
           },
+          "labels": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Exactly the labels this judge's backend run was passed (`KEY` \u2192 `VALUE`),\nwhen the backend labels its runs \u2014 only an `llmlint` judge does, with\n`session`, `judge` and `turn`. Omitted when there are none, and recorded\non an `error` decision too whenever the run was labelled.",
+            "type": "object"
+          },
           "reason": {
             "description": "Its own reason \u2014 or, for an `error`, the error's message.",
             "type": "string"
+          },
+          "run_id": {
+            "description": "The id this judge's backend run was recorded under in its own history \u2014\nfor an `llmlint` judge, the id `llmlint history <run_id>` shows. Omitted\nwhen the backend reported none (history disabled, or the run died before\nrecording), and recorded on an `error` decision too whenever known.",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
@@ -1964,7 +1978,7 @@
             ]
           },
           "failure_kind": {
-            "description": "oneharness's normalized failure reason (`auth`, `rate_limit`,\n`model_not_found`, `quota`, `tool_deferred`, `session_not_found`,\n`untrusted_directory`, `input_too_large`, `model_mismatch`), when it\nclassified one.",
+            "description": "oneharness's normalized failure reason (`auth`, `rate_limit`,\n`server_overloaded`, `model_not_found`, `quota`, `tool_deferred`,\n`session_not_found`, `untrusted_directory`, `input_too_large`,\n`model_mismatch`), when it classified one.",
             "type": [
               "string",
               "null"
@@ -2096,7 +2110,7 @@
         ]
       },
       "FellThrough": {
-        "description": "One candidate a fallback chain fell through, with oneharness's reason token\n(`not-installed`, `spawn-error`, `auth`, `quota`, `model-not-found`,\n`rate-limit`, `session-not-found`, `untrusted-directory`, `input-too-large`,\n`model-mismatch`).",
+        "description": "One candidate a fallback chain fell through, with oneharness's reason token\n(`not-installed`, `spawn-error`, `auth`, `quota`, `model-not-found`,\n`rate-limit`, `session-not-found`, `untrusted-directory`, `input-too-large`,\n`model-mismatch`, `server-overloaded`).",
         "properties": {
           "harness": {
             "description": "Canonical harness id.",
@@ -2184,9 +2198,23 @@
             "description": "The judge entry's provider kind (`oneharness`, `command`, \u2026).",
             "type": "string"
           },
+          "labels": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Exactly the labels this judge's backend run was passed (`KEY` \u2192 `VALUE`),\nwhen the backend labels its runs \u2014 only an `llmlint` judge does, with\n`session`, `judge` and `turn`. Omitted when there are none, and recorded\non an `error` decision too whenever the run was labelled.",
+            "type": "object"
+          },
           "reason": {
             "description": "Its own reason \u2014 or, for an `error`, the error's message.",
             "type": "string"
+          },
+          "run_id": {
+            "description": "The id this judge's backend run was recorded under in its own history \u2014\nfor an `llmlint` judge, the id `llmlint history <run_id>` shows. Omitted\nwhen the backend reported none (history disabled, or the run died before\nrecording), and recorded on an `error` decision too whenever known.",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [

@@ -213,8 +213,9 @@ entry or one that is malformed or repeated, `judge:` beside `judges:` or an empt
 `judges:`, `kind: llmlint` anywhere but a judge entry, a numeric eval or an
 `assessment` with no judge that can answer it, or an inverted numeric scale is a
 loud, actionable error — never a silent default. An `llmlint` judge's executable
-is probed when the run is built, so an absent one is a config error (exit 2)
-before any turn.
+is probed when the run is built, so an absent one — or one older than llmlint
+0.4.3, the first release taking `--label` — is a config error (exit 2) before any
+turn.
 
 ## Providers
 
@@ -245,7 +246,10 @@ call goes through oneharness:
   report as its next turn; a clean run passes it; a run that could not complete
   is an error, never a verdict. `bin` (default `llmlint`), `config` (`-c`),
   `diff_base` (`--diff --diff-base`, the host's own comparison base — onejudge
-  detects none) and `args`. Refused as the top-level provider, under `skill:`,
+  detects none) and `args`. Every run is labelled `session=<--session>`,
+  `judge=<label>` and `turn=<n>`, and its decision records those `labels` and
+  the llmlint `run_id`, which the human output prints as `llmlint history
+  <run_id>`. Refused as the top-level provider, under `skill:`,
   and as `--provider`; left out of numeric evals and assessments.
   [judges.md](judges.md#the-llmlint-judge) is the contract.
 - **`split`** — compose a skill-runner with a separate judge side (e.g. drive

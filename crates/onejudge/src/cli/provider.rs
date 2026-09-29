@@ -190,6 +190,24 @@ impl Provider for AnyProvider {
         }
     }
 
+    fn set_judge_label(&self, label: &str) {
+        match self {
+            AnyProvider::Oneharness(p) => p.set_judge_label(label),
+            AnyProvider::Command(p) => p.set_judge_label(label),
+            AnyProvider::Llmlint(p) => p.set_judge_label(label),
+            AnyProvider::Split { judges, .. } => judges.set_judge_label(label),
+        }
+    }
+
+    fn take_judge_link(&self) -> Option<crate::JudgeLink> {
+        match self {
+            AnyProvider::Oneharness(p) => p.take_judge_link(),
+            AnyProvider::Command(p) => p.take_judge_link(),
+            AnyProvider::Llmlint(p) => p.take_judge_link(),
+            AnyProvider::Split { judges, .. } => judges.take_judge_link(),
+        }
+    }
+
     fn invocation_telemetry(&self) -> Vec<crate::InvocationTelemetry> {
         match self {
             AnyProvider::Oneharness(p) => p.invocation_telemetry(),

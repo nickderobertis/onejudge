@@ -1,7 +1,7 @@
 # Golden documents
 
-Checked-in bytes the gate holds this crate to. `report.example-v12.json` and
-`report.schema-v12.json` are the `Report` wire contract (`tests/contract.rs`);
+Checked-in bytes the gate holds this crate to. `report.example-v13.json` and
+`report.schema-v13.json` are the `Report` wire contract (`tests/contract.rs`);
 `notes/`, `single-judge/` and `single-judge-control/` are captured journeys
 (`tests/notes.rs`, `tests/e2e.rs`).
 

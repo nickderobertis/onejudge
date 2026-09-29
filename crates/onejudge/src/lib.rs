@@ -107,7 +107,7 @@ pub use engine::{
 };
 pub use error::{Error, ProviderErrorKind, Result};
 pub use history_name::{HistoryScope, JudgeSideCall};
-pub use llmlint::{LlmlintProvider, DEFAULT_LLMLINT_BIN};
+pub use llmlint::{LlmlintProvider, DEFAULT_LLMLINT_BIN, LLMLINT_MIN_VERSION};
 pub use note::{
     supervisor_block, Accepted, Addressee, Criteria, Criterion, CriterionRefused, DeliveredNote,
     Note, NoteInbox, NoteRefused, NoteText, Notes, Party, Undelivered,
@@ -119,7 +119,7 @@ pub use provider::{
     build_judge_prompt_with_evidence, build_respond_prompt, build_supervisor_prompt,
     build_supervisor_prompt_with_evidence, build_user_prompt, latest_or_inline,
     latest_user_message, parse_supervisor, parse_verdict, render_transcript, supervise_with_reask,
-    Ask, Assessment, AssistantTurn, EvidenceContext, JudgeKind, JudgeQuery, JudgeValue,
+    Ask, Assessment, AssistantTurn, EvidenceContext, JudgeKind, JudgeLink, JudgeQuery, JudgeValue,
     JudgeVerdict, Provider, Reask, SkillRef, SupervisorOutcome, SupervisorQuery, SupervisorTurn,
     TurnOutcome, UserTurn, ARTIFACT_LISTING_LIMIT, EVIDENCE_PROMPT_MARKER,
     EVIDENCE_TOOL_RETRY_LIMIT, SUPERVISOR_REASK_LIMIT, SUPERVISOR_REASK_NOTE,

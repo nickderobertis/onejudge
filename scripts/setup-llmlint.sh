@@ -32,9 +32,12 @@ set -uo pipefail
 # wrapped binary version). `uv tool install --upgrade` installs the newest release
 # satisfying it; oneharness comes along transitively at a compatible version and
 # its executable is explicitly linked from that shared environment. llmlint >=
-# 0.3.7 gives the whole-tree default the composed llmlint.yml relies on (it omits
-# `files.include`).
-readonly LLMLINT_MIN="0.3.7"
+# 0.4.3 is the first release whose `lint` takes `--label`, which onejudge's
+# llmlint judge passes on every run; the provider's construction-time probe
+# refuses anything older (`LLMLINT_MIN_VERSION` in crates/onejudge/src/llmlint.rs,
+# held equal to this line by a unit test). It also gives the whole-tree default
+# the composed llmlint.yml relies on (it omits `files.include`).
+readonly LLMLINT_MIN="0.4.3"
 readonly BIN_DIR="$HOME/.local/bin"
 
 log() { printf 'setup-llmlint: %s\n' "$*" >&2; }

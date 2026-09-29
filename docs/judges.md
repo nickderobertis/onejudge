@@ -221,20 +221,53 @@ judge entry:
       args: [--rule, no_todo]         # appended to every run
 ```
 
-- **Probed when built.** Building the provider runs `<bin> --version` (through
-  the spawn seam, like every process onejudge creates). A spawn failure, or an
-  executable that does not answer, is `Error::Provider { kind: spawn }` naming the
-  binary and the `bin` field — which `onejudge run` reports as a config error
-  (exit 2) before any turn. An absent `llmlint` is therefore a loud error at the
-  boundary and never a silent pass.
+- **Probed when built, against a floor.** Building the provider runs
+  `<bin> --version` (through the spawn seam, like every process onejudge
+  creates). A spawn failure, an executable that does not answer, or one whose
+  version is older than **llmlint 0.4.3** (`LLMLINT_MIN_VERSION` — the first
+  release whose `lint` takes `--label`, which every run passes) or cannot be read
+  is `Error::Provider { kind: spawn }` naming the binary, the `bin` field and, for
+  a version refusal, the installed version and the floor — which `onejudge run`
+  reports as a config error (exit 2) before any turn. An absent or too-old
+  `llmlint` is therefore a loud error at the boundary, never a silent pass and
+  never a run failing every turn with llmlint's usage error.
+  `scripts/setup-llmlint.sh` installs at the same floor (`LLMLINT_MIN`), and a
+  unit test fails when the two numbers differ.
 - **One `lint` run per decision.** Each `supervise` and each boolean `judge` runs
   `<bin> lint --cwd <worktree> --format human --color never --progress never
-  [-c <config>] [--diff --diff-base <ref>] [<args>…]` with stdin closed, stdout and
-  stderr captured, and the environment inherited. `<worktree>` is the worker's
+  [-c <config>] [--diff --diff-base <ref>] [--label session=<base>]
+  --label judge=<label> --label turn=<n> [<args>…]` with stdin closed, stdout and
+  stderr captured, and the environment inherited. The caller's `args` stay last,
+  so a `--label` of the same key there wins. `<worktree>` is the worker's
   tree — the supervisor query's `worktree`, or the evidence context's for a
   judgement; a judgement handed no worktree is `Error::Invalid`. onejudge does
   **no base auto-detection: a host wiring a stack passes its own comparison base
   in `diff_base`**, and without one llmlint judges the whole tree.
+- **Every run is labelled** so it can be found in llmlint's own history
+  (`llmlint history --label session=<base>`): `session` is the run's base session
+  (`--session`, default `onejudge` — the base the history names above derive
+  from), omitted when the provider was given none; `judge` is the judge's panel
+  label, the same string as its `judge_decisions` entry's `judge` (`llmlint` for a
+  provider outside a panel); `turn` is the 1-based index of the latest assistant
+  turn the call decides on — for `supervise`, the `JudgedTurn.turn` the decision
+  is recorded under; for a `judge`, the last assistant turn of the transcript it
+  is handed. A value llmlint's label grammar would refuse (empty, over 256 code
+  points, or holding a control character — a `--session` with a tab, say) is an
+  error of the turn, `Error::Provider { kind: other }` naming the label, with no
+  llmlint run: a label is never silently dropped.
+- **Each decision links to its run.** llmlint ends a run it recorded with a
+  results pointer on stderr, ``See full results with `llmlint history <id>` ``,
+  suffixed ` (labels: k=v, …)` for a labelled run. onejudge reads the id as the
+  text between ``See full results with `llmlint history `` and the next backtick,
+  on a line *beginning* with that prefix; the suffix and every other stderr line
+  are ignored. The judge's `judge_decisions` entry then carries `labels` — exactly
+  the labels that run was passed, its own `args`' `--label`s included — and
+  `run_id`, the parsed id, so `llmlint history <run_id>` shows the run behind the
+  decision; the human output prints that command on the line under it. Both are
+  recorded on an `error` decision too whenever known, both are omitted when
+  absent, and only `kind: llmlint` fills them. A run that wrote no pointer
+  (history disabled, or it died before recording) has no `run_id` and decides as
+  it always did.
 - **Exit 0** → `Completed { reason }` / a boolean verdict of `true`, the reason
   being the report's summary line (the last non-empty line of stdout).
   **Exit 1** → `Continue { message, reason }` / a verdict of `false`: `message` is
@@ -265,7 +298,7 @@ judge entry:
   `SpawnedProcess { role: judge, op: "supervise" | "judge", program: <bin> }`
   through the spawn hook, so an embedder's group teardown reaches a running
   llmlint; a child whose call unwinds before it was reaped is killed. Its
-  decisions carry `kind: llmlint` on `judge_decisions`.
+  decisions carry `kind: llmlint`, `labels` and `run_id` on `judge_decisions`.
 
 The proof is the `onejudge-fake-llmlint` double — a stand-in for the `llmlint`
 CLI, scripted through the environment — driven by `tests/e2e.rs` through the real
@@ -274,7 +307,16 @@ the summary line, exit 2 / a signal / a missing report as the classified errors,
 every refused operation through the public trait, a spawn hook reaching the run)
 and by `tests/cli.rs` through the plan driver and the built binary (an LLM judge
 stacked on llmlint where only llmlint fails, an absent executable refused at plan
-build with no turn run, and every placement and field refusal).
+build with no turn run, and every placement and field refusal). The double
+accepts `--label`, writes the results pointer in both of llmlint's forms, and
+answers a scriptable `--version`, so the gate holds the label argv over a
+two-judge panel across two supervisor turns, the pointer parse (labelled,
+unlabelled, absent, beside an error), a refused label value and the floor
+refusal without llmlint installed. `tests/llmlint_real.rs` (`just
+test-llmlint`, the `llmlint-real` CI job) then drives the built CLI against the
+**released** llmlint — a rule matching no file, so no model call — and finds
+each decision's run through `llmlint history --label session=<base>` with the
+same `run_id`.
 
 ## Proof
 

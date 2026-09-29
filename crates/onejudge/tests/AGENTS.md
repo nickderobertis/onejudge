@@ -72,6 +72,12 @@ repo-wide contract; this covers only what differs here.
   that fails, or serves nothing, is a deterministic offline journey. Only the
   answers that must come from the true public registries are `#[ignore]`-d, like
   `live.rs`; they run via `just test-release-targets`.
+- **`llmlint_real.rs` is the real-llmlint tier**: `#[ignore]`-d, run by
+  `just test-llmlint` and the `llmlint-real` CI job, which installs llmlint at the
+  provider's floor through `scripts/setup-llmlint.sh`. It drives the built CLI
+  against the *released* llmlint (a rule matching no file, so no model call) and
+  reads each decision back through `llmlint history`. An absent llmlint fails it —
+  never make it skip.
 - **`live.rs` is the real-harness tier**: every test is `#[ignore]`-d, compiles
   in the normal build, and runs only via `just test-live` / the `live` workflow.
   See `docs/live-tier.md`.

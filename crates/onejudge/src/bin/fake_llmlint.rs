@@ -5,7 +5,11 @@
 //! against.
 //!
 //! It answers `--version` with a version line and exit 0 — the probe the provider
-//! runs when it is built — and treats every other invocation as a `lint` run.
+//! runs when it is built — and treats every other invocation as a `lint` run,
+//! accepting any argument (`--label` included). Like llmlint, a run that finished
+//! ends its stderr with the results pointer (contract C3): ``See full results with
+//! `llmlint history <id>` ``, suffixed ` (labels: k=v, …)` — sorted by key —
+//! when the run was passed a `--label`.
 //! Unlike the other doubles it takes no prompt, so there is nothing to carry a
 //! `[[marker]]`; it is scripted **through the environment** it inherits from the
 //! test process instead (the suite runs under `cargo nextest`, one process per
@@ -26,6 +30,16 @@
 //! * `ONEJUDGE_FAKE_LLMLINT_STDERR` — what a `lint` run writes to stderr.
 //! * `ONEJUDGE_FAKE_LLMLINT_VERSION_EXIT` — the exit code `--version` answers with
 //!   (default `0`): an executable that is there but is not llmlint.
+//! * `ONEJUDGE_FAKE_LLMLINT_VERSION` — the version `--version` reports (default
+//!   `0.4.3`, the provider's floor): an llmlint too old to take `--label`.
+//! * `ONEJUDGE_FAKE_LLMLINT_POINTER` — when the results pointer is written:
+//!   unset, after a run that exited `0` or `1` (llmlint records a run it
+//!   finished); `always`, after every run, an incomplete one included; `off`,
+//!   never (history disabled). The id is `fake-<judge>-<n>` for a run labelled
+//!   `judge=<judge>`, `n` counting that judge's lint runs from 1 — the judges of
+//!   a panel run at once, and each judge's own runs are serial, so the id is
+//!   deterministic — and `fake-<n>` over every lint run for an unlabelled one.
+//!   Both counts read the argv record, so a stable id needs it set.
 //!
 //! Built only under the `fake-provider` feature; never shipped to a consumer.
 #![allow(missing_docs)]
@@ -51,10 +65,13 @@ const INCOMPLETE_STDERR: &str = "error: could not resolve harness `claude-code`:
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let lint_runs_so_far = record(&args);
+    let earlier = record(&args);
+    let lint_runs_so_far = earlier.len();
 
     if args.iter().any(|arg| arg == "--version") {
-        println!("llmlint 0.4.1");
+        let version =
+            std::env::var("ONEJUDGE_FAKE_LLMLINT_VERSION").unwrap_or_else(|_| "0.4.3".to_string());
+        println!("llmlint {version}");
         std::process::exit(env_int("ONEJUDGE_FAKE_LLMLINT_VERSION_EXIT").unwrap_or(0));
     }
 
@@ -83,8 +100,19 @@ fn main() {
         Ok(text) => text,
         Err(_) => default_stdout.to_string(),
     };
-    let stderr = std::env::var("ONEJUDGE_FAKE_LLMLINT_STDERR")
+    let mut stderr = std::env::var("ONEJUDGE_FAKE_LLMLINT_STDERR")
         .unwrap_or_else(|_| default_stderr.to_string());
+    let pointer = match std::env::var("ONEJUDGE_FAKE_LLMLINT_POINTER").as_deref() {
+        Ok("off") => false,
+        Ok("always") => true,
+        _ => matches!(outcome, "0" | "1"),
+    };
+    if pointer {
+        if !stderr.is_empty() && !stderr.ends_with('\n') {
+            stderr.push('\n');
+        }
+        stderr.push_str(&results_pointer(&args, &earlier));
+    }
 
     let mut out = std::io::stdout().lock();
     let _ = out.write_all(stdout.as_bytes());
@@ -99,23 +127,65 @@ fn main() {
     std::process::exit(outcome.parse().unwrap_or(2));
 }
 
-/// Append this invocation's argv to the record, if one is named, and return how
-/// many `lint` runs were recorded before it.
-fn record(args: &[String]) -> usize {
+/// llmlint's results pointer for this run, given the `lint` runs recorded before
+/// it: the unlabelled form, or the labelled one listing every `--label` the run
+/// was passed, sorted by key, the later of a repeated key winning.
+fn results_pointer(args: &[String], earlier: &[Vec<String>]) -> String {
+    let passed = labels(args);
+    let id = match passed.get("judge") {
+        Some(judge) => {
+            let n = earlier
+                .iter()
+                .filter(|run| labels(run).get("judge") == Some(judge))
+                .count();
+            format!("fake-{judge}-{}", n + 1)
+        }
+        None => format!("fake-{}", earlier.len() + 1),
+    };
+    let mut line = format!("See full results with `llmlint history {id}`");
+    if !passed.is_empty() {
+        let listed: Vec<String> = passed.iter().map(|(k, v)| format!("{k}={v}")).collect();
+        line.push_str(&format!(" (labels: {})", listed.join(", ")));
+    }
+    line + "\n"
+}
+
+/// Every `--label KEY=VALUE` / `--label=KEY=VALUE` in `args`, the later of a
+/// repeated key winning.
+fn labels(args: &[String]) -> std::collections::BTreeMap<String, String> {
+    let mut labels = std::collections::BTreeMap::new();
+    let mut args = args.iter();
+    while let Some(arg) = args.next() {
+        let pair = if arg == "--label" {
+            args.next().map(String::as_str)
+        } else {
+            arg.strip_prefix("--label=")
+        };
+        if let Some((key, value)) = pair.and_then(|pair| pair.split_once('=')) {
+            labels.insert(key.to_string(), value.to_string());
+        }
+    }
+    labels
+}
+
+/// Append this invocation's argv to the record, if one is named, and return the
+/// `lint` runs recorded before it.
+fn record(args: &[String]) -> Vec<Vec<String>> {
     let Ok(path) = std::env::var("ONEJUDGE_FAKE_LLMLINT_ARGV") else {
-        return 0;
+        return Vec::new();
     };
     if path.is_empty() {
-        return 0;
+        return Vec::new();
     }
     let so_far = std::fs::read_to_string(&path)
         .map(|recorded| {
             recorded
                 .lines()
                 .filter(|line| line.starts_with("[\"lint\""))
-                .count()
+                .filter_map(|line| serde_json::from_str(line).ok())
+                .collect()
         })
-        .unwrap_or(0);
+        .unwrap_or_default();
     let mut file = std::fs::OpenOptions::new()
         .create(true)
         .append(true)

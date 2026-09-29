@@ -185,6 +185,9 @@ Use the `just` recipes; do not hand-roll equivalents. `just --list` is the index
   `--format json` `Report`, and the exit code — only the model faked.
 - **Out-of-gate tier, credential-gated, `#[ignore]`-d:** `live` (`tests/live.rs`,
   real `oneharness`; `docs/live-tier.md`). Not in the required-checks set.
+- **Out-of-gate, no credential, `#[ignore]`-d:** `just test-llmlint`
+  (`tests/llmlint_real.rs`, the released llmlint at the provider's floor; the
+  `llmlint-real` CI job installs it via `scripts/setup-llmlint.sh`).
 
 ## The provider boundary
 

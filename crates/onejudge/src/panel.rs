@@ -21,8 +21,8 @@ use std::sync::{Mutex, PoisonError};
 
 use crate::error::{Error, Result};
 use crate::provider::{
-    Assessment, AssistantTurn, EvidenceContext, JudgeKind, JudgeQuery, JudgeValue, JudgeVerdict,
-    Provider, SkillRef, SupervisorOutcome, SupervisorQuery, SupervisorTurn, UserTurn,
+    Assessment, AssistantTurn, EvidenceContext, JudgeKind, JudgeLink, JudgeQuery, JudgeValue,
+    JudgeVerdict, Provider, SkillRef, SupervisorOutcome, SupervisorQuery, SupervisorTurn, UserTurn,
 };
 use crate::report::{Decision, JudgeDecision};
 use crate::spawn::SpawnedProcess;
@@ -245,11 +245,15 @@ impl<J: Provider + Send> JudgePanel<J> {
     /// thread per judge — and return every result in list order once **every**
     /// thread has returned. There is no early exit: a judge still running after
     /// another has failed is waited for, so nothing is ever left running unseen.
+    ///
+    /// Each judge is told its label ([`Provider::set_judge_label`]) under its
+    /// lock before `f` runs, so a backend that labels its own runs names the
+    /// judge the report does.
     fn each<T: Send>(
         &self,
         select: impl Fn(&JudgeEntry<J>) -> bool,
-        f: impl Fn(usize, &JudgeEntry<J>, &J) -> Result<T> + Sync,
-    ) -> Vec<(usize, Result<T>)> {
+        f: impl Fn(usize, &JudgeEntry<J>, &J) -> T + Sync,
+    ) -> Vec<(usize, T)> {
         std::thread::scope(|scope| {
             let handles: Vec<_> = self
                 .judges
@@ -260,7 +264,12 @@ impl<J: Provider + Send> JudgePanel<J> {
                     let f = &f;
                     (
                         i,
-                        scope.spawn(move || judge.with(|provider| f(i, judge, provider))),
+                        scope.spawn(move || {
+                            judge.with(|provider| {
+                                provider.set_judge_label(&judge.label);
+                                f(i, judge, provider)
+                            })
+                        }),
                     )
                 })
                 .collect();
@@ -315,14 +324,19 @@ impl<J: Provider + Send> JudgePanel<J> {
     /// Combine every judge's supervisor decision per the table in
     /// `docs/judges.md`, recording one [`JudgeDecision`] per judge first — so the
     /// call that failed is on the record too.
+    ///
+    /// Each result arrives with the [`JudgeLink`] its judge left, taken under
+    /// that judge's lock right after its call, which lands on its decision as
+    /// `labels` and `run_id`.
     fn combine_supervision(
         &self,
-        results: Vec<(usize, Result<SupervisorTurn>)>,
+        linked: Vec<(usize, LinkedSupervision)>,
     ) -> Result<SupervisorTurn> {
         let mut usage = Usage::default();
-        for (i, result) in &results {
-            let judge = &self.judges[*i];
-            let (decision, reason) = match result {
+        let mut results = Vec::with_capacity(linked.len());
+        for (i, (result, link)) in linked {
+            let judge = &self.judges[i];
+            let (decision, reason) = match &result {
                 Ok(turn) => {
                     if let Some(u) = &turn.usage {
                         usage.add(u);
@@ -331,12 +345,16 @@ impl<J: Provider + Send> JudgePanel<J> {
                 }
                 Err(error) => (Decision::Error, error.to_string()),
             };
+            let JudgeLink { labels, run_id } = link.unwrap_or_default();
             self.decisions.borrow_mut().push(JudgeDecision {
                 judge: judge.label.clone(),
                 kind: judge.kind.clone(),
                 decision,
                 reason,
+                labels,
+                run_id,
             });
+            results.push((i, result));
         }
         if let Some(error) = self.failure("supervise", &results, |turn| {
             let (decision, reason) = decision_of(&turn.outcome);
@@ -542,6 +560,9 @@ impl<J: Provider + Send> JudgePanel<J> {
     }
 }
 
+/// One judge's supervisor call and the [`JudgeLink`] it left.
+type LinkedSupervision = (Result<SupervisorTurn>, Option<JudgeLink>);
+
 /// Whether `label` is `[A-Za-z0-9_-]+`.
 #[must_use]
 pub fn is_valid_label(label: &str) -> bool {
@@ -715,7 +736,10 @@ impl<J: Provider + Send> Provider for JudgePanel<J> {
             .collect();
         let results = self.each(
             |_| true,
-            |i, _, provider| provider.supervise(query, messages, sessions[i].as_deref()),
+            |i, _, provider| {
+                let result = provider.supervise(query, messages, sessions[i].as_deref());
+                (result, provider.take_judge_link())
+            },
         );
         self.combine_supervision(results)
     }
@@ -733,7 +757,13 @@ impl<J: Provider + Send> Provider for JudgePanel<J> {
         let results = self.each(
             |_| true,
             |i, _, provider| {
-                provider.supervise_with_evidence(query, messages, sessions[i].as_deref(), evidence)
+                let result = provider.supervise_with_evidence(
+                    query,
+                    messages,
+                    sessions[i].as_deref(),
+                    evidence,
+                );
+                (result, provider.take_judge_link())
             },
         );
         self.combine_supervision(results)
@@ -919,6 +949,7 @@ mod tests {
             history_name: "h",
             notes: &[],
             turn: crate::TurnOutcome::Taken,
+            turn_index: 1,
         }
     }
 
