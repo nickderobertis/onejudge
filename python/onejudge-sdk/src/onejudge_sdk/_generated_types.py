@@ -29,6 +29,9 @@ class ProviderConfig(TypedDict, total=False):
     kind: ProviderKind
     bin: Optional[str]
     judge_config: Optional[str]
+    instructions: Optional[str]
+    events: Optional[bool]
+    allow_writable_judges: Optional[bool]
     stream: Optional[bool]
     control: Optional[bool]
     mock_harness: Optional[Sequence[str]]
@@ -122,6 +125,14 @@ class _JudgeDecisionRequired(TypedDict):
 class JudgeDecision(_JudgeDecisionRequired, total=False):
     labels: dict[str, str]
     run_id: Optional[str]
+    posture: Optional[JudgePosture]
+    events: Sequence[ToolEvent]
+
+
+class JudgePosture(TypedDict):
+    mode: str
+    source: str
+    config_files: Sequence[str]
 
 
 class _TelemetryRequired(TypedDict):
@@ -168,6 +179,7 @@ class HarnessAttribution(_HarnessAttributionRequired, total=False):
     fell_through: Sequence[FellThrough]
     history_file: Optional[str]
     judge: Optional[str]
+    posture: Optional[JudgePosture]
 
 
 class FellThrough(TypedDict):
@@ -256,6 +268,12 @@ class RunReport(_RunReportRequired, total=False):
 
 class StreamEvent(TypedDict):
     turn: int
+    event: ToolEvent
+
+
+class JudgeTool(TypedDict):
+    turn: int
+    judge: str
     event: ToolEvent
 
 

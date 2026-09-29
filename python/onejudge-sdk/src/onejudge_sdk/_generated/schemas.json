@@ -214,6 +214,17 @@
               "null"
             ]
           },
+          "posture": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/JudgePosture"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The permission posture this invocation ran under, for an evaluator\njudge-side call; absent for the agent's turns and for a judge-side call\nwith no worktree, whose mode onejudge does not set."
+          },
           "ran": {
             "description": "The candidate that ran the turn, by composed id; `null` when none could.",
             "type": [
@@ -246,6 +257,13 @@
             "$ref": "#/$defs/Decision",
             "description": "What it decided, or that it failed."
           },
+          "events": {
+            "description": "The tool events this judge's harness reported while deciding, in order,\nwhen the judge asked for them (`events`, on by default for a writable\nposture). Omitted when there are none.",
+            "items": {
+              "$ref": "#/$defs/ToolEvent"
+            },
+            "type": "array"
+          },
           "judge": {
             "description": "The judge's label within its panel (`label:` in the config, or the\ndefaulted `<kind>` / `<kind>-<n>`).",
             "type": "string"
@@ -260,6 +278,17 @@
             },
             "description": "Exactly the labels this judge's backend run was passed (`KEY` \u2192 `VALUE`),\nwhen the backend labels its runs \u2014 only an `llmlint` judge does, with\n`session`, `judge` and `turn`. Omitted when there are none, and recorded\non an `error` decision too whenever the run was labelled.",
             "type": "object"
+          },
+          "posture": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/JudgePosture"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The permission posture this judge's evaluator calls ran under, and the\nconfiguration layer that set it \u2014 for a `oneharness` judge. Omitted for a\nbackend that sets no mode, and when the call failed before resolving one."
           },
           "reason": {
             "description": "Its own reason \u2014 or, for an `error`, the error's message.",
@@ -278,6 +307,32 @@
           "kind",
           "decision",
           "reason"
+        ],
+        "type": "object"
+      },
+      "JudgePosture": {
+        "description": "The permission posture an evaluator judge-side call ran under, and the\nconfiguration layer that decided it.\n\nAn evaluator call \u2014 a supervisor decision, a verdict or an assessment made\nwith the worker's tree in hand \u2014 layers onejudge's judge-side defaults (a\noneharness config holding `mode = \"read-only\"` and nothing else) *under* the\njudge's own configuration, so the judge's config, an `ONEHARNESS_*` override or\na discovered file can choose another mode. This records which one did, resolved\nover the same list the call passed with the linked core's own loader, so it\nnames the file `oneharness config` attributes the mode to.",
+        "properties": {
+          "config_files": {
+            "description": "Every layer the call's configuration was read from, in layering order:\neach file (its `extends` parents just before it), then `environment` when\nan override was set.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "mode": {
+            "description": "The effective oneharness permission mode: `read-only`, `plan`, `default`,\n`edit`, `auto` or `bypass`.",
+            "type": "string"
+          },
+          "source": {
+            "description": "The layer that set it: a config file's path \u2014 onejudge's defaults file,\nthe judge's config, or a discovered user or project file \u2014\n`environment` for an `ONEHARNESS_*` override, or `default` for\noneharness's built-in default.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "mode",
+          "source",
+          "config_files"
         ],
         "type": "object"
       },
@@ -568,6 +623,51 @@
             "type": "string"
           }
         ]
+      },
+      "ToolEvent": {
+        "description": "One normalized tool-call / action event the skill took during a turn, lifted\nfrom `oneharness`'s `events` array (its `--events` output). Harness-agnostic,\nso a consumer can inspect shell commands, file edits, and tool uses across any\nharness, not just the final text. `input` is the structured, tool-shaped args\nso a consumer can match on the command string or file path without re-parsing.\n\n`input` is free-form JSON, so `Message`/`Transcript` are `PartialEq` but not\n`Eq`.",
+        "properties": {
+          "index": {
+            "default": 0,
+            "description": "Position within the run, so ordering (\"did X before Y\") is expressible.",
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "input": {
+            "description": "Structured tool arguments (the command, the file path); `None` when none."
+          },
+          "kind": {
+            "description": "`tool_call` (the skill invoked a tool) or `tool_result` (the observation).",
+            "type": "string"
+          },
+          "name": {
+            "description": "Normalized tool name where knowable (e.g. `bash`, `edit_file`); `None` for\na `tool_result` or when the harness did not name it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "output": {
+            "description": "The result/observation text, when the transcript exposed it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tool_call_id": {
+            "description": "The harness's own stable identity for this call, joining a `tool_call` to\nits `tool_result`. `None` means the harness exposed no identity \u2014 never an\nempty string, which would read as an id that happens to be blank.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "kind",
+          "index"
+        ],
+        "type": "object"
       },
       "Usage": {
         "description": "Token / cost usage for one provider call, or a running total.\n\nEach field is independently optional because not every harness reports every\nsignal (cost is commonly absent on subscription auth, and cache counts only\nwhen the harness surfaces prompt-cache reads/writes). `None` means \"no\nsignal\", never \"zero\" \u2014 so a total stays `None` until something reports a real\nnumber, then accumulates.",
@@ -1569,6 +1669,80 @@
       "type": "object"
     }
   },
+  "judge_tool": {
+    "$defs": {
+      "ToolEvent": {
+        "description": "One normalized tool-call / action event the skill took during a turn, lifted\nfrom `oneharness`'s `events` array (its `--events` output). Harness-agnostic,\nso a consumer can inspect shell commands, file edits, and tool uses across any\nharness, not just the final text. `input` is the structured, tool-shaped args\nso a consumer can match on the command string or file path without re-parsing.\n\n`input` is free-form JSON, so `Message`/`Transcript` are `PartialEq` but not\n`Eq`.",
+        "properties": {
+          "index": {
+            "default": 0,
+            "description": "Position within the run, so ordering (\"did X before Y\") is expressible.",
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "input": {
+            "description": "Structured tool arguments (the command, the file path); `None` when none."
+          },
+          "kind": {
+            "description": "`tool_call` (the skill invoked a tool) or `tool_result` (the observation).",
+            "type": "string"
+          },
+          "name": {
+            "description": "Normalized tool name where knowable (e.g. `bash`, `edit_file`); `None` for\na `tool_result` or when the harness did not name it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "output": {
+            "description": "The result/observation text, when the transcript exposed it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tool_call_id": {
+            "description": "The harness's own stable identity for this call, joining a `tool_call` to\nits `tool_result`. `None` means the harness exposed no identity \u2014 never an\nempty string, which would read as an id that happens to be blank.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "kind",
+          "index"
+        ],
+        "type": "object"
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "One tool event a judge's harness reported while deciding a supervisor turn.\n\nOnly a judge that asked for events produces these \u2014 `events` on the judge,\non by default when its posture can change the tree \u2014 and they are the same\nevents its [`JudgeDecision::events`](crate::JudgeDecision::events) records.",
+    "properties": {
+      "event": {
+        "$ref": "#/$defs/ToolEvent",
+        "description": "The normalized tool event \u2014 the payload [`StreamEvent::event`] carries."
+      },
+      "judge": {
+        "description": "The judge's label within its panel, or the provider's own label for a\nbare provider.",
+        "type": "string"
+      },
+      "turn": {
+        "description": "1-based assistant-turn index the supervisor turn belongs to, as\n[`TurnOpened::turn`].",
+        "format": "uint",
+        "minimum": 0,
+        "type": "integer"
+      }
+    },
+    "required": [
+      "turn",
+      "judge",
+      "event"
+    ],
+    "title": "JudgeTool",
+    "type": "object"
+  },
   "observation": {
     "$defs": {
       "Decision": {
@@ -1633,6 +1807,31 @@
           "kind",
           "decision",
           "reason"
+        ],
+        "type": "object"
+      },
+      "JudgeTool": {
+        "description": "One tool event a judge's harness reported while deciding a supervisor turn.\n\nOnly a judge that asked for events produces these \u2014 `events` on the judge,\non by default when its posture can change the tree \u2014 and they are the same\nevents its [`JudgeDecision::events`](crate::JudgeDecision::events) records.",
+        "properties": {
+          "event": {
+            "$ref": "#/$defs/ToolEvent",
+            "description": "The normalized tool event \u2014 the payload [`StreamEvent::event`] carries."
+          },
+          "judge": {
+            "description": "The judge's label within its panel, or the provider's own label for a\nbare provider.",
+            "type": "string"
+          },
+          "turn": {
+            "description": "1-based assistant-turn index the supervisor turn belongs to, as\n[`TurnOpened::turn`].",
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "turn",
+          "judge",
+          "event"
         ],
         "type": "object"
       },
@@ -1940,6 +2139,20 @@
           "type"
         ],
         "type": "object"
+      },
+      {
+        "$ref": "#/$defs/JudgeTool",
+        "description": "A tool event a judge's harness reported while deciding a supervisor turn:\ndelivered after that turn's [`TurnOpened`](Observation::TurnOpened) and\nbefore that judge's [`JudgeDecided`](Observation::JudgeDecided), in the\norder the harness reported them. Its `event` is the payload\n[`Tool`](Observation::Tool) carries, so one renderer serves the worker's\nevents and a judge's.",
+        "properties": {
+          "type": {
+            "const": "judge_tool",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "type": "object"
       }
     ],
     "title": "Observation"
@@ -2158,6 +2371,17 @@
               "null"
             ]
           },
+          "posture": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/JudgePosture"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The permission posture this invocation ran under, for an evaluator\njudge-side call; absent for the agent's turns and for a judge-side call\nwith no worktree, whose mode onejudge does not set."
+          },
           "ran": {
             "description": "The candidate that ran the turn, by composed id; `null` when none could.",
             "type": [
@@ -2190,6 +2414,13 @@
             "$ref": "#/$defs/Decision",
             "description": "What it decided, or that it failed."
           },
+          "events": {
+            "description": "The tool events this judge's harness reported while deciding, in order,\nwhen the judge asked for them (`events`, on by default for a writable\nposture). Omitted when there are none.",
+            "items": {
+              "$ref": "#/$defs/ToolEvent"
+            },
+            "type": "array"
+          },
           "judge": {
             "description": "The judge's label within its panel (`label:` in the config, or the\ndefaulted `<kind>` / `<kind>-<n>`).",
             "type": "string"
@@ -2204,6 +2435,17 @@
             },
             "description": "Exactly the labels this judge's backend run was passed (`KEY` \u2192 `VALUE`),\nwhen the backend labels its runs \u2014 only an `llmlint` judge does, with\n`session`, `judge` and `turn`. Omitted when there are none, and recorded\non an `error` decision too whenever the run was labelled.",
             "type": "object"
+          },
+          "posture": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/JudgePosture"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The permission posture this judge's evaluator calls ran under, and the\nconfiguration layer that set it \u2014 for a `oneharness` judge. Omitted for a\nbackend that sets no mode, and when the call failed before resolving one."
           },
           "reason": {
             "description": "Its own reason \u2014 or, for an `error`, the error's message.",
@@ -2239,6 +2481,32 @@
             "type": "string"
           }
         ]
+      },
+      "JudgePosture": {
+        "description": "The permission posture an evaluator judge-side call ran under, and the\nconfiguration layer that decided it.\n\nAn evaluator call \u2014 a supervisor decision, a verdict or an assessment made\nwith the worker's tree in hand \u2014 layers onejudge's judge-side defaults (a\noneharness config holding `mode = \"read-only\"` and nothing else) *under* the\njudge's own configuration, so the judge's config, an `ONEHARNESS_*` override or\na discovered file can choose another mode. This records which one did, resolved\nover the same list the call passed with the linked core's own loader, so it\nnames the file `oneharness config` attributes the mode to.",
+        "properties": {
+          "config_files": {
+            "description": "Every layer the call's configuration was read from, in layering order:\neach file (its `extends` parents just before it), then `environment` when\nan override was set.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "mode": {
+            "description": "The effective oneharness permission mode: `read-only`, `plan`, `default`,\n`edit`, `auto` or `bypass`.",
+            "type": "string"
+          },
+          "source": {
+            "description": "The layer that set it: a config file's path \u2014 onejudge's defaults file,\nthe judge's config, or a discovered user or project file \u2014\n`environment` for an `ONEHARNESS_*` override, or `default` for\noneharness's built-in default.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "mode",
+          "source",
+          "config_files"
+        ],
+        "type": "object"
       },
       "JudgeValue": {
         "anyOf": [
@@ -2880,6 +3148,14 @@
         "additionalProperties": false,
         "description": "Which backend runs the harness. A flat, strict struct (rather than an\ninternally-tagged enum, which serde cannot pair with `deny_unknown_fields`):\n[`ProviderConfig::resolve`] checks that only the chosen `kind`'s fields are set\nand turns it into a validated [`ProviderSpec`], so a misplaced-but-spelled-right\nkey (e.g. `bin` under `kind: command`) is still a loud error.",
         "properties": {
+          "allow_writable_judges": {
+            "default": null,
+            "description": "`split`: let a panel of more than one judge include a judge whose\neffective mode can change the tree (any but `read-only` and `plan`).\nRefused by default: panel judges run at the same time against one\nworktree, so a writable judge can race the others and changes the tree\nthe worker continues from. A single writable judge needs no permission.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
           "args": {
             "default": null,
             "description": "`llmlint`: extra arguments appended to every `llmlint lint` invocation\nafter the ones onejudge composes (`--rule NAME`, `--agent NAME`, \u2026).",
@@ -2934,6 +3210,22 @@
               "null"
             ]
           },
+          "events": {
+            "default": null,
+            "description": "`oneharness`: whether the judge side asks its harness for tool events,\nrecorded on each decision (`judge_decisions[].decisions[].events`) and\npublished as `judge_tool` lines under `--stream`. Unset, it asks exactly\nwhen the judge's effective mode can change the tree \u2014 any mode but\n`read-only` and `plan`.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "instructions": {
+            "default": null,
+            "description": "`oneharness`: instructions appended to every evaluator prompt this\nprovider's judge side is handed \u2014 what a judge that can act should verify,\nand how. The answer format each prompt ends with is unchanged.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "judge": {
             "anyOf": [
               {
@@ -2947,7 +3239,7 @@
           },
           "judge_config": {
             "default": null,
-            "description": "`oneharness`: the oneharness config file the judge / simulated user run\nunder, passed as `oneharness run --config <path>` (default\n`oneharness.judge.toml`). This is where the judge-side harness/model\nselection lives.",
+            "description": "`oneharness`: the oneharness config file the judge / simulated user run\nunder, passed as `oneharness run --config <path>` (default\n`oneharness.judge.toml`). This is where the judge-side harness/model\nselection lives \u2014 and the judge's permission `mode`: an evaluator call\npasses onejudge's read-only defaults *before* this file, so a mode set\nhere decides the judge's posture. Unset, and with no\n`oneharness.judge.toml` in the working directory, the judge runs under\noneharness's own discovery (the user file, then the project file) behind\nthe same defaults \u2014 which in 0.15.0 was an error.",
             "type": [
               "string",
               "null"

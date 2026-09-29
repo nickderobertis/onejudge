@@ -16,8 +16,8 @@ use serde::{Deserialize, Serialize};
 use crate::control::{ControlAddress, ControlOutcome};
 use crate::provider::{JudgeKind, JudgeVerdict};
 use crate::spawn::SpawnedProcess;
-use crate::telemetry::Telemetry;
-use crate::transcript::Transcript;
+use crate::telemetry::{JudgePosture, Telemetry};
+use crate::transcript::{ToolEvent, Transcript};
 use crate::usage::Usage;
 
 /// The version of the [`Report`] wire contract. Bump on any change to the
@@ -41,10 +41,14 @@ use crate::usage::Usage;
 /// invocation belonged to; `13` added the optional `labels` and `run_id` on each
 /// [`JudgeDecision`] — the labels an `llmlint` judge's run was passed and the
 /// llmlint history id that run was recorded under, so a decision links to the
-/// `llmlint history <run_id>` record behind it.
+/// `llmlint history <run_id>` record behind it; `14` added the optional `posture`
+/// and `events` on each [`JudgeDecision`] and the optional `posture` on
+/// `telemetry.attribution` — the permission mode an evaluator judge ran under and
+/// the configuration layer that set it, and the tool events a judge that asked for
+/// them produced deciding.
 ///
 /// [`JudgePanel`]: crate::JudgePanel
-pub const SCHEMA_VERSION: u32 = 13;
+pub const SCHEMA_VERSION: u32 = 14;
 
 /// The skip predicate for a field that is always serialized but must not be
 /// *required* of a document being read. Used by [`Report::control`]; see the
@@ -123,6 +127,16 @@ pub struct JudgeDecision {
     /// recording), and recorded on an `error` decision too whenever known.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run_id: Option<String>,
+    /// The permission posture this judge's evaluator calls ran under, and the
+    /// configuration layer that set it — for a `oneharness` judge. Omitted for a
+    /// backend that sets no mode, and when the call failed before resolving one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub posture: Option<JudgePosture>,
+    /// The tool events this judge's harness reported while deciding, in order,
+    /// when the judge asked for them (`events`, on by default for a writable
+    /// posture). Omitted when there are none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub events: Vec<ToolEvent>,
 }
 
 /// Every judge's decision on one supervisor turn.
@@ -530,6 +544,8 @@ mod tests {
                     reason: "tests are missing".into(),
                     labels: BTreeMap::new(),
                     run_id: None,
+                    posture: None,
+                    events: Vec::new(),
                 },
                 JudgeDecision {
                     judge: "command".into(),
@@ -538,6 +554,8 @@ mod tests {
                     reason: "provider exited with 1".into(),
                     labels: BTreeMap::new(),
                     run_id: None,
+                    posture: None,
+                    events: Vec::new(),
                 },
                 JudgeDecision {
                     judge: "lint".into(),
@@ -550,6 +568,8 @@ mod tests {
                         ("turn".to_string(), "1".to_string()),
                     ]),
                     run_id: Some("20260929T064026Z-c80a9".into()),
+                    posture: None,
+                    events: Vec::new(),
                 },
             ],
         }];

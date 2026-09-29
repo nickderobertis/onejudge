@@ -228,6 +228,16 @@ like telemetry so a failed run still reports it (`Report::judge_decisions`,
 `Observation::JudgeDecided`, the `judge` label on attribution, session links and
 processes).
 
+**A judge's posture is a default, never an override.** An evaluator call passes
+onejudge's defaults file (`mode = "read-only"`) *first* in its config list and no
+mode on the request, so the judge's config, `ONEHARNESS_*` or a discovered file
+decides; the mode and its source are resolved with the linked core's loader and
+recorded (`oneharness/posture.rs`). Setting `mode` on a judge-side request
+reintroduces the silently-ignored-config defect. The default posture is held to
+0.15.0's harness argv and prompts (`tests/golden/judge-posture-0.15.0/`), and a
+writable judge in a multi-judge panel needs `allow_writable_judges`
+(`docs/judges.md`).
+
 An `oneharness` provider can also **stream** (`provider.stream: true`): tool events
 reach the caller's sink as oneharness observes them, then the finished report, so a
 600–2000s turn is visible while it runs. `onejudge run --stream` republishes the
@@ -284,9 +294,9 @@ tree. The **spawning** seam still escalates through three rungs — close stdout
 SIGTERM, kill — because a spawned producer has to be reached through the OS, and
 each rung reaches a case the one before cannot; two e2e tests gate that pair, one
 per rung. The `oneharness-core` pin lives in the workspace manifest and nowhere
-else; the **CLI** floor an operator installs is a different number (**0.14.0+**,
-the first release writing the report schema the linked core parses and accepting
-`run --format json`) because the two crates version independently. Never infer
+else; the **CLI** floor an operator installs is a different number (**0.18.0+**,
+the first release accepting the repeated `run --config` the judge side passes,
+and writing the report schema the linked core parses) because the two crates version independently. Never infer
 one from the other — `cli/mod.rs` gates each. See `docs/oneharness-library.md`
 before touching either.
 
@@ -309,7 +319,7 @@ Both are serialized even when null; a refused ask is `null` **plus** its
 `*_unavailable` reason, because "never asked" and "asked and refused" are
 different facts. A refusal costs no model tokens (oneharness validates before
 spawning), so the call is retried without the flag rather than failing the run.
-`--control` arrived in oneharness 0.6.14, under the **0.14.0+** floor the crate
+`--control` arrived in oneharness 0.6.14, under the **0.18.0+** floor the crate
 advertises. The stateless `judge` / `assess` calls stay uncontrolled (no session
 to be addressed by) and so does the legacy `user` turn, which shares the
 supervisor's session name — the one place "two runs on one address" is real.

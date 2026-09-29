@@ -61,6 +61,42 @@ pub struct SessionLink {
     pub judge: Option<String>,
 }
 
+/// The permission posture an evaluator judge-side call ran under, and the
+/// configuration layer that decided it.
+///
+/// An evaluator call — a supervisor decision, a verdict or an assessment made
+/// with the worker's tree in hand — layers onejudge's judge-side defaults (a
+/// oneharness config holding `mode = "read-only"` and nothing else) *under* the
+/// judge's own configuration, so the judge's config, an `ONEHARNESS_*` override or
+/// a discovered file can choose another mode. This records which one did, resolved
+/// over the same list the call passed with the linked core's own loader, so it
+/// names the file `oneharness config` attributes the mode to.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "sdk-schema", derive(schemars::JsonSchema))]
+pub struct JudgePosture {
+    /// The effective oneharness permission mode: `read-only`, `plan`, `default`,
+    /// `edit`, `auto` or `bypass`.
+    pub mode: String,
+    /// The layer that set it: a config file's path — onejudge's defaults file,
+    /// the judge's config, or a discovered user or project file —
+    /// `environment` for an `ONEHARNESS_*` override, or `default` for
+    /// oneharness's built-in default.
+    pub source: String,
+    /// Every layer the call's configuration was read from, in layering order:
+    /// each file (its `extends` parents just before it), then `environment` when
+    /// an override was set.
+    pub config_files: Vec<String>,
+}
+
+impl JudgePosture {
+    /// Whether this posture may change the tree: any mode but `read-only` and
+    /// `plan`.
+    #[must_use]
+    pub fn is_writable(&self) -> bool {
+        !matches!(self.mode.as_str(), "read-only" | "plan")
+    }
+}
+
 /// One candidate identity oneharness attempted for a single invocation — the
 /// harness (and variant/model) it tried, and what came of it.
 ///
@@ -158,6 +194,11 @@ pub struct HarnessAttribution {
     /// label — as [`SessionLink::judge`], and absent under the same conditions.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub judge: Option<String>,
+    /// The permission posture this invocation ran under, for an evaluator
+    /// judge-side call; absent for the agent's turns and for a judge-side call
+    /// with no worktree, whose mode onejudge does not set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub posture: Option<JudgePosture>,
 }
 
 /// Timing, usage, and native linkage for the complete agent+judge run.
@@ -205,6 +246,8 @@ pub struct InvocationTelemetry {
     /// The panel label of the judge that made this invocation, stamped by a
     /// [`JudgePanel`](crate::JudgePanel) of more than one judge.
     pub(crate) judge: Option<String>,
+    /// The posture an evaluator judge-side invocation ran under.
+    pub(crate) posture: Option<JudgePosture>,
 }
 
 fn strict_sum_u64(
@@ -303,6 +346,7 @@ pub(crate) fn aggregate(wall_ms: u64, records: &[InvocationTelemetry]) -> Option
                 candidates: record.candidates.clone(),
                 history_file: record.history_file.clone(),
                 judge: record.judge.clone(),
+                posture: record.posture.clone(),
             });
         }
     }
@@ -380,6 +424,7 @@ mod tests {
             ],
             history_file: Some("/state/oneharness/history/s.jsonl".into()),
             judge: None,
+            posture: None,
         }
     }
 

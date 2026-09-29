@@ -345,6 +345,7 @@ impl LlmlintProvider {
         *self.link.borrow_mut() = Some(JudgeLink {
             labels: passed,
             run_id: run_id(&String::from_utf8_lossy(&output.stderr)),
+            ..JudgeLink::default()
         });
         // One judge-side invocation per run: its wall time is the tool time (there
         // is no model call of onejudge's to attribute anything else to), and no

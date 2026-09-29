@@ -1,5 +1,6 @@
 {
   "run_config": {
+    "allow_writable_judges": "allow_writable_judges",
     "args": "args",
     "artifacts": "artifacts",
     "assessment": "assessment",
@@ -11,6 +12,8 @@
     "diff_base": "diff_base",
     "done_when": "done_when",
     "evals": "evals",
+    "events": "events",
+    "instructions": "instructions",
     "judge": "judge",
     "judge_config": "judge_config",
     "judges": "judges",

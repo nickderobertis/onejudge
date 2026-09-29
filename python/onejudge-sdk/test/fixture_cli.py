@@ -54,6 +54,26 @@ def main() -> int:
         _record_pid()
         _publish({"type": "event", "turn": 1, "event": {"kind": "tool_call", "index": 0}})
         return _block()
+    if mode == "judge-tool-stream":
+        # A worker event, a judge's tool event, then the terminal line.
+        _publish(
+            {"type": "event", "turn": 1, "event": {"kind": "tool_call", "index": 0}},
+            {
+                "type": "judge_tool",
+                "turn": 1,
+                "judge": "reviewer",
+                "event": {"kind": "tool_call", "name": "Bash", "index": 0},
+            },
+            {"type": "result", "report": _report(task)},
+        )
+        return 0
+    if mode == "bad-judge-tool":
+        # A judge line missing the judge it came from.
+        _publish(
+            {"type": "judge_tool", "turn": 1, "event": {"kind": "tool_call", "index": 0}},
+            {"type": "result", "report": _report(task)},
+        )
+        return 0
     if mode == "invalid-json":
         if task != "fixture task":
             return 4

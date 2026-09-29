@@ -7,8 +7,9 @@ expressed as a typed call — **including the invocation itself**. A turn is
 
 The pin is in the workspace manifest; everything below is verified against it.
 The **CLI** floor an operator installs is a different number — currently
-**0.14.0+**, the first release that writes the report schema the pinned core
-parses and accepts the `run --format json` the spawning seam passes — because
+**0.18.0+**, the first release that accepts the repeated `run --config` the
+judge side passes (onejudge's defaults, then the judge's config), and writes the
+report schema the pinned core parses — because
 the two crates version independently: the pin may be newer than the core that
 CLI embeds so long as the report is the same, and `cli/mod.rs` gates the floor
 on the schema, not on the two numbers. Never read one off the other.
@@ -81,12 +82,12 @@ field fails the build), and both columns against the rows below.
 | `--history-name` | `history_name: Option<String>` |
 | `--system` | `system: Option<String>` |
 | `--cwd` | `cwd: Option<PathBuf>` |
-| `--config` | `config: Option<PathBuf>` |
+| `--config` | `config: Vec<PathBuf>` — repeatable, one flag per file in layering order (later files override earlier ones); empty is discovery |
 | `--mock-harness` | `mock_harness: Vec<String>` — repeatable; runs the named harness against oneharness's own deterministic `MOCK_*` responder instead of a paid model. Rendered on both seams so the mapping stays total, but reachable only on the spawning one (see below) |
 | `--session` | `session: Option<String>` |
 | `--stream` | `stream: Option<bool>` |
 | `--control` | `control: bool` |
-| `--mode` | `mode: Option<PermissionMode>` |
+| `--mode` | `mode: Option<PermissionMode>` — rendered so the mapping stays total, but set on no turn onejudge makes: an evaluator judge's read-only default rides **first in `config`** (`oneharness/posture.rs`), where the judge's own config and `ONEHARNESS_*` can override it, which a request mode would beat ([judges.md](judges.md#posture-what-a-judge-may-do)) |
 | `--prompt-file` | `prompt: Vec<String>` — an owned value, so the `-`/stdin hop that exists only to dodge the OS argv ceiling disappears; oneharness's own `LARGE_INPUT_THRESHOLD` moves a large prompt off-argv for the harness |
 | `--compact` | **none, deliberately** — `RunRequest`'s own docs exclude it as "about how the shell *prints* the report, not how the engine produces it". An in-process caller is handed the `RunReport` value, so there is nothing to compact. Not a gap. |
 | `--format` | **none, deliberately** — like `--compact`, it chooses how the CLI *prints* the report (`json` for onejudge, which reads the machine contract rather than relying on the default oneharness 0.14.0 moves to text). An in-process caller is handed the `RunReport` value, so there is nothing to format. |

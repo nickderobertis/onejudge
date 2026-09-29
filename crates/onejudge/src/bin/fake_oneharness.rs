@@ -136,6 +136,16 @@
 //! down only on SIGTERM — exactly as real oneharness does, by polling for
 //! cancellation on its own slice rather than only when the harness writes.
 //!
+//! **The real engine, one process down.** With `ONEJUDGE_FAKE_ONEHARNESS_ENGINE=1`
+//! in its environment this double stops scripting anything: `run` parses the argv
+//! onejudge spawned it with into the `RunRequest` it names and hands it to the
+//! linked `oneharness_core` engine — the code `oneharness run` itself runs — and
+//! `config` prints the attributed `ConfigReport` that `oneharness config` prints
+//! for the same `--config` list. The harness it then spawns is whatever the config
+//! names (`onejudge-fake-harness` in the suite), so the *spawning* seam can be held
+//! to the harness argv and prompt a real oneharness produces, exactly as the
+//! in-process seam is. See [`engine`].
+//!
 //! Built only under the `fake-provider` feature; never shipped to a consumer.
 #![allow(missing_docs)]
 
@@ -206,6 +216,10 @@ fn main() {
             emit_error("--control-harness needs a sink path");
         };
         control::run_harness(sink);
+    }
+
+    if std::env::var_os(engine::ENGINE_ENV).is_some() {
+        engine::run(&argv);
     }
 
     let flags = parse_flags();
@@ -1602,5 +1616,152 @@ mod control {
     fn refuse(err: &OneharnessError) -> ! {
         eprintln!("oneharness: error: {err}");
         std::process::exit(2);
+    }
+}
+
+/// The delegating mode: see this binary's module docs.
+mod engine {
+    use std::io::Read as _;
+    use std::path::{Path, PathBuf};
+
+    use oneharness_core::domain::mode::PermissionMode;
+    use oneharness_core::io::cancel::CancelToken;
+    use oneharness_core::io::run::{run as run_engine, RunControls, RunRequest};
+
+    use super::emit_error;
+
+    /// Set (to anything) to delegate to the linked engine instead of scripting.
+    pub(super) const ENGINE_ENV: &str = "ONEJUDGE_FAKE_ONEHARNESS_ENGINE";
+
+    /// Set to a path to append each argv this mode is spawned with, one JSON
+    /// array per line — what onejudge asked oneharness for, recorded before the
+    /// engine sees it.
+    pub(super) const ARGV_LOG_ENV: &str = "ONEJUDGE_FAKE_ONEHARNESS_ARGV_LOG";
+
+    /// Run `argv` through the real engine and exit with what it decided.
+    pub(super) fn run(argv: &[String]) -> ! {
+        if let Some(log) = std::env::var_os(ARGV_LOG_ENV) {
+            use std::io::Write as _;
+            let mut file = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(log)
+                .unwrap_or_else(|e| emit_error(&format!("could not open the argv log: {e}")));
+            let line = serde_json::to_string(argv).expect("an argv serializes");
+            // One write per line: concurrent panel judges append to the same log.
+            file.write_all(format!("{line}\n").as_bytes())
+                .unwrap_or_else(|e| emit_error(&format!("could not write the argv log: {e}")));
+        }
+        match argv.first().map(String::as_str) {
+            Some("run") => run_turn(&argv[1..]),
+            Some("config") => explain(&argv[1..]),
+            other => emit_error(&format!(
+                "the engine mode serves `run` and `config`, not {other:?}"
+            )),
+        }
+    }
+
+    /// `oneharness run`, for the flags onejudge passes. Anything else is refused,
+    /// as the scripted mode refuses it, so the double cannot quietly accept a flag
+    /// the real CLI would reject.
+    fn run_turn(args: &[String]) -> ! {
+        let mut request = RunRequest::default();
+        let mut stream = false;
+        let mut i = 0;
+        while i < args.len() {
+            let flag = args[i].as_str();
+            let mut value = || -> String {
+                i += 1;
+                args.get(i)
+                    .cloned()
+                    .unwrap_or_else(|| emit_error(&format!("{flag} needs a value")))
+            };
+            match flag {
+                "--format" => {
+                    let format = value();
+                    if format != "json" {
+                        emit_error(&format!("`--format {format}` is not machine-readable"));
+                    }
+                }
+                "--compact" => {}
+                "--events" => request.events = true,
+                "--history" => request.history = Some(true),
+                "--history-name" => request.history_name = Some(value()),
+                "--system" => request.system = Some(value()),
+                // Repeatable, in layering order, as on the real CLI.
+                "--config" => request.config.push(PathBuf::from(value())),
+                "--mock-harness" => request.mock_harness.push(value()),
+                "--cwd" => request.cwd = Some(PathBuf::from(value())),
+                "--session" => request.session = Some(value()),
+                "--control" => request.control = true,
+                "--stream" => stream = true,
+                "--mode" => {
+                    request.mode = Some(
+                        PermissionMode::parse(&value())
+                            .unwrap_or_else(|e| emit_error(&format!("--mode {e}"))),
+                    );
+                }
+                "--prompt-file" => {
+                    if value() != "-" {
+                        emit_error("the engine mode reads the prompt from stdin only");
+                    }
+                    let mut prompt = String::new();
+                    if std::io::stdin().read_to_string(&mut prompt).is_err() {
+                        emit_error("could not read prompt from stdin");
+                    }
+                    request.prompt.push(prompt);
+                }
+                other => emit_error(&format!(
+                    "unrecognized flag `{other}` (the fake mirrors `oneharness run`)"
+                )),
+            }
+            i += 1;
+        }
+        if stream {
+            emit_error("the engine mode runs buffered turns only; `--stream` is scripted-mode");
+        }
+        request.stream = Some(false);
+        let outcome = run_engine(
+            &request,
+            RunControls {
+                events: None,
+                cancel: CancelToken::new(),
+                signal_cancel: false,
+                version: None,
+            },
+        )
+        .unwrap_or_else(|e| {
+            eprintln!("{e}");
+            std::process::exit(2);
+        });
+        let report = serde_json::to_string(&outcome.report)
+            .unwrap_or_else(|e| emit_error(&format!("could not serialize the report: {e}")));
+        println!("{report}");
+        std::process::exit(outcome.exit_code);
+    }
+
+    /// `oneharness config`: the layered configuration with every value's source,
+    /// for the same `--config` list `run` was given and the same working directory.
+    fn explain(args: &[String]) -> ! {
+        let mut explicit = Vec::new();
+        let mut cwd = std::env::current_dir().expect("a working directory");
+        let mut i = 0;
+        while i < args.len() {
+            let next = args.get(i + 1).cloned();
+            match (args[i].as_str(), next) {
+                ("--config", Some(path)) => explicit.push(PathBuf::from(path)),
+                ("--cwd", Some(dir)) => cwd = PathBuf::from(dir),
+                (other, _) => emit_error(&format!("`config` does not take `{other}` here")),
+            }
+            i += 2;
+        }
+        let layers = oneharness_core::io::config::load_layers(&explicit, false, Path::new(&cwd))
+            .unwrap_or_else(|e| emit_error(&e.to_string()));
+        let report = oneharness_core::domain::config::explain(&layers);
+        println!(
+            "{}",
+            serde_json::to_string(&report).expect("the config report serializes")
+        );
+        std::process::exit(0);
     }
 }

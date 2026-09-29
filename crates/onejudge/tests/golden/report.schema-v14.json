@@ -357,6 +357,17 @@
           "type": "integer",
           "format": "uint32",
           "minimum": 0
+        },
+        "posture": {
+          "description": "The permission posture this invocation ran under, for an evaluator\njudge-side call; absent for the agent's turns and for a judge-side call\nwith no worktree, whose mode onejudge does not set.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/JudgePosture"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
@@ -398,6 +409,24 @@
             "string",
             "null"
           ]
+        },
+        "posture": {
+          "description": "The permission posture this judge's evaluator calls ran under, and the\nconfiguration layer that set it — for a `oneharness` judge. Omitted for a\nbackend that sets no mode, and when the call failed before resolving one.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/JudgePosture"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "events": {
+          "description": "The tool events this judge's harness reported while deciding, in order,\nwhen the judge asked for them (`events`, on by default for a writable\nposture). Omitted when there are none.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ToolEvent"
+          }
         }
       },
       "required": [
@@ -877,6 +906,32 @@
           "minimum": 0
         }
       }
+    },
+    "JudgePosture": {
+      "description": "The permission posture an evaluator judge-side call ran under, and the\nconfiguration layer that decided it.\n\nAn evaluator call — a supervisor decision, a verdict or an assessment made\nwith the worker's tree in hand — layers onejudge's judge-side defaults (a\noneharness config holding `mode = \"read-only\"` and nothing else) *under* the\njudge's own configuration, so the judge's config, an `ONEHARNESS_*` override or\na discovered file can choose another mode. This records which one did, resolved\nover the same list the call passed with the linked core's own loader, so it\nnames the file `oneharness config` attributes the mode to.",
+      "type": "object",
+      "properties": {
+        "mode": {
+          "description": "The effective oneharness permission mode: `read-only`, `plan`, `default`,\n`edit`, `auto` or `bypass`.",
+          "type": "string"
+        },
+        "source": {
+          "description": "The layer that set it: a config file's path — onejudge's defaults file,\nthe judge's config, or a discovered user or project file —\n`environment` for an `ONEHARNESS_*` override, or `default` for\noneharness's built-in default.",
+          "type": "string"
+        },
+        "config_files": {
+          "description": "Every layer the call's configuration was read from, in layering order:\neach file (its `extends` parents just before it), then `environment` when\nan override was set.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "mode",
+        "source",
+        "config_files"
+      ]
     }
   }
 }

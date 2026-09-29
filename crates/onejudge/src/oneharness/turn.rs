@@ -30,9 +30,11 @@ pub(crate) struct TurnSpec {
     /// The working directory the harness runs in, and where oneharness starts its
     /// own project-config discovery.
     pub(crate) cwd: Option<String>,
-    /// The oneharness config file this side's harness/model selection lives in.
-    /// Judge side only — the agent side uses oneharness's discovered default.
-    pub(crate) config: Option<PathBuf>,
+    /// The oneharness config files this turn layers, earliest first: each later
+    /// file overrides the ones before it, field by field, and an empty list is
+    /// oneharness's own discovery. Judge side only — the agent side uses
+    /// oneharness's discovered default.
+    pub(crate) config: Vec<PathBuf>,
     /// Harness ids whose provider process oneharness replaces with its own
     /// deterministic `MOCK_*`-scripted responder. Empty for an ordinary turn; see
     /// [`OneharnessProvider::with_mock_harness`](crate::OneharnessProvider::with_mock_harness).
@@ -107,7 +109,9 @@ pub(crate) fn argv(spec: &TurnSpec) -> Vec<String> {
         args.push("--system".into());
         args.push(system.clone());
     }
-    if let Some(config) = &spec.config {
+    // Repeatable, in layering order: oneharness folds each later file over the
+    // ones before it, exactly as `RunRequest::config` does.
+    for config in &spec.config {
         args.push("--config".into());
         args.push(config.display().to_string());
     }
@@ -181,7 +185,7 @@ mod tests {
         ),
         ("--system", Some(("system", |r| r.system.is_some()))),
         ("--cwd", Some(("cwd", |r| r.cwd.is_some()))),
-        ("--config", Some(("config", |r| r.config.is_some()))),
+        ("--config", Some(("config", |r| !r.config.is_empty()))),
         ("--session", Some(("session", |r| r.session.is_some()))),
         ("--stream", Some(("stream", |r| r.stream == Some(true)))),
         ("--control", Some(("control", |r| r.control))),
@@ -202,7 +206,10 @@ mod tests {
         TurnSpec {
             system: Some("do x".into()),
             cwd: Some("/work".into()),
-            config: Some(PathBuf::from("oneharness.judge.toml")),
+            config: vec![
+                PathBuf::from("judge-defaults.toml"),
+                PathBuf::from("oneharness.judge.toml"),
+            ],
             mock_harness: vec!["claude-code".into()],
             session: Some("sess".into()),
             history_name: Some("hist".into()),
@@ -286,6 +293,19 @@ mod tests {
                 "docs/oneharness-library.md's mapping table has no row `{row}…`"
             );
         }
+    }
+
+    #[test]
+    fn a_config_list_is_one_flag_per_file_in_the_order_the_request_layers_it() {
+        let spec = populated();
+        let argv = argv(&spec);
+        let configs: Vec<&String> = argv
+            .windows(2)
+            .filter(|w| w[0] == "--config")
+            .map(|w| &w[1])
+            .collect();
+        assert_eq!(configs, ["judge-defaults.toml", "oneharness.judge.toml"]);
+        assert_eq!(request(&spec).config, spec.config);
     }
 
     #[test]

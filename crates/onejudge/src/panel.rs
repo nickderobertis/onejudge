@@ -327,7 +327,7 @@ impl<J: Provider + Send> JudgePanel<J> {
     ///
     /// Each result arrives with the [`JudgeLink`] its judge left, taken under
     /// that judge's lock right after its call, which lands on its decision as
-    /// `labels` and `run_id`.
+    /// `labels`, `run_id`, `posture` and `events`.
     fn combine_supervision(
         &self,
         linked: Vec<(usize, LinkedSupervision)>,
@@ -345,7 +345,12 @@ impl<J: Provider + Send> JudgePanel<J> {
                 }
                 Err(error) => (Decision::Error, error.to_string()),
             };
-            let JudgeLink { labels, run_id } = link.unwrap_or_default();
+            let JudgeLink {
+                labels,
+                run_id,
+                posture,
+                events,
+            } = link.unwrap_or_default();
             self.decisions.borrow_mut().push(JudgeDecision {
                 judge: judge.label.clone(),
                 kind: judge.kind.clone(),
@@ -353,6 +358,8 @@ impl<J: Provider + Send> JudgePanel<J> {
                 reason,
                 labels,
                 run_id,
+                posture,
+                events,
             });
             results.push((i, result));
         }

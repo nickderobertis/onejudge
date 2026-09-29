@@ -770,6 +770,9 @@ impl<'a> Engine<'a> {
                         },
                     );
                     let _ = self.record_judge_decisions(turn_index);
+                    // Not observed on this path, like the decisions beside them;
+                    // drained so a later turn never inherits them.
+                    let _ = self.provider.take_judge_tools();
                     let decision = match decision {
                         Ok(decision) => decision,
                         Err(_) => return Err(error),
@@ -924,8 +927,40 @@ impl<'a> Engine<'a> {
                 // it, and observed before the error propagates, so a supervisor
                 // watching the run sees which judge failed and what the others said.
                 let decided = self.record_judge_decisions(turn_index);
+                let bare = self.provider.take_judge_tools();
                 let mut broke = false;
-                for decision in &decided {
+                // A bare provider's judge events first — it records no decision to
+                // follow them — then each panel judge's, right before its decision.
+                'observed: for tools in &bare {
+                    for event in &tools.events {
+                        if on_observation(&Observation::JudgeTool(JudgeTool {
+                            turn: turn_index,
+                            judge: &tools.judge,
+                            event,
+                        }))
+                        .is_break()
+                        {
+                            broke = true;
+                            break 'observed;
+                        }
+                    }
+                }
+                'decided: for decision in &decided {
+                    if broke {
+                        break;
+                    }
+                    for event in &decision.events {
+                        if on_observation(&Observation::JudgeTool(JudgeTool {
+                            turn: turn_index,
+                            judge: &decision.judge,
+                            event,
+                        }))
+                        .is_break()
+                        {
+                            broke = true;
+                            break 'decided;
+                        }
+                    }
                     if on_observation(&Observation::JudgeDecided(JudgeDecided {
                         turn: turn_index,
                         judge: &decision.judge,
@@ -1320,6 +1355,31 @@ pub enum Observation<'a> {
     /// [`Message`](Observation::Message) / [`TurnClosed`](Observation::TurnClosed)
     /// — and, when the supervisor call failed, before the error propagates.
     JudgeDecided(JudgeDecided<'a>),
+    /// A tool event a judge's harness reported while deciding a supervisor turn:
+    /// delivered after that turn's [`TurnOpened`](Observation::TurnOpened) and
+    /// before that judge's [`JudgeDecided`](Observation::JudgeDecided), in the
+    /// order the harness reported them. Its `event` is the payload
+    /// [`Tool`](Observation::Tool) carries, so one renderer serves the worker's
+    /// events and a judge's.
+    JudgeTool(JudgeTool<'a>),
+}
+
+/// One tool event a judge's harness reported while deciding a supervisor turn.
+///
+/// Only a judge that asked for events produces these — `events` on the judge,
+/// on by default when its posture can change the tree — and they are the same
+/// events its [`JudgeDecision::events`](crate::JudgeDecision::events) records.
+#[derive(serde::Serialize)]
+#[cfg_attr(feature = "sdk-schema", derive(schemars::JsonSchema))]
+pub struct JudgeTool<'a> {
+    /// 1-based assistant-turn index the supervisor turn belongs to, as
+    /// [`TurnOpened::turn`].
+    pub turn: usize,
+    /// The judge's label within its panel, or the provider's own label for a
+    /// bare provider.
+    pub judge: &'a str,
+    /// The normalized tool event — the payload [`StreamEvent::event`] carries.
+    pub event: &'a ToolEvent,
 }
 
 /// One judge's decision on a supervisor turn, as its panel recorded it.
@@ -2240,6 +2300,8 @@ mod tests {
                     reason: "more".into(),
                     labels: Default::default(),
                     run_id: None,
+                    posture: None,
+                    events: Vec::new(),
                 }]
             }
 
@@ -2289,6 +2351,7 @@ mod tests {
                 &mut |observation| {
                     let (kind, stop) = match observation {
                         Observation::JudgeDecided(d) => (format!("judged/{}", d.judge), true),
+                        Observation::JudgeTool(t) => (format!("judge-tool/{}", t.judge), false),
                         Observation::TurnOpened(o) => (format!("opened/{:?}", o.role), false),
                         Observation::Message(m) => (format!("said/{:?}", m.role), false),
                         Observation::TurnClosed(c) => (format!("closed/{:?}", c.role), false),
@@ -2320,5 +2383,102 @@ mod tests {
         assert_eq!(outcome.judge_decisions.len(), 1);
         assert_eq!(outcome.judge_decisions[0].decisions[0].reason, "more");
         assert_eq!(engine.judge_decisions(), outcome.judge_decisions);
+    }
+
+    #[test]
+    fn a_bare_providers_judge_events_are_observed_inside_the_supervisor_turn() {
+        /// A bare (non-panel) provider whose judge side reported one tool event per
+        /// supervisor decision and records no per-judge decision.
+        struct Acting {
+            decided: std::cell::Cell<bool>,
+        }
+
+        impl Provider for Acting {
+            fn take_judge_tools(&self) -> Vec<crate::JudgeTools> {
+                vec![crate::JudgeTools {
+                    judge: "solo".into(),
+                    events: vec![ToolEvent {
+                        kind: "tool_call".into(),
+                        name: Some("Bash".into()),
+                        input: Some(serde_json::json!({"command": "cargo test"})),
+                        output: None,
+                        index: 0,
+                        tool_call_id: None,
+                    }],
+                }]
+            }
+
+            fn respond(
+                &self,
+                _: &SkillRef<'_>,
+                _: &[Message],
+                _: Option<&str>,
+            ) -> Result<AssistantTurn> {
+                Ok(assistant("working", false))
+            }
+
+            fn simulate_user(&self, _: &str, _: &[Message], _: Option<&str>) -> Result<UserTurn> {
+                unreachable!()
+            }
+
+            fn supervise(
+                &self,
+                _: &SupervisorQuery<'_>,
+                _: &[Message],
+                _: Option<&str>,
+            ) -> Result<SupervisorTurn> {
+                self.decided.set(true);
+                Ok(SupervisorTurn {
+                    outcome: SupervisorOutcome::Completed {
+                        reason: "tests pass".into(),
+                    },
+                    usage: None,
+                })
+            }
+
+            fn judge(&self, _: &JudgeQuery<'_>, _: &[Message]) -> Result<JudgeVerdict> {
+                unreachable!()
+            }
+
+            fn assess(&self, _: &str, _: &[Message]) -> Result<Assessment> {
+                unreachable!()
+            }
+        }
+
+        let provider = Acting {
+            decided: std::cell::Cell::new(false),
+        };
+        let engine = Engine::new(&provider, settings());
+        let mut seen = Vec::new();
+        engine
+            .run_observing(
+                &Conversation::multi_turn(skill(), "go", SimulatedUser::new("p").max_turns(3)),
+                &mut |observation| {
+                    seen.push(match observation {
+                        Observation::JudgeTool(t) => {
+                            format!("judge-tool/{}/{}/{}", t.turn, t.judge, t.event.summary())
+                        }
+                        Observation::JudgeDecided(d) => format!("judged/{}", d.judge),
+                        Observation::TurnOpened(o) => format!("opened/{:?}", o.role),
+                        Observation::Message(m) => format!("said/{:?}", m.role),
+                        Observation::TurnClosed(c) => format!("closed/{:?}", c.role),
+                        Observation::Tool(_) => "tool".into(),
+                    });
+                    ControlFlow::Continue(())
+                },
+            )
+            .unwrap();
+        assert!(provider.decided.get());
+        assert_eq!(
+            seen,
+            [
+                "opened/Assistant",
+                "said/Assistant",
+                "closed/Assistant",
+                "opened/User",
+                r#"judge-tool/1/solo/Bash({"command":"cargo test"})"#,
+                "closed/User"
+            ]
+        );
     }
 }

@@ -7,10 +7,23 @@
 
 use onejudge::{
     CandidateAttempt, ControlAddress, ControlOutcome, Decision, FellThrough, HarnessAttribution,
-    JudgeDecision, JudgeKind, JudgeValue, JudgeVerdict, JudgedTurn, Message, NamedVerdict,
-    PartyTelemetry, Report, SessionLink, SpawnedProcess, Telemetry, TelemetryRole, ToolEvent,
-    Transcript, Usage, SCHEMA_VERSION,
+    JudgeDecision, JudgeKind, JudgePosture, JudgeValue, JudgeVerdict, JudgedTurn, Message,
+    NamedVerdict, PartyTelemetry, Report, SessionLink, SpawnedProcess, Telemetry, TelemetryRole,
+    ToolEvent, Transcript, Usage, SCHEMA_VERSION,
 };
+
+/// The posture the canonical report's `reviewer` judge ran under: `auto`, set
+/// by its own config over onejudge's read-only defaults.
+fn reviewer_posture() -> JudgePosture {
+    JudgePosture {
+        mode: "auto".into(),
+        source: "/work/oneharness.judge.toml".into(),
+        config_files: vec![
+            "/run/user/1000/onejudge/judge-defaults-v1.toml".into(),
+            "/work/oneharness.judge.toml".into(),
+        ],
+    }
+}
 
 /// The canonical report the golden is generated from: one tool-using assistant
 /// turn, one boolean verdict, and usage — exercising every embedded contract type.
@@ -89,33 +102,70 @@ fn canonical_report() -> Report {
             // An agent-side record: no judge of a panel made it, so no label.
             judge: None,
         }],
-        attribution: vec![HarnessAttribution {
-            role: TelemetryRole::Agent,
-            turn_index: 1,
-            ran: Some("claude-code".into()),
-            fell_through: vec![FellThrough {
-                harness: "codex".into(),
-                reason: "quota".into(),
-            }],
-            candidates: vec![
-                CandidateAttempt {
+        attribution: vec![
+            HarnessAttribution {
+                role: TelemetryRole::Agent,
+                turn_index: 1,
+                ran: Some("claude-code".into()),
+                fell_through: vec![FellThrough {
                     harness: "codex".into(),
-                    harness_id: "codex:work".into(),
-                    variant: Some("work".into()),
-                    model: Some("gpt-5.5".into()),
-                    status: "nonzero".into(),
-                    available: true,
-                    ran: false,
-                    failure_kind: Some("quota".into()),
-                    failure_kind_source: Some("stderr".into()),
-                    exit_code: Some(1),
-                    duration_ms: Some(4),
-                    error: Some("out of credit".into()),
-                    session_id: None,
-                    history_id: Some("019b76e0-codex".into()),
-                    usage: None,
-                },
-                CandidateAttempt {
+                    reason: "quota".into(),
+                }],
+                candidates: vec![
+                    CandidateAttempt {
+                        harness: "codex".into(),
+                        harness_id: "codex:work".into(),
+                        variant: Some("work".into()),
+                        model: Some("gpt-5.5".into()),
+                        status: "nonzero".into(),
+                        available: true,
+                        ran: false,
+                        failure_kind: Some("quota".into()),
+                        failure_kind_source: Some("stderr".into()),
+                        exit_code: Some(1),
+                        duration_ms: Some(4),
+                        error: Some("out of credit".into()),
+                        session_id: None,
+                        history_id: Some("019b76e0-codex".into()),
+                        usage: None,
+                    },
+                    CandidateAttempt {
+                        harness: "claude-code".into(),
+                        harness_id: "claude-code".into(),
+                        variant: None,
+                        model: None,
+                        status: "ok".into(),
+                        available: true,
+                        ran: true,
+                        failure_kind: None,
+                        failure_kind_source: None,
+                        exit_code: Some(0),
+                        duration_ms: Some(25),
+                        error: None,
+                        session_id: Some("native-agent-1".into()),
+                        history_id: Some("019b76e0-history".into()),
+                        usage: Some(Usage {
+                            input_tokens: Some(8),
+                            output_tokens: Some(2),
+                            cache_read_tokens: Some(4),
+                            cache_write_tokens: Some(1),
+                            cost_usd: Some(0.01),
+                        }),
+                    },
+                ],
+                history_file: Some("/state/oneharness/history/run-1-skill.jsonl".into()),
+                judge: None,
+                posture: None,
+            },
+            // The v14 addition: an evaluator judge-side call records the posture it
+            // ran under — here a judge whose own config granted `auto` over
+            // onejudge's read-only defaults — and every layer it was read from.
+            HarnessAttribution {
+                role: TelemetryRole::Judge,
+                turn_index: 1,
+                ran: Some("claude-code".into()),
+                fell_through: vec![],
+                candidates: vec![CandidateAttempt {
                     harness: "claude-code".into(),
                     harness_id: "claude-code".into(),
                     variant: None,
@@ -126,22 +176,17 @@ fn canonical_report() -> Report {
                     failure_kind: None,
                     failure_kind_source: None,
                     exit_code: Some(0),
-                    duration_ms: Some(25),
+                    duration_ms: Some(10),
                     error: None,
-                    session_id: Some("native-agent-1".into()),
-                    history_id: Some("019b76e0-history".into()),
-                    usage: Some(Usage {
-                        input_tokens: Some(8),
-                        output_tokens: Some(2),
-                        cache_read_tokens: Some(4),
-                        cache_write_tokens: Some(1),
-                        cost_usd: Some(0.01),
-                    }),
-                },
-            ],
-            history_file: Some("/state/oneharness/history/run-1-skill.jsonl".into()),
-            judge: None,
-        }],
+                    session_id: None,
+                    history_id: None,
+                    usage: None,
+                }],
+                history_file: None,
+                judge: Some("reviewer".into()),
+                posture: Some(reviewer_posture()),
+            },
+        ],
     });
     // The v12 addition: one entry per supervisor turn, each judge of the panel
     // attributed by label and kind with the wire token of what it decided. Both
@@ -153,6 +198,8 @@ fn canonical_report() -> Report {
     report.judge_decisions = vec![JudgedTurn {
         turn: 1,
         decisions: vec![
+            // The v14 additions: the posture the judge ran under and the layer
+            // that set it, and the tool events its harness reported deciding.
             JudgeDecision {
                 judge: "reviewer".into(),
                 kind: "oneharness".into(),
@@ -160,6 +207,15 @@ fn canonical_report() -> Report {
                 reason: "a git commit ran".into(),
                 labels: Default::default(),
                 run_id: None,
+                posture: Some(reviewer_posture()),
+                events: vec![ToolEvent {
+                    kind: "tool_call".into(),
+                    name: Some("Bash".into()),
+                    input: Some(serde_json::json!({"command": "git log --oneline -1"})),
+                    output: None,
+                    index: 0,
+                    tool_call_id: Some("toolu_judge".into()),
+                }],
             },
             JudgeDecision {
                 judge: "command".into(),
@@ -168,6 +224,8 @@ fn canonical_report() -> Report {
                 reason: "the commit script passed".into(),
                 labels: Default::default(),
                 run_id: None,
+                posture: None,
+                events: Vec::new(),
             },
             // The v13 addition: an llmlint judge's decision links to the run
             // behind it — the labels that run was passed and the llmlint history
@@ -182,6 +240,8 @@ fn canonical_report() -> Report {
                     .map(|(key, value)| (key.to_string(), value.to_string()))
                     .collect(),
                 run_id: Some("20260929T064026Z-c80a9".into()),
+                posture: None,
+                events: Vec::new(),
             },
         ],
     }];
@@ -226,19 +286,19 @@ fn canonical_report() -> Report {
     report
 }
 
-const EXAMPLE_GOLDEN: &str = include_str!("golden/report.example-v13.json");
+const EXAMPLE_GOLDEN: &str = include_str!("golden/report.example-v14.json");
 #[cfg(feature = "sdk-schema")]
-const SCHEMA_GOLDEN: &str = include_str!("golden/report.schema-v13.json");
+const SCHEMA_GOLDEN: &str = include_str!("golden/report.schema-v14.json");
 
 #[test]
-fn report_matches_the_golden_example_v13() {
-    assert_eq!(SCHEMA_VERSION, 13, "golden is for schema v13");
+fn report_matches_the_golden_example_v14() {
+    assert_eq!(SCHEMA_VERSION, 14, "golden is for schema v14");
     let actual = serde_json::to_string_pretty(&canonical_report()).unwrap();
     assert_eq!(
         actual.trim(),
         EXAMPLE_GOLDEN.trim(),
         "the Report wire form changed. If this is intentional, bump SCHEMA_VERSION \
-         and update the v13 contract goldens. Actual serialization:\n{actual}"
+         and update the v14 contract goldens. Actual serialization:\n{actual}"
     );
 }
 
@@ -284,7 +344,7 @@ fn the_contract_doc_states_the_version_this_build_stamps() {
 
 #[cfg(feature = "sdk-schema")]
 #[test]
-fn generated_report_schema_matches_the_schema_v13_golden() {
+fn generated_report_schema_matches_the_schema_v14_golden() {
     let actual = serde_json::to_value(onejudge::sdk_schema::bundle().report).unwrap();
     let golden: serde_json::Value = serde_json::from_str(SCHEMA_GOLDEN).unwrap();
     assert_eq!(

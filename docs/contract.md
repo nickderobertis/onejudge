@@ -9,7 +9,7 @@ and re-export, so onejudge — not its consumers — owns the shape of a judged 
 
 ```jsonc
 {
-  "schema_version": 13,                 // bump on any wire change
+  "schema_version": 14,                 // bump on any wire change
   "transcript": {
     "messages": [
       { "role": "user", "content": "commit the fix" },
@@ -36,7 +36,11 @@ and re-export, so onejudge — not its consumers — owns the shape of a judged 
   "settled_reason": "…gave no next instruction…",   // omitted unless the run settled instead (see below)
   "judge_decisions": [                  // omitted when empty: only a JudgePanel records these (see below)
     { "turn": 1, "decisions": [        // one entry per supervisor turn, in turn order
-        { "judge": "reviewer", "kind": "oneharness", "decision": "done", "reason": "a git commit ran" },
+        { "judge": "reviewer", "kind": "oneharness", "decision": "done", "reason": "a git commit ran",
+          "posture": { "mode": "auto", "source": "/work/oneharness.judge.toml",   // omitted unless the judge set a mode (oneharness)
+                       "config_files": ["…/onejudge/judge-defaults-v1.toml", "/work/oneharness.judge.toml"] },
+          "events": [ { "kind": "tool_call", "name": "Bash",                        // omitted unless the judge asked for events
+                        "input": { "command": "git log --oneline -1" }, "index": 0 } ] },
         { "judge": "command", "kind": "command", "decision": "done", "reason": "the commit script passed" },
         { "judge": "lint", "kind": "llmlint", "decision": "done", "reason": "0 failed, 4 passed, 0 skipped, 0 not relevant",
           "labels": { "judge": "lint", "session": "run-1", "turn": "1" }, // omitted unless the judge's run was labelled (llmlint)
@@ -72,6 +76,7 @@ and re-export, so onejudge — not its consumers — owns the shape of a judged 
         ],
         "history_file": "/state/oneharness/history/run-1-skill.jsonl"
         // "judge": "reviewer"         // only on a judge-side call made by one judge of a panel of several
+        // "posture": { … }            // only on an evaluator judge-side call: as on its decision
       }
     ]
   },
@@ -202,6 +207,20 @@ on an `error` decision too whenever known; `run_id` is absent when llmlint wrote
 no pointer (history disabled, or the run died before recording). See
 [judges.md](judges.md#the-llmlint-judge).
 
+**v14** added two more optional keys to a decision, both omitted when absent, so
+every decision that sets no mode and asked for no events is unchanged. `posture`
+is what an evaluator `oneharness` judge ran under: `mode` (the effective
+oneharness permission mode), `source` (the layer that set it — onejudge's
+judge-side defaults file, the judge's own config, a discovered user or project
+file, `environment` for an `ONEHARNESS_*` override, or `default`) and
+`config_files` (every layer read, in order). It is resolved over the very config
+list the call passed, with the linked core's own loader, so it names the file
+`oneharness config` attributes the mode to; a judge left at its default reads
+`read-only` from the defaults file. `events` is the tool events that judge's
+harness reported deciding, when it asked for them (`events:` on the judge, on by
+default for a writable posture). The same `posture` rides each evaluator call's
+`telemetry.attribution[]` entry. See [judges.md](judges.md#posture-what-a-judge-may-do).
+
 The same label rides
 `telemetry.attribution[].judge`, `telemetry.sessions[].judge` and
 `processes[].judge`, set only by a panel of **more than one** judge; a panel of
@@ -218,8 +237,8 @@ its records carry pids and no group.
 ## Versioning and the drift gate
 
 The wire form is pinned by a canonical serialized example
-(`crates/onejudge/tests/golden/report.example-v13.json`) and its generated JSON
-Schema (`crates/onejudge/tests/golden/report.schema-v13.json`), both checked by
+(`crates/onejudge/tests/golden/report.example-v14.json`) and its generated JSON
+Schema (`crates/onejudge/tests/golden/report.schema-v14.json`), both checked by
 `tests/contract.rs`. Any change to the serialized shape — a renamed field, a new
 key, a changed default — fails that test, so it can only land as a **deliberate**
 edit that also bumps `SCHEMA_VERSION` and updates both goldens. Downstream SDKs
@@ -278,7 +297,7 @@ attribution for. So `onejudge run --format json` writes a versioned
 
 ```jsonc
 {
-  "schema_version": 13,
+  "schema_version": 14,
   "error": { "message": "run failed: provider error (supervise[command]): …", "kind": "protocol" },
   "telemetry": { /* as above, including `attribution` */ },
   "processes": [ /* what the failed run had already spawned, as below */ ],
@@ -287,7 +306,7 @@ attribution for. So `onejudge run --format json` writes a versioned
 ```
 
 Under `--stream` the same document goes to **stderr** as one compact JSON line —
-stdout there is the `event* result EOF` protocol (`docs/streaming.md`) and stays
+stdout there is the `(event | judge_tool)* result EOF` protocol (`docs/streaming.md`) and stays
 exactly as documented. The Python SDK parses whichever one this run wrote and
 attaches it to `OneJudgeProcessError.failure`.
 

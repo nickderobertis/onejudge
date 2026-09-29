@@ -81,13 +81,24 @@ because they are short and single-shot.
 ## Outbound: `onejudge run --stream`
 
 `onejudge run --format json --stream` republishes the run on **stdout** in the same
-two envelopes, so an SDK can watch it live:
+two envelopes, plus a third for what a judge did while deciding, so an SDK can
+watch it live — the grammar is `(event | judge_tool)* result EOF`:
 
 ```console
 $ onejudge run onejudge.yaml --format json --stream
 {"type":"event","turn":1,"event":{"kind":"tool_call","name":"bash","input":{"command":"git commit -m fix"},"index":0}}
-{"type":"result","report":{"schema_version":7,…}}
+{"type":"judge_tool","turn":1,"judge":"reviewer","event":{"kind":"tool_call","name":"Bash","input":{"command":"cargo test"},"index":0}}
+{"type":"result","report":{"schema_version":14,…}}
 ```
+
+A `judge_tool` line is `Observation::JudgeTool` serialized: the turn the
+supervisor decision belongs to, the judge's label (a bare provider's own,
+`oneharness`) and the same `event` payload an `event` line carries. Only a judge
+that asked for events writes one — `events:` on the judge, on by default when its
+posture can change the tree ([judges.md](judges.md#posture-what-a-judge-may-do))
+— so a run whose judges are all read-only writes exactly the two envelopes it
+always did. A judge's events arrive when its decision does (a judge-side call is
+buffered), before that decision's `result`.
 
 The outbound `event` line adds `turn` — the 1-based assistant-turn index within the
 run, which the provider upstream has no notion of. `report` is byte-for-byte the
@@ -136,7 +147,9 @@ let outcome = engine.run_streaming(&conversation, &mut |event| {
 
 **Python** — pass `on_event` to `OneJudge.run`. The SDK adds `--stream`, reads the
 NDJSON as it arrives, validates each line against the generated contract, and calls
-back per event; the terminal report becomes the ordinary `RunResult`.
+back per event; the terminal report becomes the ordinary `RunResult`. Pass
+`on_judge_tool` to be called back per `judge_tool` line the same way (either
+handler streams the run); a line neither handler wants is still validated.
 
 ```python
 from onejudge_sdk import OneJudge, StreamEvent
@@ -148,7 +161,8 @@ result = await OneJudge().run(config, "do the work", on_event=watch)
 ```
 
 The SDK enforces the same grammar outbound that onejudge enforces inbound: a line
-it cannot model — bad JSON, an unknown `type`, a report that fails the contract, a
+it cannot model — bad JSON, an unknown `type` (an SDK older than the `judge_tool`
+line is one: it refuses a run whose judge records events), a report that fails the contract, a
 stream with no terminal line, or anything written after that line — raises
 `ContractError`.
 

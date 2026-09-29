@@ -14,6 +14,7 @@ from pathlib import Path
 from onejudge_sdk import (
     ContractError,
     EventHandler,
+    JudgeTool,
     OneJudge,
     OneJudgeProcessError,
     OneJudgeTimeoutError,
@@ -266,6 +267,40 @@ class OneJudgeTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual([event["event"]["input"] for event in seen], [{"command": "git status"}])
         self.assertTrue(result.completed)
+
+    async def test_judge_tool_lines_reach_their_own_handler_and_are_validated(self) -> None:
+        """A judge's tool events are delivered apart from the worker's, typed."""
+        client = OneJudge(
+            executable=sys.executable,
+            executable_args=(str(FIXTURE),),
+            env={"ONEJUDGE_SDK_FIXTURE_MODE": "judge-tool-stream"},
+        )
+        events: list[StreamEvent] = []
+        tools: list[JudgeTool] = []
+        result = await client.run(
+            {}, "fixture task", on_event=events.append, on_judge_tool=tools.append
+        )
+        self.assertEqual(len(events), 1)
+        self.assertEqual([(t["turn"], t["judge"], t["event"]["name"]) for t in tools],
+                         [(1, "reviewer", "Bash")])
+        self.assertEqual(result.exit_code, 0)
+        # Either handler alone streams the run; the other kind of line is still
+        # read and validated, just not handed to anyone.
+        only_judge: list[JudgeTool] = []
+        await client.run({}, "fixture task", on_judge_tool=only_judge.append)
+        self.assertEqual(len(only_judge), 1)
+        await client.run({}, "fixture task", on_event=lambda _event: None)
+        bad = OneJudge(
+            executable=sys.executable,
+            executable_args=(str(FIXTURE),),
+            env={"ONEJUDGE_SDK_FIXTURE_MODE": "bad-judge-tool"},
+        )
+        with self.assertRaises(ContractError) as raised:
+            await bad.run({}, "fixture task", on_event=lambda _event: None)
+        self.assertIn("invalid onejudge judge tool event", str(raised.exception))
+        with self.assertRaises(ContractError):
+            # Deliberately invalid: exercises the boundary check.
+            await client.run({}, "task", on_judge_tool="nope")  # type: ignore[arg-type]
 
     async def test_malformed_stream_lines_are_typed_contract_errors(self) -> None:
         """Reject an unmodelled envelope and a stream with no terminal line."""

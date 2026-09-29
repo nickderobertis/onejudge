@@ -81,6 +81,10 @@ impl<S: Provider, J: Provider> Provider for SplitProvider<S, J> {
         self.judge.take_judge_link()
     }
 
+    fn take_judge_tools(&self) -> Vec<crate::JudgeTools> {
+        self.judge.take_judge_tools()
+    }
+
     fn invocation_telemetry(&self) -> Vec<crate::telemetry::InvocationTelemetry> {
         let mut records = self.skill.invocation_telemetry();
         records.extend(self.judge.invocation_telemetry());

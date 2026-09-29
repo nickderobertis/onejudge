@@ -1,0 +1,91 @@
+{
+  "harness": [
+    {
+      "argv": [
+        "-p",
+        "do it [[record-harness:{{RUN}}/harness.jsonl]] [[evaluate]]",
+        "--permission-mode",
+        "dontAsk",
+        "--append-system-prompt",
+        "[[reply:done]]",
+        "--output-format",
+        "stream-json",
+        "--verbose"
+      ],
+      "stdin": ""
+    },
+    {
+      "argv": [
+        "-p",
+        "You are the simulated USER and completion supervisor for an AI agent.\n\nOriginal task:\ndo it [[record-harness:{{RUN}}/harness.jsonl]] [[evaluate]]\n\nSupervisor persona:\na reviewer\n\nCompletion criterion:\nthe work is done\n\nEVIDENCE CONTRACT (READ-ONLY, ENFORCED)\n`[tool]` lines are abbreviated summaries; absence there is not evidence of absence. Only read-only tools may inspect files, git state, and full history; no change is permitted, and this restriction is enforced. Restrictive evaluators must use file-reading or glob tools directly, never a shell command. Before the final answer you may request exactly `{\"tool\":\"git_status\"}` or `{\"tool\":\"git_diff\"}`; no other member is allowed.\nWorktree: .\nHistory files (exact producer-returned paths):\n  - {{HISTORY_FILE}}\n\nConversation transcript (tool actions are compact normalized summaries, never raw dumps):\nUser: do it [[record-harness:{{RUN}}/harness.jsonl]] [[evaluate]]\nAssistant: done\n\nReturn ONLY one JSON object. Exactly one of these shapes is valid:\n{\"completion\":true,\"reason\":\"<concise reason>\"}\n{\"completion\":false,\"message\":\"<concrete, actionable next instruction>\",\"reason\":\"<optional concise reason>\"}\n\n`message` is handed to the agent VERBATIM as its next user turn, and it is the only thing the agent receives: it cannot see this decision, your reason, or anything else you were shown. So `completion:false` obliges you to say what to do next — name the concrete next action in the imperative, with enough detail to act on it without further context. \"Not done\" with no message leaves the agent no path forward, since there is no default next turn to fall back on, so an empty or missing `message` is not a valid answer. If you cannot name a next action, the work is done: answer `completion:true` with the reason instead.",
+        "--permission-mode",
+        "bypassPermissions",
+        "--tools",
+        "Read",
+        "Grep",
+        "Glob",
+        "WebFetch",
+        "WebSearch",
+        "--output-format",
+        "stream-json",
+        "--verbose"
+      ],
+      "stdin": ""
+    },
+    {
+      "argv": [
+        "-p",
+        "You are a strict, careful evaluator of an AI assistant's behavior.\n\nTranscript (assistant tool actions are shown as `[tool]` lines):\nUser: do it [[record-harness:{{RUN}}/harness.jsonl]] [[evaluate]]\nAssistant: done\n\nEVIDENCE CONTRACT (READ-ONLY, ENFORCED)\n`[tool]` lines are abbreviated summaries; absence there is not evidence of absence. Only read-only tools may inspect files, git state, and full history; no change is permitted, and this restriction is enforced. Restrictive evaluators must use file-reading or glob tools directly, never a shell command. Before the final answer you may request exactly `{\"tool\":\"git_status\"}` or `{\"tool\":\"git_diff\"}`; no other member is allowed.\nWorktree: .\nHistory files (exact producer-returned paths):\n  - {{HISTORY_FILE}}\n\nCriterion: the work is done\n\nDecide whether the criterion is satisfied. Tool transport events may occur before answer text. The final non-empty answer-text line must be exactly one JSON object; nothing may follow it:\n{\"value\": true or false, \"reason\": \"<one short sentence>\"}",
+        "--permission-mode",
+        "bypassPermissions",
+        "--tools",
+        "Read",
+        "Grep",
+        "Glob",
+        "WebFetch",
+        "WebSearch",
+        "--output-format",
+        "stream-json",
+        "--verbose"
+      ],
+      "stdin": ""
+    },
+    {
+      "argv": [
+        "-p",
+        "You are a strict, careful evaluator of an AI assistant's behavior.\n\nTranscript (assistant tool actions are shown as `[tool]` lines):\nUser: do it [[record-harness:{{RUN}}/harness.jsonl]] [[evaluate]]\nAssistant: done\n\nEVIDENCE CONTRACT (READ-ONLY, ENFORCED)\n`[tool]` lines are abbreviated summaries; absence there is not evidence of absence. Only read-only tools may inspect files, git state, and full history; no change is permitted, and this restriction is enforced. Restrictive evaluators must use file-reading or glob tools directly, never a shell command. Before the final answer you may request exactly `{\"tool\":\"git_status\"}` or `{\"tool\":\"git_diff\"}`; no other member is allowed.\nWorktree: .\nHistory files (exact producer-returned paths):\n  - {{HISTORY_FILE}}\n\nCriterion: done\n\nDecide whether the criterion is satisfied. Tool transport events may occur before answer text. The final non-empty answer-text line must be exactly one JSON object; nothing may follow it:\n{\"value\": true or false, \"reason\": \"<one short sentence>\"}",
+        "--permission-mode",
+        "bypassPermissions",
+        "--tools",
+        "Read",
+        "Grep",
+        "Glob",
+        "WebFetch",
+        "WebSearch",
+        "--output-format",
+        "stream-json",
+        "--verbose"
+      ],
+      "stdin": ""
+    },
+    {
+      "argv": [
+        "-p",
+        "You are a careful evaluator of an AI assistant's behavior.\n\nTranscript (assistant tool actions are shown as `[tool]` lines):\nUser: do it [[record-harness:{{RUN}}/harness.jsonl]] [[evaluate]]\nAssistant: done\n\nEVIDENCE CONTRACT (READ-ONLY, ENFORCED)\n`[tool]` lines are abbreviated summaries; absence there is not evidence of absence. Only read-only tools may inspect files, git state, and full history; no change is permitted, and this restriction is enforced. Restrictive evaluators must use file-reading or glob tools directly, never a shell command. Before the final answer you may request exactly `{\"tool\":\"git_status\"}` or `{\"tool\":\"git_diff\"}`; no other member is allowed.\nWorktree: .\nHistory files (exact producer-returned paths):\n  - {{HISTORY_FILE}}\n\nAssessment request: anything left?\n\nAnswer the assessment request concisely in free-running text. Return only the assessment text.",
+        "--permission-mode",
+        "bypassPermissions",
+        "--tools",
+        "Read",
+        "Grep",
+        "Glob",
+        "WebFetch",
+        "WebSearch",
+        "--output-format",
+        "stream-json",
+        "--verbose"
+      ],
+      "stdin": ""
+    }
+  ],
+  "oneharness": []
+}

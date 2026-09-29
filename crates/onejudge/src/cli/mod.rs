@@ -32,10 +32,11 @@ const DEFAULT_CONFIG: &str = "onejudge.yaml";
 pub const STARTER_CONFIG: &str = include_str!("starter.yaml");
 
 /// The oldest `oneharness` **CLI** this build works against, as told to an
-/// operator: the first release that both writes the report schema this crate's
-/// linked `oneharness-core` parses (so the report it produces is one this build
-/// reads) and accepts `run --format json`, which the spawning seam passes on
-/// every turn (`oneharness/turn.rs`).
+/// operator: the first release that accepts a repeated `run --config`, which an
+/// evaluator judge's call passes (onejudge's judge-side defaults first, then the
+/// judge's own config — `oneharness/posture.rs`), and that writes the report
+/// schema this crate's linked `oneharness-core` parses (so the report it produces
+/// is one this build reads).
 ///
 /// One source for every message the CLI prints, and drift-gated in this module's
 /// tests against the linked core's own report schema and against the prose that
@@ -45,18 +46,18 @@ pub const STARTER_CONFIG: &str = include_str!("starter.yaml");
 /// It is the CLI's own version, which is **not** the linked core's, and the two
 /// are deliberately **not** ordered against each other. The crates version
 /// independently — there is no `oneharness` 0.6.13, the 0.6.14 CLI carried
-/// `oneharness-core` 0.6.13, and the 0.14.0 CLI carries `oneharness-core` 0.15.0
+/// `oneharness-core` 0.6.13, and the 0.18.0 CLI carries `oneharness-core` 0.20.0
 /// — so naming the core version here would tell an operator to install a CLI
 /// that was never published, and holding the CLI to embed a core at least as new
 /// as the linked one would move the floor on every relink whether or not the
 /// report changed. The linked core may be newer than the one this floor embeds
 /// so long as both write the same report schema: what ties the two is
 /// [`MIN_ONEHARNESS_REPORT_SCHEMA`], and the gate below is written against that.
-const MIN_ONEHARNESS: &str = "0.14.0";
+const MIN_ONEHARNESS: &str = "0.18.0";
 
 /// The oneharness **report schema** the [`MIN_ONEHARNESS`] CLI writes, read off
-/// the `oneharness-core` that release embeds (`oneharness` 0.14.0 depends on
-/// `^0.15.0`, whose `domain::report::SCHEMA_VERSION` is `0.11`). The gate holds
+/// the `oneharness-core` that release embeds (`oneharness` 0.18.0 depends on
+/// `^0.20.0`, whose `domain::report::SCHEMA_VERSION` is `0.11`). The gate holds
 /// the linked core's declared schema equal to it (see [`MIN_ONEHARNESS`] for why
 /// the schema, not a version, is what ties the two), so a relink that moves the
 /// report fails until the floor and this constant follow.
@@ -68,13 +69,16 @@ const MIN_ONEHARNESS: &str = "0.14.0";
 const MIN_ONEHARNESS_REPORT_SCHEMA: &str = "0.11";
 
 /// The oldest `oneharness-core` this crate can be built against: the release
-/// that writes a per-run history pointer line and reads it back typed, which a
-/// downstream engine takes only through this crate's requirement. The manifest
+/// whose run request and config loader take an **ordered list** of config files,
+/// layered later-over-earlier, which is how an evaluator judge's defaults become
+/// defaults rather than overrides — a downstream engine takes it only through this
+/// crate's requirement. It also carries the per-run history pointer line (0.17.0).
+/// The manifest
 /// requirement is held to it by the gate below, and — so the number cannot lie —
 /// the symbols that arrived in it are named by a test in this module, which a
 /// lock resolved below it fails to compile.
 #[cfg(test)]
-const MIN_ONEHARNESS_CORE: &str = "0.17.0";
+const MIN_ONEHARNESS_CORE: &str = "0.20.0";
 
 /// Errors surfaced by the CLI. Config/validation problems are separated from IO
 /// and engine failures so the entrypoint can exit with a fitting code.
@@ -308,7 +312,8 @@ fn run_task(args: RunArgs) -> Result<i32, CliError> {
 }
 
 /// Drive `plan` while republishing it on stdout as the streamed protocol: one
-/// NDJSON `event` line per tool event the instant it is observed, then the
+/// NDJSON `event` line per tool event the instant it is observed, a `judge_tool`
+/// line per tool event a judge that asked for them reported deciding, then the
 /// terminal `result` line carrying the versioned [`Report`].
 ///
 /// Each line is flushed as it is written — a consumer reading this pipe to watch a
@@ -316,15 +321,23 @@ fn run_task(args: RunArgs) -> Result<i32, CliError> {
 fn run_streamed(plan: Plan) -> Result<i32, CliError> {
     let mut stdout = std::io::stdout();
     let mut failure = None;
-    let summary = match run_plan_streaming_reporting_failure(plan, &mut |event| {
-        if let Err(e) = write_line(&mut stdout, &StreamLine::Event(event)) {
-            // Stop the run rather than keep burning harness calls into a pipe that
-            // no longer accepts them (a consumer that hung up mid-turn).
-            failure = Some(e);
-            return ControlFlow::Break(());
-        }
-        ControlFlow::Continue(())
-    }) {
+    let summary = match execute(
+        plan,
+        Some(&mut |observation: &Observation<'_>| {
+            let line = match observation {
+                Observation::Tool(event) => StreamLine::Event(event),
+                Observation::JudgeTool(tool) => StreamLine::JudgeTool(tool),
+                _ => return ControlFlow::Continue(()),
+            };
+            if let Err(e) = write_line(&mut stdout, &line) {
+                // Stop the run rather than keep burning harness calls into a pipe that
+                // no longer accepts them (a consumer that hung up mid-turn).
+                failure = Some(e);
+                return ControlFlow::Break(());
+            }
+            ControlFlow::Continue(())
+        }),
+    ) {
         Ok(summary) => summary,
         Err(run_failure) => {
             // stdout is the `event* result EOF` protocol, so a failure cannot be
@@ -352,14 +365,20 @@ fn run_streamed(plan: Plan) -> Result<i32, CliError> {
 
 /// One line of the outbound stream — the same two `type`-tagged envelopes onejudge
 /// accepts *from* a streamed provider, so a consumer speaks one protocol in both
-/// directions. An `Event` line is the `"type"` tag wrapped around exactly
-/// [`StreamEvent`]'s fields; the terminal `Result` line's `report` is byte-for-byte
-/// the versioned [`Report`] a buffered `--format json` run prints.
+/// directions, plus the judge's own tool events. An `Event` line is the `"type"`
+/// tag wrapped around exactly [`StreamEvent`]'s fields, a `judge_tool` line around
+/// exactly [`JudgeTool`](crate::JudgeTool)'s (the same `event` payload, with the
+/// judge's label); the terminal `Result` line's `report` is byte-for-byte the
+/// versioned [`Report`] a buffered `--format json` run prints.
 #[derive(serde::Serialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 enum StreamLine<'a> {
     Event(&'a StreamEvent<'a>),
-    Result { report: &'a Report },
+    #[serde(rename = "judge_tool")]
+    JudgeTool(&'a crate::JudgeTool<'a>),
+    Result {
+        report: &'a Report,
+    },
 }
 
 /// Serialize one NDJSON line and flush it — a consumer watching a long turn learns
@@ -1109,15 +1128,32 @@ mod tests {
     use crate::Transcript;
 
     #[test]
-    fn the_linked_core_is_at_least_the_release_carrying_the_history_pointer() {
+    fn the_linked_core_is_at_least_the_release_layering_a_config_list() {
         // The manifest requirement is the one thing that constrains the build;
         // this holds it at the floor by number, and the test after it by name.
         let pinned = pinned_oneharness_core();
         assert!(
             version_parts(&pinned) >= version_parts(MIN_ONEHARNESS_CORE),
             "the workspace requires oneharness-core {pinned}, below the {MIN_ONEHARNESS_CORE} \
-             floor whose history pointer line downstream engines take through this crate"
+             floor whose layered config list downstream engines take through this crate"
         );
+        // Named, not numbered: a config *list* on both the request and the loader
+        // arrived in 0.20.0, so a lock resolved below it fails to compile this.
+        let request = oneharness_core::io::run::RunRequest {
+            config: vec![std::path::PathBuf::from("defaults.toml")],
+            ..Default::default()
+        };
+        assert_eq!(request.config.len(), 1);
+        type Layers = Vec<(String, oneharness_core::domain::config::FileConfig)>;
+        type LoadLayers = fn(
+            &[std::path::PathBuf],
+            bool,
+            &std::path::Path,
+        ) -> Result<Layers, oneharness_core::errors::OneharnessError>;
+        let layers: LoadLayers = oneharness_core::io::config::load_layers;
+        assert!(layers(&[], true, std::path::Path::new("."))
+            .unwrap()
+            .is_empty());
         // Named, not numbered: `read_pointers` and `HistoryPointer` arrived in
         // 0.17.0, so a lock resolved below that release fails to compile this
         // test rather than linking a core that writes no pointer line. The
@@ -1286,6 +1322,8 @@ mod tests {
                         reason: "looks right".into(),
                         labels: std::collections::BTreeMap::new(),
                         run_id: None,
+                        posture: None,
+                        events: Vec::new(),
                     },
                     crate::JudgeDecision {
                         judge: "lint".into(),
@@ -1294,6 +1332,8 @@ mod tests {
                         reason: String::new(),
                         labels: std::collections::BTreeMap::new(),
                         run_id: None,
+                        posture: None,
+                        events: Vec::new(),
                     },
                 ],
             },
@@ -1306,6 +1346,8 @@ mod tests {
                     reason: "clean".into(),
                     labels: std::collections::BTreeMap::new(),
                     run_id: None,
+                    posture: None,
+                    events: Vec::new(),
                 }],
             },
         ];
