@@ -3776,6 +3776,29 @@ fn harness_toml(dir: &Path, top: &str) -> String {
     )
 }
 
+/// Spell every path under the `{{RUN}}` placeholder with `/`, so a normalized
+/// record reads the same on Windows, where the path after the run directory
+/// is joined with `\`, as on a POSIX host. A path ends at whitespace, a quote,
+/// or the bracket, comma or parenthesis that closes the text around it.
+fn forward_run_paths(text: &str) -> String {
+    if std::path::MAIN_SEPARATOR == '/' {
+        return text.to_string();
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = rest.find("{{RUN}}") {
+        let (before, tail) = rest.split_at(start + "{{RUN}}".len());
+        out.push_str(before);
+        let end = tail
+            .find(|c: char| c.is_whitespace() || "\"'],)".contains(c))
+            .unwrap_or(tail.len());
+        out.push_str(&tail[..end].replace('\\', "/"));
+        rest = &tail[end..];
+    }
+    out.push_str(rest);
+    out
+}
+
 /// One posture journey's working directory — the run's cwd and so the agent's
 /// worktree — and what it ran.
 struct PostureRun {
@@ -4058,14 +4081,15 @@ impl PostureRun {
         }
     }
 
-    /// Replace every per-run spelling in `text` with a placeholder: each history
-    /// file (named by a timestamp and a pid), then the run directory, then the
-    /// harness double's path.
+    /// Replace every per-run spelling in `text` with a placeholder: the run
+    /// directory (its subpaths spelled with `/`), then each history file under
+    /// it (named by a timestamp and a pid), then the harness doubles' paths.
     fn normalize(&self, text: &str) -> String {
-        let history = format!("{}/history/", self.dir.display());
+        let text = forward_run_paths(&text.replace(&self.dir.display().to_string(), "{{RUN}}"));
+        let history = "{{RUN}}/history/";
         let mut out = String::new();
-        let mut rest = text;
-        while let Some(start) = rest.find(&history) {
+        let mut rest = text.as_str();
+        while let Some(start) = rest.find(history) {
             out.push_str(&rest[..start]);
             let tail = &rest[start..];
             let end = tail
@@ -4075,8 +4099,7 @@ impl PostureRun {
             rest = &tail[end..];
         }
         out.push_str(rest);
-        out.replace(&self.dir.display().to_string(), "{{RUN}}")
-            .replace(fake_harness_bin(), "{{HARNESS}}")
+        out.replace(fake_harness_bin(), "{{HARNESS}}")
             .replace(&fake_oneharness_bin(), "{{ONEHARNESS}}")
     }
 
