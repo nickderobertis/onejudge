@@ -304,7 +304,8 @@ impl LlmlintProvider {
 
     /// One `llmlint lint` run over `worktree`, under `op` (`supervise` or
     /// `judge`), deciding on assistant turn `turn`, recorded on this provider's
-    /// telemetry and process records and linked through [`Self::link`].
+    /// telemetry and process records, and linked to its history record for
+    /// [`Provider::take_judge_link`].
     ///
     /// The exact argv is the contract in `docs/judges.md`:
     /// `<bin> lint --cwd <worktree> --format human --color never --progress never
