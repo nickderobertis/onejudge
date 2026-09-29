@@ -4619,3 +4619,38 @@ fn an_observed_run_delivers_a_judges_tool_events_after_its_turn_opens_and_before
         );
     }
 }
+
+#[test]
+fn a_bare_oneharness_providers_judge_publishes_its_events_under_its_own_label() {
+    // Not a panel: no decisions are recorded, and the judge's events still reach
+    // `--stream` as `judge_tool` lines, under the provider's label.
+    for seam in Seam::BOTH {
+        let run = PostureRun::new("bare", seam);
+        let judge = run.judge_config("judge.toml", "mode = \"auto\"\n");
+        let provider = format!(
+            "provider:\n  kind: oneharness\n{}  {}\n",
+            seam.bin_line(2),
+            judge_config_line(&judge)
+        );
+        let outcome = run.run(&provider, " [[judge-event:cargo test]]", &["--stream"]);
+        assert_eq!(outcome.code, Some(0), "{seam:?}: {}", outcome.stderr);
+        let lines = outcome.stream_lines();
+        let tools: Vec<&serde_json::Value> =
+            lines.iter().filter(|l| l["type"] == "judge_tool").collect();
+        assert!(!tools.is_empty(), "{seam:?}: {lines:?}");
+        assert!(tools
+            .iter()
+            .all(|t| t["judge"] == "oneharness" && t["turn"] == 1));
+        let report = outcome.report();
+        assert!(report.get("judge_decisions").is_none(), "{report}");
+        // The posture still rides the judge side's attribution.
+        let judged: Vec<&serde_json::Value> = report["telemetry"]["attribution"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|a| a["role"] == "judge")
+            .collect();
+        assert!(!judged.is_empty());
+        assert!(judged.iter().all(|a| a["posture"]["mode"] == "auto"));
+    }
+}

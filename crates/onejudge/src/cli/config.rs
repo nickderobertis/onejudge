@@ -1672,6 +1672,126 @@ user:
     }
 
     #[test]
+    fn a_judges_posture_settings_resolve_onto_its_spec_and_nowhere_else() {
+        let plan = Config::from_yaml(
+            "task: x\nprovider:\n  kind: split\n  allow_writable_judges: true\n  skill:\n    \
+             kind: oneharness\n  judges:\n    - kind: oneharness\n      instructions: run the \
+             tests\n      events: false\n    - kind: oneharness\n",
+        )
+        .unwrap()
+        .into_plan()
+        .unwrap();
+        let ProviderSpec::Split {
+            judges,
+            allow_writable_judges,
+            ..
+        } = plan.provider
+        else {
+            panic!("a split");
+        };
+        assert!(allow_writable_judges);
+        assert!(matches!(
+            &judges[0].provider,
+            ProviderSpec::Oneharness { instructions: Some(text), events: Some(false), .. }
+                if text == "run the tests"
+        ));
+        assert!(matches!(
+            &judges[1].provider,
+            ProviderSpec::Oneharness {
+                instructions: None,
+                events: None,
+                ..
+            }
+        ));
+
+        // Each belongs where it acts: a judge's own settings on a oneharness entry,
+        // the panel's permission on the split.
+        for (yaml, field) in [
+            (
+                "provider:\n  kind: command\n  command: [p]\n  instructions: x\n",
+                "instructions",
+            ),
+            (
+                "provider:\n  kind: command\n  command: [p]\n  events: true\n",
+                "events",
+            ),
+            (
+                "provider:\n  kind: oneharness\n  allow_writable_judges: true\n",
+                "allow_writable_judges",
+            ),
+            (
+                "provider:\n  kind: split\n  events: true\n  skill:\n    kind: oneharness\n  \
+                 judge:\n    kind: oneharness\n",
+                "events",
+            ),
+            (
+                "provider:\n  kind: split\n  instructions: x\n  skill:\n    kind: oneharness\n  \
+                 judge:\n    kind: oneharness\n",
+                "instructions",
+            ),
+        ] {
+            let err = Config::from_yaml(&format!("task: x\n{yaml}"))
+                .unwrap()
+                .into_plan()
+                .unwrap_err();
+            assert!(
+                matches!(&err, CliError::Config(m) if m.contains(field)),
+                "{field}: {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_panel_with_a_writable_judge_is_refused_naming_it_unless_allowed() {
+        let dir = std::env::temp_dir().join(format!("oj-writable-panel-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let auto = dir.join("auto.toml");
+        std::fs::write(&auto, "mode = \"auto\"\n").unwrap();
+        let plan_mode = dir.join("plan.toml");
+        std::fs::write(&plan_mode, "mode = \"plan\"\n").unwrap();
+        let panel = |second: &std::path::Path, allow: bool| {
+            format!(
+                "task: x\nskill: {dir:?}\nprovider:\n  kind: split\n  allow_writable_judges: {allow}\n  \
+                 skill:\n    kind: oneharness\n  judges:\n    - kind: oneharness\n      \
+                 judge_config: {plan_mode:?}\n    - kind: oneharness\n      label: fixer\n      \
+                 judge_config: {second:?}\n"
+            )
+        };
+        // `skill:` must name a SKILL.md directory; write one.
+        std::fs::write(
+            dir.join("SKILL.md"),
+            "---\nname: s\ndescription: d\n---\nbody\n",
+        )
+        .unwrap();
+        let err = Config::from_yaml(&panel(&auto, false))
+            .unwrap()
+            .into_plan()
+            .unwrap_err();
+        assert!(
+            matches!(&err, CliError::Config(m) if m.contains("judge `fixer`")
+                && m.contains("`auto`")
+                && m.contains(&auto.display().to_string())
+                && m.contains("allow_writable_judges")),
+            "{err:?}"
+        );
+        // Allowed explicitly, or no writable judge at all (`plan` changes nothing).
+        assert!(Config::from_yaml(&panel(&auto, true))
+            .unwrap()
+            .into_plan()
+            .is_ok());
+        assert!(Config::from_yaml(&panel(&plan_mode, false))
+            .unwrap()
+            .into_plan()
+            .is_ok());
+        // A single writable judge has nothing to race.
+        let single = format!(
+            "task: x\nskill: {dir:?}\nprovider:\n  kind: split\n  skill:\n    kind: oneharness\n  \
+             judge:\n    kind: oneharness\n    judge_config: {auto:?}\n"
+        );
+        assert!(Config::from_yaml(&single).unwrap().into_plan().is_ok());
+    }
+
+    #[test]
     fn split_provider_composes_two_backends() {
         let yaml = r#"
 task: x

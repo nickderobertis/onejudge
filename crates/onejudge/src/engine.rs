@@ -2384,4 +2384,101 @@ mod tests {
         assert_eq!(outcome.judge_decisions[0].decisions[0].reason, "more");
         assert_eq!(engine.judge_decisions(), outcome.judge_decisions);
     }
+
+    #[test]
+    fn a_bare_providers_judge_events_are_observed_inside_the_supervisor_turn() {
+        /// A bare (non-panel) provider whose judge side reported one tool event per
+        /// supervisor decision and records no per-judge decision.
+        struct Acting {
+            decided: std::cell::Cell<bool>,
+        }
+
+        impl Provider for Acting {
+            fn take_judge_tools(&self) -> Vec<crate::JudgeTools> {
+                vec![crate::JudgeTools {
+                    judge: "solo".into(),
+                    events: vec![ToolEvent {
+                        kind: "tool_call".into(),
+                        name: Some("Bash".into()),
+                        input: Some(serde_json::json!({"command": "cargo test"})),
+                        output: None,
+                        index: 0,
+                        tool_call_id: None,
+                    }],
+                }]
+            }
+
+            fn respond(
+                &self,
+                _: &SkillRef<'_>,
+                _: &[Message],
+                _: Option<&str>,
+            ) -> Result<AssistantTurn> {
+                Ok(assistant("working", false))
+            }
+
+            fn simulate_user(&self, _: &str, _: &[Message], _: Option<&str>) -> Result<UserTurn> {
+                unreachable!()
+            }
+
+            fn supervise(
+                &self,
+                _: &SupervisorQuery<'_>,
+                _: &[Message],
+                _: Option<&str>,
+            ) -> Result<SupervisorTurn> {
+                self.decided.set(true);
+                Ok(SupervisorTurn {
+                    outcome: SupervisorOutcome::Completed {
+                        reason: "tests pass".into(),
+                    },
+                    usage: None,
+                })
+            }
+
+            fn judge(&self, _: &JudgeQuery<'_>, _: &[Message]) -> Result<JudgeVerdict> {
+                unreachable!()
+            }
+
+            fn assess(&self, _: &str, _: &[Message]) -> Result<Assessment> {
+                unreachable!()
+            }
+        }
+
+        let provider = Acting {
+            decided: std::cell::Cell::new(false),
+        };
+        let engine = Engine::new(&provider, settings());
+        let mut seen = Vec::new();
+        engine
+            .run_observing(
+                &Conversation::multi_turn(skill(), "go", SimulatedUser::new("p").max_turns(3)),
+                &mut |observation| {
+                    seen.push(match observation {
+                        Observation::JudgeTool(t) => {
+                            format!("judge-tool/{}/{}/{}", t.turn, t.judge, t.event.summary())
+                        }
+                        Observation::JudgeDecided(d) => format!("judged/{}", d.judge),
+                        Observation::TurnOpened(o) => format!("opened/{:?}", o.role),
+                        Observation::Message(m) => format!("said/{:?}", m.role),
+                        Observation::TurnClosed(c) => format!("closed/{:?}", c.role),
+                        Observation::Tool(_) => "tool".into(),
+                    });
+                    ControlFlow::Continue(())
+                },
+            )
+            .unwrap();
+        assert!(provider.decided.get());
+        assert_eq!(
+            seen,
+            [
+                "opened/Assistant",
+                "said/Assistant",
+                "closed/Assistant",
+                "opened/User",
+                r#"judge-tool/1/solo/Bash({"command":"cargo test"})"#,
+                "closed/User"
+            ]
+        );
+    }
 }

@@ -1999,6 +1999,99 @@ mod tests {
     }
 
     #[test]
+    fn a_writable_posture_states_itself_instead_of_forbidding_a_shell() {
+        let context = EvidenceContext {
+            worktree: Some("/w"),
+            history_files: &[],
+            artifacts: &[],
+        };
+        // Read-only, named or not, is today's contract byte for byte.
+        assert_eq!(
+            evidence_prompt(context, Some("read-only")),
+            evidence_prompt(context, None)
+        );
+        for mode in ["plan", "default", "edit", "auto", "bypass"] {
+            let prompt = evidence_prompt(context, Some(mode));
+            assert!(
+                prompt.starts_with(&format!("EVIDENCE CONTRACT (MODE: {mode})\n")),
+                "{prompt}"
+            );
+            assert!(!prompt.contains("never a shell command"), "{prompt}");
+            assert!(prompt.contains(posture_of(mode)), "{prompt}");
+            // The closed requests stay offered, and the rest of the block is the
+            // same as the read-only one.
+            assert!(prompt.contains(r#"`{"tool":"git_status"}` or `{"tool":"git_diff"}`"#));
+            assert!(prompt.ends_with("Worktree: /w\nHistory files (exact producer-returned paths):\n  (none supplied)\n\n"));
+        }
+        assert!(posture_of("auto").contains("shell commands"));
+        assert!(posture_of("plan").contains("change nothing"));
+    }
+
+    #[test]
+    fn a_judges_framing_reaches_every_evaluator_prompt_and_the_default_changes_none() {
+        let transcript = transcript_with_event();
+        let messages = &transcript.messages;
+        let evidence = EvidenceContext {
+            worktree: Some("/w"),
+            history_files: &[],
+            artifacts: &[],
+        };
+        let query = JudgeQuery {
+            kind: JudgeKind::Boolean,
+            criterion: "it committed",
+            scale: None,
+        };
+        let supervisor = SupervisorQuery {
+            task: "commit",
+            persona: "reviewer",
+            done_when: None,
+            worktree: "/w",
+            history_name: "h",
+            notes: &[],
+            turn: TurnOutcome::Taken,
+            turn_index: 1,
+        };
+        // The default framing is exactly the public builders' output.
+        assert_eq!(
+            judge_prompt(&query, messages, evidence, JudgeFraming::default()),
+            build_judge_prompt_with_evidence(&query, messages, evidence)
+        );
+        assert_eq!(
+            supervisor_prompt(&supervisor, messages, evidence, JudgeFraming::default()),
+            build_supervisor_prompt_with_evidence(&supervisor, messages, evidence)
+        );
+        assert_eq!(
+            assessment_prompt("left?", messages, evidence, JudgeFraming::default()),
+            build_assessment_prompt_with_evidence("left?", messages, evidence)
+        );
+        let framing = JudgeFraming {
+            mode: Some("auto"),
+            instructions: Some("  Run the tests.  "),
+        };
+        let suffix = "\n\nInstructions for this judge:\nRun the tests.";
+        for prompt in [
+            judge_prompt(&query, messages, evidence, framing),
+            supervisor_prompt(&supervisor, messages, evidence, framing),
+            assessment_prompt("left?", messages, evidence, framing),
+        ] {
+            assert!(prompt.ends_with(suffix), "{prompt}");
+            assert!(
+                prompt.contains("EVIDENCE CONTRACT (MODE: auto)"),
+                "{prompt}"
+            );
+        }
+        // Blank instructions append nothing.
+        let blank = JudgeFraming {
+            mode: None,
+            instructions: Some("   "),
+        };
+        assert_eq!(
+            judge_prompt(&query, messages, evidence, blank),
+            build_judge_prompt_with_evidence(&query, messages, evidence)
+        );
+    }
+
+    #[test]
     fn the_evidence_tool_retry_limit_is_unchanged() {
         assert_eq!(EVIDENCE_TOOL_RETRY_LIMIT, 4);
     }
