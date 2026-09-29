@@ -279,7 +279,10 @@ fn record_invocation(path: &str, args: &[String], stdin: &str) {
         .append(true)
         .open(path)
         .expect("the harness record opens");
-    writeln!(file, "{line}").expect("the harness record is written");
+    // One write per line: a panel's judges run concurrently and append to the
+    // same record, and a line split across two writes can interleave with theirs.
+    file.write_all(format!("{line}\n").as_bytes())
+        .expect("the harness record is written");
 }
 
 /// Answer a judge-side turn in its own shape; see `[[evaluate]]`.

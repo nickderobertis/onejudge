@@ -1648,7 +1648,8 @@ mod engine {
                 .open(log)
                 .unwrap_or_else(|e| emit_error(&format!("could not open the argv log: {e}")));
             let line = serde_json::to_string(argv).expect("an argv serializes");
-            writeln!(file, "{line}")
+            // One write per line: concurrent panel judges append to the same log.
+            file.write_all(format!("{line}\n").as_bytes())
                 .unwrap_or_else(|e| emit_error(&format!("could not write the argv log: {e}")));
         }
         match argv.first().map(String::as_str) {
