@@ -3801,8 +3801,9 @@ fn forward_run_paths(text: &str) -> String {
 
 /// `path` without the `\\?\` prefix `canonicalize` gives a Windows path. The
 /// run directory is the harness's working directory, and oneharness's discovery
-/// records a file it finds there by the plain spelling the OS reports for that
-/// directory, so a verbatim run directory would never equal what was recorded.
+/// spells a file it finds there the plain way the OS reports that directory.
+/// `normalize` finds the run directory in recorded text by its spelling, so the
+/// two must be spelled alike for a recorded path to read as `{{RUN}}/...`.
 fn without_verbatim_prefix(path: std::path::PathBuf) -> std::path::PathBuf {
     match path.to_str().and_then(|p| p.strip_prefix(r"\\?\")) {
         Some(plain) if !plain.starts_with("UNC\\") => std::path::PathBuf::from(plain),
@@ -3909,6 +3910,24 @@ fn judge_config_line(path: &Path) -> String {
         "judge_config: {}",
         serde_json::to_string(&path.display().to_string()).unwrap()
     )
+}
+
+/// A path a posture records names the same file as `expected`, compared as
+/// files rather than spellings, and is spelled as a person would read it: never
+/// in the `\\?\` verbatim form Windows' `canonicalize` produces, which is the
+/// form a provenance path must not leak.
+fn assert_same_file(recorded: &serde_json::Value, expected: &Path) {
+    let recorded = recorded.as_str().expect("a path");
+    assert!(
+        !recorded.starts_with(r"\\?\"),
+        "a verbatim provenance path: {recorded}"
+    );
+    assert_eq!(
+        Path::new(recorded).canonicalize().unwrap(),
+        expected.canonicalize().unwrap(),
+        "{recorded} is not {}",
+        expected.display()
+    );
 }
 
 /// Every configured layer a posture names is a file, `environment`, or the
@@ -4305,11 +4324,11 @@ fn an_auto_judge_config_grants_the_judge_a_shell_and_records_what_it_did() {
         let decision = outcome.decision("oneharness");
         let posture = &decision["posture"];
         assert_eq!(posture["mode"], "auto", "{seam:?}");
-        assert_eq!(posture["source"], judge.display().to_string(), "{seam:?}");
+        assert_same_file(&posture["source"], &judge);
         let files = posture["config_files"].as_array().unwrap();
         assert_eq!(files.len(), 2, "{seam:?}: {files:?}");
         assert_defaults_file(&files[0]);
-        assert_eq!(files[1], judge.display().to_string());
+        assert_same_file(&files[1], &judge);
         let explained = run.explain(files);
         assert_eq!(explained["mode"]["value"], "auto");
         assert_eq!(explained["mode"]["source"], posture["source"]);
@@ -4406,12 +4425,12 @@ fn with_no_judge_config_the_discovered_files_follow_the_defaults() {
         assert_eq!(outcome.code, Some(0), "{seam:?}: {}", outcome.stderr);
         let posture = outcome.decision("oneharness")["posture"].clone();
         assert_eq!(posture["mode"], "auto", "{seam:?}");
-        assert_eq!(posture["source"], project.display().to_string(), "{seam:?}");
+        assert_same_file(&posture["source"], &project);
         let files = posture["config_files"].as_array().unwrap();
         assert_eq!(files.len(), 3, "{files:?}");
         assert_defaults_file(&files[0]);
-        assert_eq!(files[1], user.display().to_string());
-        assert_eq!(files[2], project.display().to_string());
+        assert_same_file(&files[1], &user);
+        assert_same_file(&files[2], &project);
         let explained = run.explain(files);
         assert_eq!(explained["mode"]["source"], posture["source"]);
         for call in outcome.judge_side() {
