@@ -18,7 +18,8 @@
 //! `[[event:CMD]]` adds a `bash` tool event, `[[fail:KIND]]` returns a classified
 //! `failure_kind`, `[[status:TOKEN]]` returns a terminal status that carries no
 //! `failure_kind` at all (`timeout`, `spawn-error`, `skipped`), and
-//! `[[reject-session]]` makes a `--session` run exit non-zero with oneharness's
+//! `[[reject-session]]` (in `--system` on the agent side, in the prompt on the
+//! judge side) makes a `--session` run exit non-zero with oneharness's
 //! `does not support --session` text (the graceful-retry path).
 //! `[[echo-mock-harness]]` replies with the `--mock-harness` ids the run was
 //! spawned with (`none` for an unmocked one), so the deterministic-harness
@@ -229,16 +230,6 @@ fn main() {
         emit_error("deliberate non-zero exit for the e2e error path");
     }
 
-    // Session-degradation path: mimic oneharness rejecting `--session` on a harness
-    // that exposes no session id headlessly. onejudge must retry without --session.
-    if session.is_some() && system.contains("[[reject-session]]") {
-        eprintln!(
-            "harness `goose` does not support --session: it exposes no session id \
-             headlessly, so a named handle cannot be mapped to it. supported: claude-code"
-        );
-        std::process::exit(1);
-    }
-
     let is_agent = !(prompt.contains("completion supervisor")
         || prompt.contains("role-playing the USER")
         || prompt.contains("Assessment request:")
@@ -249,6 +240,18 @@ fn main() {
     // per party — which is what lets ONE run drive both halves of a two-party tree,
     // and what makes the judge side's own socket reachable now that it has one.
     let steering = if is_agent { system } else { prompt.as_str() };
+
+    // Session-degradation path: mimic oneharness rejecting `--session` on a harness
+    // that exposes no session id headlessly. onejudge must retry without --session.
+    // Read from the steering text, so either party's harness can be the one that
+    // cannot bind a session.
+    if session.is_some() && steering.contains("[[reject-session]]") {
+        eprintln!(
+            "harness `goose` does not support --session: it exposes no session id \
+             headlessly, so a named handle cannot be mapped to it. supported: claude-code"
+        );
+        std::process::exit(1);
+    }
 
     // `--control` is validated before anything runs, exactly as oneharness
     // validates it: every refusal here is a usage error the caller must be able to

@@ -65,6 +65,12 @@ impl<S: Provider, J: Provider> Provider for SplitProvider<S, J> {
         self.judge.reset_telemetry();
     }
 
+    // Only the judge side's calls are named after the run's scope; the skill side
+    // names its own turns `<base>-skill`.
+    fn set_history_scope(&self, scope: Option<&crate::HistoryScope>) {
+        self.judge.set_history_scope(scope);
+    }
+
     fn invocation_telemetry(&self) -> Vec<crate::telemetry::InvocationTelemetry> {
         let mut records = self.skill.invocation_telemetry();
         records.extend(self.judge.invocation_telemetry());

@@ -69,7 +69,7 @@ file, which beats the built-in default**:
 | `--done-when` | `ONEJUDGE_DONE_WHEN` | the completion condition |
 | `--max-turns` | `ONEJUDGE_MAX_TURNS` | the assistant-turn cap |
 | `--artifact` (repeatable) | `ONEJUDGE_ARTIFACTS` (separated like `PATH`: `:` on unix, `;` on Windows) | replaces `user.artifacts`, the files/directories the judge side reads directly |
-| `--session` | `ONEJUDGE_SESSION` | the caller-owned session name |
+| `--session` | `ONEJUDGE_SESSION` | the caller-owned session name (default `onejudge`); every party's history is named after it ([finding each party's turns](#finding-each-partys-turns)) |
 | `--provider` | `ONEJUDGE_PROVIDER` | just the backend kind (`oneharness`/`command`/`split`; `llmlint` is a judge entry only and is refused here) |
 | `--format` | — | `human` (default) or `json` |
 | `--stream` | — | publish the run on stdout as the [streamed protocol](streaming.md) (needs `--format json`, refuses `--output`) |
@@ -86,6 +86,35 @@ configures the loop, `ONEHARNESS_*` configures the harness/model underneath it.
 
 Supplying `--persona` / `--done-when` / `--max-turns` / `--artifact` (by flag or
 env) implies a simulated user even if the config had none.
+
+## Finding each party's turns
+
+Every `oneharness` call a run makes is recorded in oneharness's history store
+under a name derived from the run's session — `--session`, default `onejudge`,
+written *base* below — so one run's turns of one party are found by name rather
+than by the prompt's first words:
+
+| party | history name | a panel of more than one judge |
+|---|---|---|
+| the agent | `<base>-skill` | — |
+| the supervisor (each per-turn decision) | `<base>-user` | `<base>-user-<label>` |
+| an eval verdict (boolean or numeric) | `<base>-judge` | `<base>-judge-<label>` |
+| the assessment | `<base>-assess` | `<base>-assess-<label>` |
+
+A bare `oneharness` provider and a panel of one judge carry no label. The
+supervisor's name is the session it is handed, and it is kept when a harness
+that cannot bind a session is retried without `--session`. Each is found with:
+
+```sh
+oneharness history show <base>-user-reviewer --project <worktree> --all
+```
+
+`--all` because the name recurs across the run's turns (and across runs sharing
+a session); `--project` is the skill's working directory, which every judge-side
+call runs in. Only the names changed: onejudge still asks oneharness to record
+every call, both parties', because that record is where the report's
+`history_id` comes from. [judges.md](judges.md#sessions-and-history-names) is
+the contract.
 
 ## Output and exit code
 
@@ -169,7 +198,7 @@ and lists a directory's files newest-modified first — at most 50, with a line
 counting the rest. The listing is re-read on every judge-side turn. Empty (the
 default) leaves every prompt unchanged; the read-only tool allowlist and the
 `git_status` / `git_diff` requests are the same either way.
-| `session` | the caller-owned session name threaded across turns |
+| `session` | the caller-owned session name threaded across turns, and the base of every party's history name |
 | `evals` | optional criteria to score the finished transcript: each has a `criterion`, a `kind` (`boolean` / `numeric`), and — for numeric — a `scale: [min, max]` |
 | `assessment` | optional prompt for one free-text judgement over the finished transcript and its tool actions |
 

@@ -83,6 +83,7 @@ mod command;
 mod control;
 mod engine;
 mod error;
+mod history_name;
 mod llmlint;
 pub mod note;
 mod oneharness;
@@ -105,6 +106,7 @@ pub use engine::{
     StreamEvent, TurnClosed, TurnMessage, TurnOpened, NOOP_SETTLE_LIMIT,
 };
 pub use error::{Error, ProviderErrorKind, Result};
+pub use history_name::{HistoryScope, JudgeSideCall};
 pub use llmlint::{LlmlintProvider, DEFAULT_LLMLINT_BIN};
 pub use note::{
     supervisor_block, Accepted, Addressee, Criteria, Criterion, CriterionRefused, DeliveredNote,

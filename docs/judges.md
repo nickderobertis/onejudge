@@ -111,6 +111,36 @@ harness session; a panel of one hands the bare `<user session>` through,
 unchanged. The `session` a `command` judge sees on its supervisor request
 ([protocol.md](protocol.md)) is therefore the suffixed name.
 
+### Sessions and history names
+
+Every judge-side `oneharness` call is recorded under a history name derived from
+the run's **base session** (`Settings::session_name`, the CLI's `--session`,
+default `onejudge`). One function computes it — `HistoryScope::name`
+(`history_name.rs`) — and every judge-side call site uses it:
+
+| call | bare provider / panel of one | panel of more than one |
+|---|---|---|
+| supervisor / simulated-user turn | `<base>-user` | `<base>-user-<label>` |
+| `judge` — boolean or numeric, with or without evidence | `<base>-judge` | `<base>-judge-<label>` |
+| `assess` | `<base>-assess` | `<base>-assess-<label>` |
+
+The supervisor's name is exactly the session the judge is handed, and it
+survives the retry that drops `--session` for a harness that cannot bind one.
+The engine hands the base to its provider through `Provider::set_history_scope`
+before every judge-side entry point; a panel of more than one hands each judge a
+copy labelled with its own label, and a panel of one hands it through unchanged.
+A provider nothing scoped — a library caller invoking it directly — sets no name,
+and oneharness derives one from the prompt as it always has. The agent side's
+`<base>-skill` is unchanged. Only the names are new: onejudge still asks
+oneharness to record every call (the record is where `history_id` comes from),
+so what is recorded, and when, is as it was.
+
+```sh
+oneharness history show <base>-user-reviewer --project <worktree> --all   # one judge's decisions
+oneharness history show <base>-judge-reviewer --project <worktree> --all  # its eval verdicts
+oneharness history show <base>-assess --project <worktree> --all          # a bare judge's assessment
+```
+
 ## What each surface carries per judge
 
 **`JudgeDecision { judge, kind, decision, reason }`** — `judge` is the label,

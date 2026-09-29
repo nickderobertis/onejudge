@@ -11,6 +11,7 @@ use onemessagebus::{Closed, Delivered};
 
 use crate::control::ControlOutcome;
 use crate::error::Result;
+use crate::history_name::{HistoryScope, JudgeSideCall};
 use crate::note::{Accepted, Criteria, DeliveredNote, Note, NoteInbox, Party, Undelivered};
 use crate::provider::{
     Assessment, AssistantTurn, EvidenceContext, JudgeKind, JudgeQuery, JudgeVerdict, Provider,
@@ -655,6 +656,7 @@ impl<'a> Engine<'a> {
         on_observation: &mut dyn FnMut(&Observation<'_>) -> ControlFlow<()>,
     ) -> Result<Outcome> {
         self.provider.reset_telemetry();
+        self.scope_history();
         *self.started.borrow_mut() = Some(Instant::now());
         *self.worktree.borrow_mut() = Some(conversation.skill.dir.clone());
         *self.artifacts.borrow_mut() = conversation
@@ -677,7 +679,7 @@ impl<'a> Engine<'a> {
         // re-inlining the transcript, so onejudge no longer needs to know the
         // harness's capability up front.
         let skill_session = format!("{}-skill", self.settings.session_name);
-        let user_session = format!("{}-user", self.settings.session_name);
+        let user_session = self.history_scope().name(JudgeSideCall::User);
 
         let mut transcript = Transcript::from_input(&conversation.input);
         let mut totals = Usage::default();
@@ -1156,6 +1158,7 @@ impl<'a> Engine<'a> {
             criterion,
             scale: None,
         };
+        self.scope_history();
         let histories = self.history_files();
         let artifacts = self.artifacts.borrow();
         let worktree = self.worktree.borrow();
@@ -1203,6 +1206,7 @@ impl<'a> Engine<'a> {
             criterion,
             scale: Some((min, max)),
         };
+        self.scope_history();
         let histories = self.history_files();
         let artifacts = self.artifacts.borrow();
         let worktree = self.worktree.borrow();
@@ -1223,6 +1227,7 @@ impl<'a> Engine<'a> {
     /// # Errors
     /// Propagates a provider failure.
     pub fn assess(&self, prompt: &str, transcript: &Transcript) -> Result<Assessment> {
+        self.scope_history();
         let histories = self.history_files();
         let artifacts = self.artifacts.borrow();
         let worktree = self.worktree.borrow();
@@ -1235,6 +1240,20 @@ impl<'a> Engine<'a> {
                 artifacts: &artifacts,
             },
         )
+    }
+
+    /// The scope every judge-side history name of this engine's runs derives
+    /// from: the run's base session.
+    fn history_scope(&self) -> HistoryScope {
+        HistoryScope::new(self.settings.session_name.clone())
+    }
+
+    /// Name the provider's judge-side history after this engine's run. Set before
+    /// every judge-side entry point rather than once, so a judgement taken on an
+    /// engine that never ran — or on a provider another engine scoped since — is
+    /// still named after this one.
+    fn scope_history(&self) {
+        self.provider.set_history_scope(Some(&self.history_scope()));
     }
 
     fn history_files(&self) -> Vec<String> {

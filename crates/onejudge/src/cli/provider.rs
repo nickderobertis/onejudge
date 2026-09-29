@@ -181,6 +181,15 @@ impl Provider for AnyProvider {
         }
     }
 
+    fn set_history_scope(&self, scope: Option<&crate::HistoryScope>) {
+        match self {
+            AnyProvider::Oneharness(p) => p.set_history_scope(scope),
+            AnyProvider::Command(p) => p.set_history_scope(scope),
+            AnyProvider::Llmlint(p) => p.set_history_scope(scope),
+            AnyProvider::Split { judges, .. } => judges.set_history_scope(scope),
+        }
+    }
+
     fn invocation_telemetry(&self) -> Vec<crate::InvocationTelemetry> {
         match self {
             AnyProvider::Oneharness(p) => p.invocation_telemetry(),

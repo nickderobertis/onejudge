@@ -92,6 +92,7 @@ use std::time::{Duration, Instant};
 
 use crate::control::{ControlAddress, ControlOutcome};
 use crate::error::{Error, ProviderErrorKind, Result};
+use crate::history_name::{history_name, HistoryScope, JudgeSideCall};
 use crate::provider::{
     build_assessment_prompt, build_assessment_prompt_with_evidence, build_judge_prompt,
     build_judge_prompt_with_evidence, build_supervisor_prompt,
@@ -364,6 +365,8 @@ pub struct OneharnessProvider {
     /// The supervisor side's, reported on [`Provider::supervisor_control`].
     supervisor: PartyControl,
     telemetry: RefCell<Vec<InvocationTelemetry>>,
+    /// The run the judge-side history records are named after, set by the engine.
+    history_scope: RefCell<Option<HistoryScope>>,
     spawner: Spawner,
 }
 
@@ -395,6 +398,7 @@ impl OneharnessProvider {
             agent: PartyControl::new("agent"),
             supervisor: PartyControl::new("judge"),
             telemetry: RefCell::new(Vec::new()),
+            history_scope: RefCell::new(None),
             spawner: Spawner::default(),
         }
     }
@@ -747,6 +751,12 @@ impl OneharnessProvider {
         }
     }
 
+    /// The history name a judge-side `call` records under: derived from the scope
+    /// the engine set, or none when it set none.
+    fn judge_side_history_name(&self, call: JudgeSideCall) -> Option<String> {
+        history_name(self.history_scope.borrow().as_ref(), call)
+    }
+
     /// Run a judge/simulated-user turn under the judge config, threading `session`
     /// and — on a `SessionUnsupported` failure — retrying once without it. The
     /// prompt already inlines the whole transcript, so the retry needs no rebuild.
@@ -763,17 +773,22 @@ impl OneharnessProvider {
     fn run_judge_side(
         &self,
         op: &str,
+        call: JudgeSideCall,
         prompt: &str,
         session: Option<&str>,
         cwd: Option<&str>,
         control: bool,
     ) -> Result<Invocation> {
+        // Named once, before the ladder, so every rung — including the retry that
+        // drops `--session` — records under the same name.
+        let history_name = self.judge_side_history_name(call);
         let mut session = session;
         if let Some(name) = session {
             if control && self.wants_control(&self.supervisor) {
                 let spec = self.mocked(judge_side_spec(
                     self.judge_config.as_deref(),
                     Some(name),
+                    history_name.as_deref(),
                     cwd,
                     true,
                     prompt,
@@ -803,6 +818,7 @@ impl OneharnessProvider {
                 let spec = self.mocked(judge_side_spec(
                     self.judge_config.as_deref(),
                     Some(name),
+                    history_name.as_deref(),
                     cwd,
                     false,
                     prompt,
@@ -822,6 +838,7 @@ impl OneharnessProvider {
         let spec = self.mocked(judge_side_spec(
             self.judge_config.as_deref(),
             None,
+            history_name.as_deref(),
             cwd,
             false,
             prompt,
@@ -1201,6 +1218,7 @@ fn respond_spec(
 fn judge_side_spec(
     judge_config: Option<&Path>,
     session: Option<&str>,
+    history_name: Option<&str>,
     cwd: Option<&str>,
     control: bool,
     prompt: &str,
@@ -1212,7 +1230,7 @@ fn judge_side_spec(
         // As on the agent side: `OneharnessProvider::mocked` folds it in.
         mock_harness: Vec::new(),
         session: session.map(str::to_string),
-        history_name: None,
+        history_name: history_name.map(str::to_string),
         events: false,
         // Streaming is about the long agent turn, not the short judgement calls.
         stream: false,
@@ -1289,6 +1307,10 @@ impl Provider for OneharnessProvider {
         self.telemetry.borrow().clone()
     }
 
+    fn set_history_scope(&self, scope: Option<&HistoryScope>) {
+        *self.history_scope.borrow_mut() = scope.cloned();
+    }
+
     fn spawned_processes(&self) -> Vec<SpawnedProcess> {
         self.spawner.records()
     }
@@ -1333,7 +1355,8 @@ impl Provider for OneharnessProvider {
         session: Option<&str>,
     ) -> Result<UserTurn> {
         let prompt = build_user_prompt(persona, messages);
-        let result = self.run_judge_side("user", &prompt, session, None, false)?;
+        let result =
+            self.run_judge_side("user", JudgeSideCall::User, &prompt, session, None, false)?;
         Ok(UserTurn {
             message: result.reply(),
             stop: false,
@@ -1352,8 +1375,14 @@ impl Provider for OneharnessProvider {
             // The re-ask says what was unusable about the last answer; asking the
             // identical question again mostly buys the identical answer.
             let prompt = format!("{base}{}", self.supervisor_reask_note(ask));
-            let result =
-                self.run_judge_side("supervisor", &prompt, session, Some(query.worktree), true)?;
+            let result = self.run_judge_side(
+                "supervisor",
+                JudgeSideCall::User,
+                &prompt,
+                session,
+                Some(query.worktree),
+                true,
+            )?;
             let outcome = self.supervisor_outcome(ask, &result.reply());
             Ok(SupervisorTurn {
                 outcome,
@@ -1374,8 +1403,14 @@ impl Provider for OneharnessProvider {
             let mut prompt = format!("{base}{}", self.supervisor_reask_note(ask));
             let mut usage = Usage::default();
             for tool_attempt in 0..=crate::provider::EVIDENCE_TOOL_RETRY_LIMIT {
-                let result =
-                    self.run_judge_side("supervisor", &prompt, session, evidence.worktree, true)?;
+                let result = self.run_judge_side(
+                    "supervisor",
+                    JudgeSideCall::User,
+                    &prompt,
+                    session,
+                    evidence.worktree,
+                    true,
+                )?;
                 if let Some(value) = result.usage() {
                     usage.add(&value);
                 }
@@ -1419,7 +1454,8 @@ impl Provider for OneharnessProvider {
     fn judge(&self, query: &JudgeQuery<'_>, messages: &[Message]) -> Result<JudgeVerdict> {
         // Judging is stateless — no session to continue.
         let prompt = build_judge_prompt(query, messages);
-        let result = self.run_judge_side("judge", &prompt, None, None, false)?;
+        let result =
+            self.run_judge_side("judge", JudgeSideCall::Judge, &prompt, None, None, false)?;
         let mut verdict = parse_verdict(query.kind, "oneharness:judge", &result.reply())?;
         verdict.usage = result.usage();
         Ok(verdict)
@@ -1434,7 +1470,14 @@ impl Provider for OneharnessProvider {
         let mut prompt = build_judge_prompt_with_evidence(query, messages, evidence);
         let mut usage = Usage::default();
         for attempt in 0..=crate::provider::EVIDENCE_TOOL_RETRY_LIMIT {
-            let result = self.run_judge_side("judge", &prompt, None, evidence.worktree, false)?;
+            let result = self.run_judge_side(
+                "judge",
+                JudgeSideCall::Judge,
+                &prompt,
+                None,
+                evidence.worktree,
+                false,
+            )?;
             if let Some(value) = result.usage() {
                 usage.add(&value);
             }
@@ -1474,7 +1517,8 @@ impl Provider for OneharnessProvider {
 
     fn assess(&self, prompt: &str, messages: &[Message]) -> Result<Assessment> {
         let prompt = build_assessment_prompt(prompt, messages);
-        let result = self.run_judge_side("assess", &prompt, None, None, false)?;
+        let result =
+            self.run_judge_side("assess", JudgeSideCall::Assess, &prompt, None, None, false)?;
         let text = result.reply();
         if text.trim().is_empty() {
             return Err(Error::provider(
@@ -1497,7 +1541,14 @@ impl Provider for OneharnessProvider {
         let mut prompt = build_assessment_prompt_with_evidence(prompt, messages, evidence);
         let mut usage = Usage::default();
         for attempt in 0..=crate::provider::EVIDENCE_TOOL_RETRY_LIMIT {
-            let result = self.run_judge_side("assess", &prompt, None, evidence.worktree, false)?;
+            let result = self.run_judge_side(
+                "assess",
+                JudgeSideCall::Assess,
+                &prompt,
+                None,
+                evidence.worktree,
+                false,
+            )?;
             if let Some(value) = result.usage() {
                 usage.add(&value);
             }
@@ -1571,6 +1622,7 @@ mod tests {
             provider.judge_config.as_deref(),
             Some("s"),
             None,
+            None,
             false,
             "p",
         ));
@@ -1631,6 +1683,7 @@ mod tests {
             provider.judge_config.as_deref(),
             Some("s"),
             None,
+            None,
             false,
             "p",
         )));
@@ -1641,7 +1694,7 @@ mod tests {
         // And an ordinary provider asks for no responder at all.
         let plain = OneharnessProvider::new();
         assert!(
-            !argv_of(&plain.mocked(judge_side_spec(None, None, None, false, "p")))
+            !argv_of(&plain.mocked(judge_side_spec(None, None, None, None, false, "p")))
                 .iter()
                 .any(|arg| arg == "--mock-harness")
         );
@@ -1718,7 +1771,7 @@ mod tests {
         assert!(argv_of(&agent).iter().any(|a| a == "--stream"));
         // The judge / simulated-user side stays buffered: streaming is about the
         // long agent turn, not the short judgement calls.
-        let judge = judge_side_spec(None, Some("s"), None, false, "p");
+        let judge = judge_side_spec(None, Some("s"), None, None, false, "p");
         assert!(!judge.stream);
         assert!(!argv_of(&judge).iter().any(|a| a == "--stream"));
     }
@@ -1727,6 +1780,7 @@ mod tests {
     fn a_judge_side_spec_selects_by_config_not_by_harness_or_model() {
         let args = argv_of(&judge_side_spec(
             Some(Path::new("oneharness.judge.toml")),
+            None,
             None,
             None,
             false,
@@ -1741,13 +1795,62 @@ mod tests {
             .any(|w| w == ["--config", "oneharness.judge.toml"]));
         // With no judge config, no `--config` is passed (oneharness discovers its
         // own default).
-        let no_config = argv_of(&judge_side_spec(None, None, None, false, "p"));
+        let no_config = argv_of(&judge_side_spec(None, None, None, None, false, "p"));
         assert!(!no_config.iter().any(|a| a == "--config"));
     }
 
     #[test]
+    fn a_judge_side_spec_records_under_the_history_name_it_is_given() {
+        let named = |spec: &TurnSpec| {
+            argv_of(spec)
+                .windows(2)
+                .find(|w| w[0] == "--history-name")
+                .map(|w| w[1].clone())
+        };
+        let scope = HistoryScope::new("run-3");
+        let user = scope.name(JudgeSideCall::User);
+        let controlled = judge_side_spec(None, Some(&user), Some(&user), None, true, "p");
+        assert_eq!(named(&controlled).as_deref(), Some("run-3-user"));
+        // The session-unsupported retry drops `--session` and keeps the name, so a
+        // harness that cannot bind a session still records under it.
+        let retry = judge_side_spec(None, None, Some(&user), None, false, "p");
+        assert!(!argv_of(&retry).iter().any(|a| a == "--session"));
+        assert_eq!(named(&retry).as_deref(), Some("run-3-user"));
+        // No base session: no name, and oneharness derives one as it always has.
+        let unscoped = judge_side_spec(None, None, None, None, false, "p");
+        assert_eq!(named(&unscoped), None);
+    }
+
+    #[test]
+    fn the_provider_names_each_judge_side_call_from_the_scope_it_was_handed() {
+        let provider = OneharnessProvider::new();
+        assert_eq!(provider.judge_side_history_name(JudgeSideCall::Judge), None);
+        provider.set_history_scope(Some(&HistoryScope::new("run-3").labelled("r")));
+        assert_eq!(
+            provider
+                .judge_side_history_name(JudgeSideCall::User)
+                .as_deref(),
+            Some("run-3-user-r")
+        );
+        assert_eq!(
+            provider
+                .judge_side_history_name(JudgeSideCall::Judge)
+                .as_deref(),
+            Some("run-3-judge-r")
+        );
+        assert_eq!(
+            provider
+                .judge_side_history_name(JudgeSideCall::Assess)
+                .as_deref(),
+            Some("run-3-assess-r")
+        );
+        provider.set_history_scope(None);
+        assert_eq!(provider.judge_side_history_name(JudgeSideCall::User), None);
+    }
+
+    #[test]
     fn evaluator_worktree_enforces_read_only_while_plain_user_stays_default() {
-        let evaluator = judge_side_spec(None, None, Some("/work"), false, "p");
+        let evaluator = judge_side_spec(None, None, None, Some("/work"), false, "p");
         assert_eq!(
             evaluator.mode,
             Some(oneharness_core::domain::mode::PermissionMode::ReadOnly)
@@ -1760,7 +1863,7 @@ mod tests {
             .windows(2)
             .any(|pair| pair == ["--mode", "read-only"]));
 
-        let user = judge_side_spec(None, None, None, false, "p");
+        let user = judge_side_spec(None, None, None, None, false, "p");
         assert_eq!(user.mode, None);
         assert!(!argv_of(&user).iter().any(|arg| arg == "--mode"));
         let worker = respond_spec("s", "/work", None, None, false, false, "p");
@@ -1946,21 +2049,25 @@ mod tests {
     #[test]
     fn the_judge_side_rides_the_same_control_expression_the_agent_side_does() {
         // Asked for, alongside the `--session` name that addresses it.
-        assert!(argv_of(&judge_side_spec(None, Some("s"), None, true, "p"))
-            .iter()
-            .any(|a| a == "--control"));
+        assert!(
+            argv_of(&judge_side_spec(None, Some("s"), None, None, true, "p"))
+                .iter()
+                .any(|a| a == "--control")
+        );
         // Not asked for.
         assert!(
-            !argv_of(&judge_side_spec(None, Some("s"), None, false, "p"))
+            !argv_of(&judge_side_spec(None, Some("s"), None, None, false, "p"))
                 .iter()
                 .any(|a| a == "--control")
         );
         // Asked for, but with no session to be addressed by: dropped, exactly as it
         // is on the agent side, because the socket is keyed on the session name.
-        assert!(!judge_side_spec(None, None, None, true, "p").control);
-        assert!(!argv_of(&judge_side_spec(None, None, None, true, "p"))
-            .iter()
-            .any(|a| a == "--control"));
+        assert!(!judge_side_spec(None, None, None, None, true, "p").control);
+        assert!(
+            !argv_of(&judge_side_spec(None, None, None, None, true, "p"))
+                .iter()
+                .any(|a| a == "--control")
+        );
     }
 
     #[test]
