@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.0](https://github.com/nickderobertis/onejudge/compare/v0.14.0...v0.15.0) - 2026-09-29
+
+### Added
+
+- *(judges)* label every llmlint judge run and record its history id ([#118](https://github.com/nickderobertis/onejudge/pull/118))
+- *(judges)* name judge-side history after the run's session ([#117](https://github.com/nickderobertis/onejudge/pull/117))
+
 ## [0.14.0](https://github.com/nickderobertis/onejudge/compare/v0.13.5...v0.14.0) - 2026-09-22
 
 ### Added
