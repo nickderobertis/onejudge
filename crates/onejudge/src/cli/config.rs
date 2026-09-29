@@ -131,9 +131,33 @@ pub struct ProviderConfig {
     /// `oneharness`: the oneharness config file the judge / simulated user run
     /// under, passed as `oneharness run --config <path>` (default
     /// `oneharness.judge.toml`). This is where the judge-side harness/model
-    /// selection lives.
+    /// selection lives — and the judge's permission `mode`: an evaluator call
+    /// passes onejudge's read-only defaults *before* this file, so a mode set
+    /// here decides the judge's posture. Unset, and with no
+    /// `oneharness.judge.toml` in the working directory, the judge runs under
+    /// oneharness's own discovery (the user file, then the project file) behind
+    /// the same defaults — which in 0.15.0 was an error.
     #[serde(default)]
     pub judge_config: Option<String>,
+    /// `oneharness`: instructions appended to every evaluator prompt this
+    /// provider's judge side is handed — what a judge that can act should verify,
+    /// and how. The answer format each prompt ends with is unchanged.
+    #[serde(default)]
+    pub instructions: Option<String>,
+    /// `oneharness`: whether the judge side asks its harness for tool events,
+    /// recorded on each decision (`judge_decisions[].decisions[].events`) and
+    /// published as `judge_tool` lines under `--stream`. Unset, it asks exactly
+    /// when the judge's effective mode can change the tree — any mode but
+    /// `read-only` and `plan`.
+    #[serde(default)]
+    pub events: Option<bool>,
+    /// `split`: let a panel of more than one judge include a judge whose
+    /// effective mode can change the tree (any but `read-only` and `plan`).
+    /// Refused by default: panel judges run at the same time against one
+    /// worktree, so a writable judge can race the others and changes the tree
+    /// the worker continues from. A single writable judge needs no permission.
+    #[serde(default)]
+    pub allow_writable_judges: Option<bool>,
     /// `oneharness`: the agent-side binary speaks the **streamed provider
     /// protocol** (`docs/streaming.md`) — NDJSON tool events as they occur, then a
     /// terminal report line. Default `false` (one buffered report document).
@@ -401,6 +425,7 @@ impl Config {
         }
 
         let skill = build_skill(self.skill, self.system_prompt.unwrap_or_default())?;
+        refuse_writable_panels(&provider, std::path::Path::new(&skill.dir))?;
 
         let (conversation, done_when) = match self.user {
             Some(u) => {
@@ -468,6 +493,59 @@ impl Config {
     }
 }
 
+/// Refuse a panel of more than one judge in which any `oneharness` judge's
+/// effective mode can change the tree, unless the split allows it — naming the
+/// judge, its mode and the layer that set it, before any harness runs.
+///
+/// Panel judges run at the same time against one worktree, so a writable judge
+/// races the others' reads and changes the tree the worker continues from. A
+/// single judge has nothing to race, so it is never refused. A judge whose
+/// configuration cannot be read is left to its first call, which fails loudly
+/// naming it.
+fn refuse_writable_panels(
+    provider: &ProviderSpec,
+    worktree: &std::path::Path,
+) -> Result<(), CliError> {
+    let ProviderSpec::Split {
+        skill,
+        judges,
+        allow_writable_judges,
+    } = provider
+    else {
+        return Ok(());
+    };
+    refuse_writable_panels(skill, worktree)?;
+    for judge in judges {
+        refuse_writable_panels(&judge.provider, worktree)?;
+    }
+    if *allow_writable_judges || judges.len() < 2 {
+        return Ok(());
+    }
+    for judge in judges {
+        let ProviderSpec::Oneharness { judge_config, .. } = &judge.provider else {
+            continue;
+        };
+        let config = crate::oneharness::cli_judge_config(judge_config.as_deref());
+        let Ok(posture) = crate::oneharness::evaluator_posture(config.as_deref(), worktree) else {
+            continue;
+        };
+        if posture.is_writable() {
+            return Err(CliError::Config(format!(
+                "judge `{label}` runs in the writable `{mode}` mode (set by `{source}`) in a panel \
+                 of {n} judges: panel judges run at the same time against one worktree, so a judge \
+                 that can change it races the others and changes the tree the worker continues \
+                 from. Give it a read-only mode, run it as the only judge, or set \
+                 `allow_writable_judges: true` on the split to accept that",
+                label = judge.label,
+                mode = posture.mode,
+                source = posture.source,
+                n = judges.len(),
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// Where in the config a [`ProviderConfig`] sits: the top-level `provider`, a
 /// split's `skill:` child, or one entry of its judge list. A `label` belongs to
 /// a judge entry and nowhere else.
@@ -486,6 +564,9 @@ impl ProviderConfig {
             kind,
             bin,
             judge_config,
+            instructions,
+            events,
+            allow_writable_judges,
             stream,
             control,
             mock_harness,
@@ -549,12 +630,15 @@ impl ProviderConfig {
                 reject(skill.is_some(), "skill")?;
                 reject(judge.is_some(), "judge")?;
                 reject(judges.is_some(), "judges")?;
+                reject(allow_writable_judges.is_some(), "allow_writable_judges")?;
                 Ok(ProviderSpec::Oneharness {
                     // Unset means the in-process engine, which is the default and
                     // needs nothing on PATH. Naming one is the explicit opt-in to
                     // spawning it — see `OneharnessProvider::with_bin`.
                     bin,
                     judge_config: judge_config.map(PathBuf::from),
+                    instructions: instructions.filter(|text| !text.trim().is_empty()),
+                    events,
                     stream: stream.unwrap_or(false),
                     control: control.unwrap_or(false),
                     mock_harness: mock_harness.unwrap_or_default(),
@@ -563,6 +647,9 @@ impl ProviderConfig {
             ProviderKind::Command => {
                 reject(bin.is_some(), "bin")?;
                 reject(judge_config.is_some(), "judge_config")?;
+                reject(instructions.is_some(), "instructions")?;
+                reject(events.is_some(), "events")?;
+                reject(allow_writable_judges.is_some(), "allow_writable_judges")?;
                 reject(stream.is_some(), "stream")?;
                 reject(control.is_some(), "control")?;
                 reject(mock_harness.is_some(), "mock_harness")?;
@@ -580,6 +667,9 @@ impl ProviderConfig {
             ProviderKind::Split => {
                 reject(bin.is_some(), "bin")?;
                 reject(judge_config.is_some(), "judge_config")?;
+                // A judge's own settings, set on the judge entry they belong to.
+                reject(instructions.is_some(), "instructions")?;
+                reject(events.is_some(), "events")?;
                 reject(stream.is_some(), "stream")?;
                 // A `split` has two backends, so a control ask on the wrapper says
                 // nothing about which turn it addresses. Set it on the `skill:`
@@ -624,10 +714,14 @@ impl ProviderConfig {
                 Ok(ProviderSpec::Split {
                     skill: Box::new(skill.resolve(Place::Skill)?),
                     judges: resolve_judges(judges)?,
+                    allow_writable_judges: allow_writable_judges.unwrap_or(false),
                 })
             }
             ProviderKind::Llmlint => {
                 reject(judge_config.is_some(), "judge_config")?;
+                reject(instructions.is_some(), "instructions")?;
+                reject(events.is_some(), "events")?;
+                reject(allow_writable_judges.is_some(), "allow_writable_judges")?;
                 reject(stream.is_some(), "stream")?;
                 reject(control.is_some(), "control")?;
                 reject(mock_harness.is_some(), "mock_harness")?;
@@ -751,8 +845,15 @@ pub enum ProviderSpec {
         /// engine in process. `None` — the default — runs it in process.
         bin: Option<String>,
         /// The judge / simulated-user oneharness config file (`--config <path>`);
-        /// `None` leaves the provider's own default (`oneharness.judge.toml`).
+        /// `None` leaves the provider's own default (`oneharness.judge.toml`), or
+        /// oneharness's discovery when that file is not in the working directory.
         judge_config: Option<PathBuf>,
+        /// Instructions appended to every evaluator prompt the judge side is
+        /// handed.
+        instructions: Option<String>,
+        /// Whether the judge side asks for tool events; `None` asks exactly when
+        /// its posture is writable.
+        events: Option<bool>,
         /// The agent-side binary speaks the streamed provider protocol.
         stream: bool,
         /// Ask for a controllable agent turn (`oneharness run --control`).
@@ -774,6 +875,9 @@ pub enum ProviderSpec {
         /// The judges, in list order — one or more, every one run concurrently
         /// against each worker turn. A single `judge:` resolves to a list of one.
         judges: Vec<JudgeSpec>,
+        /// Whether a panel of more than one judge may include one whose posture
+        /// can change the tree.
+        allow_writable_judges: bool,
     },
     /// A judge whose verdict is one `llmlint` run over the worker's tree
     /// ([`LlmlintProvider`](crate::LlmlintProvider)). Only ever a judge of a
@@ -1581,7 +1685,7 @@ provider:
 "#;
         let plan = Config::from_yaml(yaml).unwrap().into_plan().unwrap();
         match plan.provider {
-            ProviderSpec::Split { skill, judges } => {
+            ProviderSpec::Split { skill, judges, .. } => {
                 assert!(matches!(*skill, ProviderSpec::Oneharness { .. }));
                 // `judge:` is the one-element list, labelled by its kind.
                 assert_eq!(judges.len(), 1);

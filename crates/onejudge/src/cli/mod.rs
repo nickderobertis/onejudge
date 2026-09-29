@@ -312,7 +312,8 @@ fn run_task(args: RunArgs) -> Result<i32, CliError> {
 }
 
 /// Drive `plan` while republishing it on stdout as the streamed protocol: one
-/// NDJSON `event` line per tool event the instant it is observed, then the
+/// NDJSON `event` line per tool event the instant it is observed, a `judge_tool`
+/// line per tool event a judge that asked for them reported deciding, then the
 /// terminal `result` line carrying the versioned [`Report`].
 ///
 /// Each line is flushed as it is written — a consumer reading this pipe to watch a
@@ -320,15 +321,23 @@ fn run_task(args: RunArgs) -> Result<i32, CliError> {
 fn run_streamed(plan: Plan) -> Result<i32, CliError> {
     let mut stdout = std::io::stdout();
     let mut failure = None;
-    let summary = match run_plan_streaming_reporting_failure(plan, &mut |event| {
-        if let Err(e) = write_line(&mut stdout, &StreamLine::Event(event)) {
-            // Stop the run rather than keep burning harness calls into a pipe that
-            // no longer accepts them (a consumer that hung up mid-turn).
-            failure = Some(e);
-            return ControlFlow::Break(());
-        }
-        ControlFlow::Continue(())
-    }) {
+    let summary = match execute(
+        plan,
+        Some(&mut |observation: &Observation<'_>| {
+            let line = match observation {
+                Observation::Tool(event) => StreamLine::Event(event),
+                Observation::JudgeTool(tool) => StreamLine::JudgeTool(tool),
+                _ => return ControlFlow::Continue(()),
+            };
+            if let Err(e) = write_line(&mut stdout, &line) {
+                // Stop the run rather than keep burning harness calls into a pipe that
+                // no longer accepts them (a consumer that hung up mid-turn).
+                failure = Some(e);
+                return ControlFlow::Break(());
+            }
+            ControlFlow::Continue(())
+        }),
+    ) {
         Ok(summary) => summary,
         Err(run_failure) => {
             // stdout is the `event* result EOF` protocol, so a failure cannot be
@@ -356,14 +365,20 @@ fn run_streamed(plan: Plan) -> Result<i32, CliError> {
 
 /// One line of the outbound stream — the same two `type`-tagged envelopes onejudge
 /// accepts *from* a streamed provider, so a consumer speaks one protocol in both
-/// directions. An `Event` line is the `"type"` tag wrapped around exactly
-/// [`StreamEvent`]'s fields; the terminal `Result` line's `report` is byte-for-byte
-/// the versioned [`Report`] a buffered `--format json` run prints.
+/// directions, plus the judge's own tool events. An `Event` line is the `"type"`
+/// tag wrapped around exactly [`StreamEvent`]'s fields, a `judge_tool` line around
+/// exactly [`JudgeTool`](crate::JudgeTool)'s (the same `event` payload, with the
+/// judge's label); the terminal `Result` line's `report` is byte-for-byte the
+/// versioned [`Report`] a buffered `--format json` run prints.
 #[derive(serde::Serialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 enum StreamLine<'a> {
     Event(&'a StreamEvent<'a>),
-    Result { report: &'a Report },
+    #[serde(rename = "judge_tool")]
+    JudgeTool(&'a crate::JudgeTool<'a>),
+    Result {
+        report: &'a Report,
+    },
 }
 
 /// Serialize one NDJSON line and flush it — a consumer watching a long turn learns
@@ -1307,6 +1322,8 @@ mod tests {
                         reason: "looks right".into(),
                         labels: std::collections::BTreeMap::new(),
                         run_id: None,
+                        posture: None,
+                        events: Vec::new(),
                     },
                     crate::JudgeDecision {
                         judge: "lint".into(),
@@ -1315,6 +1332,8 @@ mod tests {
                         reason: String::new(),
                         labels: std::collections::BTreeMap::new(),
                         run_id: None,
+                        posture: None,
+                        events: Vec::new(),
                     },
                 ],
             },
@@ -1327,6 +1346,8 @@ mod tests {
                     reason: "clean".into(),
                     labels: std::collections::BTreeMap::new(),
                     run_id: None,
+                    posture: None,
+                    events: Vec::new(),
                 }],
             },
         ];

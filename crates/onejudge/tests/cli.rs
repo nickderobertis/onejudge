@@ -2172,6 +2172,7 @@ user:
             Observation::JudgeDecided(d) => {
                 format!("judged/{}/{}/{}", d.judge, d.decision.as_str(), d.reason)
             }
+            Observation::JudgeTool(t) => format!("judge-tool/{}/{}", t.judge, t.event.summary()),
         });
         ControlFlow::Continue(())
     })
@@ -2563,6 +2564,7 @@ fn an_observing_plan_run_delivers_each_judges_decision_inside_the_supervisor_tur
             Observation::JudgeDecided(d) => {
                 format!("judged/{}/{}/{}", d.turn, d.judge, d.decision.as_str())
             }
+            Observation::JudgeTool(t) => format!("judge-tool/{}/{}", t.turn, t.judge),
         });
         ControlFlow::Continue(())
     })
@@ -2609,6 +2611,7 @@ fn an_observing_plan_run_delivers_each_judges_decision_inside_the_supervisor_tur
             Observation::Message(m) => format!("said/{:?}", m.role),
             Observation::TurnClosed(c) => format!("closed/{:?}", c.role),
             Observation::Tool(_) => "tool".to_string(),
+            Observation::JudgeTool(t) => format!("judge-tool/{}", t.judge),
         });
         ControlFlow::Continue(())
     }) else {

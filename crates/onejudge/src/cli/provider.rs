@@ -54,6 +54,8 @@ impl AnyProvider {
             ProviderSpec::Oneharness {
                 bin,
                 judge_config,
+                instructions,
+                events,
                 stream,
                 control,
                 mock_harness,
@@ -71,8 +73,15 @@ impl AnyProvider {
                 for id in mock_harness {
                     provider = provider.with_mock_harness(id);
                 }
-                if let Some(config) = judge_config {
-                    provider = provider.with_judge_config(config.clone());
+                provider = match crate::oneharness::cli_judge_config(judge_config.as_deref()) {
+                    Some(config) => provider.with_judge_config(config),
+                    None => provider.with_judge_config_discovery(),
+                };
+                if let Some(instructions) = instructions {
+                    provider = provider.with_judge_instructions(instructions.clone());
+                }
+                if let Some(events) = events {
+                    provider = provider.with_judge_events(*events);
                 }
                 Ok(AnyProvider::Oneharness(provider))
             }
@@ -99,7 +108,7 @@ impl AnyProvider {
                 }
                 Ok(AnyProvider::Llmlint(provider.with_args(args.clone())))
             }
-            ProviderSpec::Split { skill, judges } => Ok(AnyProvider::Split {
+            ProviderSpec::Split { skill, judges, .. } => Ok(AnyProvider::Split {
                 skill: Box::new(AnyProvider::build(skill)?),
                 judges: JudgePanel::new(
                     judges
@@ -205,6 +214,15 @@ impl Provider for AnyProvider {
             AnyProvider::Command(p) => p.take_judge_link(),
             AnyProvider::Llmlint(p) => p.take_judge_link(),
             AnyProvider::Split { judges, .. } => judges.take_judge_link(),
+        }
+    }
+
+    fn take_judge_tools(&self) -> Vec<crate::JudgeTools> {
+        match self {
+            AnyProvider::Oneharness(p) => p.take_judge_tools(),
+            AnyProvider::Command(p) => p.take_judge_tools(),
+            AnyProvider::Llmlint(p) => p.take_judge_tools(),
+            AnyProvider::Split { judges, .. } => judges.take_judge_tools(),
         }
     }
 
@@ -402,6 +420,8 @@ mod tests {
         let oh = AnyProvider::build(&ProviderSpec::Oneharness {
             bin: Some("oneharness".into()),
             judge_config: Some("oneharness.judge.toml".into()),
+            instructions: None,
+            events: None,
             stream: false,
             control: false,
             mock_harness: Vec::new(),
@@ -428,6 +448,8 @@ mod tests {
             skill: Box::new(ProviderSpec::Oneharness {
                 bin: Some("oneharness".into()),
                 judge_config: None,
+                instructions: None,
+                events: None,
                 stream: true,
                 control: false,
                 mock_harness: Vec::new(),
@@ -444,12 +466,15 @@ mod tests {
                     provider: ProviderSpec::Oneharness {
                         bin: None,
                         judge_config: None,
+                        instructions: None,
+                        events: None,
                         stream: false,
                         control: false,
                         mock_harness: Vec::new(),
                     },
                 },
             ],
+            allow_writable_judges: false,
         };
         let provider = AnyProvider::build(&spec).unwrap();
         let AnyProvider::Split { judges, .. } = &provider else {
@@ -471,6 +496,7 @@ mod tests {
                 label: "j".into(),
                 provider: ProviderSpec::Command { command: vec![] },
             }],
+            allow_writable_judges: false,
         };
         assert!(matches!(
             AnyProvider::build(&broken),

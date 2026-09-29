@@ -770,6 +770,9 @@ impl<'a> Engine<'a> {
                         },
                     );
                     let _ = self.record_judge_decisions(turn_index);
+                    // Not observed on this path, like the decisions beside them;
+                    // drained so a later turn never inherits them.
+                    let _ = self.provider.take_judge_tools();
                     let decision = match decision {
                         Ok(decision) => decision,
                         Err(_) => return Err(error),
@@ -924,8 +927,40 @@ impl<'a> Engine<'a> {
                 // it, and observed before the error propagates, so a supervisor
                 // watching the run sees which judge failed and what the others said.
                 let decided = self.record_judge_decisions(turn_index);
+                let bare = self.provider.take_judge_tools();
                 let mut broke = false;
-                for decision in &decided {
+                // A bare provider's judge events first — it records no decision to
+                // follow them — then each panel judge's, right before its decision.
+                'observed: for tools in &bare {
+                    for event in &tools.events {
+                        if on_observation(&Observation::JudgeTool(JudgeTool {
+                            turn: turn_index,
+                            judge: &tools.judge,
+                            event,
+                        }))
+                        .is_break()
+                        {
+                            broke = true;
+                            break 'observed;
+                        }
+                    }
+                }
+                'decided: for decision in &decided {
+                    if broke {
+                        break;
+                    }
+                    for event in &decision.events {
+                        if on_observation(&Observation::JudgeTool(JudgeTool {
+                            turn: turn_index,
+                            judge: &decision.judge,
+                            event,
+                        }))
+                        .is_break()
+                        {
+                            broke = true;
+                            break 'decided;
+                        }
+                    }
                     if on_observation(&Observation::JudgeDecided(JudgeDecided {
                         turn: turn_index,
                         judge: &decision.judge,
@@ -1320,6 +1355,31 @@ pub enum Observation<'a> {
     /// [`Message`](Observation::Message) / [`TurnClosed`](Observation::TurnClosed)
     /// — and, when the supervisor call failed, before the error propagates.
     JudgeDecided(JudgeDecided<'a>),
+    /// A tool event a judge's harness reported while deciding a supervisor turn:
+    /// delivered after that turn's [`TurnOpened`](Observation::TurnOpened) and
+    /// before that judge's [`JudgeDecided`](Observation::JudgeDecided), in the
+    /// order the harness reported them. Its `event` is the payload
+    /// [`Tool`](Observation::Tool) carries, so one renderer serves the worker's
+    /// events and a judge's.
+    JudgeTool(JudgeTool<'a>),
+}
+
+/// One tool event a judge's harness reported while deciding a supervisor turn.
+///
+/// Only a judge that asked for events produces these — `events` on the judge,
+/// on by default when its posture can change the tree — and they are the same
+/// events its [`JudgeDecision::events`](crate::JudgeDecision::events) records.
+#[derive(serde::Serialize)]
+#[cfg_attr(feature = "sdk-schema", derive(schemars::JsonSchema))]
+pub struct JudgeTool<'a> {
+    /// 1-based assistant-turn index the supervisor turn belongs to, as
+    /// [`TurnOpened::turn`].
+    pub turn: usize,
+    /// The judge's label within its panel, or the provider's own label for a
+    /// bare provider.
+    pub judge: &'a str,
+    /// The normalized tool event — the payload [`StreamEvent::event`] carries.
+    pub event: &'a ToolEvent,
 }
 
 /// One judge's decision on a supervisor turn, as its panel recorded it.
@@ -2240,6 +2300,8 @@ mod tests {
                     reason: "more".into(),
                     labels: Default::default(),
                     run_id: None,
+                    posture: None,
+                    events: Vec::new(),
                 }]
             }
 
@@ -2289,6 +2351,7 @@ mod tests {
                 &mut |observation| {
                     let (kind, stop) = match observation {
                         Observation::JudgeDecided(d) => (format!("judged/{}", d.judge), true),
+                        Observation::JudgeTool(t) => (format!("judge-tool/{}", t.judge), false),
                         Observation::TurnOpened(o) => (format!("opened/{:?}", o.role), false),
                         Observation::Message(m) => (format!("said/{:?}", m.role), false),
                         Observation::TurnClosed(c) => (format!("closed/{:?}", c.role), false),

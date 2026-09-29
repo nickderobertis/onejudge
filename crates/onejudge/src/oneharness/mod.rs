@@ -82,6 +82,7 @@
 pub(crate) mod fixture;
 mod history;
 mod library;
+mod posture;
 mod report;
 mod turn;
 
@@ -96,16 +97,18 @@ use crate::control::{ControlAddress, ControlOutcome};
 use crate::error::{Error, ProviderErrorKind, Result};
 use crate::history_name::{history_name, HistoryScope, JudgeSideCall};
 use crate::provider::{
-    build_assessment_prompt, build_assessment_prompt_with_evidence, build_judge_prompt,
-    build_judge_prompt_with_evidence, build_supervisor_prompt,
-    build_supervisor_prompt_with_evidence, build_user_prompt, latest_or_inline, parse_supervisor,
-    parse_verdict, resolve_evidence_request, supervise_with_reask, Ask, Assessment, AssistantTurn,
-    EvidenceContext, JudgeQuery, JudgeVerdict, Provider, Reask, SkillRef, SupervisorOutcome,
-    SupervisorQuery, SupervisorTurn, UserTurn, SUPERVISOR_REASK_LIMIT, SUPERVISOR_REDIRECT_NOTE,
+    assessment_prompt, build_assessment_prompt, build_judge_prompt, build_user_prompt,
+    judge_prompt, latest_or_inline, parse_supervisor, parse_verdict, resolve_evidence_request,
+    supervise_with_reask, supervisor_prompt, Ask, Assessment, AssistantTurn, EvidenceContext,
+    JudgeFraming, JudgeLink, JudgeQuery, JudgeTools, JudgeVerdict, Provider, Reask, SkillRef,
+    SupervisorOutcome, SupervisorQuery, SupervisorTurn, UserTurn, SUPERVISOR_REASK_LIMIT,
+    SUPERVISOR_REDIRECT_NOTE,
 };
 use crate::spawn::{role_of, SharedSpawnHook, SpawnContext, SpawnedProcess, Spawner};
 use crate::stream::{read_stream, StreamOutcome};
-use crate::telemetry::{CandidateAttempt, FellThrough, InvocationTelemetry, TelemetryRole};
+use crate::telemetry::{
+    CandidateAttempt, FellThrough, InvocationTelemetry, JudgePosture, TelemetryRole,
+};
 use crate::transcript::{Message, ToolEvent};
 use crate::usage::Usage;
 
@@ -115,6 +118,33 @@ use turn::TurnSpec;
 
 /// The default judge/simulated-user oneharness config filename.
 const DEFAULT_JUDGE_CONFIG: &str = "oneharness.judge.toml";
+
+/// The judge config the CLI runs a `oneharness` provider under: the one its
+/// config names, else `oneharness.judge.toml` when that file is in the working
+/// directory, else `None` — oneharness's own discovery, behind onejudge's
+/// judge-side defaults. (0.15.0 passed the default file whether or not it
+/// existed, which oneharness refused.)
+#[cfg(feature = "cli")]
+pub(crate) fn cli_judge_config(configured: Option<&Path>) -> Option<PathBuf> {
+    match configured {
+        Some(config) => Some(config.to_path_buf()),
+        None => {
+            let default = Path::new(DEFAULT_JUDGE_CONFIG);
+            default.is_file().then(|| default.to_path_buf())
+        }
+    }
+}
+
+/// The posture an evaluator call under `judge_config` (`None`: discovery) over
+/// `worktree` runs in — what the CLI refuses a writable panel by.
+#[cfg(feature = "cli")]
+pub(crate) fn evaluator_posture(
+    judge_config: Option<&Path>,
+    worktree: &Path,
+) -> Result<JudgePosture> {
+    let configs = posture::evaluator_configs(judge_config, worktree)?;
+    posture::resolve(&configs, worktree)
+}
 
 /// The stable substring in oneharness's error when a harness cannot bind a
 /// `--session` name (its `OneharnessError::SessionUnsupported`). Matching it lets
@@ -353,10 +383,41 @@ impl PartyControl {
     }
 }
 
+/// What an evaluator judge-side call runs under: the config list it layers,
+/// the posture that list resolves to, and whether it asks for tool events.
+struct Evaluator {
+    configs: Vec<PathBuf>,
+    /// `None` when the linked core could not read the list — see
+    /// [`OneharnessProvider::evaluator`].
+    posture: Option<JudgePosture>,
+    events: bool,
+}
+
+/// What this provider's judge side has recorded for the supervisor decision in
+/// flight, taken by [`Provider::take_judge_link`] or
+/// [`Provider::take_judge_tools`].
+#[derive(Default)]
+struct JudgeRecord {
+    posture: Option<JudgePosture>,
+    events: Vec<ToolEvent>,
+}
+
 /// The default [`Provider`]: runs each turn through the `oneharness` engine.
 pub struct OneharnessProvider {
     execution: Execution,
+    /// The judge side's own oneharness config; `None` is discovery.
     judge_config: Option<PathBuf>,
+    /// Appended to every evaluator prompt this provider's judge side is handed.
+    judge_instructions: Option<String>,
+    /// Whether an evaluator call asks for tool events; `None` asks exactly when
+    /// its posture is writable.
+    judge_events: Option<bool>,
+    /// The label this provider judges under ([`Provider::set_judge_label`]).
+    judge_label: RefCell<Option<String>>,
+    /// The posture of the evaluator call in flight, stamped on its telemetry.
+    evaluating: RefCell<Option<JudgePosture>>,
+    /// What the supervisor decisions since the last take recorded.
+    judge_record: RefCell<JudgeRecord>,
     /// Harness ids run against oneharness's deterministic responder instead of a
     /// paid model. Empty for an ordinary run.
     mock_harness: Vec<String>,
@@ -394,6 +455,11 @@ impl OneharnessProvider {
         Self {
             execution: Execution::Library,
             judge_config: Some(PathBuf::from(DEFAULT_JUDGE_CONFIG)),
+            judge_instructions: None,
+            judge_events: None,
+            judge_label: RefCell::new(None),
+            evaluating: RefCell::new(None),
+            judge_record: RefCell::new(JudgeRecord::default()),
             mock_harness: Vec::new(),
             stream: false,
             control: false,
@@ -491,10 +557,91 @@ impl OneharnessProvider {
     /// (default `oneharness.judge.toml`), passed as `oneharness run --config
     /// <path>`. This is where the judge-side harness/model selection lives — onejudge
     /// itself passes no `--harness`/`--model`.
+    ///
+    /// An **evaluator** call — a supervisor decision, verdict or assessment made
+    /// with the worker's tree in hand — passes onejudge's judge-side defaults
+    /// (`mode = "read-only"`) *before* this file, so a `mode` set here, in an
+    /// `ONEHARNESS_*` override or in harness `args` is what the judge runs under;
+    /// with none, it stays read-only. The plain simulated-user turn passes this
+    /// file alone, as it always has.
     #[must_use]
     pub fn with_judge_config(mut self, config: impl Into<PathBuf>) -> Self {
         self.judge_config = Some(config.into());
         self
+    }
+
+    /// Run the judge and simulated user under **oneharness's own discovery**
+    /// instead of a named judge config: the user file, then the project file
+    /// found from the working directory. An evaluator call passes onejudge's
+    /// judge-side defaults followed by exactly those discovered files, so a
+    /// discovered `mode` still decides the judge's posture; the plain
+    /// simulated-user turn passes nothing and lets oneharness discover.
+    #[must_use]
+    pub fn with_judge_config_discovery(mut self) -> Self {
+        self.judge_config = None;
+        self
+    }
+
+    /// Append `instructions` to every evaluator prompt this provider's judge
+    /// side is handed — what to verify and how, for a judge whose posture lets it
+    /// act — the way a system prompt frames the agent. The answer format each
+    /// prompt ends with is unchanged: it is the protocol.
+    #[must_use]
+    pub fn with_judge_instructions(mut self, instructions: impl Into<String>) -> Self {
+        self.judge_instructions = Some(instructions.into());
+        self
+    }
+
+    /// Whether an evaluator call asks its harness for tool events, recorded on
+    /// the judge's decision and observed as
+    /// [`Observation::JudgeTool`](crate::Observation::JudgeTool). Unset, it asks
+    /// exactly when the judge's posture can change the tree — any mode but
+    /// `read-only` and `plan`.
+    #[must_use]
+    pub fn with_judge_events(mut self, events: bool) -> Self {
+        self.judge_events = Some(events);
+        self
+    }
+
+    /// What an evaluator call over `worktree` runs under: onejudge's defaults
+    /// layered under the judge's config (or the discovered files), the posture
+    /// that resolves to, and whether it asks for events.
+    ///
+    /// A list the linked core cannot read is not refused here: the call still
+    /// passes it, and oneharness refuses it with its own words, exactly as it
+    /// always has — onejudge is never stricter about a judge's config than the
+    /// oneharness that runs it. Its posture is then unknown, so it is recorded as
+    /// none, framed as the read-only default, and said so on stderr.
+    fn evaluator(&self, worktree: &str) -> Result<Evaluator> {
+        let worktree = Path::new(worktree);
+        let configs = posture::evaluator_configs(self.judge_config.as_deref(), worktree)?;
+        let posture = match posture::resolve(&configs, worktree) {
+            Ok(posture) => Some(posture),
+            Err(e) => {
+                eprintln!(
+                    "onejudge: warning — {e}; the judge's posture is unknown, so its prompt \
+                     states the read-only default"
+                );
+                None
+            }
+        };
+        let events = self
+            .judge_events
+            .unwrap_or_else(|| posture.as_ref().is_some_and(JudgePosture::is_writable));
+        Ok(Evaluator {
+            configs,
+            posture,
+            events,
+        })
+    }
+
+    /// How `evaluator`'s prompts are framed: its posture, and this judge's
+    /// instructions.
+    fn framing<'a>(&'a self, evaluator: &'a Evaluator) -> JudgeFraming<'a> {
+        JudgeFraming {
+            mode: evaluator.posture.as_ref().map(|p| p.mode.as_str()),
+            instructions: self.judge_instructions.as_deref(),
+        }
     }
 
     /// Declare that the agent side **streams**: the turn asks oneharness to
@@ -763,6 +910,13 @@ impl OneharnessProvider {
     /// and — on a `SessionUnsupported` failure — retrying once without it. The
     /// prompt already inlines the whole transcript, so the retry needs no rebuild.
     ///
+    /// `evaluator` is set for an **evaluator** call — one made with the worker's
+    /// tree in hand — and carries the config list it layers (onejudge's defaults
+    /// first) and whether it asks for events; the call then records its posture
+    /// on its telemetry and, for a supervisor decision, its events for
+    /// [`Provider::take_judge_link`]. A call without one passes the judge config
+    /// alone, exactly as it always has.
+    ///
     /// `control` asks for a **controllable supervisor turn**, and rides exactly the
     /// ladder the agent side does: the most capable call first, and each retry
     /// drops the one thing the previous attempt was refused for. Both refusals cost
@@ -772,6 +926,11 @@ impl OneharnessProvider {
     /// `judge` / `assess` calls carry no session to be addressed by, and the legacy
     /// `user` turn shares the supervisor's session name, so controlling it would
     /// put a second socket on one address.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "each is one independent axis of a judge-side call, threaded through a retry \
+                  ladder that rebuilds the spec per rung; a struct would only rename them"
+    )]
     fn run_judge_side(
         &self,
         op: &str,
@@ -780,22 +939,62 @@ impl OneharnessProvider {
         session: Option<&str>,
         cwd: Option<&str>,
         control: bool,
+        evaluator: Option<&Evaluator>,
+    ) -> Result<Invocation> {
+        *self.evaluating.borrow_mut() = evaluator.and_then(|e| e.posture.clone());
+        let result = self.judge_side_ladder(op, call, prompt, session, cwd, control, evaluator);
+        *self.evaluating.borrow_mut() = None;
+        let invocation = result?;
+        if op == "supervisor" {
+            if let Some(evaluator) = evaluator {
+                let mut record = self.judge_record.borrow_mut();
+                record.posture.clone_from(&evaluator.posture);
+                if evaluator.events {
+                    record.events.extend(invocation.events());
+                }
+            }
+        }
+        Ok(invocation)
+    }
+
+    /// The retry ladder [`run_judge_side`](Self::run_judge_side) runs.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the same axes as `run_judge_side`, which this is the body of"
+    )]
+    fn judge_side_ladder(
+        &self,
+        op: &str,
+        call: JudgeSideCall,
+        prompt: &str,
+        session: Option<&str>,
+        cwd: Option<&str>,
+        control: bool,
+        evaluator: Option<&Evaluator>,
     ) -> Result<Invocation> {
         // Named once, before the ladder, so every rung — including the retry that
         // drops `--session` — records under the same name.
         let history_name = self.judge_side_history_name(call);
+        let configs = match evaluator {
+            Some(evaluator) => evaluator.configs.clone(),
+            None => self.judge_config.iter().cloned().collect(),
+        };
+        let events = evaluator.is_some_and(|evaluator| evaluator.events);
+        let spec = |session: Option<&str>, control: bool| {
+            self.mocked(judge_side_spec(
+                configs.clone(),
+                session,
+                history_name.as_deref(),
+                cwd,
+                control,
+                events,
+                prompt,
+            ))
+        };
         let mut session = session;
         if let Some(name) = session {
             if control && self.wants_control(&self.supervisor) {
-                let spec = self.mocked(judge_side_spec(
-                    self.judge_config.as_deref(),
-                    Some(name),
-                    history_name.as_deref(),
-                    cwd,
-                    true,
-                    prompt,
-                ));
-                match self.run(op, &spec) {
+                match self.run(op, &spec(Some(name), true)) {
                     Ok(result) => {
                         // The address is keyed on the directory the turn ran under,
                         // the same string oneharness slugged to key the store.
@@ -817,15 +1016,7 @@ impl OneharnessProvider {
                 }
             }
             if let Some(name) = session {
-                let spec = self.mocked(judge_side_spec(
-                    self.judge_config.as_deref(),
-                    Some(name),
-                    history_name.as_deref(),
-                    cwd,
-                    false,
-                    prompt,
-                ));
-                match self.run(op, &spec) {
+                match self.run(op, &spec(Some(name), false)) {
                     Ok(result) => return Ok(result),
                     Err(e) if is_session_unsupported(&e) => {
                         eprintln!(
@@ -837,15 +1028,7 @@ impl OneharnessProvider {
                 }
             }
         }
-        let spec = self.mocked(judge_side_spec(
-            self.judge_config.as_deref(),
-            None,
-            history_name.as_deref(),
-            cwd,
-            false,
-            prompt,
-        ));
-        self.run(op, &spec)
+        self.run(op, &spec(None, false))
     }
 
     /// Run one buffered turn and return its parsed single-result report.
@@ -1027,9 +1210,11 @@ impl OneharnessProvider {
                     .set(report::was_redirected(&invocation.report));
             }
         }
-        self.telemetry
-            .borrow_mut()
-            .push(invocation_telemetry(role, invocation));
+        let mut record = invocation_telemetry(role, invocation);
+        if role == TelemetryRole::Judge {
+            record.posture = self.evaluating.borrow().clone();
+        }
+        self.telemetry.borrow_mut().push(record);
     }
 }
 
@@ -1129,6 +1314,8 @@ fn invocation_telemetry(role: TelemetryRole, invocation: &Invocation) -> Invocat
         history_file: report.history_file.clone(),
         // A backend never knows which judge of a panel it is; the panel stamps it.
         judge: None,
+        // Only the provider knows the posture of the call in flight; it stamps it.
+        posture: None,
     }
 }
 
@@ -1213,40 +1400,40 @@ fn respond_spec(
     }
 }
 
-/// Describe a judge or simulated-user turn (no system prompt, no events).
+/// Describe a judge or simulated-user turn (no system prompt).
 /// Harness/model selection comes from the judge config, not from a harness/model
 /// selection onejudge makes.
+///
+/// **No mode, ever.** An evaluator call's read-only default rides `configs` as
+/// its first file ([`posture`]), so it is a default the later files and the
+/// environment can override; a mode on the request would beat them all.
 #[must_use]
 fn judge_side_spec(
-    judge_config: Option<&Path>,
+    configs: Vec<PathBuf>,
     session: Option<&str>,
     history_name: Option<&str>,
     cwd: Option<&str>,
     control: bool,
+    events: bool,
     prompt: &str,
 ) -> TurnSpec {
     TurnSpec {
         system: None,
         cwd: cwd.map(str::to_string),
-        config: judge_config.map(Path::to_path_buf).into_iter().collect(),
+        config: configs,
         // As on the agent side: `OneharnessProvider::mocked` folds it in.
         mock_harness: Vec::new(),
         session: session.map(str::to_string),
         history_name: history_name.map(str::to_string),
-        events: false,
-        // Streaming is about the long agent turn, not the short judgement calls.
+        events,
+        // Streaming is about the long agent turn, not the short judgement calls:
+        // a judge's events arrive on its finished report.
         stream: false,
         // The same expression the agent side uses, for the same reason: turn
         // control is addressed by the `--session` name, so it only ever rides
         // alongside one and is dropped when the session is.
         control: control && session.is_some(),
-        // Only evaluator calls receive a worktree. The plain simulated-user turn
-        // deliberately remains in the harness default mode.
-        mode: if cwd.is_some() {
-            Some(oneharness_core::domain::mode::PermissionMode::ReadOnly)
-        } else {
-            None
-        },
+        mode: None,
         prompt: prompt.to_string(),
     }
 }
@@ -1303,6 +1490,7 @@ impl Provider for OneharnessProvider {
         // the socket run one opened.
         self.agent.reset();
         self.supervisor.reset();
+        *self.judge_record.borrow_mut() = JudgeRecord::default();
     }
 
     fn invocation_telemetry(&self) -> Vec<InvocationTelemetry> {
@@ -1311,6 +1499,38 @@ impl Provider for OneharnessProvider {
 
     fn set_history_scope(&self, scope: Option<&HistoryScope>) {
         *self.history_scope.borrow_mut() = scope.cloned();
+    }
+
+    fn set_judge_label(&self, label: &str) {
+        *self.judge_label.borrow_mut() = Some(label.to_string());
+    }
+
+    // The posture and events of the supervisor decisions since the last take —
+    // taken by a panel after each judge's call, so its decision carries them.
+    fn take_judge_link(&self) -> Option<JudgeLink> {
+        let JudgeRecord { posture, events } = std::mem::take(&mut *self.judge_record.borrow_mut());
+        (posture.is_some() || !events.is_empty()).then(|| JudgeLink {
+            posture,
+            events,
+            ..JudgeLink::default()
+        })
+    }
+
+    // A bare provider's judge events, under its label — `oneharness`, its kind,
+    // unless a caller named it.
+    fn take_judge_tools(&self) -> Vec<JudgeTools> {
+        let events = std::mem::take(&mut self.judge_record.borrow_mut().events);
+        if events.is_empty() {
+            return Vec::new();
+        }
+        vec![JudgeTools {
+            judge: self
+                .judge_label
+                .borrow()
+                .clone()
+                .unwrap_or_else(|| "oneharness".to_string()),
+            events,
+        }]
     }
 
     fn spawned_processes(&self) -> Vec<SpawnedProcess> {
@@ -1357,8 +1577,15 @@ impl Provider for OneharnessProvider {
         session: Option<&str>,
     ) -> Result<UserTurn> {
         let prompt = build_user_prompt(persona, messages);
-        let result =
-            self.run_judge_side("user", JudgeSideCall::User, &prompt, session, None, false)?;
+        let result = self.run_judge_side(
+            "user",
+            JudgeSideCall::User,
+            &prompt,
+            session,
+            None,
+            false,
+            None,
+        )?;
         Ok(UserTurn {
             message: result.reply(),
             stop: false,
@@ -1372,7 +1599,17 @@ impl Provider for OneharnessProvider {
         messages: &[Message],
         session: Option<&str>,
     ) -> Result<SupervisorTurn> {
-        let base = build_supervisor_prompt(query, messages);
+        let evaluator = self.evaluator(query.worktree)?;
+        let base = supervisor_prompt(
+            query,
+            messages,
+            EvidenceContext {
+                worktree: Some(query.worktree),
+                history_files: &[],
+                artifacts: &[],
+            },
+            self.framing(&evaluator),
+        );
         supervise_with_reask(|ask| {
             // The re-ask says what was unusable about the last answer; asking the
             // identical question again mostly buys the identical answer.
@@ -1384,6 +1621,7 @@ impl Provider for OneharnessProvider {
                 session,
                 Some(query.worktree),
                 true,
+                Some(&evaluator),
             )?;
             let outcome = self.supervisor_outcome(ask, &result.reply());
             Ok(SupervisorTurn {
@@ -1400,7 +1638,14 @@ impl Provider for OneharnessProvider {
         session: Option<&str>,
         evidence: EvidenceContext<'_>,
     ) -> Result<SupervisorTurn> {
-        let base = build_supervisor_prompt_with_evidence(query, messages, evidence);
+        let evaluator = evidence
+            .worktree
+            .map(|worktree| self.evaluator(worktree))
+            .transpose()?;
+        let framing = evaluator
+            .as_ref()
+            .map_or_else(JudgeFraming::default, |e| self.framing(e));
+        let base = supervisor_prompt(query, messages, evidence, framing);
         supervise_with_reask(|ask| {
             let mut prompt = format!("{base}{}", self.supervisor_reask_note(ask));
             let mut usage = Usage::default();
@@ -1412,6 +1657,7 @@ impl Provider for OneharnessProvider {
                     session,
                     evidence.worktree,
                     true,
+                    evaluator.as_ref(),
                 )?;
                 if let Some(value) = result.usage() {
                     usage.add(&value);
@@ -1456,8 +1702,15 @@ impl Provider for OneharnessProvider {
     fn judge(&self, query: &JudgeQuery<'_>, messages: &[Message]) -> Result<JudgeVerdict> {
         // Judging is stateless — no session to continue.
         let prompt = build_judge_prompt(query, messages);
-        let result =
-            self.run_judge_side("judge", JudgeSideCall::Judge, &prompt, None, None, false)?;
+        let result = self.run_judge_side(
+            "judge",
+            JudgeSideCall::Judge,
+            &prompt,
+            None,
+            None,
+            false,
+            None,
+        )?;
         let mut verdict = parse_verdict(query.kind, "oneharness:judge", &result.reply())?;
         verdict.usage = result.usage();
         Ok(verdict)
@@ -1469,7 +1722,14 @@ impl Provider for OneharnessProvider {
         messages: &[Message],
         evidence: EvidenceContext<'_>,
     ) -> Result<JudgeVerdict> {
-        let mut prompt = build_judge_prompt_with_evidence(query, messages, evidence);
+        let evaluator = evidence
+            .worktree
+            .map(|worktree| self.evaluator(worktree))
+            .transpose()?;
+        let framing = evaluator
+            .as_ref()
+            .map_or_else(JudgeFraming::default, |e| self.framing(e));
+        let mut prompt = judge_prompt(query, messages, evidence, framing);
         let mut usage = Usage::default();
         for attempt in 0..=crate::provider::EVIDENCE_TOOL_RETRY_LIMIT {
             let result = self.run_judge_side(
@@ -1479,6 +1739,7 @@ impl Provider for OneharnessProvider {
                 None,
                 evidence.worktree,
                 false,
+                evaluator.as_ref(),
             )?;
             if let Some(value) = result.usage() {
                 usage.add(&value);
@@ -1519,8 +1780,15 @@ impl Provider for OneharnessProvider {
 
     fn assess(&self, prompt: &str, messages: &[Message]) -> Result<Assessment> {
         let prompt = build_assessment_prompt(prompt, messages);
-        let result =
-            self.run_judge_side("assess", JudgeSideCall::Assess, &prompt, None, None, false)?;
+        let result = self.run_judge_side(
+            "assess",
+            JudgeSideCall::Assess,
+            &prompt,
+            None,
+            None,
+            false,
+            None,
+        )?;
         let text = result.reply();
         if text.trim().is_empty() {
             return Err(Error::provider(
@@ -1540,7 +1808,14 @@ impl Provider for OneharnessProvider {
         messages: &[Message],
         evidence: EvidenceContext<'_>,
     ) -> Result<Assessment> {
-        let mut prompt = build_assessment_prompt_with_evidence(prompt, messages, evidence);
+        let evaluator = evidence
+            .worktree
+            .map(|worktree| self.evaluator(worktree))
+            .transpose()?;
+        let framing = evaluator
+            .as_ref()
+            .map_or_else(JudgeFraming::default, |e| self.framing(e));
+        let mut prompt = assessment_prompt(prompt, messages, evidence, framing);
         let mut usage = Usage::default();
         for attempt in 0..=crate::provider::EVIDENCE_TOOL_RETRY_LIMIT {
             let result = self.run_judge_side(
@@ -1550,6 +1825,7 @@ impl Provider for OneharnessProvider {
                 None,
                 evidence.worktree,
                 false,
+                evaluator.as_ref(),
             )?;
             if let Some(value) = result.usage() {
                 usage.add(&value);
@@ -1621,10 +1897,11 @@ mod tests {
         );
         // The judge/user side passes the configured file via --config.
         let args = argv_of(&judge_side_spec(
-            provider.judge_config.as_deref(),
+            provider.judge_config.iter().cloned().collect(),
             Some("s"),
             None,
             None,
+            false,
             false,
             "p",
         ));
@@ -1682,10 +1959,11 @@ mod tests {
             .windows(2)
             .any(|w| w == ["--mock-harness", "claude-code"]));
         let judge = argv_of(&provider.mocked(judge_side_spec(
-            provider.judge_config.as_deref(),
+            provider.judge_config.iter().cloned().collect(),
             Some("s"),
             None,
             None,
+            false,
             false,
             "p",
         )));
@@ -1695,11 +1973,17 @@ mod tests {
 
         // And an ordinary provider asks for no responder at all.
         let plain = OneharnessProvider::new();
-        assert!(
-            !argv_of(&plain.mocked(judge_side_spec(None, None, None, None, false, "p")))
-                .iter()
-                .any(|arg| arg == "--mock-harness")
-        );
+        assert!(!argv_of(&plain.mocked(judge_side_spec(
+            Vec::new(),
+            None,
+            None,
+            None,
+            false,
+            false,
+            "p"
+        )))
+        .iter()
+        .any(|arg| arg == "--mock-harness"));
     }
 
     /// A hook that records nothing and refuses nothing — this is about which seam
@@ -1773,7 +2057,7 @@ mod tests {
         assert!(argv_of(&agent).iter().any(|a| a == "--stream"));
         // The judge / simulated-user side stays buffered: streaming is about the
         // long agent turn, not the short judgement calls.
-        let judge = judge_side_spec(None, Some("s"), None, None, false, "p");
+        let judge = judge_side_spec(Vec::new(), Some("s"), None, None, false, false, "p");
         assert!(!judge.stream);
         assert!(!argv_of(&judge).iter().any(|a| a == "--stream"));
     }
@@ -1781,10 +2065,11 @@ mod tests {
     #[test]
     fn a_judge_side_spec_selects_by_config_not_by_harness_or_model() {
         let args = argv_of(&judge_side_spec(
-            Some(Path::new("oneharness.judge.toml")),
+            vec![PathBuf::from("oneharness.judge.toml")],
             None,
             None,
             None,
+            false,
             false,
             "p",
         ));
@@ -1797,7 +2082,15 @@ mod tests {
             .any(|w| w == ["--config", "oneharness.judge.toml"]));
         // With no judge config, no `--config` is passed (oneharness discovers its
         // own default).
-        let no_config = argv_of(&judge_side_spec(None, None, None, None, false, "p"));
+        let no_config = argv_of(&judge_side_spec(
+            Vec::new(),
+            None,
+            None,
+            None,
+            false,
+            false,
+            "p",
+        ));
         assert!(!no_config.iter().any(|a| a == "--config"));
     }
 
@@ -1811,15 +2104,16 @@ mod tests {
         };
         let scope = HistoryScope::new("run-3");
         let user = scope.name(JudgeSideCall::User);
-        let controlled = judge_side_spec(None, Some(&user), Some(&user), None, true, "p");
+        let controlled =
+            judge_side_spec(Vec::new(), Some(&user), Some(&user), None, true, false, "p");
         assert_eq!(named(&controlled).as_deref(), Some("run-3-user"));
         // The session-unsupported retry drops `--session` and keeps the name, so a
         // harness that cannot bind a session still records under it.
-        let retry = judge_side_spec(None, None, Some(&user), None, false, "p");
+        let retry = judge_side_spec(Vec::new(), None, Some(&user), None, false, false, "p");
         assert!(!argv_of(&retry).iter().any(|a| a == "--session"));
         assert_eq!(named(&retry).as_deref(), Some("run-3-user"));
         // No base session: no name, and oneharness derives one as it always has.
-        let unscoped = judge_side_spec(None, None, None, None, false, "p");
+        let unscoped = judge_side_spec(Vec::new(), None, None, None, false, false, "p");
         assert_eq!(named(&unscoped), None);
     }
 
@@ -1851,25 +2145,90 @@ mod tests {
     }
 
     #[test]
-    fn evaluator_worktree_enforces_read_only_while_plain_user_stays_default() {
-        let evaluator = judge_side_spec(None, None, None, Some("/work"), false, "p");
-        assert_eq!(
-            evaluator.mode,
-            Some(oneharness_core::domain::mode::PermissionMode::ReadOnly)
+    fn an_evaluator_call_layers_the_defaults_first_and_sets_no_mode() {
+        // The one change to what onejudge asks oneharness for: the defaults file
+        // leads the config list, and no mode rides the request — so the judge's
+        // config, the environment and harness args decide the posture.
+        let dir = std::env::temp_dir().join(format!("oj-evaluator-spec-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let judge = dir.join("judge.toml");
+        std::fs::write(&judge, "timeout = 30\n").unwrap();
+        let provider = OneharnessProvider::new().with_judge_config(&judge);
+        let evaluator = provider.evaluator(dir.to_str().unwrap()).unwrap();
+        assert_eq!(evaluator.posture.as_ref().unwrap().mode, "read-only");
+        assert!(
+            !evaluator.events,
+            "a read-only judge asks for no events by default"
         );
-        assert_eq!(
-            turn::request(&evaluator).mode,
-            Some(oneharness_core::domain::mode::PermissionMode::ReadOnly)
+        let spec = judge_side_spec(
+            evaluator.configs.clone(),
+            None,
+            None,
+            dir.to_str(),
+            false,
+            evaluator.events,
+            "p",
         );
-        assert!(argv_of(&evaluator)
+        let defaults = posture::defaults_file().unwrap();
+        assert_eq!(spec.config, [defaults.clone(), judge.clone()]);
+        assert_eq!(spec.mode, None);
+        assert_eq!(
+            turn::request(&spec).config,
+            [defaults.clone(), judge.clone()]
+        );
+        assert_eq!(turn::request(&spec).mode, None);
+        let argv = argv_of(&spec);
+        let configs: Vec<&String> = argv
             .windows(2)
-            .any(|pair| pair == ["--mode", "read-only"]));
+            .filter(|w| w[0] == "--config")
+            .map(|w| &w[1])
+            .collect();
+        assert_eq!(
+            configs,
+            [
+                &defaults.display().to_string(),
+                &judge.display().to_string()
+            ]
+        );
+        assert!(!argv.iter().any(|arg| arg == "--mode"));
 
-        let user = judge_side_spec(None, None, None, None, false, "p");
+        // A judge-side call with no worktree is unchanged: the judge config alone.
+        let user = judge_side_spec(
+            provider.judge_config.iter().cloned().collect(),
+            None,
+            None,
+            None,
+            false,
+            false,
+            "p",
+        );
+        assert_eq!(user.config, [judge]);
         assert_eq!(user.mode, None);
-        assert!(!argv_of(&user).iter().any(|arg| arg == "--mode"));
         let worker = respond_spec("s", "/work", None, None, false, false, "p");
         assert_eq!(worker.mode, None);
+    }
+
+    #[test]
+    fn a_writable_judge_asks_for_events_unless_told_not_to() {
+        let dir = std::env::temp_dir().join(format!("oj-evaluator-events-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let judge = dir.join("judge.toml");
+        std::fs::write(&judge, "mode = \"auto\"\n").unwrap();
+        let worktree = dir.to_str().unwrap();
+        let auto = OneharnessProvider::new().with_judge_config(&judge);
+        assert!(auto.evaluator(worktree).unwrap().events);
+        let quiet = OneharnessProvider::new()
+            .with_judge_config(&judge)
+            .with_judge_events(false);
+        assert!(!quiet.evaluator(worktree).unwrap().events);
+        let read_only = dir.join("read-only.toml");
+        std::fs::write(&read_only, "").unwrap();
+        let loud = OneharnessProvider::new()
+            .with_judge_config(&read_only)
+            .with_judge_events(true);
+        assert!(loud.evaluator(worktree).unwrap().events);
+        let spec = judge_side_spec(Vec::new(), None, None, Some(worktree), false, true, "p");
+        assert!(argv_of(&spec).iter().any(|arg| arg == "--events"));
     }
 
     #[test]
@@ -2051,25 +2410,43 @@ mod tests {
     #[test]
     fn the_judge_side_rides_the_same_control_expression_the_agent_side_does() {
         // Asked for, alongside the `--session` name that addresses it.
-        assert!(
-            argv_of(&judge_side_spec(None, Some("s"), None, None, true, "p"))
-                .iter()
-                .any(|a| a == "--control")
-        );
+        assert!(argv_of(&judge_side_spec(
+            Vec::new(),
+            Some("s"),
+            None,
+            None,
+            true,
+            false,
+            "p"
+        ))
+        .iter()
+        .any(|a| a == "--control"));
         // Not asked for.
-        assert!(
-            !argv_of(&judge_side_spec(None, Some("s"), None, None, false, "p"))
-                .iter()
-                .any(|a| a == "--control")
-        );
+        assert!(!argv_of(&judge_side_spec(
+            Vec::new(),
+            Some("s"),
+            None,
+            None,
+            false,
+            false,
+            "p"
+        ))
+        .iter()
+        .any(|a| a == "--control"));
         // Asked for, but with no session to be addressed by: dropped, exactly as it
         // is on the agent side, because the socket is keyed on the session name.
-        assert!(!judge_side_spec(None, None, None, None, true, "p").control);
-        assert!(
-            !argv_of(&judge_side_spec(None, None, None, None, true, "p"))
-                .iter()
-                .any(|a| a == "--control")
-        );
+        assert!(!judge_side_spec(Vec::new(), None, None, None, true, false, "p").control);
+        assert!(!argv_of(&judge_side_spec(
+            Vec::new(),
+            None,
+            None,
+            None,
+            true,
+            false,
+            "p"
+        ))
+        .iter()
+        .any(|a| a == "--control"));
     }
 
     #[test]

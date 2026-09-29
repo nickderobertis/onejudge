@@ -1392,6 +1392,8 @@ fn decision(judge: &str, decision: Decision, reason: &str) -> JudgeDecision {
         reason: reason.into(),
         labels: Default::default(),
         run_id: None,
+        posture: None,
+        events: Vec::new(),
     }
 }
 
@@ -4109,6 +4111,11 @@ enum Seen {
         decision: onejudge::Decision,
         reason: String,
     },
+    JudgeTool {
+        turn: usize,
+        judge: String,
+        name: Option<String>,
+    },
 }
 
 /// Copy one borrowed [`Observation`] into an owned record.
@@ -4143,6 +4150,11 @@ fn observed(observation: &Observation<'_>) -> Seen {
             kind: decided.kind.to_string(),
             decision: decided.decision,
             reason: decided.reason.to_string(),
+        },
+        Observation::JudgeTool(tool) => Seen::JudgeTool {
+            turn: tool.turn,
+            judge: tool.judge.to_string(),
+            name: tool.event.name.clone(),
         },
     }
 }
@@ -4293,6 +4305,7 @@ fn an_observing_multi_turn_run_reports_both_parties_without_disturbing_the_strea
             Seen::Said { turn, role, .. } => ("said", *turn, Some(*role)),
             Seen::Closed { turn, role, .. } => ("closed", *turn, Some(*role)),
             Seen::Judged { turn, .. } => ("judged", *turn, None),
+            Seen::JudgeTool { turn, .. } => ("judge-tool", *turn, None),
         })
         .collect();
     assert_eq!(

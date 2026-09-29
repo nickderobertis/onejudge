@@ -16,7 +16,7 @@ from jsonschema import Draft202012Validator
 from jsonschema.protocols import Validator
 
 from ._errors import ContractError, OneJudgeProcessError, OneJudgeTimeoutError
-from ._generated_types import FailureReport, RunConfig, RunReport, StreamEvent
+from ._generated_types import FailureReport, JudgeTool, RunConfig, RunReport, StreamEvent
 from ._result import RunResult
 
 _STREAM_LIMIT = 16 * 1024 * 1024
@@ -24,6 +24,11 @@ _STREAM_LIMIT = 16 * 1024 * 1024
 #: What a caller passes as ``on_event`` to watch a run while it is still running.
 #: It is called once per tool event, in the order onejudge published them.
 EventHandler = Callable[[StreamEvent], None]
+
+#: What a caller passes as ``on_judge_tool`` to watch what a judge did while it
+#: decided. It is called once per tool event a judge's harness reported, in order,
+#: for a judge that asked for events (a writable posture, or ``events: true``).
+JudgeToolHandler = Callable[[JudgeTool], None]
 
 _T = TypeVar("_T")
 
@@ -60,7 +65,7 @@ def _failure_report(stdout: bytes, stderr: str) -> Optional[FailureReport]:
 
     A buffered ``--format json`` run writes it on stdout, where the report would
     have gone; a streamed run writes it as one compact JSON line on stderr, because
-    stdout is the ``event* result EOF`` protocol. Absent or unreadable output is
+    stdout is the ``(event | judge_tool)* result EOF`` protocol. Absent or unreadable output is
     simply no document — the process error stands on its own either way.
     """
     candidates = [stdout.decode("utf-8", errors="replace")]
@@ -95,11 +100,12 @@ async def _bounded(awaitable: Awaitable[_T], timeout: Optional[float]) -> _T:
 async def _stream_exchange(
     process: asyncio.subprocess.Process,
     task: str,
-    on_event: EventHandler,
+    on_event: Optional[EventHandler],
+    on_judge_tool: Optional[JudgeToolHandler],
 ) -> tuple[Optional[RunReport], bytes]:
     """Read `onejudge run --stream`'s NDJSON, calling back per event as it arrives.
 
-    The grammar is `event* result EOF`, and every line is validated against the
+    The grammar is `(event | judge_tool)* result EOF`, and every line is validated against the
     same generated contract the buffered path uses — so an unreadable line, an
     envelope this SDK does not model, a stream that stops before its terminal
     `result` line, or anything written after that line is loud rather than a
@@ -118,7 +124,7 @@ async def _stream_exchange(
         except (BrokenPipeError, ConnectionResetError):  # pragma: no cover - OS race
             pass
         stdin.close()
-        report = await _read_lines(stdout, on_event)
+        report = await _read_lines(stdout, on_event, on_judge_tool)
         errors = await draining
     except BaseException:
         # Every exceptional exit owns the same cleanup: a contract violation, a
@@ -148,9 +154,10 @@ async def _discard(draining: asyncio.Future[bytes]) -> None:
 
 async def _read_lines(
     stdout: asyncio.StreamReader,
-    on_event: EventHandler,
+    on_event: Optional[EventHandler],
+    on_judge_tool: Optional[JudgeToolHandler],
 ) -> Optional[RunReport]:
-    """Read the whole stream, enforcing its `event* result EOF` grammar."""
+    """Read the whole stream, enforcing its `(event | judge_tool)* result EOF` grammar."""
     report: Optional[RunReport] = None
     async for raw in stdout:
         line = raw.decode("utf-8", errors="replace").strip()
@@ -161,12 +168,20 @@ async def _read_lines(
             # result, and an unmodelled envelope are the same violation. Ignoring
             # them would let a run that overran its own protocol look clean.
             raise ContractError(f"onejudge wrote a line after its terminal result line: {line}")
-        report = _stream_line(line, on_event)
+        report = _stream_line(line, on_event, on_judge_tool)
     return report
 
 
-def _stream_line(line: str, on_event: EventHandler) -> Optional[RunReport]:
-    """Dispatch one stream line, returning the report when it is the terminal one."""
+def _stream_line(
+    line: str,
+    on_event: Optional[EventHandler],
+    on_judge_tool: Optional[JudgeToolHandler],
+) -> Optional[RunReport]:
+    """Dispatch one stream line, returning the report when it is the terminal one.
+
+    Every line is validated whether or not a handler wants it, so a malformed
+    judge line is as loud as a malformed event.
+    """
     try:
         value = json.loads(line)
     except json.JSONDecodeError as error:
@@ -176,7 +191,13 @@ def _stream_line(line: str, on_event: EventHandler) -> Optional[RunReport]:
     kind = value.pop("type", None)
     if kind == "event":
         event = _validate("stream_event", value, "invalid onejudge stream event")
-        on_event(cast("StreamEvent", event))
+        if on_event is not None:
+            on_event(cast("StreamEvent", event))
+        return None
+    if kind == "judge_tool":
+        tool = _validate("judge_tool", value, "invalid onejudge judge tool event")
+        if on_judge_tool is not None:
+            on_judge_tool(cast("JudgeTool", tool))
         return None
     if kind == "result":
         return cast(
@@ -230,16 +251,22 @@ class OneJudge:
         env: Optional[Mapping[str, str]] = None,
         timeout: Optional[float] = None,
         on_event: Optional[EventHandler] = None,
+        on_judge_tool: Optional[JudgeToolHandler] = None,
     ) -> RunResult:
         """Run one task and return exit-faithful process and report data.
 
         Pass ``on_event`` to watch the run while it is still running: onejudge then
         publishes each tool event as it happens (`docs/streaming.md`) and this call
-        invokes the handler per event before returning the same final result.
+        invokes the handler per event before returning the same final result. Pass
+        ``on_judge_tool`` to watch, the same way, the tool events a judge reported
+        while deciding; either handler streams the run.
         """
         parsed = _input(config)
         if on_event is not None and not callable(on_event):
             raise ContractError("invalid onejudge on_event: expected a callable")
+        if on_judge_tool is not None and not callable(on_judge_tool):
+            raise ContractError("invalid onejudge on_judge_tool: expected a callable")
+        streaming = on_event is not None or on_judge_tool is not None
         if not isinstance(task, str):
             raise ContractError("invalid onejudge task: expected a string")
         if provider not in (None, "oneharness", "command", "split"):
@@ -256,7 +283,7 @@ class OneJudge:
             config_path = Path(directory) / "effective.onejudge.json"
             config_path.write_text(json.dumps(parsed), encoding="utf-8")
             args = ["run", str(config_path), "--task", "-", "--format", "json"]
-            if on_event is not None:
+            if streaming:
                 args.append("--stream")
             if provider is not None:
                 args.extend(("--provider", provider))
@@ -272,13 +299,13 @@ class OneJudge:
             stdout_bytes = b""
             streamed: Optional[RunReport] = None
             try:
-                if on_event is None:
+                if not streaming:
                     stdout_bytes, stderr_bytes = await _bounded(
                         process.communicate(task.encode()), timeout
                     )
                 else:
                     streamed, stderr_bytes = await _bounded(
-                        _stream_exchange(process, task, on_event), timeout
+                        _stream_exchange(process, task, on_event, on_judge_tool), timeout
                     )
             except asyncio.TimeoutError as error:
                 await _terminate(process)
@@ -290,7 +317,7 @@ class OneJudge:
         returncode = process.returncode or 0
         if returncode not in (0, 1):
             raise OneJudgeProcessError(returncode, stderr, _failure_report(stdout_bytes, stderr))
-        if on_event is not None:
+        if streaming:
             if streamed is None:
                 raise ContractError("onejudge stream ended without a terminal result line")
             return RunResult(exit_code=returncode, stderr=stderr, raw=streamed)

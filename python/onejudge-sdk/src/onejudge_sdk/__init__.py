@@ -1,6 +1,6 @@
 """Async Python SDK for the onejudge CLI."""
 
-from ._client import EventHandler, OneJudge
+from ._client import EventHandler, JudgeToolHandler, OneJudge
 from ._errors import ContractError, OneJudgeProcessError, OneJudgeTimeoutError
 from ._generated_types import (
     CandidateAttempt,
@@ -14,6 +14,8 @@ from ._generated_types import (
     JudgeDecision,
     JudgedTurn,
     JudgeKind,
+    JudgePosture,
+    JudgeTool,
     JudgeVerdict,
     Message,
     NamedVerdict,
@@ -46,6 +48,9 @@ __all__ = [
     "HarnessAttribution",
     "JudgeDecision",
     "JudgeKind",
+    "JudgePosture",
+    "JudgeTool",
+    "JudgeToolHandler",
     "JudgeVerdict",
     "JudgedTurn",
     "Message",

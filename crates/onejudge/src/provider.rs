@@ -141,13 +141,36 @@ pub struct UserTurn {
 /// labels the backend's run was passed and the id it was recorded under.
 ///
 /// Reported through [`Provider::take_judge_link`] and carried onto that judge's
-/// [`JudgeDecision`](crate::JudgeDecision) as `labels` and `run_id`.
+/// [`JudgeDecision`](crate::JudgeDecision) as `labels`, `run_id`, `posture` and
+/// `events`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct JudgeLink {
     /// Exactly the labels the run was passed, `KEY` → `VALUE`.
     pub labels: std::collections::BTreeMap<String, String>,
     /// The id the run was recorded under, when the backend reported one.
     pub run_id: Option<String>,
+    /// The permission posture the call ran under and the layer that set it, when
+    /// the backend sets one (an evaluator call on a
+    /// [`OneharnessProvider`](crate::OneharnessProvider)).
+    pub posture: Option<crate::JudgePosture>,
+    /// The tool events the judge's harness reported while deciding, when it asked
+    /// for them.
+    pub events: Vec<ToolEvent>,
+}
+
+/// The tool events a judge's harness reported during one supervisor decision,
+/// under the label that judge judges as.
+///
+/// What [`Provider::take_judge_tools`] hands a bare (non-panel) provider's caller;
+/// a [`JudgePanel`](crate::JudgePanel)'s judges carry theirs on their
+/// [`JudgeDecision`](crate::JudgeDecision)s instead.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JudgeTools {
+    /// The judge's label: its panel label, or the provider's own
+    /// ([`Provider::set_judge_label`], else its kind) for a bare provider.
+    pub judge: String,
+    /// The events, in the order the harness reported them.
+    pub events: Vec<ToolEvent>,
 }
 
 /// Inputs for one per-turn supervisor decision.
@@ -470,6 +493,20 @@ pub trait Provider {
         None
     }
 
+    /// Take the tool events this provider's judge side reported during the
+    /// supervisor decisions made since the last take, when it asked for them.
+    ///
+    /// The engine takes them after every supervisor call and delivers each to an
+    /// observer as an [`Observation::JudgeTool`](crate::Observation::JudgeTool)
+    /// before the turn's decisions. A backend whose events already travelled on
+    /// [`Provider::take_judge_link`] — every judge of a
+    /// [`JudgePanel`](crate::JudgePanel) — has none left here, so nothing is
+    /// delivered twice. Defaulted to none, which is the truth for a backend that
+    /// asks its judge side for no events.
+    fn take_judge_tools(&self) -> Vec<JudgeTools> {
+        Vec::new()
+    }
+
     /// Run one assistant/skill turn given the conversation so far.
     ///
     /// `session`, when `Some`, is a **caller-owned session name** the engine
@@ -710,10 +747,48 @@ pub fn build_supervisor_prompt_with_evidence(
     messages: &[Message],
     evidence: EvidenceContext<'_>,
 ) -> String {
+    supervisor_prompt(query, messages, evidence, JudgeFraming::default())
+}
+
+/// How an evaluator judge's prompt is framed beyond the transcript and the
+/// question: the posture the judge actually runs under, and the instructions its
+/// configuration appends. The default — read-only, no instructions — frames every
+/// prompt exactly as the public builders always have.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct JudgeFraming<'a> {
+    /// The judge's effective oneharness permission mode; `None` is read-only.
+    pub(crate) mode: Option<&'a str>,
+    /// Instructions appended to every evaluator prompt this judge is handed.
+    pub(crate) instructions: Option<&'a str>,
+}
+
+impl JudgeFraming<'_> {
+    /// `prompt`, with this judge's instructions appended when it has any.
+    fn finish(self, prompt: String) -> String {
+        match self
+            .instructions
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+        {
+            Some(instructions) => {
+                format!("{prompt}\n\nInstructions for this judge:\n{instructions}")
+            }
+            None => prompt,
+        }
+    }
+}
+
+/// The supervisor prompt, framed for the judge that will answer it.
+pub(crate) fn supervisor_prompt(
+    query: &SupervisorQuery<'_>,
+    messages: &[Message],
+    evidence: EvidenceContext<'_>,
+    framing: JudgeFraming<'_>,
+) -> String {
     let criterion = query.done_when.unwrap_or(
         "No explicit completion criterion was supplied; continue unless the original task is clearly complete.",
     );
-    format!(
+    framing.finish(format!(
         "You are the simulated USER and completion supervisor for an AI agent.\n\n\
          Original task:\n{task}\n\nSupervisor persona:\n{persona}\n\n\
          Completion criterion:\n{criterion}\n\n{notes}{evidence}\
@@ -735,8 +810,8 @@ pub fn build_supervisor_prompt_with_evidence(
             .map(|block| format!("{block}\n"))
             .unwrap_or_default(),
         transcript = render_transcript(messages, true),
-        evidence = evidence_prompt(evidence),
-    )
+        evidence = evidence_prompt(evidence, framing.mode),
+    ))
 }
 
 /// Parse and strictly validate the supervisor's discriminated JSON response.
@@ -875,9 +950,19 @@ pub fn build_judge_prompt_with_evidence(
     messages: &[Message],
     evidence: EvidenceContext<'_>,
 ) -> String {
+    judge_prompt(query, messages, evidence, JudgeFraming::default())
+}
+
+/// The criterion prompt, framed for the judge that will answer it.
+pub(crate) fn judge_prompt(
+    query: &JudgeQuery<'_>,
+    messages: &[Message],
+    evidence: EvidenceContext<'_>,
+    framing: JudgeFraming<'_>,
+) -> String {
     let transcript = render_transcript(messages, true);
-    let evidence = evidence_prompt(evidence);
-    match query.kind {
+    let evidence = evidence_prompt(evidence, framing.mode);
+    let prompt = match query.kind {
         JudgeKind::Boolean => format!(
             "You are a strict, careful evaluator of an AI assistant's behavior.\n\n\
              Transcript (assistant tool actions are shown as `[tool]` lines):\n{transcript}\n\n{evidence}\
@@ -900,7 +985,8 @@ pub fn build_judge_prompt_with_evidence(
                 criterion = query.criterion,
             )
         }
-    }
+    };
+    framing.finish(prompt)
 }
 
 /// Build a free-text assessment prompt over the events-aware transcript.
@@ -916,18 +1002,31 @@ pub fn build_assessment_prompt_with_evidence(
     messages: &[Message],
     evidence: EvidenceContext<'_>,
 ) -> String {
+    assessment_prompt(prompt, messages, evidence, JudgeFraming::default())
+}
+
+/// The assessment prompt, framed for the judge that will answer it.
+pub(crate) fn assessment_prompt(
+    prompt: &str,
+    messages: &[Message],
+    evidence: EvidenceContext<'_>,
+    framing: JudgeFraming<'_>,
+) -> String {
     let transcript = render_transcript(messages, true);
-    let evidence = evidence_prompt(evidence);
-    format!(
+    let evidence = evidence_prompt(evidence, framing.mode);
+    framing.finish(format!(
         "You are a careful evaluator of an AI assistant's behavior.\n\n\
          Transcript (assistant tool actions are shown as `[tool]` lines):\n{transcript}\n\n{evidence}\
          Assessment request: {prompt}\n\n\
          Answer the assessment request concisely in free-running text. Return only \
          the assessment text."
-    )
+    ))
 }
 
-/// Semantic marker shared by every evaluator prompt and deterministic double.
+/// The heading of the evidence contract a **read-only** evaluator is handed — the
+/// default posture, and the one every prompt the public builders compose carries.
+/// A judge whose configuration grants another mode is handed
+/// `EVIDENCE CONTRACT (MODE: <mode>)` instead, stating the posture it has.
 pub const EVIDENCE_PROMPT_MARKER: &str = "EVIDENCE CONTRACT (READ-ONLY, ENFORCED)";
 /// Maximum number of fixed Git evidence requests before a verdict is required.
 pub const EVIDENCE_TOOL_RETRY_LIMIT: u32 = 4;
@@ -1047,7 +1146,11 @@ fn hardened_git(worktree: &str, args: &[&str]) -> Result<String> {
     })
 }
 
-fn evidence_prompt(context: EvidenceContext<'_>) -> String {
+/// The evidence contract for a judge running in `mode` (`None` or `read-only`:
+/// today's read-only contract, byte for byte). Any other mode states the posture
+/// the judge actually has instead of forbidding a shell, and still offers the
+/// closed `git_status` / `git_diff` requests.
+fn evidence_prompt(context: EvidenceContext<'_>, mode: Option<&str>) -> String {
     let worktree = context.worktree.unwrap_or("(not supplied)");
     let histories = if context.history_files.is_empty() {
         "  (none supplied)".to_string()
@@ -1059,16 +1162,49 @@ fn evidence_prompt(context: EvidenceContext<'_>) -> String {
             .collect::<Vec<_>>()
             .join("\n")
     };
+    let contract = match mode.filter(|mode| *mode != "read-only") {
+        None => format!(
+            "{EVIDENCE_PROMPT_MARKER}\n\
+             `[tool]` lines are abbreviated summaries; absence there is not evidence of absence. \
+             Only read-only tools may inspect files, git state, and full history; no change is permitted, \
+             and this restriction is enforced. Restrictive evaluators must use file-reading or glob tools \
+             directly, never a shell command. Before the final answer you may request exactly \
+             `{{\"tool\":\"git_status\"}}` or `{{\"tool\":\"git_diff\"}}`; no other member is allowed."
+        ),
+        Some(mode) => format!(
+            "EVIDENCE CONTRACT (MODE: {mode})\n\
+             `[tool]` lines are abbreviated summaries; absence there is not evidence of absence. \
+             You run in the `{mode}` permission mode: {posture} Use the tools it grants to inspect \
+             files, git state, and full history, and to verify the work yourself where it allows — \
+             for example by reading the commit log or running the tests. The worker continues from \
+             this worktree, so leave it as you found it. Before the final answer you may also request \
+             exactly `{{\"tool\":\"git_status\"}}` or `{{\"tool\":\"git_diff\"}}`; no other member is allowed.",
+            posture = posture_of(mode),
+        ),
+    };
     format!(
-        "{EVIDENCE_PROMPT_MARKER}\n\
-         `[tool]` lines are abbreviated summaries; absence there is not evidence of absence. \
-         Only read-only tools may inspect files, git state, and full history; no change is permitted, \
-         and this restriction is enforced. Restrictive evaluators must use file-reading or glob tools \
-         directly, never a shell command. Before the final answer you may request exactly \
-         `{{\"tool\":\"git_status\"}}` or `{{\"tool\":\"git_diff\"}}`; no other member is allowed.\n\
+        "{contract}\n\
          Worktree: {worktree}\nHistory files (exact producer-returned paths):\n{histories}\n\n{artifacts}",
         artifacts = artifacts_prompt(&context),
     )
+}
+
+/// What a oneharness permission mode grants, in the words a judge acts on.
+fn posture_of(mode: &str) -> &'static str {
+    match mode {
+        "plan" => "you may read and research, and change nothing.",
+        "default" => {
+            "the harness's own approval flow, run unattended: a tool that needs approval is \
+             refused rather than asked about."
+        }
+        "edit" => "file edits are approved; shell commands are still gated.",
+        "auto" => {
+            "tools the harness judges safe — shell commands among them — are approved; risky \
+             ones are gated."
+        }
+        "bypass" => "every tool is approved, shell commands included, with no gating.",
+        _ => "the tools your harness grants in it are available to you.",
+    }
 }
 
 /// The most files listed beneath one named artifact directory.
@@ -1839,11 +1975,14 @@ mod tests {
     #[test]
     fn no_named_artifacts_leave_the_evidence_contract_byte_identical() {
         let histories = vec!["/h.jsonl".to_string()];
-        let prompt = evidence_prompt(EvidenceContext {
-            worktree: Some("/w"),
-            history_files: &histories,
-            artifacts: &[],
-        });
+        let prompt = evidence_prompt(
+            EvidenceContext {
+                worktree: Some("/w"),
+                history_files: &histories,
+                artifacts: &[],
+            },
+            None,
+        );
         assert_eq!(
             prompt,
             format!(
@@ -1903,11 +2042,14 @@ mod tests {
             "empty".to_string(),
         ];
         let worktree = root.display().to_string();
-        let prompt = evidence_prompt(EvidenceContext {
-            worktree: Some(&worktree),
-            history_files: &[],
-            artifacts: &named,
-        });
+        let prompt = evidence_prompt(
+            EvidenceContext {
+                worktree: Some(&worktree),
+                history_files: &[],
+                artifacts: &named,
+            },
+            None,
+        );
 
         let section = prompt
             .split_once("ARTIFACTS TO READ DIRECTLY\n")
@@ -1979,11 +2121,14 @@ mod tests {
         let readable = fs::read_dir(plans.join("locked")).is_ok();
         let named = vec![".plans".to_string()];
         let worktree = root.display().to_string();
-        let prompt = evidence_prompt(EvidenceContext {
-            worktree: Some(&worktree),
-            history_files: &[],
-            artifacts: &named,
-        });
+        let prompt = evidence_prompt(
+            EvidenceContext {
+                worktree: Some(&worktree),
+                history_files: &[],
+                artifacts: &named,
+            },
+            None,
+        );
         fs::set_permissions(plans.join("locked"), fs::Permissions::from_mode(0o755)).unwrap();
 
         let mut listed: Vec<&str> = prompt

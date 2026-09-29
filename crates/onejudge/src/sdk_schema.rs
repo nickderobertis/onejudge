@@ -11,7 +11,7 @@ use serde::Serialize;
 use crate::{
     cli::{Config, FailureReport},
     note::Note,
-    Observation, Report, StreamEvent,
+    JudgeTool, Observation, Report, StreamEvent,
 };
 
 /// The deterministic bundle of onejudge's public SDK input/output contracts.
@@ -23,8 +23,12 @@ pub struct SdkSchemaBundle {
     pub report: Schema,
     /// One live tool-event envelope emitted during a streaming run.
     pub stream_event: Schema,
+    /// One tool event a judge's harness reported deciding, as a streaming run's
+    /// `judge_tool` line carries it (without its `type` tag).
+    pub judge_tool: Schema,
     /// One live observation of a run in progress — a turn's opening, a tool event,
-    /// a party's reply, or a turn's close — as an in-process embedder receives it.
+    /// a party's reply, a turn's close, a judge's decision or a judge's tool event —
+    /// as an in-process embedder receives it.
     pub observation: Schema,
     /// Versioned JSON document emitted instead of a report when a `--format json`
     /// run fails, carrying the classified error and the harness attribution the
@@ -192,6 +196,7 @@ pub fn bundle() -> SdkSchemaBundle {
         run_config: schemars::schema_for!(Config),
         report: schema_for_serialize::<Report>(),
         stream_event: schema_for_serialize::<StreamEvent<'static>>(),
+        judge_tool: schema_for_serialize::<JudgeTool<'static>>(),
         observation: schema_for_serialize::<Observation<'static>>(),
         failure_report: schema_for_serialize::<FailureReport>(),
         frames: frame_schemas()

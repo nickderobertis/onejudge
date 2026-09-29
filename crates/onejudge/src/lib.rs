@@ -102,8 +102,8 @@ mod usage;
 pub use command::CommandProvider;
 pub use control::{ControlAddress, ControlOutcome};
 pub use engine::{
-    Conversation, Engine, JudgeDecided, Observation, Outcome, Settings, SimulatedUser, Skill,
-    StreamEvent, TurnClosed, TurnMessage, TurnOpened, NOOP_SETTLE_LIMIT,
+    Conversation, Engine, JudgeDecided, JudgeTool, Observation, Outcome, Settings, SimulatedUser,
+    Skill, StreamEvent, TurnClosed, TurnMessage, TurnOpened, NOOP_SETTLE_LIMIT,
 };
 pub use error::{Error, ProviderErrorKind, Result};
 pub use history_name::{HistoryScope, JudgeSideCall};
@@ -119,9 +119,9 @@ pub use provider::{
     build_judge_prompt_with_evidence, build_respond_prompt, build_supervisor_prompt,
     build_supervisor_prompt_with_evidence, build_user_prompt, latest_or_inline,
     latest_user_message, parse_supervisor, parse_verdict, render_transcript, supervise_with_reask,
-    Ask, Assessment, AssistantTurn, EvidenceContext, JudgeKind, JudgeLink, JudgeQuery, JudgeValue,
-    JudgeVerdict, Provider, Reask, SkillRef, SupervisorOutcome, SupervisorQuery, SupervisorTurn,
-    TurnOutcome, UserTurn, ARTIFACT_LISTING_LIMIT, EVIDENCE_PROMPT_MARKER,
+    Ask, Assessment, AssistantTurn, EvidenceContext, JudgeKind, JudgeLink, JudgeQuery, JudgeTools,
+    JudgeValue, JudgeVerdict, Provider, Reask, SkillRef, SupervisorOutcome, SupervisorQuery,
+    SupervisorTurn, TurnOutcome, UserTurn, ARTIFACT_LISTING_LIMIT, EVIDENCE_PROMPT_MARKER,
     EVIDENCE_TOOL_RETRY_LIMIT, SUPERVISOR_REASK_LIMIT, SUPERVISOR_REASK_NOTE,
     SUPERVISOR_REDIRECT_NOTE, SUPERVISOR_UNPARSED_NOTE,
 };
@@ -135,8 +135,8 @@ pub use split::SplitProvider;
 #[doc(hidden)]
 pub use telemetry::InvocationTelemetry;
 pub use telemetry::{
-    CandidateAttempt, FellThrough, HarnessAttribution, PartyTelemetry, SessionLink, Telemetry,
-    TelemetryRole,
+    CandidateAttempt, FellThrough, HarnessAttribution, JudgePosture, PartyTelemetry, SessionLink,
+    Telemetry, TelemetryRole,
 };
 pub use transcript::{Message, Role, ToolEvent, ToolQuery, Transcript};
 pub use usage::Usage;

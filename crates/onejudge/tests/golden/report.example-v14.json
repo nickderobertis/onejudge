@@ -1,5 +1,5 @@
 {
-  "schema_version": 13,
+  "schema_version": 14,
   "transcript": {
     "messages": [
       {
@@ -43,7 +43,26 @@
           "judge": "reviewer",
           "kind": "oneharness",
           "decision": "done",
-          "reason": "a git commit ran"
+          "reason": "a git commit ran",
+          "posture": {
+            "mode": "auto",
+            "source": "/work/oneharness.judge.toml",
+            "config_files": [
+              "/run/user/1000/onejudge/judge-defaults-v1.toml",
+              "/work/oneharness.judge.toml"
+            ]
+          },
+          "events": [
+            {
+              "kind": "tool_call",
+              "name": "Bash",
+              "input": {
+                "command": "git log --oneline -1"
+              },
+              "index": 0,
+              "tool_call_id": "toolu_judge"
+            }
+          ]
         },
         {
           "judge": "command",
@@ -151,6 +170,31 @@
           }
         ],
         "history_file": "/state/oneharness/history/run-1-skill.jsonl"
+      },
+      {
+        "role": "judge",
+        "turn_index": 1,
+        "ran": "claude-code",
+        "candidates": [
+          {
+            "harness": "claude-code",
+            "harness_id": "claude-code",
+            "status": "ok",
+            "available": true,
+            "ran": true,
+            "exit_code": 0,
+            "duration_ms": 10
+          }
+        ],
+        "judge": "reviewer",
+        "posture": {
+          "mode": "auto",
+          "source": "/work/oneharness.judge.toml",
+          "config_files": [
+            "/run/user/1000/onejudge/judge-defaults-v1.toml",
+            "/work/oneharness.judge.toml"
+          ]
+        }
       }
     ]
   },

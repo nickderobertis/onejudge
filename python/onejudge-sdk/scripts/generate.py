@@ -22,6 +22,7 @@ TYPE_ROOTS = {
     "run_config": "RunConfig",
     "report": "RunReport",
     "stream_event": "StreamEvent",
+    "judge_tool": "JudgeTool",
     "failure_report": "FailureReport",
 }
 
