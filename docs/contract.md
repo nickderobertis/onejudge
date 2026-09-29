@@ -9,7 +9,7 @@ and re-export, so onejudge — not its consumers — owns the shape of a judged 
 
 ```jsonc
 {
-  "schema_version": 12,                 // bump on any wire change
+  "schema_version": 13,                 // bump on any wire change
   "transcript": {
     "messages": [
       { "role": "user", "content": "commit the fix" },
@@ -37,7 +37,10 @@ and re-export, so onejudge — not its consumers — owns the shape of a judged 
   "judge_decisions": [                  // omitted when empty: only a JudgePanel records these (see below)
     { "turn": 1, "decisions": [        // one entry per supervisor turn, in turn order
         { "judge": "reviewer", "kind": "oneharness", "decision": "done", "reason": "a git commit ran" },
-        { "judge": "command", "kind": "command", "decision": "done", "reason": "the commit script passed" }
+        { "judge": "command", "kind": "command", "decision": "done", "reason": "the commit script passed" },
+        { "judge": "lint", "kind": "llmlint", "decision": "done", "reason": "0 failed, 4 passed, 0 skipped, 0 not relevant",
+          "labels": { "judge": "lint", "session": "run-1", "turn": "1" }, // omitted unless the judge's run was labelled (llmlint)
+          "run_id": "20260929T064026Z-c80a9" }                               // omitted unless llmlint named its history record
       ] }
   ],
   "usage": {                            // omitted when nothing reported
@@ -187,7 +190,19 @@ Omitted when empty. A run judged by a bare provider — `kind: oneharness`,
 `kind: command`, or a library `SplitProvider` whose judge half is not a
 `JudgePanel` — records no decision, and nothing is synthesized for it; every CLI
 `split` builds a panel, a single `judge:` included, so it records one decision
-per turn. The same label rides
+per turn.
+
+**v13** added two optional keys to a decision, both omitted when absent — so
+every non-`llmlint` decision is unchanged: `labels`, an object of string →
+string holding exactly the `--label`s that judge's `llmlint lint` run was passed
+(`session`, `judge`, `turn`, and any the judge's own `args` add), and `run_id`,
+the llmlint history id parsed from that run's results pointer, so
+`llmlint history <run_id>` shows the run behind the decision. Both are recorded
+on an `error` decision too whenever known; `run_id` is absent when llmlint wrote
+no pointer (history disabled, or the run died before recording). See
+[judges.md](judges.md#the-llmlint-judge).
+
+The same label rides
 `telemetry.attribution[].judge`, `telemetry.sessions[].judge` and
 `processes[].judge`, set only by a panel of **more than one** judge; a panel of
 one writes exactly the records a bare provider writes.
@@ -203,8 +218,8 @@ its records carry pids and no group.
 ## Versioning and the drift gate
 
 The wire form is pinned by a canonical serialized example
-(`crates/onejudge/tests/golden/report.example-v12.json`) and its generated JSON
-Schema (`crates/onejudge/tests/golden/report.schema-v12.json`), both checked by
+(`crates/onejudge/tests/golden/report.example-v13.json`) and its generated JSON
+Schema (`crates/onejudge/tests/golden/report.schema-v13.json`), both checked by
 `tests/contract.rs`. Any change to the serialized shape — a renamed field, a new
 key, a changed default — fails that test, so it can only land as a **deliberate**
 edit that also bumps `SCHEMA_VERSION` and updates both goldens. Downstream SDKs
@@ -263,7 +278,7 @@ attribution for. So `onejudge run --format json` writes a versioned
 
 ```jsonc
 {
-  "schema_version": 12,
+  "schema_version": 13,
   "error": { "message": "run failed: provider error (supervise[command]): …", "kind": "protocol" },
   "telemetry": { /* as above, including `attribution` */ },
   "processes": [ /* what the failed run had already spawned, as below */ ],

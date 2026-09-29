@@ -71,6 +71,16 @@ impl<S: Provider, J: Provider> Provider for SplitProvider<S, J> {
         self.judge.set_history_scope(scope);
     }
 
+    // The judge side is the one judging under a label and keeping a per-run
+    // record, so both halves of the link belong to it.
+    fn set_judge_label(&self, label: &str) {
+        self.judge.set_judge_label(label);
+    }
+
+    fn take_judge_link(&self) -> Option<crate::JudgeLink> {
+        self.judge.take_judge_link()
+    }
+
     fn invocation_telemetry(&self) -> Vec<crate::telemetry::InvocationTelemetry> {
         let mut records = self.skill.invocation_telemetry();
         records.extend(self.judge.invocation_telemetry());

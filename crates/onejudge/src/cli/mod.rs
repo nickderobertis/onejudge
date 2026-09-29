@@ -971,6 +971,11 @@ fn render_conversation(report: &Report) -> String {
                     out.push_str(" — ");
                     out.push_str(&decision.reason);
                 }
+                // The exact command that shows the llmlint run behind the
+                // decision, on its own line so it copies whole.
+                if let Some(run_id) = &decision.run_id {
+                    out.push_str(&format!("\n    llmlint history {run_id}"));
+                }
             }
         }
     }
@@ -1279,12 +1284,16 @@ mod tests {
                         kind: "oneharness".into(),
                         decision: crate::Decision::Done,
                         reason: "looks right".into(),
+                        labels: std::collections::BTreeMap::new(),
+                        run_id: None,
                     },
                     crate::JudgeDecision {
                         judge: "lint".into(),
                         kind: "command".into(),
                         decision: crate::Decision::Continue,
                         reason: String::new(),
+                        labels: std::collections::BTreeMap::new(),
+                        run_id: None,
                     },
                 ],
             },
@@ -1295,6 +1304,8 @@ mod tests {
                     kind: "command".into(),
                     decision: crate::Decision::Done,
                     reason: "clean".into(),
+                    labels: std::collections::BTreeMap::new(),
+                    run_id: None,
                 }],
             },
         ];
@@ -1310,6 +1321,17 @@ mod tests {
              Assistant: done\n\
              \x20 [judge lint (command)] done — clean",
             "{out}"
+        );
+        // A decision linked to an llmlint run prints the command that shows it.
+        s.report.judge_decisions[1].decisions[0].kind = "llmlint".into();
+        s.report.judge_decisions[1].decisions[0].run_id = Some("20260929T064026Z-c80a9".into());
+        assert!(
+            render_human(&s).contains(
+                "Assistant: done\n\x20 [judge lint (llmlint)] done — clean\n\
+                 \x20   llmlint history 20260929T064026Z-c80a9\n"
+            ),
+            "{}",
+            render_human(&s)
         );
         // Without decisions the conversation renders exactly as it always has.
         s.report.judge_decisions.clear();

@@ -34,7 +34,7 @@ set -uo pipefail
 # its executable is explicitly linked from that shared environment. llmlint >=
 # 0.3.7 gives the whole-tree default the composed llmlint.yml relies on (it omits
 # `files.include`).
-readonly LLMLINT_MIN="0.3.7"
+readonly LLMLINT_MIN="0.4.3"
 readonly BIN_DIR="$HOME/.local/bin"
 
 log() { printf 'setup-llmlint: %s\n' "$*" >&2; }

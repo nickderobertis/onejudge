@@ -1,5 +1,5 @@
 {
-  "schema_version": 12,
+  "schema_version": 13,
   "transcript": {
     "messages": [
       {
@@ -50,6 +50,18 @@
           "kind": "command",
           "decision": "done",
           "reason": "the commit script passed"
+        },
+        {
+          "judge": "lint",
+          "kind": "llmlint",
+          "decision": "done",
+          "reason": "0 failed, 4 passed, 0 skipped, 0 not relevant",
+          "labels": {
+            "judge": "lint",
+            "session": "run-1",
+            "turn": "1"
+          },
+          "run_id": "20260929T064026Z-c80a9"
         }
       ]
     }

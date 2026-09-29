@@ -1390,6 +1390,8 @@ fn decision(judge: &str, decision: Decision, reason: &str) -> JudgeDecision {
         kind: "command".into(),
         decision,
         reason: reason.into(),
+        labels: Default::default(),
+        run_id: None,
     }
 }
 
@@ -1871,6 +1873,8 @@ fn script_llmlint(name: &str, exits: &str) -> std::path::PathBuf {
     std::env::set_var("ONEJUDGE_FAKE_LLMLINT_EXIT", exits);
     std::env::remove_var("ONEJUDGE_FAKE_LLMLINT_STDOUT");
     std::env::remove_var("ONEJUDGE_FAKE_LLMLINT_STDERR");
+    std::env::remove_var("ONEJUDGE_FAKE_LLMLINT_POINTER");
+    std::env::remove_var("ONEJUDGE_FAKE_LLMLINT_VERSION");
     argv
 }
 
@@ -1888,9 +1892,43 @@ fn recorded_argv(path: &std::path::Path) -> Vec<Vec<String>> {
         .collect()
 }
 
-/// The argv the contract spells for one `lint` run over `worktree`, before any
-/// `-c` / `--diff` / extra arguments.
-fn lint_argv(worktree: &str) -> Vec<String> {
+/// The `--label`s the contract spells for a run of the judge `judge` deciding on
+/// turn `turn` of a run whose base session is `onejudge` (the default).
+fn labels_argv(judge: &str, turn: usize) -> Vec<String> {
+    [
+        "--label".to_string(),
+        "session=onejudge".to_string(),
+        "--label".to_string(),
+        format!("judge={judge}"),
+        "--label".to_string(),
+        format!("turn={turn}"),
+    ]
+    .into()
+}
+
+/// [`labels_argv`] as the map a decision records.
+fn labels_map(judge: &str, turn: usize) -> std::collections::BTreeMap<String, String> {
+    [
+        ("session", "onejudge".to_string()),
+        ("judge", judge.to_string()),
+        ("turn", turn.to_string()),
+    ]
+    .into_iter()
+    .map(|(key, value)| (key.to_string(), value))
+    .collect()
+}
+
+/// The argv the contract spells for one `lint` run over `worktree` by the judge
+/// `judge` on turn `turn`, with no `-c` / `--diff` / extra arguments.
+fn lint_argv(worktree: &str, judge: &str, turn: usize) -> Vec<String> {
+    let mut argv = lint_base_argv(worktree);
+    argv.extend(labels_argv(judge, turn));
+    argv
+}
+
+/// The fixed head of every `lint` run's argv, before any `-c` / `--diff` /
+/// labels / extra arguments.
+fn lint_base_argv(worktree: &str) -> Vec<String> {
     [
         "lint",
         "--cwd",
@@ -1979,13 +2017,34 @@ fn an_llmlint_judge_with_failing_rules_hands_the_worker_its_report_verbatim() {
             ("strict", "llmlint", Decision::Continue, FAILING_SUMMARY),
         ]
     );
+    // Each decision links to its own llmlint run: the labels it was passed and
+    // the history id parsed from the pointer that run wrote on stderr.
+    type Link<'a> = (
+        &'a str,
+        &'a std::collections::BTreeMap<String, String>,
+        Option<&'a str>,
+    );
+    let links: Vec<Link<'_>> = outcome.judge_decisions[0]
+        .decisions
+        .iter()
+        .map(|d| (d.judge.as_str(), &d.labels, d.run_id.as_deref()))
+        .collect();
+    assert_eq!(
+        links,
+        [
+            ("lint", &labels_map("lint", 1), Some("fake-lint-1")),
+            ("strict", &labels_map("strict", 1), Some("fake-strict-1")),
+        ]
+    );
 
     // The argv: one `--version` probe per provider built, then one `lint` run per
     // judge for the one supervisor decision. The two judges run at the same time,
     // so their lines land in either order.
     let mut recorded = recorded_argv(&argv);
     recorded.sort();
-    let mut strict = lint_argv("/skills/demo");
+    // Each judge's labels name it by its panel label — the `judge` field of its
+    // decision — and sit after `-c` / `--diff` and before the caller's `args`.
+    let mut strict = lint_base_argv("/skills/demo");
     strict.extend(
         [
             "-c",
@@ -1993,15 +2052,15 @@ fn an_llmlint_judge_with_failing_rules_hands_the_worker_its_report_verbatim() {
             "--diff",
             "--diff-base",
             "origin/main",
-            "--rule",
-            "scripts_are_quiet_on_success",
         ]
         .map(str::to_string),
     );
+    strict.extend(labels_argv("strict", 1));
+    strict.extend(["--rule", "scripts_are_quiet_on_success"].map(str::to_string));
     let mut expected_argv = vec![
         vec!["--version".to_string()],
         vec!["--version".to_string()],
-        lint_argv("/skills/demo"),
+        lint_argv("/skills/demo", "lint", 1),
         strict,
     ];
     expected_argv.sort();
@@ -2053,10 +2112,12 @@ fn an_llmlint_judge_whose_rules_all_hold_completes_the_run_with_the_summary_line
     assert_eq!(verdict.reason, CLEAN_SUMMARY);
     assert_eq!(
         recorded_argv(&argv),
+        // Outside a panel the judge label is `llmlint`; the re-judge decides on
+        // the same (only) assistant turn as the supervisor did.
         [
             vec!["--version".to_string()],
-            lint_argv("/skills/demo"),
-            lint_argv("/skills/demo"),
+            lint_argv("/skills/demo", "llmlint", 1),
+            lint_argv("/skills/demo", "llmlint", 1),
         ]
     );
     let ops: Vec<String> = engine
@@ -2257,6 +2318,130 @@ fn an_executable_that_is_not_llmlint_is_refused_where_the_provider_is_built() {
     assert!(text.contains(fake_llmlint_bin()), "{text}");
     assert!(text.contains("`bin`"), "{text}");
     assert!(text.contains("--version"), "{text}");
+}
+
+#[test]
+fn an_llmlint_decision_that_errored_still_links_to_its_run_when_llmlint_recorded_one() {
+    // A run that could not complete is an `error` decision — never a verdict — and
+    // when llmlint still named its history record, the decision carries it and the
+    // labels the run was passed, so the failure can be read back.
+    let argv = script_llmlint("errored-linked", "2");
+    std::env::set_var("ONEJUDGE_FAKE_LLMLINT_POINTER", "always");
+    let split = SplitProvider::new(
+        echo(),
+        JudgePanel::new(vec![JudgeEntry::new("lint", "llmlint", fake_llmlint())]).unwrap(),
+    );
+    let engine = Engine::new(&split, settings());
+    let err = engine
+        .run(&Conversation::multi_turn(
+            skill_with("Be helpful."),
+            "please commit",
+            SimulatedUser::new("A tester.").max_turns(3),
+        ))
+        .unwrap_err();
+    assert_eq!(err.kind(), Some(ProviderErrorKind::Other), "{err}");
+    let decisions = engine.judge_decisions();
+    assert_eq!(decisions.len(), 1);
+    let decision = &decisions[0].decisions[0];
+    assert_eq!(decision.decision, Decision::Error);
+    assert_eq!(decision.labels, labels_map("lint", 1));
+    assert_eq!(decision.run_id.as_deref(), Some("fake-lint-1"));
+    assert_eq!(
+        recorded_argv(&argv),
+        [
+            vec!["--version".to_string()],
+            lint_argv("/skills/demo", "lint", 1)
+        ]
+    );
+}
+
+#[test]
+fn an_llmlint_run_with_history_disabled_records_no_run_id_and_still_decides() {
+    // No pointer on stderr (history disabled): the decision stands on llmlint's
+    // exit code as always, carries its labels, and names no id it was never told.
+    script_llmlint("no-history", "0");
+    std::env::set_var("ONEJUDGE_FAKE_LLMLINT_POINTER", "off");
+    std::env::set_var(
+        "ONEJUDGE_FAKE_LLMLINT_STDERR",
+        "warning: history disabled by config\n",
+    );
+    let split = SplitProvider::new(
+        echo(),
+        JudgePanel::new(vec![JudgeEntry::new("lint", "llmlint", fake_llmlint())]).unwrap(),
+    );
+    let engine = Engine::new(&split, settings());
+    let outcome = engine
+        .run(&Conversation::multi_turn(
+            skill_with("Be helpful."),
+            "please commit",
+            SimulatedUser::new("A tester.").max_turns(3),
+        ))
+        .unwrap();
+    assert_eq!(outcome.completion_reason.as_deref(), Some(CLEAN_SUMMARY));
+    let decision = &outcome.judge_decisions[0].decisions[0];
+    assert_eq!(decision.decision, Decision::Done);
+    assert_eq!(decision.labels, labels_map("lint", 1));
+    assert_eq!(decision.run_id, None);
+    let json = serde_json::to_string(&outcome.judge_decisions).unwrap();
+    assert!(!json.contains("run_id"), "{json}");
+}
+
+#[test]
+fn a_label_value_llmlint_would_refuse_fails_the_turn_rather_than_dropping_the_label() {
+    // A base session holding a control character cannot be passed as llmlint's
+    // `session=` label: the turn fails naming the label, and llmlint never runs —
+    // an unlabelled run would be one the caller can never find again.
+    let argv = script_llmlint("bad-label", "0");
+    let split = SplitProvider::new(
+        echo(),
+        JudgePanel::new(vec![JudgeEntry::new("lint", "llmlint", fake_llmlint())]).unwrap(),
+    );
+    let engine = Engine::new(&split, settings().with_session_name("run\t7"));
+    let err = engine
+        .run(&Conversation::multi_turn(
+            skill_with("Be helpful."),
+            "please commit",
+            SimulatedUser::new("A tester.").max_turns(3),
+        ))
+        .unwrap_err();
+    let text = err.to_string();
+    assert!(text.contains("session=\"run\\t7\""), "{text}");
+    assert!(text.contains("control character"), "{text}");
+    let decision = &engine.judge_decisions()[0].decisions[0];
+    assert_eq!(decision.decision, Decision::Error);
+    assert!(decision.labels.is_empty(), "no run was passed any label");
+    assert_eq!(decision.run_id, None);
+    assert_eq!(recorded_argv(&argv), [vec!["--version".to_string()]]);
+}
+
+#[test]
+fn an_llmlint_older_than_the_label_floor_is_refused_where_the_provider_is_built() {
+    script_llmlint("too-old", "0");
+    std::env::set_var("ONEJUDGE_FAKE_LLMLINT_VERSION", "0.4.2");
+    let err = LlmlintProvider::new(fake_llmlint_bin()).unwrap_err();
+    assert_eq!(err.kind(), Some(ProviderErrorKind::Spawn), "{err}");
+    let text = err.to_string();
+    assert!(
+        text.contains("0.4.2"),
+        "names the installed version: {text}"
+    );
+    assert!(
+        text.contains(onejudge::LLMLINT_MIN_VERSION),
+        "names the floor: {text}"
+    );
+    assert!(text.contains(fake_llmlint_bin()), "{text}");
+    assert!(text.contains("`bin`"), "{text}");
+
+    // At the floor, and past it, the provider is built.
+    for version in [onejudge::LLMLINT_MIN_VERSION, "0.5.0", "1.0.0-rc.1"] {
+        std::env::set_var("ONEJUDGE_FAKE_LLMLINT_VERSION", version);
+        LlmlintProvider::new(fake_llmlint_bin())
+            .unwrap_or_else(|err| panic!("{version} is at or past the floor: {err}"));
+    }
+    // A version it cannot read is refused the same way, not waved through.
+    std::env::set_var("ONEJUDGE_FAKE_LLMLINT_VERSION", "unknown");
+    let err = LlmlintProvider::new(fake_llmlint_bin()).unwrap_err();
+    assert_eq!(err.kind(), Some(ProviderErrorKind::Spawn), "{err}");
 }
 
 #[cfg(unix)]

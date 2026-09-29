@@ -9,6 +9,8 @@
 //! against a checked-in golden, so any change to the wire form is a deliberate
 //! edit that bumps [`SCHEMA_VERSION`], never a silent break for downstream SDKs.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 use crate::control::{ControlAddress, ControlOutcome};
@@ -36,10 +38,13 @@ use crate::usage::Usage;
 /// `12` added `judge_decisions` — what each judge of a [`JudgePanel`] decided on
 /// each supervisor turn — and the `judge` label on `telemetry.attribution`,
 /// `telemetry.sessions` and `processes` that says which judge of a panel an
-/// invocation belonged to.
+/// invocation belonged to; `13` added the optional `labels` and `run_id` on each
+/// [`JudgeDecision`] — the labels an `llmlint` judge's run was passed and the
+/// llmlint history id that run was recorded under, so a decision links to the
+/// `llmlint history <run_id>` record behind it.
 ///
 /// [`JudgePanel`]: crate::JudgePanel
-pub const SCHEMA_VERSION: u32 = 12;
+pub const SCHEMA_VERSION: u32 = 13;
 
 /// The skip predicate for a field that is always serialized but must not be
 /// *required* of a document being read. Used by [`Report::control`]; see the
@@ -106,6 +111,18 @@ pub struct JudgeDecision {
     pub decision: Decision,
     /// Its own reason — or, for an `error`, the error's message.
     pub reason: String,
+    /// Exactly the labels this judge's backend run was passed (`KEY` → `VALUE`),
+    /// when the backend labels its runs — only an `llmlint` judge does, with
+    /// `session`, `judge` and `turn`. Omitted when there are none, and recorded
+    /// on an `error` decision too whenever the run was labelled.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub labels: BTreeMap<String, String>,
+    /// The id this judge's backend run was recorded under in its own history —
+    /// for an `llmlint` judge, the id `llmlint history <run_id>` shows. Omitted
+    /// when the backend reported none (history disabled, or the run died before
+    /// recording), and recorded on an `error` decision too whenever known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
 }
 
 /// Every judge's decision on one supervisor turn.
@@ -511,18 +528,43 @@ mod tests {
                     kind: "oneharness".into(),
                     decision: Decision::Continue,
                     reason: "tests are missing".into(),
+                    labels: BTreeMap::new(),
+                    run_id: None,
                 },
                 JudgeDecision {
                     judge: "command".into(),
                     kind: "command".into(),
                     decision: Decision::Error,
                     reason: "provider exited with 1".into(),
+                    labels: BTreeMap::new(),
+                    run_id: None,
+                },
+                JudgeDecision {
+                    judge: "lint".into(),
+                    kind: "llmlint".into(),
+                    decision: Decision::Error,
+                    reason: "llmlint could not complete (exit 2)".into(),
+                    labels: BTreeMap::from([
+                        ("judge".to_string(), "lint".to_string()),
+                        ("session".to_string(), "run-7".to_string()),
+                        ("turn".to_string(), "1".to_string()),
+                    ]),
+                    run_id: Some("20260929T064026Z-c80a9".into()),
                 },
             ],
         }];
         let json = serde_json::to_string(&report).unwrap();
         assert!(json.contains("\"judge_decisions\":[{\"turn\":1,\"decisions\":[{\"judge\":\"reviewer\",\"kind\":\"oneharness\",\"decision\":\"continue\",\"reason\":\"tests are missing\"}"));
         assert!(json.contains("\"decision\":\"error\""));
+        // The v13 addition: an llmlint decision — an `error` one included —
+        // carries its run's labels and history id; every other decision omits
+        // both keys rather than writing them empty.
+        assert!(json.contains(
+            "\"reason\":\"llmlint could not complete (exit 2)\",\"labels\":{\"judge\":\"lint\",\
+             \"session\":\"run-7\",\"turn\":\"1\"},\"run_id\":\"20260929T064026Z-c80a9\"}"
+        ));
+        assert_eq!(json.matches("\"labels\"").count(), 1);
+        assert_eq!(json.matches("\"run_id\"").count(), 1);
         assert_eq!(serde_json::from_str::<Report>(&json).unwrap(), report);
         for (decision, token) in [
             (Decision::Done, "done"),
