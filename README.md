@@ -55,7 +55,9 @@ reason or supplies the exact next user message. It sees compact normalized tool
 summaries by default, never raw dumps; when needed it may inspect the agent-side
 recording with `oneharness history show <session>-skill --project <worktree>
 --format text`. Agent and judge harnesses run in that worktree, but only agent
-runs are automatically history-recorded. **Harness
+runs are automatically history-recorded. From oneharness 0.21.1, `history show` and
+`history list` read only the last 7 UTC days by default; reach an older run with
+`--since <YYYY-MM-DD>` or `--all-time`. **Harness
 and model selection lives in those `oneharness.toml`
 files, not `onejudge.yaml`.** `onejudge schema` prints the annotated config, the
 single source of truth for every field.

@@ -149,7 +149,9 @@ pub struct CandidateAttempt {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
     /// The oneharness history record written for this attempt, when history was
-    /// on — the handle `oneharness history show` resolves.
+    /// on — the handle `oneharness history show <id>` resolves. From oneharness
+    /// 0.21.1 that reads the dated index segment the id names, at any age; a
+    /// record written before that index existed needs `--all-time`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub history_id: Option<String>,
     /// This attempt's own token/cost accounting.

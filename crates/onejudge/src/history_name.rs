@@ -3,7 +3,9 @@
 //! Every judge-side call is named after the **run's base session** (the engine's
 //! `session_name`, the CLI's `--session`), so `oneharness history show <name>`
 //! finds exactly one run's turns of one party rather than every run's turns under
-//! a prompt-derived name. The scheme is computed here and nowhere else:
+//! a prompt-derived name. (From oneharness 0.21.1 that lookup reads the last 7
+//! UTC days by default; an older run needs `--since <date>` or `--all-time`.) The
+//! scheme is computed here and nowhere else:
 //!
 //! | call | bare provider / panel of one | panel of more than one |
 //! | --- | --- | --- |

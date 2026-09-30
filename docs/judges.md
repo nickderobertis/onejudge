@@ -146,6 +146,9 @@ oneharness history show <base>-judge-reviewer --project <worktree> --all  # its 
 oneharness history show <base>-assess --project <worktree> --all          # a bare judge's assessment
 ```
 
+From oneharness 0.21.1 these read the last 7 UTC days by default; add
+`--since <YYYY-MM-DD>` or `--all-time` for an older run.
+
 ## What each surface carries per judge
 
 **`JudgeDecision { judge, kind, decision, reason }`** — `judge` is the label,

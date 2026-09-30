@@ -52,10 +52,13 @@
 //! result, so a build that re-read the file reports those instead and fails
 //! loudly. They still have to be a coherent record — oneharness validates its own
 //! run lines on read (`model_ms + tool_ms <= duration_ms`) and drops one that is
-//! not, which would take the `history_id` with it. Without
-//! the marker there is no record to name, so the id alone is inlined on the result
-//! (the "producer that supplies its own id" case onejudge also accepts), which
-//! keeps the rest of the suite independent of a shared on-disk store.
+//! not, which would take the `history_id` with it.
+//! `[[recorded:PATH]]` instead reports PATH as `history_file` and writes nothing:
+//! the session file is one an earlier oneharness already left in its store, so a
+//! test can hold onejudge's read to a store laid out as released cores wrote it.
+//! Without either marker there is no record to name, so the id alone is inlined
+//! on the result (the "producer that supplies its own id" case onejudge also
+//! accepts), which keeps the rest of the suite independent of a shared on-disk store.
 //!
 //! Under `--stream` it speaks the **streamed provider protocol**
 //! (`docs/streaming.md`) instead: one `{"type":"event","event":{…}}` line per tool
@@ -423,10 +426,13 @@ fn main() {
         );
 
     // The history record oneharness writes per attempt, when the test asked for it.
-    let history_file = marker(system, "history").map(|path| {
-        write_history(path, &results);
-        path.to_string()
-    });
+    // `[[recorded:PATH]]` names a record already on disk, and writes nothing.
+    let history_file = marker(system, "history")
+        .map(|path| {
+            write_history(path, &results);
+            path.to_string()
+        })
+        .or_else(|| marker(system, "recorded").map(str::to_string));
 
     // The control block, and with it the session record `oneharness interrupt`
     // reads before it dials. Built here rather than up front because both bind to

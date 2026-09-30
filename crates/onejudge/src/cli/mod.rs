@@ -165,7 +165,9 @@ pub struct RunArgs {
     /// agent's `<session>-skill`, the supervisor's `<session>-user`, eval verdicts
     /// `<session>-judge` and the assessment `<session>-assess`, each suffixed
     /// `-<label>` in a panel of more than one judge — so `oneharness history show
-    /// <session>-user-<label> --project <worktree> --all` finds one judge's turns.
+    /// <session>-user-<label> --project <worktree> --all` finds one judge's turns
+    /// (from oneharness 0.21.1, within the last 7 UTC days unless `--since
+    /// <date>` or `--all-time` widens the window).
     #[arg(long)]
     pub session: Option<String>,
     /// Override just the provider backend kind.

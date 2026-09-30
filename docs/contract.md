@@ -105,7 +105,9 @@ own wire tokens — `failure_kind` is one of `auth`, `rate_limit`,
 `server_overloaded`, `model_not_found`, `quota`, `tool_deferred`,
 `session_not_found`, `untrusted_directory`, `input_too_large`, `model_mismatch`,
 passed through verbatim from its closed taxonomy — and `history_id` resolves through
-`oneharness history show`. A candidate's `model` is the model *requested*; the
+`oneharness history show <id>` (from oneharness 0.21.1 through the dated index
+segment the id names, at any age; a record written before that index existed
+needs `--all-time`). A candidate's `model` is the model *requested*; the
 model the harness itself said it would serve (`observed_model`, the other half
 of a `model_mismatch`) stays on oneharness's own report and history record,
 which onejudge reads typed but does not restate here.
