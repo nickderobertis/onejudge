@@ -109,9 +109,10 @@ provider failure). What each judge of a [panel](judges.md) decided reaches a
 consumer there too, on the report's `judge_decisions`: the protocol itself is
 unchanged by a panel.
 
-Each line is flushed as it is written. `--stream` requires `--format json` and
-refuses `--output` — the stream *is* stdout — and either misuse is a loud config
-error (exit 2) rather than a silently discarded stream.
+Each line is flushed as it is written. Under `--format json`, `--stream` refuses
+`--output` — the stream *is* stdout — and that misuse is a loud config error
+(exit 2) rather than a silently discarded stream. `--format text --stream` is
+accepted and means what `--format text` already does: the run drawn live.
 
 A run that **fails** publishes no terminal line (there is no report), and stdout
 keeps exactly this grammar: no third envelope type was invented for it. The

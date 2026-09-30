@@ -1745,6 +1745,102 @@
   },
   "observation": {
     "$defs": {
+      "ActionEvent": {
+        "description": "One normalized action a harness took, harness-agnostic so a single consumer\nassertion works across harnesses. Every field is always serialized (null when\nabsent) so the shape is stable, mirroring the `usage` contract.",
+        "properties": {
+          "duration_ms": {
+            "description": "Monotonic elapsed tool time. `None` means no terminal boundary was seen.",
+            "format": "uint128",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "finished_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "index": {
+            "description": "Position of this event within the run, so \"did X before Y\" is\nexpressible from a stable ordering (also array order). It counts every\nkind, so tool calls interleaved with `message`/`reasoning` events do not\ncarry contiguous indexes; count tool calls by `kind`, not by `index`.",
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "input": {
+            "description": "Structured, tool-shaped arguments (the command string, the file path),\nso a consumer asserts on specific args without re-parsing; `null` when the\nevent carries none (e.g. a `tool_result`)."
+          },
+          "kind": {
+            "description": "The kind of event: `tool_call` (the model invoked a tool),\n`tool_result` (the observation returned to the model), `message` (the\nagent's own text, in `output`) or `reasoning` (its reasoning text, in\n`output`). A `message` or `reasoning` event is one finished item, never\na token delta. Left open for future kinds rather than an enum, so a new\nshape never breaks the field \u2014 a consumer counting tool calls filters on\nit (see [`ActionEvent::is_tool_activity`]).",
+            "type": "string"
+          },
+          "name": {
+            "description": "Normalized tool name where knowable (e.g. `bash`, `Edit`); `null` for a\n`tool_result`, or when the harness did not name the tool.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "output": {
+            "description": "The result/observation text, when the trace exposes it; `null` otherwise.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "started_at": {
+            "description": "UTC interval bounds for tool execution, populated on history records.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ToolCallStatus"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Terminal tool state, populated on history tool-call events."
+          },
+          "timing_source": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/TimingSource"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Provenance for the tool interval. Omitted when timing is unavailable."
+          },
+          "tool_call_id": {
+            "description": "Stable call identity within the session. Present on tool calls and their\nmatching results when the provider exposes an identity; history fills a\ndeterministic run-local identity for providers that do not.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "kind",
+          "name",
+          "input",
+          "output",
+          "index",
+          "tool_call_id",
+          "started_at",
+          "finished_at",
+          "duration_ms",
+          "status"
+        ],
+        "type": "object"
+      },
       "Decision": {
         "description": "What one judge of a [`JudgePanel`](crate::JudgePanel) decided, as a wire token.\n\nThe five outcomes a supervisor call can have, plus `error` for a judge that\ncould not run \u2014 recorded rather than dropped, because a judge that could not\nrun is never read as a pass and a reader has to be able to see that it was\nasked.",
         "oneOf": [
@@ -1793,6 +1889,13 @@
           "reason": {
             "description": "Its own reason \u2014 or, for an `error`, the error's message.",
             "type": "string"
+          },
+          "run_id": {
+            "description": "The run its backend kept a record of, as\n[`JudgeDecision::run_id`](crate::JudgeDecision::run_id) \u2014 an llmlint\njudge's `llmlint history <run_id>`. Absent when the backend kept none.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "turn": {
             "description": "1-based assistant-turn index the supervisor turn belongs to, as\n[`TurnOpened::turn`].",
@@ -1875,6 +1978,30 @@
         ],
         "type": "object"
       },
+      "TimingSource": {
+        "description": "How a normalized tool interval was obtained.",
+        "oneOf": [
+          {
+            "const": "provider_measured",
+            "description": "Derived from provider lifecycle records with explicit request boundaries.",
+            "type": "string"
+          },
+          {
+            "const": "stdout_observed",
+            "description": "Derived from JSON records as they crossed oneharness's stdout pipe.",
+            "type": "string"
+          }
+        ]
+      },
+      "ToolCallStatus": {
+        "enum": [
+          "completed",
+          "failed",
+          "timeout",
+          "interrupted"
+        ],
+        "type": "string"
+      },
       "ToolEvent": {
         "description": "One normalized tool-call / action event the skill took during a turn, lifted\nfrom `oneharness`'s `events` array (its `--events` output). Harness-agnostic,\nso a consumer can inspect shell commands, file edits, and tool uses across any\nharness, not just the final text. `input` is the structured, tool-shaped args\nso a consumer can match on the command string or file path without re-parsing.\n\n`input` is free-form JSON, so `Message`/`Transcript` are `PartialEq` but not\n`Eq`.",
         "properties": {
@@ -1920,12 +2047,46 @@
         ],
         "type": "object"
       },
+      "TurnAction": {
+        "description": "One normalized event the worker's harness reported during a turn.\n\nThe payload is oneharness's own [`ActionEvent`], so a reader draws it with\noneharness's renderer (`oneharness_core::domain::render::render_event`) and\nshows exactly what `oneharness run --stream --format text` would.",
+        "properties": {
+          "event": {
+            "$ref": "#/$defs/ActionEvent",
+            "description": "The event, exactly as oneharness reported it \u2014 or, from a backend that\nreports only tool events, the [`ActionEvent`] its tool event describes."
+          },
+          "turn": {
+            "description": "1-based assistant-turn index within this run, as [`StreamEvent::turn`].",
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "turn",
+          "event"
+        ],
+        "type": "object"
+      },
       "TurnClosed": {
         "description": "A turn ending, with what it cost and the interval it ran over.",
         "properties": {
           "finished_at": {
             "description": "When the turn ended, RFC 3339 with millisecond precision in UTC.",
             "type": "string"
+          },
+          "harness": {
+            "description": "The harness identity that ran the worker's turn, as the provider's\ntelemetry attributes it (`codex`, `claude-code:fast`). Absent for a\nsupervisor turn, and for a backend that attributes no harness.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "model": {
+            "description": "The model that harness ran, where it reported one.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "role": {
             "$ref": "#/$defs/Role",
@@ -2090,6 +2251,20 @@
         "properties": {
           "type": {
             "const": "tool",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "type": "object"
+      },
+      {
+        "$ref": "#/$defs/TurnAction",
+        "description": "Every normalized event the worker's harness reported, as oneharness\nreported it: its own `message` and `reasoning` items as well as its tool\nactivity. A tool event is delivered as [`Tool`](Observation::Tool) first\nand then as this; the agent's words are delivered only as this, and never\nbecome a [`ToolEvent`] \u2014 they are rendered for a reader, not summarized for\na judge.",
+        "properties": {
+          "type": {
+            "const": "action",
             "type": "string"
           }
         },

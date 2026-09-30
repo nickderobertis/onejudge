@@ -73,16 +73,18 @@ const MIN_ONEHARNESS: &str = "0.18.0";
 const MIN_ONEHARNESS_REPORT_SCHEMA: &str = "0.11";
 
 /// The oldest `oneharness-core` this crate can be built against: the release
-/// whose run request and config loader take an **ordered list** of config files,
-/// layered later-over-earlier, which is how an evaluator judge's defaults become
+/// whose public text renderer (`domain::render`) draws the worker's events in
+/// `--format text`, and which reports the agent's own `message` and `reasoning`
+/// items as events. It carries the **ordered list** of config files, layered
+/// later-over-earlier (0.20.0), which is how an evaluator judge's defaults become
 /// defaults rather than overrides — a downstream engine takes it only through this
-/// crate's requirement. It also carries the per-run history pointer line (0.17.0).
+/// crate's requirement — and the per-run history pointer line (0.17.0).
 /// The manifest
 /// requirement is held to it by the gate below, and — so the number cannot lie —
 /// the symbols that arrived in it are named by a test in this module, which a
 /// lock resolved below it fails to compile.
 #[cfg(test)]
-const MIN_ONEHARNESS_CORE: &str = "0.20.0";
+const MIN_ONEHARNESS_CORE: &str = "0.21.0";
 
 /// Errors surfaced by the CLI. Config/validation problems are separated from IO
 /// and engine failures so the entrypoint can exit with a fitting code.
@@ -509,7 +511,8 @@ fn watch_session(args: &WatchArgs) -> Result<i32, CliError> {
                 let failure: FailureReport = serde_json::from_value(value).map_err(|e| {
                     CliError::Config(format!("the watch stream's failure is unreadable: {e}"))
                 })?;
-                (Some(text::failed(&failure.error.message)), Some(1))
+                // A run that produced no report exits 2; its watcher does too.
+                (Some(text::failed(&failure.error.message)), Some(2))
             }
             _ => (
                 serde_json::from_value::<text::Seen>(value)
@@ -1382,6 +1385,23 @@ mod tests {
         );
         // Named, not numbered: a config *list* on both the request and the loader
         // arrived in 0.20.0, so a lock resolved below it fails to compile this.
+        // Named, not numbered: the public renderer arrived in 0.21.0.
+        let render: fn(&crate::ActionEvent) -> Option<String> =
+            oneharness_core::domain::render::render_event;
+        let said = crate::ActionEvent {
+            kind: "message".into(),
+            name: None,
+            input: None,
+            output: Some("hi".into()),
+            index: 0,
+            tool_call_id: None,
+            started_at: None,
+            finished_at: None,
+            duration_ms: None,
+            status: None,
+            timing_source: None,
+        };
+        assert_eq!(render(&said).as_deref(), Some("› hi"));
         let request = oneharness_core::io::run::RunRequest {
             config: vec![std::path::PathBuf::from("defaults.toml")],
             ..Default::default()

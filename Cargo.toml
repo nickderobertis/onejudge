@@ -18,10 +18,10 @@ description = "A simulated interaction and evaluation loop over oneharness: driv
 # oneharness's own engine crate. onejudge depends on it for the **wire contract**
 # of the boundary it drives — `RunReport` / `RunResult` / `FailureKind` /
 # `RunStreamEnvelope` — instead of re-declaring shadow serde structs that drift.
-# 0.18.0 is the floor that resolves a config file's `extends` chain — a parent
-# config the file inherits from, which an older core refuses as an unknown key —
-# so an agent-side config onejudge hands over may name its harness only in a
-# parent. Downstream engines that link onejudge hold one copy of the core and
+# 0.21.0 is the floor whose public text renderer (`domain::render`) draws the
+# worker's events in `--format text`, and which reports the agent's own `message`
+# and `reasoning` items as events (0.18.0 resolved a config file's `extends`
+# chain, so an agent-side config may name its harness only in a parent). Downstream engines that link onejudge hold one copy of the core and
 # take that only through this requirement (a `^0.17` lock cannot resolve it).
 # The spawned CLI floor is gated separately, on the report schema, in
 # `cli/mod.rs`. A published registry version, never a git rev.
