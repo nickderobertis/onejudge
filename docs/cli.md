@@ -111,7 +111,8 @@ oneharness history show <base>-user-reviewer --project <worktree> --all
 
 `--all` because the name recurs across the run's turns (and across runs sharing
 a session); `--project` is the skill's working directory, which every judge-side
-call runs in. Only the names changed: onejudge still asks oneharness to record
+call runs in. From oneharness 0.21.1 the lookup reads the last 7 UTC days by
+default; add `--since <YYYY-MM-DD>` or `--all-time` for an older run. Only the names changed: onejudge still asks oneharness to record
 every call, both parties', because that record is where the report's
 `history_id` comes from. [judges.md](judges.md#sessions-and-history-names) is
 the contract.

@@ -55,7 +55,7 @@
             "type": "string"
           },
           "history_id": {
-            "description": "The oneharness history record written for this attempt, when history was\non \u2014 the handle `oneharness history show` resolves.",
+            "description": "The oneharness history record written for this attempt, when history was\non \u2014 the handle `oneharness history show <id>` resolves. From oneharness\n0.21.1 that reads the dated index segment the id names, at any age; a\nrecord written before that index existed needs `--all-time`.",
             "type": [
               "string",
               "null"
@@ -2388,7 +2388,7 @@
             "type": "string"
           },
           "history_id": {
-            "description": "The oneharness history record written for this attempt, when history was\non \u2014 the handle `oneharness history show` resolves.",
+            "description": "The oneharness history record written for this attempt, when history was\non \u2014 the handle `oneharness history show <id>` resolves. From oneharness\n0.21.1 that reads the dated index segment the id names, at any age; a\nrecord written before that index existed needs `--all-time`.",
             "type": [
               "string",
               "null"

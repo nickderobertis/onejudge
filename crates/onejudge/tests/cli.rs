@@ -3632,13 +3632,18 @@ fn binary_asks_the_spawned_oneharness_for_its_json_report_by_name() {
 }
 
 /// The names of every history session under `store`, read through oneharness's
-/// own history reader — what `oneharness history list` would print.
+/// own history reader over its default window — what `oneharness history list`
+/// would print (the run under test is minutes old, so it is inside that window).
 fn history_names(store: &Path) -> std::collections::BTreeSet<String> {
-    oneharness_core::io::history::list_sessions(store, None)
-        .unwrap()
-        .into_iter()
-        .map(|session| session.name)
-        .collect()
+    oneharness_core::io::history::list_sessions(
+        store,
+        None,
+        oneharness_core::domain::history_index::HistoryWindow::default(),
+    )
+    .unwrap()
+    .into_iter()
+    .map(|session| session.name)
+    .collect()
 }
 
 /// Run the built binary over a project whose agent and judge configs both pin the
@@ -3744,6 +3749,313 @@ fn every_judge_side_turn_is_recorded_under_the_run_session_and_its_label() {
             "sess-b-assess"
         ])
     );
+}
+
+// --- History across the segment cutover ---------------------------------------
+//
+// `oneharness-core` 0.24.0 indexes history in dated segments under `.index.d/`
+// and never reads the legacy index or walks the store to record a run. These
+// journeys hold onejudge's own history read — the `history_id` it reports for
+// each attempt — to both sides of that cutover.
+
+/// Every file under `dir`, relative path → bytes, so a journey can prove it
+/// neither created nor changed any.
+fn file_snapshot(dir: &Path) -> std::collections::BTreeMap<String, Vec<u8>> {
+    fn walk(root: &Path, dir: &Path, out: &mut std::collections::BTreeMap<String, Vec<u8>>) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                walk(root, &path, out);
+            } else {
+                let relative = path.strip_prefix(root).unwrap().display().to_string();
+                out.insert(relative, std::fs::read(&path).unwrap());
+            }
+        }
+    }
+    let mut out = std::collections::BTreeMap::new();
+    walk(dir, dir, &mut out);
+    out
+}
+
+/// Copy the checked-in store a released pre-cutover oneharness wrote
+/// (`tests/golden/pre-cutover-history/store`, `scripts/capture-pre-cutover-history.sh`).
+fn copy_tree(from: &Path, to: &Path) {
+    std::fs::create_dir_all(to).unwrap();
+    for entry in std::fs::read_dir(from).unwrap() {
+        let path = entry.unwrap().path();
+        let target = to.join(path.file_name().unwrap());
+        if path.is_dir() {
+            copy_tree(&path, &target);
+        } else {
+            std::fs::copy(&path, &target).unwrap();
+        }
+    }
+}
+
+/// The agent invocation's attribution off a finished report.
+fn agent_attribution(report: &onejudge::Report) -> &onejudge::HarnessAttribution {
+    report
+        .telemetry
+        .as_ref()
+        .expect("telemetry reaches the report")
+        .attribution
+        .iter()
+        .find(|a| a.role == onejudge::TelemetryRole::Agent)
+        .expect("the agent invocation is attributed")
+}
+
+#[test]
+fn a_run_recorded_before_the_segment_cutover_is_still_read_back() {
+    // A store exactly as released oneharness 0.20.0 (core 0.22.0) left it: the
+    // session file in its line format, the legacy `.index.jsonl`, no `.index.d/`.
+    // The fake oneharness reports that session file as the run's `history_file`,
+    // so onejudge's read of it goes through the linked core's reader alone.
+    let golden =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden/pre-cutover-history/store");
+    let dir = scratch_path("cli-pre-cutover-history");
+    let _ = std::fs::remove_dir_all(&dir);
+    let store = dir.join("store");
+    copy_tree(&golden, &store);
+    assert!(store.join(".index.jsonl").is_file());
+    assert!(!store.join(".index.d").exists());
+    let session = std::fs::read_dir(store.join("tmp-onejudge-pre-cutover-project"))
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    let recorded: serde_json::Value = serde_json::from_str(
+        std::fs::read_to_string(&session)
+            .unwrap()
+            .lines()
+            .next()
+            .unwrap(),
+    )
+    .unwrap();
+    let before = file_snapshot(&store);
+
+    let config = dir.join("onejudge.yaml");
+    let quote = |text: &str| serde_json::to_string(text).unwrap();
+    std::fs::write(
+        &config,
+        format!(
+            "provider:\n  kind: oneharness\n  bin: {}\ntask: read it back\nsystem_prompt: {}\n",
+            quote(&fake_oneharness_bin()),
+            quote(&format!(
+                "[[reply:read back]][[recorded:{}]]",
+                session.display()
+            )),
+        ),
+    )
+    .unwrap();
+    let output = Command::new(onejudge_bin())
+        .args(["run", config.to_str().unwrap(), "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: onejudge::Report =
+        serde_json::from_str(&String::from_utf8(output.stdout).unwrap()).unwrap();
+    let agent = agent_attribution(&report);
+    assert_eq!(
+        agent.history_file.as_deref(),
+        Some(session.to_str().unwrap())
+    );
+    assert_eq!(
+        agent.candidates[0].history_id.as_deref(),
+        recorded["history_id"].as_str(),
+        "the pre-cutover session's record did not reach the report"
+    );
+    assert_eq!(
+        file_snapshot(&store),
+        before,
+        "reading a pre-cutover record created or changed a file in its store"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[cfg(unix)]
+#[test]
+fn an_in_process_turn_records_history_without_reading_the_legacy_index_or_the_store() {
+    use oneharness_core::domain::history::HistoryId;
+    use oneharness_core::domain::history_index::{
+        HistoryIndexEntry, SegmentKind, UtcDate, INDEX_DIR, LEGACY_EVENT_INDEX_FILE,
+        LEGACY_INDEX_FILE,
+    };
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = scratch_path("cli-history-without-scans");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("xdg")).unwrap();
+    std::fs::create_dir_all(dir.join("skill")).unwrap();
+    let store = dir.join("store");
+
+    // A store a long-lived host holds: 1,200 other sessions across four projects,
+    // in the line format released cores wrote, and both legacy index files —
+    // which nothing may open: under an older core, recording this run had to
+    // read `.index.jsonl` to reconcile it.
+    let template = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/golden/pre-cutover-history/store/tmp-onejudge-pre-cutover-project")
+            .read_dir()
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path(),
+    )
+    .unwrap();
+    for project in 0..4 {
+        let project_dir = store.join(format!("home-host-project-{project}"));
+        std::fs::create_dir_all(&project_dir).unwrap();
+        for session in 0..300 {
+            std::fs::write(
+                project_dir.join(format!("older-20250101T000000Z-{session}.jsonl")),
+                &template,
+            )
+            .unwrap();
+        }
+    }
+    let legacy = [
+        store.join(LEGACY_INDEX_FILE),
+        store.join(LEGACY_EVENT_INDEX_FILE),
+    ];
+    for path in &legacy {
+        std::fs::write(path, "{\"legacy\":true}\n").unwrap();
+    }
+    let before = file_snapshot(&store);
+    let legacy_meta: Vec<_> = legacy
+        .iter()
+        .map(|path| {
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o000)).unwrap();
+            let meta = std::fs::metadata(path).unwrap();
+            (
+                meta.permissions().mode(),
+                meta.len(),
+                meta.modified().unwrap(),
+            )
+        })
+        .collect();
+    for path in &legacy {
+        assert!(
+            std::fs::File::open(path).is_err(),
+            "{} must be unopenable for this journey to prove anything (running as root?)",
+            path.display()
+        );
+    }
+
+    let harness = format!(
+        "harnesses = [\"claude-code\"]\n\n[harness.claude-code]\nbin = {:?}\n",
+        fake_harness_bin(),
+    );
+    let skill = dir.join("skill");
+    std::fs::write(skill.join("SKILL.md"), "[[reply:recorded in a segment]]").unwrap();
+    std::fs::write(skill.join("oneharness.toml"), &harness).unwrap();
+    let config = dir.join("onejudge.yaml");
+    std::fs::write(
+        &config,
+        format!(
+            "provider:\n  kind: oneharness\nskill: {}\ntask: record this turn\n",
+            serde_json::to_string(&skill.display().to_string()).unwrap()
+        ),
+    )
+    .unwrap();
+    let today = || {
+        UtcDate::from_epoch_secs(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs()
+                .try_into()
+                .unwrap(),
+        )
+    };
+    let started_on = today();
+    let output = Command::new(onejudge_bin())
+        .args(["run", config.to_str().unwrap(), "--format", "json"])
+        .env("ONEHARNESS_HISTORY_DIR", &store)
+        .env("XDG_CONFIG_HOME", dir.join("xdg"))
+        .env_remove("ONEHARNESS_CONFIG")
+        .env_remove("ONEHARNESS_HISTORY")
+        .env_remove("ONEHARNESS_HISTORY_POINTER_FILE")
+        .env_remove("ONEHARNESS_HISTORY_LABELS")
+        .env_remove("ONEJUDGE_SESSION")
+        .output()
+        .unwrap();
+    let finished_on = today();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: onejudge::Report =
+        serde_json::from_str(&String::from_utf8(output.stdout).unwrap()).unwrap();
+    assert_eq!(
+        report.transcript.messages[1].content,
+        "recorded in a segment"
+    );
+
+    // The id onejudge read back through its own history read names a record in
+    // today's run segment.
+    let agent = agent_attribution(&report);
+    let id: HistoryId = agent.candidates[0]
+        .history_id
+        .as_deref()
+        .expect("onejudge read the run's record back")
+        .parse()
+        .unwrap();
+    let date = UtcDate::of_history_id(id).expect("a new record's id carries its date");
+    assert!(
+        date == started_on || date == finished_on,
+        "{date} is not the run's UTC date"
+    );
+    let segment = store
+        .join(INDEX_DIR)
+        .join(SegmentKind::Runs.file_name(date));
+    let entries = std::fs::read_to_string(&segment)
+        .unwrap_or_else(|e| panic!("no run segment at {}: {e}", segment.display()));
+    let entry = entries
+        .lines()
+        .map(|line| serde_json::from_str::<HistoryIndexEntry>(line).unwrap())
+        .find_map(|entry| match entry {
+            HistoryIndexEntry::Run(run) if run.history_id == id => Some(run),
+            _ => None,
+        })
+        .expect("the run's record is indexed in its dated segment");
+    assert_eq!(
+        Some(entry.session_path.under(&store).display().to_string()),
+        agent.history_file,
+        "the segment entry names the session file onejudge read"
+    );
+
+    // Nothing else was touched: no legacy lock, both legacy index files as they
+    // were (still unopenable, same size and mtime, then byte for byte), and every
+    // other session's file unchanged.
+    assert!(
+        !store.join(".index.lock").exists(),
+        "the legacy index lock was created"
+    );
+    for (path, meta) in legacy.iter().zip(&legacy_meta) {
+        let now = std::fs::metadata(path).unwrap();
+        assert_eq!(
+            &(now.permissions().mode(), now.len(), now.modified().unwrap()),
+            meta,
+            "{} changed",
+            path.display()
+        );
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o644)).unwrap();
+    }
+    let mut after = file_snapshot(&store);
+    after.retain(|path, _| before.contains_key(path));
+    assert_eq!(after.len(), before.len());
+    assert!(
+        after == before,
+        "a legacy index or another session's file changed"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 // --- Judge posture: what an evaluator judge runs under ------------------------

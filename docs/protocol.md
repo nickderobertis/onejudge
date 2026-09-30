@@ -195,7 +195,8 @@ turn was delivered and only its shape was wrong ([contract.md](contract.md)).
 The transcript carries compact normalized event summaries, not raw tool dumps.
 `worktree` and `history_name` let a backend inspect the full oneharness recording
 when needed with `oneharness history show <history_name> --project <worktree>
---format text`.
+--format text` (from oneharness 0.21.1 it reads the last 7 UTC days by default;
+`--since <YYYY-MM-DD>` or `--all-time` reaches an older run).
 
 ## `assess` — write a free-text judgement
 
