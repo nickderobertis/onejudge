@@ -346,7 +346,7 @@ system_prompt: Be warm.
 #[test]
 fn oneharness_provider_kind_drives_the_loop() {
     // The `oneharness` provider kind, pointed at the fake-oneharness double, driven
-    // in Human format so the streaming dispatch arm runs. The agent's reply
+    // in Text format so the observing dispatch arm runs. The agent's reply
     // satisfies `done_when` on turn one.
     let bin = serde_json::to_string(&fake_oneharness_bin()).unwrap();
     let yaml = format!(
@@ -357,7 +357,7 @@ fn oneharness_provider_kind_drives_the_loop() {
     );
     let plan = Config::from_yaml(&yaml).unwrap().into_plan().unwrap();
     let mut sink = |_: &str| {};
-    let summary = run_plan(plan, Format::Human, &mut sink).unwrap();
+    let summary = run_plan(plan, Format::Text, &mut sink).unwrap();
     assert!(summary.completed);
     assert_eq!(summary.report.transcript.assistant_turns(), 1);
     assert_eq!(exit_code(&summary), 0);
@@ -399,7 +399,7 @@ fn split_provider_kind_composes_two_backends() {
     );
     let plan = Config::from_yaml(&yaml).unwrap().into_plan().unwrap();
     let mut sink = |_: &str| {};
-    let summary = run_plan(plan, Format::Human, &mut sink).unwrap();
+    let summary = run_plan(plan, Format::Text, &mut sink).unwrap();
     assert_eq!(summary.report.transcript.assistant_turns(), 2);
     assert!(summary.hit_max_turns);
     assert_eq!(exit_code(&summary), 1);
@@ -678,7 +678,7 @@ fn write_config(name: &str, body: &str) -> std::path::PathBuf {
 }
 
 #[test]
-fn binary_run_prints_human_result_and_exits_zero() {
+fn binary_run_prints_the_run_as_text_by_default_and_exits_zero() {
     let config = write_config(
         "human.yaml",
         "\
@@ -696,20 +696,23 @@ user:
         .unwrap();
     assert!(output.status.success(), "expected exit 0");
     let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.contains("=== Conversation ==="));
+    // A turn section, its tool call drawn once by oneharness's renderer, and the
+    // closing summary — no raw JSON anywhere.
+    assert!(stdout.starts_with("── turn 1 · worker ──"), "{stdout}");
+    assert_eq!(
+        stdout.matches("$ git commit -m fix\n").count(),
+        1,
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("── done: completed after 1 turn"),
+        "{stdout}"
+    );
     assert!(stdout.contains("Status: completed"));
-    // The human `Usage:` line surfaces the aggregated prompt-cache reads/writes.
-    assert!(
-        stdout.contains("cache_read="),
-        "human usage shows cache reads"
-    );
-    assert!(
-        stdout.contains("cache_write="),
-        "human usage shows cache writes"
-    );
-    // Live tool events stream to stderr, keeping stdout clean.
-    let stderr = String::from_utf8(output.stderr).unwrap();
-    assert!(stderr.contains("git commit"), "events stream to stderr");
+    assert!(!stdout.contains('{'), "{stdout}");
+    // The `Usage:` line surfaces the aggregated prompt-cache reads/writes.
+    assert!(stdout.contains("cache_read="), "usage shows cache reads");
+    assert!(stdout.contains("cache_write="), "usage shows cache writes");
 }
 
 #[test]
@@ -1215,7 +1218,7 @@ fn binary_env_supplies_skill_and_system_prompt() {
 #[test]
 fn binary_skill_body_and_system_prompt_both_reach_the_harness() {
     // With both set, each half reaches the provider: the `system_prompt`'s
-    // `[[event]]` fires (surfacing on stderr) and the skill body's `[[done]]` ends
+    // `[[event]]` fires (drawn in the run's text) and the skill body's `[[done]]` ends
     // the multi-turn loop on turn one — so a run that would otherwise hit the cap
     // completes, proving the skill body was delivered too.
     let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("skill-both");
@@ -1243,15 +1246,12 @@ fn binary_skill_body_and_system_prompt_both_reach_the_harness() {
         output.status.success(),
         "skill body's [[done]] reached the harness"
     );
-    assert!(String::from_utf8(output.stdout)
-        .unwrap()
-        .contains("Status: completed"));
-    // The system prompt's `[[event]]` reached the harness (events stream to stderr).
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("Status: completed"));
+    // The system prompt's `[[event]]` reached the harness (drawn in the text).
     assert!(
-        String::from_utf8(output.stderr)
-            .unwrap()
-            .contains("git status"),
-        "system prompt's event reached the harness"
+        stdout.contains("$ git status"),
+        "system prompt's event reached the harness: {stdout}"
     );
 }
 
@@ -1453,25 +1453,19 @@ fn binary_stream_exits_one_when_the_run_is_incomplete() {
 
 #[test]
 fn binary_stream_rejects_an_output_surface_it_cannot_honor() {
+    // Only the JSON stream *is* stdout; `--format text --stream` is accepted (see
+    // `binary_text_format_is_live_streamable_aliased_and_writes_its_output`).
     let config = write_config("stream-misuse.yaml", "task: go\nsystem_prompt: Be warm.\n");
-    for (args, needle) in [
-        (vec!["--stream"], "--format json"),
-        (
-            vec!["--stream", "--format", "json", "--output", "report.json"],
-            "drop --output",
-        ),
-    ] {
-        let output = Command::new(onejudge_bin())
-            .arg("run")
-            .arg(config.to_str().unwrap())
-            .args(&args)
-            .current_dir(Path::new(env!("CARGO_TARGET_TMPDIR")))
-            .output()
-            .unwrap();
-        assert_eq!(output.status.code(), Some(2), "{args:?}");
-        let stderr = String::from_utf8(output.stderr).unwrap();
-        assert!(stderr.contains(needle), "{args:?}: {stderr}");
-    }
+    let output = Command::new(onejudge_bin())
+        .arg("run")
+        .arg(config.to_str().unwrap())
+        .args(["--stream", "--format", "json", "--output", "report.json"])
+        .current_dir(Path::new(env!("CARGO_TARGET_TMPDIR")))
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("drop --output"), "{stderr}");
 }
 
 #[test]
@@ -2000,7 +1994,7 @@ fn an_oneharness_config_that_names_no_bin_runs_the_turn_in_process() {
     );
     let plan = Config::from_yaml(&yaml).unwrap().into_plan().unwrap();
     let mut sink = |_: &str| {};
-    let summary = run_plan(plan, Format::Human, &mut sink).unwrap();
+    let summary = run_plan(plan, Format::Text, &mut sink).unwrap();
 
     assert_eq!(summary.report.transcript.assistant_turns(), 1);
     assert_eq!(
@@ -2358,7 +2352,7 @@ fn binary_run_json_reports_each_judges_decision_and_labels_the_judge_side() {
 }
 
 #[test]
-fn binary_run_human_prints_each_judges_decision_beside_its_turn() {
+fn binary_run_text_prints_each_judges_decision_and_the_feedback_under_its_turn() {
     let config = Path::new(env!("CARGO_TARGET_TMPDIR")).join("panel-human.yaml");
     std::fs::write(&config, reviewer_and_lint(TWO_TURN_BODY)).unwrap();
     let output = Command::new(onejudge_bin())
@@ -2367,21 +2361,51 @@ fn binary_run_human_prints_each_judges_decision_beside_its_turn() {
         .unwrap();
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
-    let conversation = stdout
-        .split("\n\n=== Result ===")
+    // Everything before the closing summary; a turn's duration is a measurement,
+    // so it is read as a shape.
+    let run: Vec<&str> = stdout
+        .split("── done:")
         .next()
-        .expect("the conversation section");
+        .expect("the run's sections")
+        .lines()
+        .collect();
+    let rule = |title: &str| {
+        let head = format!("── {title} ");
+        format!("{head}{}", "─".repeat(64 - head.chars().count()))
+    };
+    let closed = |line: &str, reply: &str| {
+        line.starts_with("  done in ") && line.ends_with(&format!(" · {reply}"))
+    };
+    assert_eq!(run[0], rule("turn 1 · worker"), "{stdout}");
+    assert_eq!(run[1], "task: please commit");
+    assert!(closed(run[2], "echo: please commit"), "{stdout}");
     assert_eq!(
-        conversation,
-        "=== Conversation ===\n\
-         User: please commit\n\
-         Assistant: echo: please commit\n\
-         \x20 [judge reviewer (command)] done — looks right\n\
-         \x20 [judge lint (command)] continue — completion criterion not yet met\n\
-         User: ## Judge `lint` (command)\n\nThanks — and what about the next step?\n\
-         Assistant: echo: ## Judge `lint` (command)\n\nThanks — and what about the next step?\n\
-         \x20 [judge reviewer (command)] done — looks right\n\
-         \x20 [judge lint (command)] done — completion criterion found in transcript",
+        run[3..8],
+        [
+            rule("turn 1 · judges").as_str(),
+            "reviewer  done  looks right",
+            "lint  continue  completion criterion not yet met",
+            "feedback → worker: ## Judge `lint` (command)",
+            "",
+        ],
+        "{stdout}"
+    );
+    assert_eq!(
+        run[8],
+        "                   Thanks — and what about the next step?"
+    );
+    assert_eq!(run[9], rule("turn 2 · worker ← feedback"));
+    assert!(
+        closed(run[10], "echo: ## Judge `lint` (command) (+1 line)"),
+        "{stdout}"
+    );
+    assert_eq!(
+        run[11..],
+        [
+            rule("turn 2 · judges").as_str(),
+            "reviewer  done  looks right",
+            "lint  done  completion criterion found in transcript",
+        ],
         "{stdout}"
     );
     assert!(stdout.contains("Status: completed"), "{stdout}");
@@ -2969,7 +2993,7 @@ fn binary_run_hands_the_worker_llmlints_report_under_its_header_and_composes_its
 }
 
 #[test]
-fn binary_human_output_prints_the_llmlint_history_command_beside_each_llmlint_decision() {
+fn binary_text_output_prints_the_llmlint_history_command_under_each_llmlint_decision() {
     // What the wrapper reads a run by: every llmlint decision's `llmlint history
     // <run_id>` on the line under it, tied to the turn it decided on — and no
     // such line under the reviewer's.
@@ -2985,6 +3009,7 @@ fn binary_human_output_prints_the_llmlint_history_command_beside_each_llmlint_de
         ),
     )
     .unwrap();
+    // `human`, the text view's older name, still selects it.
     let (output, _) = run_binary_with_llmlint("human", &config, "1,0", "human");
     assert!(
         output.status.success(),
@@ -2994,16 +3019,16 @@ fn binary_human_output_prints_the_llmlint_history_command_beside_each_llmlint_de
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(
         stdout.contains(&format!(
-            "  [judge reviewer (command)] done — looks right\n\
-             \x20 [judge lint (llmlint)] continue — {LLMLINT_FAILING_SUMMARY}\n\
-             \x20   llmlint history fake-lint-1\n"
+            "reviewer  done  looks right\n\
+             lint  continue  {LLMLINT_FAILING_SUMMARY}\n\
+             \x20 llmlint history fake-lint-1\n"
         )),
         "{stdout}"
     );
     assert!(
         stdout.contains(&format!(
-            "  [judge lint (llmlint)] done — {LLMLINT_CLEAN_SUMMARY}\n\
-             \x20   llmlint history fake-lint-2"
+            "lint  done  {LLMLINT_CLEAN_SUMMARY}\n\
+             \x20 llmlint history fake-lint-2"
         )),
         "{stdout}"
     );
