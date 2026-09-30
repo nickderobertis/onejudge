@@ -68,8 +68,11 @@ impl<S: Provider, J: Provider> Provider for SplitProvider<S, J> {
     }
 
     // Only the judge side's calls are named after the run's scope; the skill side
-    // names its own turns `<base>-skill`.
+    // names its own turns `<base>-skill`. Both sides are handed it, because both
+    // label their runs `session=<base>` — the skill side makes no judge-side call
+    // for the scope to name.
     fn set_history_scope(&self, scope: Option<&crate::HistoryScope>) {
+        self.skill.set_history_scope(scope);
         self.judge.set_history_scope(scope);
     }
 

@@ -197,7 +197,12 @@ impl Provider for AnyProvider {
             AnyProvider::Oneharness(p) => p.set_history_scope(scope),
             AnyProvider::Command(p) => p.set_history_scope(scope),
             AnyProvider::Llmlint(p) => p.set_history_scope(scope),
-            AnyProvider::Split { judges, .. } => judges.set_history_scope(scope),
+            // Both sides label their runs `session=<base>`; only the judges
+            // name records after it (see `SplitProvider::set_history_scope`).
+            AnyProvider::Split { skill, judges } => {
+                skill.set_history_scope(scope);
+                judges.set_history_scope(scope);
+            }
         }
     }
 

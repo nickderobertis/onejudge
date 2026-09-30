@@ -12,6 +12,7 @@
 //! not the other fails the gate instead of silently changing what a turn means
 //! depending on which seam ran it.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use oneharness_core::domain::mode::PermissionMode;
@@ -43,6 +44,10 @@ pub(crate) struct TurnSpec {
     pub(crate) session: Option<String>,
     /// The human-meaningful name for the history session.
     pub(crate) history_name: Option<String>,
+    /// The labels every history record this turn writes carries — which run,
+    /// turn, role and judge it belongs to — so `oneharness history watch --label
+    /// session=<session>` selects one onejudge run's harness activity.
+    pub(crate) labels: BTreeMap<String, String>,
     /// Ask for normalized tool events. Agent side only.
     pub(crate) events: bool,
     /// Publish those events as they occur rather than only on the finished report.
@@ -69,6 +74,7 @@ pub(crate) fn request(spec: &TurnSpec) -> RunRequest {
         // counterpart for.
         history: Some(true),
         history_name: spec.history_name.clone(),
+        history_label: history_labels(spec).collect(),
         system: spec.system.clone(),
         cwd: spec.cwd.as_ref().map(PathBuf::from),
         config: spec.config.clone(),
@@ -136,6 +142,11 @@ pub(crate) fn argv(spec: &TurnSpec) -> Vec<String> {
         args.push("--history-name".into());
         args.push(name.clone());
     }
+    // Repeatable: one `KEY=VALUE` per label, in key order.
+    for label in history_labels(spec) {
+        args.push("--history-label".into());
+        args.push(label);
+    }
     if let Some(name) = &spec.session {
         args.push("--session".into());
         args.push(name.clone());
@@ -150,6 +161,13 @@ pub(crate) fn argv(spec: &TurnSpec) -> Vec<String> {
         args.push(mode.as_str().into());
     }
     args
+}
+
+/// `spec`'s labels as the `KEY=VALUE` words both renderings carry.
+fn history_labels(spec: &TurnSpec) -> impl Iterator<Item = String> + '_ {
+    spec.labels
+        .iter()
+        .map(|(key, value)| format!("{key}={value}"))
 }
 
 #[cfg(test)]
@@ -178,6 +196,10 @@ mod tests {
         (
             "--history-name",
             Some(("history_name", |r| r.history_name.is_some())),
+        ),
+        (
+            "--history-label",
+            Some(("history_label", |r| !r.history_label.is_empty())),
         ),
         (
             "--mock-harness",
@@ -213,6 +235,10 @@ mod tests {
             mock_harness: vec!["claude-code".into()],
             session: Some("sess".into()),
             history_name: Some("hist".into()),
+            labels: BTreeMap::from([
+                ("role".to_string(), "worker".to_string()),
+                ("session".to_string(), "sess".to_string()),
+            ]),
             events: true,
             stream: true,
             control: true,
@@ -306,6 +332,22 @@ mod tests {
             .collect();
         assert_eq!(configs, ["judge-defaults.toml", "oneharness.judge.toml"]);
         assert_eq!(request(&spec).config, spec.config);
+    }
+
+    #[test]
+    fn labels_are_one_key_value_word_per_label_on_both_renderings() {
+        let spec = populated();
+        let argv = argv(&spec);
+        let labels: Vec<&String> = argv
+            .windows(2)
+            .filter(|w| w[0] == "--history-label")
+            .map(|w| &w[1])
+            .collect();
+        assert_eq!(labels, ["role=worker", "session=sess"]);
+        assert_eq!(
+            request(&spec).history_label,
+            ["role=worker", "session=sess"]
+        );
     }
 
     #[test]

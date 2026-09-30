@@ -4180,6 +4180,82 @@ fn default_posture_run(seam: Seam, bin: &str) -> (PostureRun, PostureOutcome) {
     (run, outcome)
 }
 
+/// Every history record under `dir` — oneharness's own JSONL, one record per
+/// harness run — as JSON.
+fn history_records(dir: &Path) -> Vec<serde_json::Value> {
+    let mut records = Vec::new();
+    let mut pending = vec![dir.to_path_buf()];
+    while let Some(dir) = pending.pop() {
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                pending.push(path);
+            } else if path.extension().is_some_and(|ext| ext == "jsonl") {
+                for line in std::fs::read_to_string(&path).unwrap().lines() {
+                    let record: serde_json::Value = serde_json::from_str(line).unwrap();
+                    if record.get("history_id").is_some() {
+                        records.push(record);
+                    }
+                }
+            }
+        }
+    }
+    records
+}
+
+#[test]
+fn every_history_record_a_run_writes_carries_its_session_turn_role_and_judge_labels() {
+    // What `oneharness history watch --label session=<session>` selects one run's
+    // harness activity by. Read back from the records the linked core wrote — in
+    // process, and through a spawned oneharness running the same core — rather
+    // than from the argv onejudge built.
+    for seam in Seam::BOTH {
+        let run = PostureRun::new("labels", seam);
+        let judge = run.judge_config("judge.toml", "");
+        let judged = |label: &str| [format!("label: {label}"), judge_config_line(&judge)];
+        let (alpha, beta) = (judged("alpha"), judged("beta"));
+        let provider = run.split(
+            &[],
+            &[
+                &alpha.iter().map(String::as_str).collect::<Vec<_>>(),
+                &beta.iter().map(String::as_str).collect::<Vec<_>>(),
+            ],
+        );
+        let outcome = run.run(&provider, "", &[]);
+        assert_eq!(outcome.code, Some(0), "{seam:?}: {}", outcome.stderr);
+
+        let records = history_records(&run.dir.join("history"));
+        let mut seen = std::collections::BTreeSet::new();
+        for record in &records {
+            let labels = &record["labels"];
+            assert_eq!(labels["session"], "posture", "{seam:?}: {record}");
+            assert_eq!(labels["turn"], "1", "{seam:?}: {record}");
+            let role = labels["role"].as_str().expect("a role label");
+            let judge = labels.get("judge").and_then(serde_json::Value::as_str);
+            match role {
+                "worker" => assert_eq!(judge, None, "{seam:?}: {record}"),
+                "supervisor" | "judge" => assert!(
+                    matches!(judge, Some("alpha" | "beta")),
+                    "{seam:?}: a judge-side run names its judge: {record}"
+                ),
+                other => panic!("{seam:?}: unexpected role `{other}`: {record}"),
+            }
+            seen.insert(format!("{role}/{}", judge.unwrap_or("-")));
+        }
+        assert_eq!(
+            seen.into_iter().collect::<Vec<_>>(),
+            [
+                "judge/alpha",
+                "judge/beta",
+                "supervisor/alpha",
+                "supervisor/beta",
+                "worker/-"
+            ],
+            "{seam:?}: every party's runs were recorded and labelled"
+        );
+    }
+}
+
 /// Unix only: the recorded prompts carry the run directory's own spelling, which
 /// the placeholders reconcile on a POSIX path and nowhere else.
 #[cfg(unix)]
@@ -4220,9 +4296,11 @@ fn with_no_mode_configured_the_harness_argv_and_judge_prompts_are_the_0_15_0_one
 
 #[test]
 fn a_judge_with_no_mode_differs_from_0_15_0_only_by_the_leading_defaults_config() {
-    // The one intended change to what onejudge asks oneharness for: an evaluator
-    // call leads with onejudge's defaults file and carries no `--mode`. The
-    // agent's turn and everything else about the call are 0.15.0's argv.
+    // The intended changes to what onejudge asks oneharness for: an evaluator
+    // call leads with onejudge's defaults file and carries no `--mode`, and every
+    // run carries the `--history-label`s that say which run, turn, role and judge
+    // it is. The agent's turn and everything else about the call are 0.15.0's
+    // argv.
     let baseline = posture_baseline(Seam::Spawned);
     let (run, outcome) = default_posture_run(Seam::Spawned, onejudge_bin());
     let decision = outcome.decision("oneharness");
@@ -4255,7 +4333,46 @@ fn a_judge_with_no_mode_differs_from_0_15_0_only_by_the_leading_defaults_config(
             out
         })
         .collect();
-    assert_eq!(outcome.oneharness, expected);
+    let (unlabelled, labels): (Vec<Vec<String>>, Vec<Vec<String>>) = outcome
+        .oneharness
+        .iter()
+        .map(|argv| {
+            let mut rest = Vec::new();
+            let mut labels = Vec::new();
+            let mut args = argv.iter();
+            while let Some(arg) = args.next() {
+                if arg == "--history-label" {
+                    labels.push(args.next().unwrap().clone());
+                } else {
+                    rest.push(arg.clone());
+                }
+            }
+            (rest, labels)
+        })
+        .unzip();
+    assert_eq!(unlabelled, expected);
+    let judged = |role: &str| {
+        vec![
+            "judge=oneharness".to_string(),
+            format!("role={role}"),
+            "session=posture".to_string(),
+            "turn=1".to_string(),
+        ]
+    };
+    assert_eq!(
+        labels,
+        vec![
+            vec![
+                "role=worker".to_string(),
+                "session=posture".to_string(),
+                "turn=1".to_string(),
+            ],
+            judged("supervisor"),
+            judged("judge"),
+            judged("judge"),
+            judged("judge"),
+        ]
+    );
 
     // In process there is no argv, so the same resolution is read off the
     // report on both seams: read-only, set by the defaults file, attributed to
