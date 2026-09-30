@@ -6,11 +6,15 @@
 //! The binary entrypoint (`src/bin/onejudge.rs`) stays thin; the logic lives here
 //! and in the `config` / `provider` submodules so it is covered by the gate.
 //! [`run`] loads and validates the config, builds the provider, drives the loop,
-//! scores the evals, and renders the result — human-readable by default, or the
-//! versioned [`Report`] contract under `--format json`.
+//! scores the evals, and renders the result — readably and live by default
+//! (`--format text`, the `text` module), or the versioned [`Report`] contract
+//! under `--format json`. Every run is also published for `onejudge watch` to
+//! follow from another process (the `watch` module).
 
 mod config;
 mod provider;
+mod text;
+mod watch;
 
 use std::io::{Read as _, Write};
 use std::ops::ControlFlow;
@@ -69,16 +73,18 @@ const MIN_ONEHARNESS: &str = "0.18.0";
 const MIN_ONEHARNESS_REPORT_SCHEMA: &str = "0.11";
 
 /// The oldest `oneharness-core` this crate can be built against: the release
-/// whose run request and config loader take an **ordered list** of config files,
-/// layered later-over-earlier, which is how an evaluator judge's defaults become
+/// whose public text renderer (`domain::render`) draws the worker's events in
+/// `--format text`, and which reports the agent's own `message` and `reasoning`
+/// items as events. It carries the **ordered list** of config files, layered
+/// later-over-earlier (0.20.0), which is how an evaluator judge's defaults become
 /// defaults rather than overrides — a downstream engine takes it only through this
-/// crate's requirement. It also carries the per-run history pointer line (0.17.0).
+/// crate's requirement — and the per-run history pointer line (0.17.0).
 /// The manifest
 /// requirement is held to it by the gate below, and — so the number cannot lie —
 /// the symbols that arrived in it are named by a test in this module, which a
 /// lock resolved below it fails to compile.
 #[cfg(test)]
-const MIN_ONEHARNESS_CORE: &str = "0.20.0";
+const MIN_ONEHARNESS_CORE: &str = "0.21.0";
 
 /// Errors surfaced by the CLI. Config/validation problems are separated from IO
 /// and engine failures so the entrypoint can exit with a fitting code.
@@ -110,6 +116,9 @@ pub struct Cli {
 pub enum Command {
     /// Drive one task to completion via a simulated-user loop.
     Run(RunArgs),
+    /// Follow a running (or finished) `onejudge run` from another process: replay
+    /// its session from the start, then follow it to the result.
+    Watch(WatchArgs),
     /// Write a starter `onejudge.yaml`.
     Init(InitArgs),
     /// Print the annotated config schema.
@@ -163,18 +172,36 @@ pub struct RunArgs {
     #[arg(long, value_enum)]
     pub provider: Option<ProviderKind>,
 
-    /// The output format.
-    #[arg(long, value_enum, default_value_t = Format::Human)]
+    /// The output format: `text` (the default) prints the run readably as it
+    /// happens; `json` prints the versioned report. `human` is accepted as an
+    /// alias of `text`.
+    #[arg(long, value_enum, default_value_t = Format::Text)]
     pub format: Format,
-    /// Publish the run on stdout as the streamed protocol (`docs/streaming.md`):
-    /// one `{"type":"event",…}` line per tool event as it happens, then a terminal
-    /// `{"type":"result","report":{…}}` line. Requires `--format json`, and is
-    /// incompatible with `--output` (the stream *is* stdout).
+    /// Stream the run as it happens. Under `--format json` that is the streamed
+    /// protocol on stdout (`docs/streaming.md`): one `{"type":"event",…}` line per
+    /// tool event, then a terminal `{"type":"result","report":{…}}` line — which is
+    /// incompatible with `--output`, because the stream *is* stdout. Under `--format
+    /// text`, which is already live, it changes nothing.
     #[arg(long)]
     pub stream: bool,
-    /// Write the result here instead of stdout.
+    /// Write the final result here instead of stdout: the report under `--format
+    /// json`, and the whole text of the run under `--format text` (whose live
+    /// lines then go to stderr).
     #[arg(long, short)]
     pub output: Option<PathBuf>,
+}
+
+/// Arguments for `onejudge watch`.
+#[derive(Debug, Parser)]
+pub struct WatchArgs {
+    /// The session to follow — the `--session` its run was given (default
+    /// `onejudge`).
+    #[arg(default_value = "onejudge")]
+    pub session: String,
+    /// `text` prints the run exactly as `onejudge run` prints it; `json` prints
+    /// each observation, then the result, as one JSON line.
+    #[arg(long, value_enum, default_value_t = Format::Text)]
+    pub format: Format,
 }
 
 /// Arguments for `onejudge init`.
@@ -196,10 +223,31 @@ pub struct InitArgs {
 /// The `--format` choices.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum Format {
-    /// A readable transcript + result summary.
-    Human,
+    /// The run drawn for a person as it happens — turns, the worker's events and
+    /// words, each judge's decision, the feedback handed back — then a closing
+    /// summary. `human` is its alias on the command line.
+    #[value(alias = "human")]
+    Text,
     /// The versioned [`Report`] JSON contract.
     Json,
+    /// The name [`Format::Text`] had before it matched oneharness's `text`; means
+    /// exactly what `Text` means. Kept so code naming it still builds.
+    #[value(skip)]
+    #[deprecated(note = "use `Format::Text`")]
+    Human,
+}
+
+impl Format {
+    /// Whether this is the text view, under either of its names.
+    #[must_use]
+    #[allow(
+        deprecated,
+        reason = "`Human` is the deprecated spelling of `Text`, and this is the one place both \
+                  are read as the same thing"
+    )]
+    pub fn is_text(self) -> bool {
+        matches!(self, Format::Text | Format::Human)
+    }
 }
 
 /// Run the CLI to completion, returning the process exit code.
@@ -209,6 +257,7 @@ pub enum Format {
 pub fn run(cli: Cli) -> Result<i32, CliError> {
     match cli.command {
         Command::Run(args) => run_task(args),
+        Command::Watch(args) => watch_session(&args),
         Command::Init(args) => init(args),
         Command::Schema => {
             print!("{STARTER_CONFIG}");
@@ -236,20 +285,15 @@ fn run_task(args: RunArgs) -> Result<i32, CliError> {
         output,
     } = args;
 
-    // Validate the output surface before doing any work: `--stream` publishes the
-    // NDJSON protocol on stdout, so a human rendering or a file destination would
-    // silently discard the very thing that was asked for.
-    if stream {
-        if format != Format::Json {
-            return Err(CliError::Config(
-                "--stream publishes the JSON streamed protocol; pass --format json".into(),
-            ));
-        }
-        if output.is_some() {
-            return Err(CliError::Config(
-                "--stream writes the event stream to stdout; drop --output".into(),
-            ));
-        }
+    // Validate the output surface before doing any work: `--format json --stream`
+    // publishes the NDJSON protocol on stdout, so a file destination would silently
+    // discard the very thing that was asked for. Text is live whether streamed or
+    // not, so `--stream` asks it for nothing it does not already do.
+    let json = !format.is_text();
+    if stream && json && output.is_some() {
+        return Err(CliError::Config(
+            "--stream writes the event stream to stdout; drop --output".into(),
+        ));
     }
 
     let cfg_path = resolve_config_path(config.as_ref());
@@ -279,36 +323,212 @@ fn run_task(args: RunArgs) -> Result<i32, CliError> {
 
     let plan = cfg.into_plan()?;
 
+    // Every run is published for `onejudge watch <session>`, whatever it prints.
+    // A stream that cannot be opened is a side channel lost, never a run refused.
+    let publisher = match watch::Publisher::start(&watch::watch_dir(), &plan.settings.session_name)
+    {
+        Ok(publisher) => Some(publisher),
+        Err(e) => {
+            eprintln!("onejudge: warning — {e}; `onejudge watch` will not see this run");
+            None
+        }
+    };
+    let mut published = Published {
+        publisher,
+        started: std::time::Instant::now(),
+    };
+
+    if !json {
+        return run_text(plan, &mut published, output.as_ref());
+    }
     if stream {
-        return run_streamed(plan);
+        return run_streamed(plan, &mut published);
     }
 
-    // Live tool events go to stderr so a `--format json` (or redirected) run keeps
-    // a clean stdout; the rendered result goes to stdout / `--output`.
-    let mut progress = |line: &str| {
-        eprintln!("{line}");
-    };
-    let summary = match run_plan_reporting_failure(plan, format, &mut progress) {
+    let summary = match execute(
+        plan,
+        Some(&mut |observation: &Observation<'_>| {
+            published.observation(observation);
+            ControlFlow::Continue(())
+        }),
+    ) {
         Ok(summary) => summary,
         Err(failure) => {
+            published.failure(&failure);
             // A failed run produces no report, but it does produce attribution —
             // which harness identity refused, on which side. Under `--format json`
             // that is written where the report would have gone, so a programmatic
             // caller never has to parse it back out of a human message.
-            if format == Format::Json {
-                write_output(output.as_ref(), &render_failure_json(&failure)?)?;
-            }
+            write_output(output.as_ref(), &render_failure_json(&failure)?)?;
             return Err(failure.error);
         }
     };
 
-    let rendered = match format {
-        Format::Human => render_human(&summary),
-        Format::Json => render_json(&summary.report)?,
-    };
-    write_output(output.as_ref(), &rendered)?;
+    let code = exit_code(&summary);
+    published.result(&summary, code);
+    write_output(output.as_ref(), &render_json(&summary.report)?)?;
+    Ok(code)
+}
 
-    Ok(exit_code(&summary))
+/// A run's publication for `onejudge watch`: each observation as the JSON line it
+/// serializes to, then one terminal line — `{"type":"result",…}` carrying the
+/// report and what the closing summary is drawn from, or `{"type":"failure",…}`
+/// carrying the [`FailureReport`].
+struct Published {
+    publisher: Option<watch::Publisher>,
+    started: std::time::Instant,
+}
+
+impl Published {
+    /// Publish `observation`, returning the line it was published as.
+    fn observation(&mut self, observation: &Observation<'_>) -> Option<String> {
+        let line = serde_json::to_string(observation).ok()?;
+        if let Some(publisher) = &mut self.publisher {
+            publisher.publish(&line);
+        }
+        Some(line)
+    }
+
+    /// Publish the terminal record for a run that finished, returning it.
+    fn result(&mut self, summary: &RunSummary, code: i32) -> text::Finished {
+        let elapsed = u64::try_from(self.started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        let finished = text::Finished::new(summary, code, elapsed);
+        self.terminal("result", &finished);
+        finished
+    }
+
+    /// Publish the terminal record for a run that produced no report.
+    fn failure(&mut self, failure: &RunFailure) {
+        self.terminal("failure", &FailureReport::new(failure));
+    }
+
+    fn terminal(&mut self, kind: &'static str, body: &impl serde::Serialize) {
+        #[derive(serde::Serialize)]
+        struct Tagged<'a, T> {
+            r#type: &'static str,
+            #[serde(flatten)]
+            body: &'a T,
+        }
+        if let (Some(publisher), Ok(line)) = (
+            &mut self.publisher,
+            serde_json::to_string(&Tagged { r#type: kind, body }),
+        ) {
+            publisher.publish(&line);
+        }
+    }
+}
+
+/// Drive `plan` under `--format text`: each observation drawn as it happens —
+/// on stdout, or on stderr when `--output` takes the result — then the closing
+/// summary. `--output` receives the whole text of the run.
+fn run_text(
+    plan: Plan,
+    published: &mut Published,
+    output: Option<&PathBuf>,
+) -> Result<i32, CliError> {
+    let mut view = text::TextView::default();
+    let mut printed = String::new();
+    let mut broken = None;
+    let emit = |block: &str, printed: &mut String| -> Result<(), CliError> {
+        printed.push_str(block);
+        printed.push('\n');
+        if output.is_some() {
+            let mut err = std::io::stderr();
+            writeln!(err, "{block}")?;
+            err.flush()?;
+        } else {
+            let mut out = std::io::stdout();
+            writeln!(out, "{block}")?;
+            out.flush()?;
+        }
+        Ok(())
+    };
+    let run = execute(
+        plan,
+        Some(&mut |observation: &Observation<'_>| {
+            let Some(line) = published.observation(observation) else {
+                return ControlFlow::Continue(());
+            };
+            let Some(block) = serde_json::from_str::<text::Seen>(&line)
+                .ok()
+                .and_then(|seen| view.render(&seen))
+            else {
+                return ControlFlow::Continue(());
+            };
+            if let Err(e) = emit(&block, &mut printed) {
+                // Stop the run rather than keep burning harness calls into a pipe
+                // that no longer accepts them.
+                broken = Some(e);
+                return ControlFlow::Break(());
+            }
+            ControlFlow::Continue(())
+        }),
+    );
+    let outcome = match run {
+        Ok(summary) => {
+            let code = exit_code(&summary);
+            let finished = published.result(&summary, code);
+            emit(text::closing(&finished).trim_end(), &mut printed).map(|()| code)
+        }
+        Err(failure) => {
+            published.failure(&failure);
+            let _ = emit(&text::failed(&failure.error.to_string()), &mut printed);
+            Err(failure.error)
+        }
+    };
+    if let Some(path) = output {
+        std::fs::write(path, &printed)?;
+    }
+    if let Some(e) = broken {
+        return Err(e);
+    }
+    outcome
+}
+
+/// `onejudge watch <session>`: replay the session's stream from its start, then
+/// follow it to the run's result, drawn as `run` draws it — or, under `--format
+/// json`, each record as the JSON line it was published as. Exits with the run's
+/// own exit code.
+fn watch_session(args: &WatchArgs) -> Result<i32, CliError> {
+    let mut view = text::TextView::default();
+    let mut out = std::io::stdout();
+    let json = !args.format.is_text();
+    watch::follow(&watch::watch_dir(), &args.session, &mut |line| {
+        let value: serde_json::Value = serde_json::from_str(line)
+            .map_err(|e| CliError::Config(format!("the watch stream is unreadable: {e}")))?;
+        let (block, code) = match value.get("type").and_then(serde_json::Value::as_str) {
+            Some("result") => {
+                let finished: text::Finished = serde_json::from_value(value).map_err(|e| {
+                    CliError::Config(format!("the watch stream's result is unreadable: {e}"))
+                })?;
+                let code = finished.exit_code;
+                (
+                    Some(text::closing(&finished).trim_end().to_string()),
+                    Some(code),
+                )
+            }
+            Some("failure") => {
+                let failure: FailureReport = serde_json::from_value(value).map_err(|e| {
+                    CliError::Config(format!("the watch stream's failure is unreadable: {e}"))
+                })?;
+                // A run that produced no report exits 2; its watcher does too.
+                (Some(text::failed(&failure.error.message)), Some(2))
+            }
+            _ => (
+                serde_json::from_value::<text::Seen>(value)
+                    .ok()
+                    .and_then(|seen| view.render(&seen)),
+                None,
+            ),
+        };
+        if json {
+            writeln!(out, "{line}")?;
+        } else if let Some(block) = block {
+            writeln!(out, "{block}")?;
+        }
+        out.flush()?;
+        Ok(code)
+    })
 }
 
 /// Drive `plan` while republishing it on stdout as the streamed protocol: one
@@ -318,12 +538,13 @@ fn run_task(args: RunArgs) -> Result<i32, CliError> {
 ///
 /// Each line is flushed as it is written — a consumer reading this pipe to watch a
 /// long turn learns nothing from a line still sitting in our buffer.
-fn run_streamed(plan: Plan) -> Result<i32, CliError> {
+fn run_streamed(plan: Plan, published: &mut Published) -> Result<i32, CliError> {
     let mut stdout = std::io::stdout();
     let mut failure = None;
     let summary = match execute(
         plan,
         Some(&mut |observation: &Observation<'_>| {
+            published.observation(observation);
             let line = match observation {
                 Observation::Tool(event) => StreamLine::Event(event),
                 Observation::JudgeTool(tool) => StreamLine::JudgeTool(tool),
@@ -340,6 +561,7 @@ fn run_streamed(plan: Plan) -> Result<i32, CliError> {
     ) {
         Ok(summary) => summary,
         Err(run_failure) => {
+            published.failure(&run_failure);
             // stdout is the `event* result EOF` protocol, so a failure cannot be
             // published there without inventing a third envelope every consumer
             // would have to learn. It goes to stderr as ONE compact JSON line
@@ -354,13 +576,15 @@ fn run_streamed(plan: Plan) -> Result<i32, CliError> {
     if let Some(e) = failure {
         return Err(e);
     }
+    let code = exit_code(&summary);
+    published.result(&summary, code);
     write_line(
         &mut stdout,
         &StreamLine::Result {
             report: &summary.report,
         },
     )?;
-    Ok(exit_code(&summary))
+    Ok(code)
 }
 
 /// One line of the outbound stream — the same two `type`-tagged envelopes onejudge
@@ -601,8 +825,10 @@ impl From<CliError> for Box<RunFailure> {
 }
 
 /// Drive `plan` to completion, re-judge its `done_when`, score its evals, and
-/// bundle everything into a [`RunSummary`]. `progress` receives a line per tool
-/// event during a `Human`-format run (streamed); a `Json` run is buffered.
+/// bundle everything into a [`RunSummary`]. Under [`Format::Text`] `progress`
+/// receives the run as `onejudge run` draws it, one block of lines per
+/// observation as it happens (the closing summary is the caller's to draw); a
+/// `Json` run is buffered.
 ///
 /// Every process this spawns is offered to the plan's
 /// [`spawn_hook`](Plan::with_spawn_hook), if an embedder installed one.
@@ -628,16 +854,21 @@ pub fn run_plan_reporting_failure(
     format: Format,
     progress: &mut dyn FnMut(&str),
 ) -> Result<RunSummary, Box<RunFailure>> {
-    match format {
-        Format::Human => {
-            let mut lines = |ev: &StreamEvent<'_>| {
-                progress(&format!("· turn {} — {}", ev.turn, ev.event.summary()));
-                ControlFlow::Continue(())
-            };
-            run_plan_streaming_reporting_failure(plan, &mut lines)
-        }
-        Format::Json => execute(plan, None),
+    if !format.is_text() {
+        return execute(plan, None);
     }
+    let mut view = text::TextView::default();
+    let mut lines = |observation: &Observation<'_>| {
+        if let Some(block) = serde_json::to_string(observation)
+            .ok()
+            .and_then(|line| serde_json::from_str::<text::Seen>(&line).ok())
+            .and_then(|seen| view.render(&seen))
+        {
+            progress(&block);
+        }
+        ControlFlow::Continue(())
+    };
+    execute(plan, Some(&mut lines))
 }
 
 /// The sink a streaming run delivers each live [`StreamEvent`] to. Returning
@@ -907,17 +1138,12 @@ pub fn render_human(summary: &RunSummary) -> String {
     out.push_str(&render_conversation(&summary.report));
     out.push_str("\n\n=== Result ===\n");
 
-    let status = if summary.completed {
-        "completed".to_string()
-    } else if let Some(settled) = &summary.report.settled_reason {
-        // Said before the turn cap, because it is the more specific fact and the
-        // one an operator would otherwise have to guess at.
-        format!("incomplete — {settled}")
-    } else if summary.hit_max_turns {
-        format!("incomplete — hit the turn cap ({})", summary.max_turns)
-    } else {
-        "incomplete".to_string()
-    };
+    let status = status_line(
+        summary.completed,
+        summary.report.settled_reason.as_deref(),
+        summary.hit_max_turns,
+        summary.max_turns,
+    );
     out.push_str(&format!("Status: {status}\n"));
     out.push_str(&format!(
         "Turns:  {} assistant turn(s)\n",
@@ -952,6 +1178,26 @@ pub fn render_human(summary: &RunSummary) -> String {
         out.push('\n');
     }
     out
+}
+
+/// A run's status as a person reads it: `completed`, or `incomplete` and why.
+fn status_line(
+    completed: bool,
+    settled: Option<&str>,
+    hit_max_turns: bool,
+    max_turns: u32,
+) -> String {
+    if completed {
+        "completed".to_string()
+    } else if let Some(settled) = settled {
+        // Said before the turn cap, because it is the more specific fact and the
+        // one an operator would otherwise have to guess at.
+        format!("incomplete — {settled}")
+    } else if hit_max_turns {
+        format!("incomplete — hit the turn cap ({max_turns})")
+    } else {
+        "incomplete".to_string()
+    }
 }
 
 /// The conversation as [`render_transcript`](crate::render_transcript) renders
@@ -1139,6 +1385,23 @@ mod tests {
         );
         // Named, not numbered: a config *list* on both the request and the loader
         // arrived in 0.20.0, so a lock resolved below it fails to compile this.
+        // Named, not numbered: the public renderer arrived in 0.21.0.
+        let render: fn(&crate::ActionEvent) -> Option<String> =
+            oneharness_core::domain::render::render_event;
+        let said = crate::ActionEvent {
+            kind: "message".into(),
+            name: None,
+            input: None,
+            output: Some("hi".into()),
+            index: 0,
+            tool_call_id: None,
+            started_at: None,
+            finished_at: None,
+            duration_ms: None,
+            status: None,
+            timing_source: None,
+        };
+        assert_eq!(render(&said).as_deref(), Some("› hi"));
         let request = oneharness_core::io::run::RunRequest {
             config: vec![std::path::PathBuf::from("defaults.toml")],
             ..Default::default()

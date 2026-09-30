@@ -78,12 +78,12 @@ pub(crate) fn run_buffered(op: &str, spec: &TurnSpec) -> Result<Invocation> {
     parse_report_typed(op, outcome.report)
 }
 
-/// Run one streamed turn, delivering each tool event to `on_event` the instant
-/// oneharness observes it.
+/// Run one streamed turn, delivering each normalized event to `on_event` the
+/// instant oneharness observes it.
 pub(crate) fn run_streaming(
     op: &str,
     spec: &TurnSpec,
-    on_event: &mut dyn FnMut(&ToolEvent) -> ControlFlow<()>,
+    on_event: &mut dyn FnMut(&ActionEvent) -> ControlFlow<()>,
 ) -> Result<Streamed> {
     let mut request = turn::request(spec);
     request.stream = Some(true);
@@ -117,13 +117,13 @@ pub(crate) fn run_streaming(
     )?)))
 }
 
-/// The sink onejudge hands `run`: it lifts each of oneharness's own
-/// [`ActionEvent`]s into the engine's [`ToolEvent`] and offers it to the caller
-/// before the turn ends.
+/// The sink onejudge hands `run`: it offers each of oneharness's own
+/// [`ActionEvent`]s to the caller before the turn ends, and keeps the tool
+/// activity among them lifted into the engine's [`ToolEvent`].
 struct TurnEvents<'a> {
-    on_event: &'a mut dyn FnMut(&ToolEvent) -> ControlFlow<()>,
-    /// Every event delivered so far, so an aborted turn can still report what it
-    /// observed — which is the whole of what a short-circuiting caller gets.
+    on_event: &'a mut dyn FnMut(&ActionEvent) -> ControlFlow<()>,
+    /// Every tool event delivered so far, so an aborted turn can still report what
+    /// it observed — which is the whole of what a short-circuiting caller gets.
     seen: Vec<ToolEvent>,
     cancel: CancelToken,
     aborted: bool,
@@ -131,9 +131,8 @@ struct TurnEvents<'a> {
 
 impl EventSink for TurnEvents<'_> {
     fn event(&mut self, _harness_id: &str, event: &ActionEvent) -> SinkStep {
-        let event = tool_event(event);
-        let step = (self.on_event)(&event);
-        self.seen.push(event);
+        let step = (self.on_event)(event);
+        self.seen.extend(tool_event(event));
         if step.is_break() {
             self.aborted = true;
             // Both paths into the same teardown; see this module's header for why

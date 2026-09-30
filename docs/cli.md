@@ -71,9 +71,9 @@ file, which beats the built-in default**:
 | `--artifact` (repeatable) | `ONEJUDGE_ARTIFACTS` (separated like `PATH`: `:` on unix, `;` on Windows) | replaces `user.artifacts`, the files/directories the judge side reads directly |
 | `--session` | `ONEJUDGE_SESSION` | the caller-owned session name (default `onejudge`); every party's history is named after it ([finding each party's turns](#finding-each-partys-turns)) |
 | `--provider` | `ONEJUDGE_PROVIDER` | just the backend kind (`oneharness`/`command`/`split`; `llmlint` is a judge entry only and is refused here) |
-| `--format` | — | `human` (default) or `json` |
-| `--stream` | — | publish the run on stdout as the [streamed protocol](streaming.md) (needs `--format json`, refuses `--output`) |
-| `--output`, `-o` | — | write the result to a file instead of stdout |
+| `--format` | — | `text` (default; `human` is an alias) or `json` |
+| `--stream` | — | stream the run as it happens: under `--format json` the [streamed protocol](streaming.md) on stdout (refuses `--output`); `text` is already live |
+| `--output`, `-o` | — | write the final result to a file instead of stdout: the report under `json`, the whole text of the run under `text` (whose live lines then go to stderr) |
 
 Each `ONEJUDGE_*` variable is the flag name in upper-snake-case, except that the
 repeatable `--artifact` takes its whole list from the plural `ONEJUDGE_ARTIFACTS`.
@@ -118,11 +118,35 @@ the contract.
 
 ## Output and exit code
 
-- **Human (default):** the conversation (with each turn's tool actions, and —
-  under a judge panel — each judge's decision beside the supervisor turn it
-  belongs to), the completion status (completed / hit the turn cap / settled —
-  see below), usage, and any eval verdicts.
-  Live tool events stream to **stderr** so a redirected stdout stays clean.
+- **`--format text` (default; `human` is an alias):** the run, printed to stdout
+  **as it happens** — a rule per turn, the worker's events and words, each
+  judge's tool events and decision (with `llmlint history <run_id>` under an
+  llmlint judge's), the feedback handed back, then a closing summary: status
+  (completed / hit the turn cap / settled — see below), completion check, usage,
+  eval verdicts and assessment. The worker's events are drawn by oneharness's own
+  renderer (`oneharness_core::domain::render::render_event`), so a command, a
+  file change, the agent's text (`› …`) and its reasoning (`(thinking) …`) read
+  exactly as `oneharness run --stream --format text` prints them; each call is
+  drawn once. A judge's tool events go through the same renderer, prefixed with
+  its label. For example:
+
+  ```text
+  ── turn 1 · worker ─────────────────────────────────────────────
+  task: add appointment rescheduling
+  (thinking) the scheduling intent owns this
+  $ rg --files practices | rg -i reschedul
+  ✎ practices/pulsemd/intents/scheduling/voice/prompt.md
+  › Added the reschedule tool and prompt flow.
+    done in 7m37s · codex (gpt-6-sol) · Added appointment rescheduling.
+  ── turn 1 · judges ─────────────────────────────────────────────
+  lint  continue  1 failed, 3 passed, 0 skipped, 0 not relevant
+    llmlint history 20260929T064026Z-c80a9
+  reviewer  done  The edits add rescheduling where it belongs.
+  feedback → worker: ## Judge `lint` (llmlint)
+  …
+  ── done: completed after 2 turns (12m04s) ──────────────────────
+  Status: completed
+  ```
 - **`--format json`:** the versioned [`Report`](contract.md) — transcript +
   verdicts + usage, stamped with `schema_version`. This reuses onejudge's existing
   wire contract; it is not a new one.
@@ -135,7 +159,45 @@ the contract.
   — the classified error plus the telemetry the run had recorded, including which
   harness identities were attempted and why each was refused. Under `--stream` it
   goes to **stderr** as one compact JSON line instead, so stdout stays exactly the
-  `event* result EOF` protocol. The human format is unchanged (stderr text).
+  `event* result EOF` protocol. Under `--format text` the run's closing line
+  says it failed and the error goes to stderr.
+
+## Watching a run from another terminal
+
+Every run — whatever it prints — publishes each observation it emits, then its
+result, to a durable stream named after its `--session`, over the same
+`onemessagebus` onejudge carries [notes](notes.md) on. `onejudge watch` follows
+it from a second process:
+
+```sh
+onejudge watch <session>                 # the run as `onejudge run` prints it
+onejudge watch <session> --format json   # each observation, then the result, as NDJSON
+```
+
+`watch` replays the session from its first observation — so it can start at any
+point, even after the run has finished — then follows it to the result and exits
+with the run's own exit code. It waits for a run when there is none yet. A new
+run under a session name starts that session's stream afresh, so a watch never
+mixes an earlier run's observations into the current one's; a watch whose run is
+replaced before it finishes says so and exits `2`. Under `--format json` each
+line is one serialized `Observation` (`turn_opened`, `tool`, `action`, `message`,
+`turn_closed`, `judge_decided`, `judge_tool` — the shapes in the SDK schema
+bundle), then a terminal `{"type":"result",…}` carrying `exit_code`,
+`elapsed_ms`, the completion check, the evals and the versioned `report`, or a
+`{"type":"failure",…}` carrying the [`FailureReport`](contract.md#when-a-run-fails).
+
+The streams are kept in `ONEJUDGE_WATCH_DIR` when it is set, else under a
+per-user state directory (`$XDG_STATE_HOME`, `~/.local/state`, or
+`%LOCALAPPDATA%`) at `onejudge/watch/<working directory>` — so run `watch` from
+the directory the run was started in, or give both the same
+`ONEJUDGE_WATCH_DIR`. One log per session name is kept: a run removes its
+session's previous one.
+
+Every oneharness run onejudge starts is also **labelled** `session=<session>`,
+`turn=<n>`, `role=worker|supervisor|judge`, and `judge=<label>` on a judge-side
+run (the same keys an [llmlint judge](judges.md#the-llmlint-judge)'s runs carry),
+so `oneharness history watch --label session=<session>` selects one run's
+harness activity without onejudge.
 
 Every judged run reports, under `telemetry.attribution`, which harness identities
 each invocation attempted, on which **side** (agent vs judge), which one ran, and
@@ -265,7 +327,7 @@ call goes through oneharness:
   `diff_base` (`--diff --diff-base`, the host's own comparison base — onejudge
   detects none) and `args`. Every run is labelled `session=<--session>`,
   `judge=<label>` and `turn=<n>`, and its decision records those `labels` and
-  the llmlint `run_id`, which the human output prints as `llmlint history
+  the llmlint `run_id`, which the text output prints as `llmlint history
   <run_id>`. Refused as the top-level provider, under `skill:`,
   and as `--provider`; left out of numeric evals and assessments.
   [judges.md](judges.md#the-llmlint-judge) is the contract.
@@ -273,5 +335,5 @@ call goes through oneharness:
   the agent on one harness, judge on another). The judge side is a **list of
   judges** — `judges:` — every one run concurrently against each worker turn and
   combined into one attributed answer, each judge's decision recorded on the
-  report's `judge_decisions` and printed beside its turn in the human format;
+  report's `judge_decisions` and printed under its turn in the text format;
   `judge:` is the one-element shorthand. [judges.md](judges.md) is the contract.

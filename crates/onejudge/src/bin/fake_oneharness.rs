@@ -15,7 +15,9 @@
 //! exit non-zero) and the `oneharness init [PATH] [--force]` subcommand, so both a
 //! live-path arg bug and `onejudge init` are caught/covered here. Markers in
 //! `--system` steer the skill turn: `[[reply:TEXT]]` sets the reply,
-//! `[[event:CMD]]` adds a `bash` tool event, `[[fail:KIND]]` returns a classified
+//! `[[event:CMD]]` adds a `bash` tool event, `[[say:TEXT]]` and `[[think:TEXT]]`
+//! add the agent's own `message` and `reasoning` events (all three repeatable,
+//! reported in the order they appear), `[[fail:KIND]]` returns a classified
 //! `failure_kind`, `[[status:TOKEN]]` returns a terminal status that carries no
 //! `failure_kind` at all (`timeout`, `spawn-error`, `skipped`), and
 //! `[[reject-session]]` (in `--system` on the agent side, in the prompt on the
@@ -1041,6 +1043,7 @@ fn parse_flags() -> HashMap<String, String> {
         "--mode",
         // Repeatable on the real CLI, and accumulated as such below.
         "--mock-harness",
+        "--history-label",
     ];
     const TOGGLES: &[&str] = &[
         "--events",
@@ -1166,11 +1169,52 @@ fn respond_result(
             )
         });
     let mut result = ok_result(reply, prompt);
-    if let Some(cmd) = marker(system, "event") {
-        result.events = Some(vec![tool_event(0, cmd)]);
+    let events = activity(system);
+    if !events.is_empty() {
+        result.events = Some(events);
         result.events_source = Some("stream-json:content-blocks".into());
     }
     result
+}
+
+/// The events the `[[event:CMD]]`, `[[say:TEXT]]` and `[[think:TEXT]]` markers in
+/// `system` script, in the order they appear: a `bash` tool call, the agent's own
+/// `message`, and its `reasoning`, each indexed by its position in the run as
+/// oneharness indexes every kind.
+fn activity(system: &str) -> Vec<ActionEvent> {
+    let mut found: Vec<(usize, &str, &str)> = Vec::new();
+    for kind in ["event", "say", "think"] {
+        let open = format!("[[{kind}:");
+        let mut from = 0;
+        while let Some(at) = system[from..].find(&open) {
+            let start = from + at + open.len();
+            let Some(end) = system[start..].find("]]") else {
+                break;
+            };
+            found.push((from + at, kind, &system[start..start + end]));
+            from = start + end;
+        }
+    }
+    found.sort_by_key(|(at, ..)| *at);
+    found
+        .into_iter()
+        .enumerate()
+        .map(|(index, (_, kind, text))| match kind {
+            "event" => tool_event(index, text),
+            said => ActionEvent {
+                kind: if said == "say" {
+                    "message"
+                } else {
+                    "reasoning"
+                }
+                .into(),
+                name: None,
+                input: None,
+                output: Some(text.into()),
+                ..tool_event(index, "")
+            },
+        })
+        .collect()
 }
 
 /// Build a judge verdict as the harness reply text, deciding `true` iff the
@@ -1687,6 +1731,8 @@ mod engine {
                 "--events" => request.events = true,
                 "--history" => request.history = Some(true),
                 "--history-name" => request.history_name = Some(value()),
+                // Repeatable, one `KEY=VALUE` per flag, as on the real CLI.
+                "--history-label" => request.history_label.push(value()),
                 "--system" => request.system = Some(value()),
                 // Repeatable, in layering order, as on the real CLI.
                 "--config" => request.config.push(PathBuf::from(value())),

@@ -246,6 +246,18 @@ rule that keeps it safe is that a *declared*-streaming provider's unmodelled lin
 a loud `Protocol` error, while a typeless bare report stays accepted (a degraded run
 is not a failed one).
 
+**The CLI's default `--format text` is drawn from the `Observation` stream, and
+`onejudge watch` draws the same stream from another process** (`cli/text.rs`,
+`cli/watch.rs`, `docs/cli.md`). Two rules keep them honest. Worker events are drawn
+by oneharness's public `render_event` from the whole `ActionEvent`
+(`Observation::Action`, `Provider::respond_observing`) — never from the lossy
+`ToolEvent`, and only `tool_call`/`tool_result` are ever lifted into a `ToolEvent`,
+because that is what a judge prompt summarizes. And `run` and `watch` share one
+view over the *serialized* observation, so they print the same text by
+construction; each run appends to a queue of its own, which is why a watch never
+mixes runs. Every oneharness run is labelled `session`/`turn`/`role`/`judge`
+(`TurnSpec::labels`). `--format json` and its `--stream` protocol are untouched.
+
 An **in-process** embedder can watch more than the tool calls: `run_observing`
 (`Engine`, and `run_plan_observing_reporting_failure` for a `Plan`) delivers an
 `Observation` per turn opening, reply and close — the prose an operator reads a

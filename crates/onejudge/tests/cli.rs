@@ -346,7 +346,7 @@ system_prompt: Be warm.
 #[test]
 fn oneharness_provider_kind_drives_the_loop() {
     // The `oneharness` provider kind, pointed at the fake-oneharness double, driven
-    // in Human format so the streaming dispatch arm runs. The agent's reply
+    // in Text format so the observing dispatch arm runs. The agent's reply
     // satisfies `done_when` on turn one.
     let bin = serde_json::to_string(&fake_oneharness_bin()).unwrap();
     let yaml = format!(
@@ -357,7 +357,7 @@ fn oneharness_provider_kind_drives_the_loop() {
     );
     let plan = Config::from_yaml(&yaml).unwrap().into_plan().unwrap();
     let mut sink = |_: &str| {};
-    let summary = run_plan(plan, Format::Human, &mut sink).unwrap();
+    let summary = run_plan(plan, Format::Text, &mut sink).unwrap();
     assert!(summary.completed);
     assert_eq!(summary.report.transcript.assistant_turns(), 1);
     assert_eq!(exit_code(&summary), 0);
@@ -399,7 +399,7 @@ fn split_provider_kind_composes_two_backends() {
     );
     let plan = Config::from_yaml(&yaml).unwrap().into_plan().unwrap();
     let mut sink = |_: &str| {};
-    let summary = run_plan(plan, Format::Human, &mut sink).unwrap();
+    let summary = run_plan(plan, Format::Text, &mut sink).unwrap();
     assert_eq!(summary.report.transcript.assistant_turns(), 2);
     assert!(summary.hit_max_turns);
     assert_eq!(exit_code(&summary), 1);
@@ -678,7 +678,7 @@ fn write_config(name: &str, body: &str) -> std::path::PathBuf {
 }
 
 #[test]
-fn binary_run_prints_human_result_and_exits_zero() {
+fn binary_run_prints_the_run_as_text_by_default_and_exits_zero() {
     let config = write_config(
         "human.yaml",
         "\
@@ -696,20 +696,23 @@ user:
         .unwrap();
     assert!(output.status.success(), "expected exit 0");
     let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.contains("=== Conversation ==="));
+    // A turn section, its tool call drawn once by oneharness's renderer, and the
+    // closing summary — no raw JSON anywhere.
+    assert!(stdout.starts_with("── turn 1 · worker ──"), "{stdout}");
+    assert_eq!(
+        stdout.matches("$ git commit -m fix\n").count(),
+        1,
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("── done: completed after 1 turn"),
+        "{stdout}"
+    );
     assert!(stdout.contains("Status: completed"));
-    // The human `Usage:` line surfaces the aggregated prompt-cache reads/writes.
-    assert!(
-        stdout.contains("cache_read="),
-        "human usage shows cache reads"
-    );
-    assert!(
-        stdout.contains("cache_write="),
-        "human usage shows cache writes"
-    );
-    // Live tool events stream to stderr, keeping stdout clean.
-    let stderr = String::from_utf8(output.stderr).unwrap();
-    assert!(stderr.contains("git commit"), "events stream to stderr");
+    assert!(!stdout.contains('{'), "{stdout}");
+    // The `Usage:` line surfaces the aggregated prompt-cache reads/writes.
+    assert!(stdout.contains("cache_read="), "usage shows cache reads");
+    assert!(stdout.contains("cache_write="), "usage shows cache writes");
 }
 
 #[test]
@@ -1215,7 +1218,7 @@ fn binary_env_supplies_skill_and_system_prompt() {
 #[test]
 fn binary_skill_body_and_system_prompt_both_reach_the_harness() {
     // With both set, each half reaches the provider: the `system_prompt`'s
-    // `[[event]]` fires (surfacing on stderr) and the skill body's `[[done]]` ends
+    // `[[event]]` fires (drawn in the run's text) and the skill body's `[[done]]` ends
     // the multi-turn loop on turn one — so a run that would otherwise hit the cap
     // completes, proving the skill body was delivered too.
     let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("skill-both");
@@ -1243,15 +1246,12 @@ fn binary_skill_body_and_system_prompt_both_reach_the_harness() {
         output.status.success(),
         "skill body's [[done]] reached the harness"
     );
-    assert!(String::from_utf8(output.stdout)
-        .unwrap()
-        .contains("Status: completed"));
-    // The system prompt's `[[event]]` reached the harness (events stream to stderr).
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("Status: completed"));
+    // The system prompt's `[[event]]` reached the harness (drawn in the text).
     assert!(
-        String::from_utf8(output.stderr)
-            .unwrap()
-            .contains("git status"),
-        "system prompt's event reached the harness"
+        stdout.contains("$ git status"),
+        "system prompt's event reached the harness: {stdout}"
     );
 }
 
@@ -1453,25 +1453,19 @@ fn binary_stream_exits_one_when_the_run_is_incomplete() {
 
 #[test]
 fn binary_stream_rejects_an_output_surface_it_cannot_honor() {
+    // Only the JSON stream *is* stdout; `--format text --stream` is accepted (see
+    // `binary_text_format_is_live_streamable_aliased_and_writes_its_output`).
     let config = write_config("stream-misuse.yaml", "task: go\nsystem_prompt: Be warm.\n");
-    for (args, needle) in [
-        (vec!["--stream"], "--format json"),
-        (
-            vec!["--stream", "--format", "json", "--output", "report.json"],
-            "drop --output",
-        ),
-    ] {
-        let output = Command::new(onejudge_bin())
-            .arg("run")
-            .arg(config.to_str().unwrap())
-            .args(&args)
-            .current_dir(Path::new(env!("CARGO_TARGET_TMPDIR")))
-            .output()
-            .unwrap();
-        assert_eq!(output.status.code(), Some(2), "{args:?}");
-        let stderr = String::from_utf8(output.stderr).unwrap();
-        assert!(stderr.contains(needle), "{args:?}: {stderr}");
-    }
+    let output = Command::new(onejudge_bin())
+        .arg("run")
+        .arg(config.to_str().unwrap())
+        .args(["--stream", "--format", "json", "--output", "report.json"])
+        .current_dir(Path::new(env!("CARGO_TARGET_TMPDIR")))
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("drop --output"), "{stderr}");
 }
 
 #[test]
@@ -2000,7 +1994,7 @@ fn an_oneharness_config_that_names_no_bin_runs_the_turn_in_process() {
     );
     let plan = Config::from_yaml(&yaml).unwrap().into_plan().unwrap();
     let mut sink = |_: &str| {};
-    let summary = run_plan(plan, Format::Human, &mut sink).unwrap();
+    let summary = run_plan(plan, Format::Text, &mut sink).unwrap();
 
     assert_eq!(summary.report.transcript.assistant_turns(), 1);
     assert_eq!(
@@ -2167,6 +2161,7 @@ user:
         seen.push(match observation {
             Observation::TurnOpened(o) => format!("opened/{:?}/{}", o.role, o.instruction),
             Observation::Tool(e) => format!("tool/{}", e.event.summary()),
+            Observation::Action(a) => format!("action/{}", a.event.kind),
             Observation::Message(m) => format!("said/{:?}/{}", m.role, m.text),
             Observation::TurnClosed(c) => format!("closed/{:?}/{}", c.role, c.usage.is_some()),
             Observation::JudgeDecided(d) => {
@@ -2185,6 +2180,7 @@ user:
         vec![
             "opened/Assistant/please commit".to_string(),
             r#"tool/bash({"command":"git commit -m fix"})"#.to_string(),
+            "action/tool_call".to_string(),
             "said/Assistant/echo: please commit".to_string(),
             "closed/Assistant/true".to_string(),
             // The supervisor completed the run, so it appended nothing to the
@@ -2356,7 +2352,7 @@ fn binary_run_json_reports_each_judges_decision_and_labels_the_judge_side() {
 }
 
 #[test]
-fn binary_run_human_prints_each_judges_decision_beside_its_turn() {
+fn binary_run_text_prints_each_judges_decision_and_the_feedback_under_its_turn() {
     let config = Path::new(env!("CARGO_TARGET_TMPDIR")).join("panel-human.yaml");
     std::fs::write(&config, reviewer_and_lint(TWO_TURN_BODY)).unwrap();
     let output = Command::new(onejudge_bin())
@@ -2365,21 +2361,51 @@ fn binary_run_human_prints_each_judges_decision_beside_its_turn() {
         .unwrap();
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
-    let conversation = stdout
-        .split("\n\n=== Result ===")
+    // Everything before the closing summary; a turn's duration is a measurement,
+    // so it is read as a shape.
+    let run: Vec<&str> = stdout
+        .split("── done:")
         .next()
-        .expect("the conversation section");
+        .expect("the run's sections")
+        .lines()
+        .collect();
+    let rule = |title: &str| {
+        let head = format!("── {title} ");
+        format!("{head}{}", "─".repeat(64 - head.chars().count()))
+    };
+    let closed = |line: &str, reply: &str| {
+        line.starts_with("  done in ") && line.ends_with(&format!(" · {reply}"))
+    };
+    assert_eq!(run[0], rule("turn 1 · worker"), "{stdout}");
+    assert_eq!(run[1], "task: please commit");
+    assert!(closed(run[2], "echo: please commit"), "{stdout}");
     assert_eq!(
-        conversation,
-        "=== Conversation ===\n\
-         User: please commit\n\
-         Assistant: echo: please commit\n\
-         \x20 [judge reviewer (command)] done — looks right\n\
-         \x20 [judge lint (command)] continue — completion criterion not yet met\n\
-         User: ## Judge `lint` (command)\n\nThanks — and what about the next step?\n\
-         Assistant: echo: ## Judge `lint` (command)\n\nThanks — and what about the next step?\n\
-         \x20 [judge reviewer (command)] done — looks right\n\
-         \x20 [judge lint (command)] done — completion criterion found in transcript",
+        run[3..8],
+        [
+            rule("turn 1 · judges").as_str(),
+            "reviewer  done  looks right",
+            "lint  continue  completion criterion not yet met",
+            "feedback → worker: ## Judge `lint` (command)",
+            "",
+        ],
+        "{stdout}"
+    );
+    assert_eq!(
+        run[8],
+        "                   Thanks — and what about the next step?"
+    );
+    assert_eq!(run[9], rule("turn 2 · worker ← feedback"));
+    assert!(
+        closed(run[10], "echo: ## Judge `lint` (command) (+1 line)"),
+        "{stdout}"
+    );
+    assert_eq!(
+        run[11..],
+        [
+            rule("turn 2 · judges").as_str(),
+            "reviewer  done  looks right",
+            "lint  done  completion criterion found in transcript",
+        ],
         "{stdout}"
     );
     assert!(stdout.contains("Status: completed"), "{stdout}");
@@ -2559,6 +2585,7 @@ fn an_observing_plan_run_delivers_each_judges_decision_inside_the_supervisor_tur
         seen.push(match observation {
             Observation::TurnOpened(o) => format!("opened/{:?}", o.role),
             Observation::Tool(e) => format!("tool/{}", e.event.summary()),
+            Observation::Action(a) => format!("action/{}", a.event.kind),
             Observation::Message(m) => format!("said/{:?}", m.role),
             Observation::TurnClosed(c) => format!("closed/{:?}", c.role),
             Observation::JudgeDecided(d) => {
@@ -2611,6 +2638,7 @@ fn an_observing_plan_run_delivers_each_judges_decision_inside_the_supervisor_tur
             Observation::Message(m) => format!("said/{:?}", m.role),
             Observation::TurnClosed(c) => format!("closed/{:?}", c.role),
             Observation::Tool(_) => "tool".to_string(),
+            Observation::Action(_) => "action".to_string(),
             Observation::JudgeTool(t) => format!("judge-tool/{}", t.judge),
         });
         ControlFlow::Continue(())
@@ -2965,7 +2993,7 @@ fn binary_run_hands_the_worker_llmlints_report_under_its_header_and_composes_its
 }
 
 #[test]
-fn binary_human_output_prints_the_llmlint_history_command_beside_each_llmlint_decision() {
+fn binary_text_output_prints_the_llmlint_history_command_under_each_llmlint_decision() {
     // What the wrapper reads a run by: every llmlint decision's `llmlint history
     // <run_id>` on the line under it, tied to the turn it decided on — and no
     // such line under the reviewer's.
@@ -2981,6 +3009,7 @@ fn binary_human_output_prints_the_llmlint_history_command_beside_each_llmlint_de
         ),
     )
     .unwrap();
+    // `human`, the text view's older name, still selects it.
     let (output, _) = run_binary_with_llmlint("human", &config, "1,0", "human");
     assert!(
         output.status.success(),
@@ -2990,16 +3019,16 @@ fn binary_human_output_prints_the_llmlint_history_command_beside_each_llmlint_de
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(
         stdout.contains(&format!(
-            "  [judge reviewer (command)] done — looks right\n\
-             \x20 [judge lint (llmlint)] continue — {LLMLINT_FAILING_SUMMARY}\n\
-             \x20   llmlint history fake-lint-1\n"
+            "reviewer  done  looks right\n\
+             lint  continue  {LLMLINT_FAILING_SUMMARY}\n\
+             \x20 llmlint history fake-lint-1\n"
         )),
         "{stdout}"
     );
     assert!(
         stdout.contains(&format!(
-            "  [judge lint (llmlint)] done — {LLMLINT_CLEAN_SUMMARY}\n\
-             \x20   llmlint history fake-lint-2"
+            "lint  done  {LLMLINT_CLEAN_SUMMARY}\n\
+             \x20 llmlint history fake-lint-2"
         )),
         "{stdout}"
     );
@@ -4059,8 +4088,12 @@ impl PostureRun {
         let config = self.dir.join("onejudge.yaml");
         std::fs::write(&config, self.yaml(provider, task_extra)).unwrap();
         let mut command = Command::new(bin);
+        command.args(["run", config.to_str().unwrap()]);
+        // `--format json` unless the journey chose its own.
+        if !args.contains(&"--format") {
+            command.args(["--format", "json"]);
+        }
         command
-            .args(["run", config.to_str().unwrap(), "--format", "json"])
             .args(args)
             .current_dir(&self.dir)
             .env("XDG_STATE_HOME", self.dir.join("state"))
@@ -4176,6 +4209,82 @@ fn default_posture_run(seam: Seam, bin: &str) -> (PostureRun, PostureOutcome) {
     (run, outcome)
 }
 
+/// Every history record under `dir` — oneharness's own JSONL, one record per
+/// harness run — as JSON.
+fn history_records(dir: &Path) -> Vec<serde_json::Value> {
+    let mut records = Vec::new();
+    let mut pending = vec![dir.to_path_buf()];
+    while let Some(dir) = pending.pop() {
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                pending.push(path);
+            } else if path.extension().is_some_and(|ext| ext == "jsonl") {
+                for line in std::fs::read_to_string(&path).unwrap().lines() {
+                    let record: serde_json::Value = serde_json::from_str(line).unwrap();
+                    if record.get("history_id").is_some() {
+                        records.push(record);
+                    }
+                }
+            }
+        }
+    }
+    records
+}
+
+#[test]
+fn every_history_record_a_run_writes_carries_its_session_turn_role_and_judge_labels() {
+    // What `oneharness history watch --label session=<session>` selects one run's
+    // harness activity by. Read back from the records the linked core wrote — in
+    // process, and through a spawned oneharness running the same core — rather
+    // than from the argv onejudge built.
+    for seam in Seam::BOTH {
+        let run = PostureRun::new("labels", seam);
+        let judge = run.judge_config("judge.toml", "");
+        let judged = |label: &str| [format!("label: {label}"), judge_config_line(&judge)];
+        let (alpha, beta) = (judged("alpha"), judged("beta"));
+        let provider = run.split(
+            &[],
+            &[
+                &alpha.iter().map(String::as_str).collect::<Vec<_>>(),
+                &beta.iter().map(String::as_str).collect::<Vec<_>>(),
+            ],
+        );
+        let outcome = run.run(&provider, "", &[]);
+        assert_eq!(outcome.code, Some(0), "{seam:?}: {}", outcome.stderr);
+
+        let records = history_records(&run.dir.join("history"));
+        let mut seen = std::collections::BTreeSet::new();
+        for record in &records {
+            let labels = &record["labels"];
+            assert_eq!(labels["session"], "posture", "{seam:?}: {record}");
+            assert_eq!(labels["turn"], "1", "{seam:?}: {record}");
+            let role = labels["role"].as_str().expect("a role label");
+            let judge = labels.get("judge").and_then(serde_json::Value::as_str);
+            match role {
+                "worker" => assert_eq!(judge, None, "{seam:?}: {record}"),
+                "supervisor" | "judge" => assert!(
+                    matches!(judge, Some("alpha" | "beta")),
+                    "{seam:?}: a judge-side run names its judge: {record}"
+                ),
+                other => panic!("{seam:?}: unexpected role `{other}`: {record}"),
+            }
+            seen.insert(format!("{role}/{}", judge.unwrap_or("-")));
+        }
+        assert_eq!(
+            seen.into_iter().collect::<Vec<_>>(),
+            [
+                "judge/alpha",
+                "judge/beta",
+                "supervisor/alpha",
+                "supervisor/beta",
+                "worker/-"
+            ],
+            "{seam:?}: every party's runs were recorded and labelled"
+        );
+    }
+}
+
 /// Unix only: the recorded prompts carry the run directory's own spelling, which
 /// the placeholders reconcile on a POSIX path and nowhere else.
 #[cfg(unix)]
@@ -4216,9 +4325,11 @@ fn with_no_mode_configured_the_harness_argv_and_judge_prompts_are_the_0_15_0_one
 
 #[test]
 fn a_judge_with_no_mode_differs_from_0_15_0_only_by_the_leading_defaults_config() {
-    // The one intended change to what onejudge asks oneharness for: an evaluator
-    // call leads with onejudge's defaults file and carries no `--mode`. The
-    // agent's turn and everything else about the call are 0.15.0's argv.
+    // The intended changes to what onejudge asks oneharness for: an evaluator
+    // call leads with onejudge's defaults file and carries no `--mode`, and every
+    // run carries the `--history-label`s that say which run, turn, role and judge
+    // it is. The agent's turn and everything else about the call are 0.15.0's
+    // argv.
     let baseline = posture_baseline(Seam::Spawned);
     let (run, outcome) = default_posture_run(Seam::Spawned, onejudge_bin());
     let decision = outcome.decision("oneharness");
@@ -4251,7 +4362,46 @@ fn a_judge_with_no_mode_differs_from_0_15_0_only_by_the_leading_defaults_config(
             out
         })
         .collect();
-    assert_eq!(outcome.oneharness, expected);
+    let (unlabelled, labels): (Vec<Vec<String>>, Vec<Vec<String>>) = outcome
+        .oneharness
+        .iter()
+        .map(|argv| {
+            let mut rest = Vec::new();
+            let mut labels = Vec::new();
+            let mut args = argv.iter();
+            while let Some(arg) = args.next() {
+                if arg == "--history-label" {
+                    labels.push(args.next().unwrap().clone());
+                } else {
+                    rest.push(arg.clone());
+                }
+            }
+            (rest, labels)
+        })
+        .unzip();
+    assert_eq!(unlabelled, expected);
+    let judged = |role: &str| {
+        vec![
+            "judge=oneharness".to_string(),
+            format!("role={role}"),
+            "session=posture".to_string(),
+            "turn=1".to_string(),
+        ]
+    };
+    assert_eq!(
+        labels,
+        vec![
+            vec![
+                "role=worker".to_string(),
+                "session=posture".to_string(),
+                "turn=1".to_string(),
+            ],
+            judged("supervisor"),
+            judged("judge"),
+            judged("judge"),
+            judged("judge"),
+        ]
+    );
 
     // In process there is no argv, so the same resolution is read off the
     // report on both seams: read-only, set by the defaults file, attributed to
@@ -4616,6 +4766,7 @@ fn an_observed_run_delivers_a_judges_tool_events_after_its_turn_opens_and_before
             seen.push(match observation {
                 Observation::TurnOpened(o) => format!("opened/{:?}/{}", o.role, o.turn),
                 Observation::Tool(e) => format!("tool/{}", e.turn),
+                Observation::Action(a) => format!("action/{}", a.turn),
                 Observation::Message(m) => format!("said/{:?}/{}", m.role, m.turn),
                 Observation::TurnClosed(c) => format!("closed/{:?}/{}", c.role, c.turn),
                 Observation::JudgeDecided(d) => format!("judged/{}/{}", d.turn, d.judge),
@@ -4706,4 +4857,406 @@ fn a_bare_oneharness_providers_judge_publishes_its_events_under_its_own_label() 
         assert!(!judged.is_empty());
         assert!(judged.iter().all(|a| a["posture"]["mode"] == "auto"));
     }
+}
+
+// --- The text view, the published stream, and `onejudge watch` ---------------
+
+/// A fresh, empty directory `onejudge watch` streams are kept in.
+fn watch_dir(name: &str) -> std::path::PathBuf {
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("watch-dir-{name}"));
+    let _ = std::fs::remove_dir_all(&dir);
+    dir
+}
+
+/// `onejudge` with `args`, hermetic: every `ONEHARNESS_*` override removed and
+/// streams kept in `watch`.
+fn onejudge_in(watch: &Path, cwd: &Path, args: &[&str]) -> Command {
+    let mut command = Command::new(onejudge_bin());
+    command
+        .args(args)
+        .current_dir(cwd)
+        .env("ONEJUDGE_WATCH_DIR", watch);
+    for (key, _) in std::env::vars().filter(|(key, _)| key.starts_with("ONEHARNESS_")) {
+        command.env_remove(key);
+    }
+    command
+}
+
+/// What `onejudge watch <session> --format json` prints for a finished run: its
+/// exit code and each published record.
+fn watched_records(
+    watch: &Path,
+    cwd: &Path,
+    session: &str,
+) -> (Option<i32>, Vec<serde_json::Value>) {
+    let output = onejudge_in(watch, cwd, &["watch", session, "--format", "json"])
+        .output()
+        .unwrap();
+    let records = String::from_utf8(output.stdout)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    (output.status.code(), records)
+}
+
+/// What oneharness's own renderer draws for each worker event the run
+/// published, in order — the lines the text view must print, computed from the
+/// very events, never copied by hand.
+fn rendered_worker_events(records: &[serde_json::Value]) -> Vec<(String, String)> {
+    records
+        .iter()
+        .filter(|record| record["type"] == "action")
+        .filter_map(|record| {
+            let event: onejudge::ActionEvent =
+                serde_json::from_value(record["event"].clone()).unwrap();
+            oneharness_core::domain::render::render_event(&event).map(|line| (event.kind, line))
+        })
+        .collect()
+}
+
+/// Assert `text` holds each of `blocks` as whole lines, once each, in order.
+fn assert_lines_in_order(text: &str, blocks: &[String]) {
+    let padded = format!("\n{text}");
+    let mut from = 0;
+    for block in blocks {
+        let needle = format!("\n{block}\n");
+        assert_eq!(
+            padded.matches(&needle).count(),
+            1,
+            "`{block}` once in:\n{text}"
+        );
+        let at = padded[from..]
+            .find(&needle)
+            .unwrap_or_else(|| panic!("`{block}` out of order in:\n{text}"));
+        from += at + 1;
+    }
+}
+
+#[test]
+fn text_output_draws_the_workers_events_and_each_judges_through_oneharnesss_renderer() {
+    // One conversation per seam — in process, and through a spawned oneharness
+    // running the same core — whose worker reasons, runs a command and speaks, and
+    // whose judge runs a tool of its own before it decides.
+    for seam in Seam::BOTH {
+        let watch = watch_dir(&format!("render-{}", seam.name()));
+        let run = PostureRun::new("text-render", seam)
+            .with_env("ONEJUDGE_WATCH_DIR", watch.to_str().unwrap());
+        let judge = run.judge_config("judge.toml", "mode = \"auto\"\n");
+        let provider = run.split(&[], &[&[&judge_config_line(&judge)]]);
+        let outcome = run.run(
+            &provider,
+            " [[think:check the tests first]] [[event:cargo test]] [[say:the tests pass now]] \
+             [[judge-event:cargo clippy]]",
+            &["--format", "text"],
+        );
+        assert_eq!(outcome.code, Some(0), "{seam:?}: {}", outcome.stderr);
+        let stdout = &outcome.stdout;
+
+        let (code, records) = watched_records(&watch, &run.dir, "posture");
+        assert_eq!(code, Some(0), "{seam:?}");
+        let worker = rendered_worker_events(&records);
+        let kinds: Vec<&str> = worker.iter().map(|(kind, _)| kind.as_str()).collect();
+        assert_eq!(kinds, ["reasoning", "tool_call", "message"], "{seam:?}");
+        // The worker's lines are exactly what `render_event` returns for them.
+        let lines: Vec<String> = worker.into_iter().map(|(_, line)| line).collect();
+        assert_lines_in_order(stdout, &lines);
+
+        // The judge's own tool event, through the same renderer, under its label.
+        let judged: Vec<String> = records
+            .iter()
+            .filter(|record| record["type"] == "judge_tool")
+            .filter_map(|record| {
+                let tool: onejudge::ToolEvent =
+                    serde_json::from_value(record["event"].clone()).unwrap();
+                let event = onejudge::ActionEvent {
+                    kind: tool.kind,
+                    name: tool.name,
+                    input: tool.input,
+                    output: tool.output,
+                    index: tool.index,
+                    tool_call_id: tool.tool_call_id,
+                    started_at: None,
+                    finished_at: None,
+                    duration_ms: None,
+                    status: None,
+                    timing_source: None,
+                };
+                // A `tool_result` draws nothing: its call was already drawn.
+                let line = oneharness_core::domain::render::render_event(&event)?;
+                Some(format!("{}: {line}", record["judge"].as_str().unwrap()))
+            })
+            .collect();
+        // One drawn line per call the judge's harness reported (the double runs
+        // its scripted command once per time the prompt names it).
+        assert!(!judged.is_empty(), "{seam:?}");
+        assert!(
+            judged
+                .iter()
+                .all(|line| line == "oneharness: $ cargo clippy"),
+            "{seam:?}: {judged:?}"
+        );
+        let drawn: Vec<usize> = stdout
+            .lines()
+            .enumerate()
+            .filter(|(_, line)| *line == judged[0])
+            .map(|(at, _)| at)
+            .collect();
+        assert_eq!(drawn.len(), judged.len(), "{seam:?}:\n{stdout}");
+        let decided = stdout
+            .lines()
+            .position(|line| line.starts_with("oneharness  done"))
+            .unwrap_or_else(|| panic!("{seam:?}: the judge's decision is drawn:\n{stdout}"));
+        assert!(
+            drawn.iter().all(|at| *at < decided),
+            "{seam:?}: its tool events come before it decides"
+        );
+        assert!(!stdout.contains('{'), "{seam:?}: no raw JSON:\n{stdout}");
+
+        // Only tool activity became a `ToolEvent`: every judge prompt lists the
+        // command alone, never the agent's words or its reasoning.
+        for call in outcome.judge_side() {
+            let prompt = prompt_of(call);
+            let tools: Vec<&str> = prompt
+                .lines()
+                .filter(|line| line.starts_with("  [tool] "))
+                .collect();
+            assert_eq!(
+                tools,
+                [r#"  [tool] Bash({"command":"cargo test"})"#],
+                "{seam:?}: {prompt}"
+            );
+        }
+        // …and the report's transcript carries the same single tool event.
+        let report = outcome.report_from_watch(&records);
+        assert_eq!(
+            report["transcript"]["messages"][1]["events"]
+                .as_array()
+                .map(Vec::len),
+            Some(1),
+            "{seam:?}"
+        );
+    }
+}
+
+impl PostureOutcome {
+    /// The report a run published as its result — how a text run's report is read.
+    fn report_from_watch(&self, records: &[serde_json::Value]) -> serde_json::Value {
+        let last = records.last().expect("the run published its result");
+        assert_eq!(last["type"], "result", "{last}");
+        last["report"].clone()
+    }
+}
+
+/// A config streaming the worker's turn through `skill_extra` (a oneharness
+/// entry's own lines) and completing on the echo double's supervisor.
+fn streamed_text_config(dir: &Path, skill_extra: &str, system: &str) -> std::path::PathBuf {
+    let echo = serde_json::to_string(&echo_bin()).unwrap();
+    let config = dir.join("onejudge.yaml");
+    std::fs::write(
+        &config,
+        format!(
+            "provider:\n  kind: split\n  skill:\n    kind: oneharness\n    stream: true\n{skill_extra}  \
+             judge:\n    kind: command\n    command: [{echo}, \"[[supervisor-complete:looks right]]\"]\n\
+             task: fix it\nsystem_prompt: {}\nuser:\n  persona: a reviewer\n  max_turns: 2\n\
+             session: streamed\n",
+            serde_json::to_string(system).unwrap()
+        ),
+    )
+    .unwrap();
+    config
+}
+
+#[test]
+fn a_streamed_turn_is_drawn_from_the_events_oneharness_streams_on_both_seams() {
+    // The two live paths an event reaches the view by: the in-process `EventSink`,
+    // and a spawned oneharness's NDJSON `event` lines.
+    let system = "[[reply:fixed]] [[think:look first]] [[event:cargo test]] [[say:all green]]";
+    let oh = serde_json::to_string(&fake_oneharness_bin()).unwrap();
+    for (name, extra) in [
+        ("in-process", String::new()),
+        ("spawned", format!("    bin: {oh}\n")),
+    ] {
+        let dir = in_process_project(&format!("streamed-text-{name}"), "");
+        let watch = watch_dir(&format!("streamed-{name}"));
+        let config = streamed_text_config(&dir, &extra, system);
+        let output = onejudge_in(&watch, &dir, &["run", config.to_str().unwrap()])
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        assert_eq!(output.status.code(), Some(0), "{name}: {stdout}");
+        let (_, records) = watched_records(&watch, &dir, "streamed");
+        let worker = rendered_worker_events(&records);
+        let kinds: Vec<&str> = worker.iter().map(|(kind, _)| kind.as_str()).collect();
+        assert_eq!(kinds, ["reasoning", "tool_call", "message"], "{name}");
+        let lines: Vec<String> = worker.into_iter().map(|(_, line)| line).collect();
+        assert_lines_in_order(&stdout, &lines);
+        assert!(
+            stdout.starts_with("── turn 1 · worker ──"),
+            "{name}: {stdout}"
+        );
+        assert!(
+            stdout.contains("── done: completed after 1 turn"),
+            "{name}: {stdout}"
+        );
+    }
+}
+
+#[test]
+fn binary_text_format_is_live_streamable_aliased_and_writes_its_output() {
+    let dir = scratch_path("text-formats");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let watch = watch_dir("formats");
+    let oh = serde_json::to_string(&fake_oneharness_bin()).unwrap();
+    let config = streamed_text_config(
+        &dir,
+        &format!("    bin: {oh}\n"),
+        "[[reply:fixed]] [[event:cargo test]] [[say:all green]]",
+    );
+    let config = config.to_str().unwrap();
+    let run = |args: &[&str]| {
+        let mut argv = vec!["run", config];
+        argv.extend_from_slice(args);
+        onejudge_in(&watch, &dir, &argv).output().unwrap()
+    };
+    // What a text run draws, less the two measured durations.
+    let shape = |text: &str| -> Vec<String> {
+        text.lines()
+            .filter(|line| !line.starts_with("  done in ") && !line.starts_with("── done:"))
+            .map(str::to_string)
+            .collect()
+    };
+
+    let default = run(&[]);
+    assert_eq!(default.status.code(), Some(0));
+    let drawn = String::from_utf8(default.stdout).unwrap();
+    assert!(drawn.contains("\n$ cargo test\n› all green\n"), "{drawn}");
+    for args in [
+        &["--format", "text", "--stream"][..],
+        &["--format", "human"][..],
+        &["--format", "human", "--stream"][..],
+    ] {
+        let output = run(args);
+        assert_eq!(output.status.code(), Some(0), "{args:?}");
+        assert_eq!(
+            shape(&String::from_utf8(output.stdout).unwrap()),
+            shape(&drawn),
+            "{args:?} draws the run as the default does"
+        );
+    }
+
+    // `--output` takes the whole text; the live lines move to stderr.
+    let file = dir.join("run.txt");
+    let output = run(&["--output", file.to_str().unwrap()]);
+    assert_eq!(output.status.code(), Some(0));
+    assert!(output.stdout.is_empty());
+    let written = std::fs::read_to_string(&file).unwrap();
+    assert_eq!(shape(&written), shape(&drawn));
+    assert!(written.contains("Status: completed"), "{written}");
+    let live = String::from_utf8(output.stderr).unwrap();
+    assert!(live.contains("\n$ cargo test\n"), "{live}");
+
+    // …and under `--format json` it takes the versioned report, as it always has.
+    let file = dir.join("report.json");
+    let output = run(&["--format", "json", "--output", file.to_str().unwrap()]);
+    assert_eq!(output.status.code(), Some(0));
+    assert!(output.stdout.is_empty());
+    let report: onejudge::Report =
+        serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+    assert_eq!(report.schema_version, onejudge::SCHEMA_VERSION);
+    assert_eq!(report.transcript.messages[1].content, "fixed");
+}
+
+#[test]
+fn watch_follows_a_live_run_from_its_start_and_never_mixes_in_an_earlier_one() {
+    use std::io::BufRead as _;
+
+    let dir = scratch_path("watch-live");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let watch = watch_dir("live");
+    let oh = serde_json::to_string(&fake_oneharness_bin()).unwrap();
+    let skill = format!("    bin: {oh}\n");
+
+    // An earlier run under the same session name, finished.
+    let earlier = streamed_text_config(&dir, &skill, "[[reply:the earlier run]]");
+    let output = onejudge_in(&watch, &dir, &["run", earlier.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0));
+
+    // The run under watch holds its turn open after its first event until the
+    // test releases it — so the watchers start while it is genuinely running.
+    let release = dir.join("release");
+    let config = streamed_text_config(
+        &dir,
+        &skill,
+        &format!(
+            "[[reply:the watched run]] [[event:cargo test]] [[stream-wait:{}]]",
+            release.display()
+        ),
+    );
+    let mut running = onejudge_in(&watch, &dir, &["run", config.to_str().unwrap()])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut live = std::io::BufReader::new(running.stdout.take().unwrap());
+    let mut printed = String::new();
+    loop {
+        let mut line = String::new();
+        assert!(
+            live.read_line(&mut line).unwrap() > 0,
+            "the run ended early: {printed}"
+        );
+        printed.push_str(&line);
+        if line == "$ cargo test\n" {
+            break;
+        }
+    }
+
+    let spawn_watch = |format: &str| {
+        onejudge_in(&watch, &dir, &["watch", "streamed", "--format", format])
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .unwrap()
+    };
+    let text = spawn_watch("text");
+    let json = spawn_watch("json");
+    // Both watchers are following before the turn can end.
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    std::fs::write(&release, "").unwrap();
+
+    let mut rest = String::new();
+    std::io::Read::read_to_string(&mut live, &mut rest).unwrap();
+    printed.push_str(&rest);
+    let status = running.wait().unwrap();
+    assert_eq!(status.code(), Some(0), "{printed}");
+    assert!(printed.contains("the watched run"), "{printed}");
+
+    let text = text.wait_with_output().unwrap();
+    let json = json.wait_with_output().unwrap();
+    // Replayed from the start and followed to the end: exactly what `run` printed.
+    assert_eq!(String::from_utf8(text.stdout).unwrap(), printed);
+    assert_eq!(text.status.code(), Some(0));
+    assert_eq!(json.status.code(), Some(0));
+
+    let records: Vec<serde_json::Value> = String::from_utf8(json.stdout)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(records[0]["type"], "turn_opened", "{records:#?}");
+    assert_eq!(records.last().unwrap()["type"], "result");
+    assert_eq!(records.last().unwrap()["exit_code"], 0);
+    assert!(
+        records
+            .iter()
+            .any(|r| r["type"] == "action" && r["event"]["input"]["command"] == "cargo test"),
+        "{records:#?}"
+    );
+    let all = serde_json::to_string(&records).unwrap();
+    assert!(all.contains("the watched run"));
+    assert!(!all.contains("the earlier run"), "{all}");
 }

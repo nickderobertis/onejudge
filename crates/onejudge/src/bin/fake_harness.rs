@@ -40,6 +40,10 @@
 //! * `[[reply:TEXT]]` — the final assistant text. Defaults to `ok`.
 //! * `[[event:CMD]]` — emit one `Bash` tool call for `CMD`. Repeatable, and
 //!   emitted in order, so a streamed run has more than one event to observe.
+//! * `[[say:TEXT]]` / `[[think:TEXT]]` — emit a `text` / `thinking` content
+//!   block, which oneharness normalizes into the agent's own `message` /
+//!   `reasoning` event. Repeatable, and interleaved with `[[event:…]]` in the
+//!   order the markers appear.
 //! * `[[stream-wait:PATH]]` — after the events, block until `PATH` exists. A
 //!   consumer that only saw the events when the turn *ended* would never create
 //!   it, so this is what makes incremental delivery provable rather than assumed.
@@ -140,7 +144,7 @@ fn main() {
     let events = if evaluator {
         Vec::new()
     } else {
-        markers(&prompt, "event")
+        activity(&prompt)
     };
     let judge_events = if evaluator {
         markers(&prompt, "judge-event")
@@ -179,10 +183,22 @@ fn main() {
                 r#"{{"type":"user","message":{{"content":[{{"type":"tool_result","tool_use_id":"j{index}","content":"ran"}}]}}}}"#
             ));
         }
-        for (index, command) in events.iter().enumerate() {
+        let mut calls = 0;
+        for (kind, text) in &events {
+            let block = match *kind {
+                "say" => format!(r#"{{"type":"text","text":{}}}"#, json_string(text)),
+                "think" => format!(r#"{{"type":"thinking","thinking":{}}}"#, json_string(text)),
+                _ => {
+                    let block = format!(
+                        r#"{{"type":"tool_use","id":"t{calls}","name":"Bash","input":{{"command":{}}}}}"#,
+                        json_string(text)
+                    );
+                    calls += 1;
+                    block
+                }
+            };
             emit(&format!(
-                r#"{{"type":"assistant","message":{{"content":[{{"type":"tool_use","id":"t{index}","name":"Bash","input":{{"command":{}}}}}]}}}}"#,
-                json_string(command)
+                r#"{{"type":"assistant","message":{{"content":[{block}]}}}}"#
             ));
         }
     }
@@ -403,6 +419,29 @@ fn resumed_on(args: &[String]) -> Option<String> {
 /// The first `[[name:value]]` in `text`, if any.
 fn marker(text: &str, name: &str) -> Option<String> {
     markers(text, name).into_iter().next()
+}
+
+/// The worker's scripted activity — every `[[event:CMD]]`, `[[say:TEXT]]` and
+/// `[[think:TEXT]]` in `text` — as `(marker, value)` in the order it appears.
+fn activity(text: &str) -> Vec<(&'static str, String)> {
+    let mut found: Vec<(usize, &'static str, String)> = Vec::new();
+    for kind in ["event", "say", "think"] {
+        let open = format!("[[{kind}:");
+        let mut from = 0;
+        while let Some(at) = text[from..].find(&open) {
+            let start = from + at + open.len();
+            let Some(end) = text[start..].find("]]") else {
+                break;
+            };
+            found.push((from + at, kind, text[start..start + end].to_string()));
+            from = start + end;
+        }
+    }
+    found.sort_by_key(|(at, ..)| *at);
+    found
+        .into_iter()
+        .map(|(_, kind, value)| (kind, value))
+        .collect()
 }
 
 /// Every `[[name:value]]` in `text`, in order.

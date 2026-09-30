@@ -7,6 +7,7 @@ use std::cell::{Cell, RefCell};
 use std::ops::ControlFlow;
 use std::time::Instant;
 
+use oneharness_core::domain::events::ActionEvent;
 use onemessagebus::{Closed, Delivered};
 
 use crate::control::ControlOutcome;
@@ -719,15 +720,29 @@ impl<'a> Engine<'a> {
                 return Ok(self.finish(transcript, totals, true, None, None));
             }
             let mut broke = false;
+            let invoked = self.worker_invocations();
             let turn = if streaming {
-                self.provider.respond_streaming(
+                self.provider.respond_observing(
                     &skill,
                     &transcript.messages,
                     Some(skill_session.as_str()),
-                    &mut |event| {
-                        let flow = on_observation(&Observation::Tool(StreamEvent {
+                    &mut |action| {
+                        // Tool activity first, exactly as it always reached a
+                        // streaming sink — a sink that stops on it is handed
+                        // nothing after — then the whole event for a reader.
+                        if let Some(event) = crate::oneharness::tool_event(action) {
+                            let flow = on_observation(&Observation::Tool(StreamEvent {
+                                turn: turn_index,
+                                event: &event,
+                            }));
+                            if flow.is_break() {
+                                broke = true;
+                                return flow;
+                            }
+                        }
+                        let flow = on_observation(&Observation::Action(TurnAction {
                             turn: turn_index,
-                            event,
+                            event: action,
                         }));
                         broke |= flow.is_break();
                         flow
@@ -810,6 +825,7 @@ impl<'a> Engine<'a> {
             let should_settle =
                 noop.observe(&instruction, &message, &events) && self.settings.settle_on_noop;
             let finished_at = observed_at();
+            let (harness, model) = self.worker_identity(invoked);
             // Nothing follows the observation that asked to stop — a sink that broke
             // mid-turn is not handed the reply it declined to wait for.
             if !broke {
@@ -827,6 +843,8 @@ impl<'a> Engine<'a> {
                     usage: usage.as_ref(),
                     started_at,
                     finished_at,
+                    harness,
+                    model,
                 }))
                 .is_break();
             }
@@ -967,6 +985,7 @@ impl<'a> Engine<'a> {
                         kind: &decision.kind,
                         decision: decision.decision,
                         reason: &decision.reason,
+                        run_id: decision.run_id.as_deref(),
                     }))
                     .is_break()
                     {
@@ -1031,6 +1050,8 @@ impl<'a> Engine<'a> {
                     usage: usage.as_ref(),
                     started_at,
                     finished_at,
+                    harness: None,
+                    model: None,
                 }))
                 .is_break();
             }
@@ -1289,6 +1310,36 @@ impl<'a> Engine<'a> {
     /// every judge-side entry point rather than once, so a judgement taken on an
     /// engine that never ran — or on a provider another engine scoped since — is
     /// still named after this one.
+    /// How many worker invocations the provider has recorded so far.
+    fn worker_invocations(&self) -> usize {
+        self.provider
+            .invocation_telemetry()
+            .iter()
+            .filter(|invocation| invocation.role == Some(crate::TelemetryRole::Agent))
+            .count()
+    }
+
+    /// The harness and model that ran the worker's turn just taken — the
+    /// candidate that ran in the newest worker invocation, if the turn recorded
+    /// one past the `before` already there. A backend that attributes no harness
+    /// names none, rather than a previous turn's.
+    fn worker_identity(&self, before: usize) -> (Option<String>, Option<String>) {
+        let invocations = self.provider.invocation_telemetry();
+        let worker: Vec<_> = invocations
+            .iter()
+            .filter(|invocation| invocation.role == Some(crate::TelemetryRole::Agent))
+            .collect();
+        if worker.len() <= before {
+            return (None, None);
+        }
+        worker
+            .last()
+            .and_then(|invocation| invocation.candidates.iter().find(|c| c.ran))
+            .map_or((None, None), |ran| {
+                (Some(ran.harness_id.clone()), ran.model.clone())
+            })
+    }
+
     fn scope_history(&self) {
         self.provider.set_history_scope(Some(&self.history_scope()));
     }
@@ -1345,6 +1396,13 @@ pub enum Observation<'a> {
     TurnOpened(TurnOpened<'a>),
     /// A tool event, exactly as [`Engine::run_streaming`] delivers it.
     Tool(StreamEvent<'a>),
+    /// Every normalized event the worker's harness reported, as oneharness
+    /// reported it: its own `message` and `reasoning` items as well as its tool
+    /// activity. A tool event is delivered as [`Tool`](Observation::Tool) first
+    /// and then as this; the agent's words are delivered only as this, and never
+    /// become a [`ToolEvent`] — they are rendered for a reader, not summarized for
+    /// a judge.
+    Action(TurnAction<'a>),
     /// A party's own words for a turn, as they are appended to the transcript.
     Message(TurnMessage<'a>),
     /// A turn ended, with what it cost and when it ran.
@@ -1362,6 +1420,21 @@ pub enum Observation<'a> {
     /// [`Tool`](Observation::Tool) carries, so one renderer serves the worker's
     /// events and a judge's.
     JudgeTool(JudgeTool<'a>),
+}
+
+/// One normalized event the worker's harness reported during a turn.
+///
+/// The payload is oneharness's own [`ActionEvent`], so a reader draws it with
+/// oneharness's renderer (`oneharness_core::domain::render::render_event`) and
+/// shows exactly what `oneharness run --stream --format text` would.
+#[derive(serde::Serialize)]
+#[cfg_attr(feature = "sdk-schema", derive(schemars::JsonSchema))]
+pub struct TurnAction<'a> {
+    /// 1-based assistant-turn index within this run, as [`StreamEvent::turn`].
+    pub turn: usize,
+    /// The event, exactly as oneharness reported it — or, from a backend that
+    /// reports only tool events, the [`ActionEvent`] its tool event describes.
+    pub event: &'a ActionEvent,
 }
 
 /// One tool event a judge's harness reported while deciding a supervisor turn.
@@ -1401,6 +1474,11 @@ pub struct JudgeDecided<'a> {
     pub decision: Decision,
     /// Its own reason — or, for an `error`, the error's message.
     pub reason: &'a str,
+    /// The run its backend kept a record of, as
+    /// [`JudgeDecision::run_id`](crate::JudgeDecision::run_id) — an llmlint
+    /// judge's `llmlint history <run_id>`. Absent when the backend kept none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<&'a str>,
 }
 
 /// A turn beginning, and the message it was given to answer.
@@ -1457,6 +1535,14 @@ pub struct TurnClosed<'a> {
     pub started_at: String,
     /// When the turn ended, RFC 3339 with millisecond precision in UTC.
     pub finished_at: String,
+    /// The harness identity that ran the worker's turn, as the provider's
+    /// telemetry attributes it (`codex`, `claude-code:fast`). Absent for a
+    /// supervisor turn, and for a backend that attributes no harness.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub harness: Option<String>,
+    /// The model that harness ran, where it reported one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
 }
 
 /// The clock read every observation is stamped with: RFC 3339, millisecond
@@ -2356,6 +2442,7 @@ mod tests {
                         Observation::Message(m) => (format!("said/{:?}", m.role), false),
                         Observation::TurnClosed(c) => (format!("closed/{:?}", c.role), false),
                         Observation::Tool(_) => ("tool".into(), false),
+                        Observation::Action(_) => ("action".into(), false),
                     };
                     seen.push(kind);
                     if stop {
@@ -2463,6 +2550,7 @@ mod tests {
                         Observation::Message(m) => format!("said/{:?}", m.role),
                         Observation::TurnClosed(c) => format!("closed/{:?}", c.role),
                         Observation::Tool(_) => "tool".into(),
+                        Observation::Action(_) => "action".into(),
                     });
                     ControlFlow::Continue(())
                 },

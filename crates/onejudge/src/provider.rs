@@ -11,6 +11,7 @@
 use std::ops::ControlFlow;
 use std::process::Command;
 
+use oneharness_core::domain::events::ActionEvent;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
@@ -552,6 +553,32 @@ pub trait Provider {
             }
         }
         Ok(turn)
+    }
+
+    /// Like [`Provider::respond_streaming`], but delivers **every** normalized
+    /// event the harness reported as it is observed, in oneharness's own
+    /// [`ActionEvent`] shape — the agent's own `message` and `reasoning` items as
+    /// well as its tool activity, and the lifecycle fields (a call's `status`) a
+    /// [`ToolEvent`] does not keep. It is what a reader rendering the turn for a
+    /// person needs; [`AssistantTurn::events`] still holds the tool activity alone.
+    ///
+    /// The default runs [`Provider::respond_streaming`] and hands each tool event
+    /// on as the [`ActionEvent`] it describes, with the lifecycle fields unknown: a
+    /// backend that reports only tool events has no agent text to deliver. The
+    /// oneharness backend overrides it with what oneharness reported.
+    ///
+    /// # Errors
+    /// As [`Provider::respond`].
+    fn respond_observing(
+        &self,
+        skill: &SkillRef<'_>,
+        messages: &[Message],
+        session: Option<&str>,
+        on_event: &mut dyn FnMut(&ActionEvent) -> ControlFlow<()>,
+    ) -> Result<AssistantTurn> {
+        self.respond_streaming(skill, messages, session, &mut |event| {
+            on_event(&crate::oneharness::action_event(event))
+        })
     }
 
     /// Produce one simulated-user turn. `session` is the simulated user's own

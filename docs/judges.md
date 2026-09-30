@@ -185,9 +185,9 @@ a bare provider's arrive under its own label (`oneharness`). An embedder matchin
 **The `--stream` NDJSON protocol** is `(event | judge_tool)* result EOF`: a judge
 that recorded events publishes each as a `judge_tool` line, and the decisions
 reach an SDK on the `result` line's report ([streaming.md](streaming.md)).
-The human `--format` prints each judge's decision beside the supervisor turn it
-belongs to — under the assistant turn that turn judged, as
-`[judge <label> (<kind>)] <decision> — <reason>`. The SDK schema bundle
+The text `--format` prints each judge's decision under the supervisor turn it
+belongs to, as `<label>  <decision>  <reason>`, after that judge's tool events
+(`<label>: $ …`, drawn by oneharness's renderer). The SDK schema bundle
 (`onejudge schema`, `sdk_schema.rs`, the generated Python declarations) carries
 every shape above.
 
@@ -346,7 +346,7 @@ judge entry:
   are ignored. The judge's `judge_decisions` entry then carries `labels` — exactly
   the labels that run was passed, its own `args`' `--label`s included — and
   `run_id`, the parsed id, so `llmlint history <run_id>` shows the run behind the
-  decision; the human output prints that command on the line under it. Both are
+  decision; the text output prints that command on the line under it. Both are
   recorded on an `error` decision too whenever known, both are omitted when
   absent, and only `kind: llmlint` fills them. A run that wrote no pointer
   (history disabled, or it died before recording) has no `run_id` and decides as

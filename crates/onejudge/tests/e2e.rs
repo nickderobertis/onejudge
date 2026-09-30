@@ -4092,6 +4092,10 @@ enum Seen {
         name: Option<String>,
         tool_call_id: Option<String>,
     },
+    Action {
+        turn: usize,
+        kind: String,
+    },
     Said {
         turn: usize,
         role: Role,
@@ -4131,6 +4135,10 @@ fn observed(observation: &Observation<'_>) -> Seen {
             turn: event.turn,
             name: event.event.name.clone(),
             tool_call_id: event.event.tool_call_id.clone(),
+        },
+        Observation::Action(action) => Seen::Action {
+            turn: action.turn,
+            kind: action.event.kind.clone(),
         },
         Observation::Message(message) => Seen::Said {
             turn: message.turn,
@@ -4216,7 +4224,7 @@ fn an_observing_turn_reports_its_instruction_reply_identity_and_bounds() {
         .unwrap();
     assert!(!outcome.stopped_early);
 
-    assert_eq!(seen.len(), 4, "{seen:#?}");
+    assert_eq!(seen.len(), 5, "{seen:#?}");
     let Seen::Opened {
         turn,
         role,
@@ -4244,8 +4252,17 @@ fn an_observing_turn_reports_its_instruction_reply_identity_and_bounds() {
         "the call identity the harness exposed reached the observer: {seen:#?}"
     );
 
+    // …and then as the whole event oneharness reported, for a reader.
     assert_eq!(
         seen[2],
+        Seen::Action {
+            turn: 1,
+            kind: "tool_call".into(),
+        }
+    );
+
+    assert_eq!(
+        seen[3],
         Seen::Said {
             turn: 1,
             role: Role::Assistant,
@@ -4259,7 +4276,7 @@ fn an_observing_turn_reports_its_instruction_reply_identity_and_bounds() {
         usage,
         started_at: opened_at,
         finished_at,
-    } = &seen[3]
+    } = &seen[4]
     else {
         panic!("the turn closes last: {seen:#?}")
     };
@@ -4302,6 +4319,7 @@ fn an_observing_multi_turn_run_reports_both_parties_without_disturbing_the_strea
         .map(|s| match s {
             Seen::Opened { turn, role, .. } => ("opened", *turn, Some(*role)),
             Seen::Tool { turn, .. } => ("tool", *turn, None),
+            Seen::Action { turn, .. } => ("action", *turn, None),
             Seen::Said { turn, role, .. } => ("said", *turn, Some(*role)),
             Seen::Closed { turn, role, .. } => ("closed", *turn, Some(*role)),
             Seen::Judged { turn, .. } => ("judged", *turn, None),
@@ -4313,6 +4331,7 @@ fn an_observing_multi_turn_run_reports_both_parties_without_disturbing_the_strea
         vec![
             ("opened", 1, Some(Role::Assistant)),
             ("tool", 1, None),
+            ("action", 1, None),
             ("said", 1, Some(Role::Assistant)),
             ("closed", 1, Some(Role::Assistant)),
             ("opened", 1, Some(Role::User)),
@@ -4320,6 +4339,7 @@ fn an_observing_multi_turn_run_reports_both_parties_without_disturbing_the_strea
             ("closed", 1, Some(Role::User)),
             ("opened", 2, Some(Role::Assistant)),
             ("tool", 2, None),
+            ("action", 2, None),
             ("said", 2, Some(Role::Assistant)),
             ("closed", 2, Some(Role::Assistant)),
         ],
@@ -4328,33 +4348,33 @@ fn an_observing_multi_turn_run_reports_both_parties_without_disturbing_the_strea
 
     // The supervisor answers the agent's reply, and its own words become the next
     // assistant turn's instruction — the chain an operator reads the dispatch by.
-    let Seen::Said { text: reply, .. } = &seen[2] else {
+    let Seen::Said { text: reply, .. } = &seen[3] else {
         unreachable!()
     };
     let Seen::Opened {
         instruction: answering,
         ..
-    } = &seen[4]
+    } = &seen[5]
     else {
         unreachable!()
     };
     assert_eq!(answering, reply);
     let Seen::Said {
         text: instruction, ..
-    } = &seen[5]
+    } = &seen[6]
     else {
         unreachable!()
     };
     let Seen::Opened {
         instruction: next, ..
-    } = &seen[7]
+    } = &seen[8]
     else {
         unreachable!()
     };
     assert_eq!(next, instruction);
 
     // This provider does report accounting, so the turn's own cost is observed.
-    let Seen::Closed { usage, .. } = &seen[3] else {
+    let Seen::Closed { usage, .. } = &seen[4] else {
         unreachable!()
     };
     assert!(
@@ -4443,8 +4463,8 @@ fn breaking_an_observation_stops_the_run_and_delivers_nothing_after_it() {
         })
         .unwrap();
     assert!(outcome.stopped_early);
-    assert_eq!(seen.len(), 3, "{seen:#?}");
-    assert!(matches!(seen[2], Seen::Said { .. }));
+    assert_eq!(seen.len(), 4, "{seen:#?}");
+    assert!(matches!(seen[3], Seen::Said { .. }));
     assert_eq!(outcome.transcript.assistant_turns(), 1);
 }
 
@@ -4511,9 +4531,9 @@ fn breaking_a_supervisor_observation_keeps_its_instruction_out_of_the_transcript
         },
         &opening,
     );
-    assert_eq!(seen.len(), 5, "{seen:#?}");
+    assert_eq!(seen.len(), 6, "{seen:#?}");
     assert!(matches!(
-        seen[4],
+        seen[5],
         Seen::Opened {
             role: Role::User,
             ..
@@ -4542,9 +4562,9 @@ fn breaking_a_supervisor_observation_keeps_its_instruction_out_of_the_transcript
         },
         &said,
     );
-    assert_eq!(seen.len(), 6, "{seen:#?}");
+    assert_eq!(seen.len(), 7, "{seen:#?}");
     assert!(matches!(
-        seen[5],
+        seen[6],
         Seen::Said {
             role: Role::User,
             ..
@@ -4573,9 +4593,9 @@ fn breaking_a_supervisor_observation_keeps_its_instruction_out_of_the_transcript
         },
         &closed,
     );
-    assert_eq!(seen.len(), 7, "{seen:#?}");
+    assert_eq!(seen.len(), 8, "{seen:#?}");
     assert!(matches!(
-        seen[6],
+        seen[7],
         Seen::Closed {
             role: Role::User,
             ..

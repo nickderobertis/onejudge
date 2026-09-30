@@ -98,8 +98,11 @@ fully-commented starter and `onejudge schema` prints the annotated field referen
 (the single source of truth); it is validated strictly (`deny_unknown_fields`) so a
 typo is a loud error.
 
-Human output is the conversation + tool actions + completion status + eval
-verdicts; `--format json` emits the versioned [`Report`](docs/contract.md). The
+Text output (the default) draws the run live — each turn, the worker's events and
+words through oneharness's renderer, each judge's verdict, the feedback handed
+back — then the completion status and eval verdicts; `onejudge watch <session>`
+follows the same run from another terminal. `--format json` emits the versioned
+[`Report`](docs/contract.md). The
 exit code is `0` only when the task completed and every boolean eval passed, `1`
 if it hit `max_turns` or a boolean eval failed, `2` on a bad config. Add `--stream`
 to publish tool events on stdout as they occur, ahead of that same report

@@ -87,11 +87,14 @@ mod report;
 mod turn;
 
 use std::cell::{Cell, RefCell};
+use std::collections::BTreeMap;
 use std::io::{Read as _, Write};
 use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
+
+use oneharness_core::domain::events::ActionEvent;
 
 use crate::control::{ControlAddress, ControlOutcome};
 use crate::error::{Error, ProviderErrorKind, Result};
@@ -112,7 +115,7 @@ use crate::telemetry::{
 use crate::transcript::{Message, ToolEvent};
 use crate::usage::Usage;
 
-pub(crate) use report::tool_event;
+pub(crate) use report::{action_event, tool_event};
 use report::{parse_report, parse_report_value, ControlSocket, Invocation};
 use turn::TurnSpec;
 
@@ -402,6 +405,36 @@ struct JudgeRecord {
     events: Vec<ToolEvent>,
 }
 
+/// Which party a oneharness run is made for, as its `role=` history label says.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LabelledRole {
+    /// The agent's own turn.
+    Worker,
+    /// A supervisor decision or a simulated-user turn.
+    Supervisor,
+    /// A stateless verdict or an assessment.
+    Judge,
+}
+
+impl LabelledRole {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Worker => "worker",
+            Self::Supervisor => "supervisor",
+            Self::Judge => "judge",
+        }
+    }
+}
+
+/// The number of assistant turns in `messages` — the turn a judge-side call over
+/// them is labelled with.
+fn assistant_turns(messages: &[Message]) -> usize {
+    messages
+        .iter()
+        .filter(|m| m.role == crate::Role::Assistant)
+        .count()
+}
+
 /// The default [`Provider`]: runs each turn through the `oneharness` engine.
 pub struct OneharnessProvider {
     execution: Execution,
@@ -430,6 +463,9 @@ pub struct OneharnessProvider {
     telemetry: RefCell<Vec<InvocationTelemetry>>,
     /// The run the judge-side history records are named after, set by the engine.
     history_scope: RefCell<Option<HistoryScope>>,
+    /// The assistant turn the judge-side call in flight belongs to, for its
+    /// `turn=` history label; set on entry to each judge-side call.
+    labelled_turn: Cell<usize>,
     spawner: Spawner,
 }
 
@@ -467,6 +503,7 @@ impl OneharnessProvider {
             supervisor: PartyControl::new("judge"),
             telemetry: RefCell::new(Vec::new()),
             history_scope: RefCell::new(None),
+            labelled_turn: Cell::new(0),
             spawner: Spawner::default(),
         }
     }
@@ -751,14 +788,21 @@ impl OneharnessProvider {
         worktree: &str,
         messages: &[Message],
         session: Option<&str>,
-        on_event: &mut dyn FnMut(&ToolEvent) -> ControlFlow<()>,
+        on_event: &mut dyn FnMut(&ActionEvent) -> ControlFlow<()>,
     ) -> Result<AssistantTurn> {
+        // The turn this reply will be: one past the assistant turns already there.
+        let turn = assistant_turns(messages) + 1;
+        let labels = self.history_labels(LabelledRole::Worker, turn);
+        let labelled = |spec: TurnSpec| TurnSpec {
+            labels: labels.clone(),
+            ..spec
+        };
         let mut session = session;
         if let Some(name) = session {
             // A continued session only needs the latest user turn.
             let prompt = latest_or_inline(messages, true);
             if self.wants_control(&self.agent) {
-                let spec = self.mocked(respond_spec(
+                let spec = labelled(self.mocked(respond_spec(
                     instructions,
                     worktree,
                     Some(name),
@@ -766,7 +810,7 @@ impl OneharnessProvider {
                     self.stream,
                     true,
                     &prompt,
-                ));
+                )));
                 match self.respond_once(&spec, on_event) {
                     Ok(turn) => {
                         self.control_address(&self.agent, worktree);
@@ -791,7 +835,7 @@ impl OneharnessProvider {
                 }
             }
             if let Some(name) = session {
-                let spec = self.mocked(respond_spec(
+                let spec = labelled(self.mocked(respond_spec(
                     instructions,
                     worktree,
                     Some(name),
@@ -799,7 +843,7 @@ impl OneharnessProvider {
                     self.stream,
                     false,
                     &prompt,
-                ));
+                )));
                 match self.respond_once(&spec, on_event) {
                     Ok(turn) => return Ok(turn),
                     Err(e) if is_session_unsupported(&e) => {
@@ -814,7 +858,7 @@ impl OneharnessProvider {
         }
         // Fresh or fallback call: inline the whole conversation, no `--session`.
         let prompt = latest_or_inline(messages, false);
-        let spec = self.mocked(respond_spec(
+        let spec = labelled(self.mocked(respond_spec(
             instructions,
             worktree,
             None,
@@ -822,7 +866,7 @@ impl OneharnessProvider {
             self.stream,
             false,
             &prompt,
-        ));
+        )));
         self.respond_once(&spec, on_event)
     }
 
@@ -849,18 +893,18 @@ impl OneharnessProvider {
     fn respond_once(
         &self,
         spec: &TurnSpec,
-        on_event: &mut dyn FnMut(&ToolEvent) -> ControlFlow<()>,
+        on_event: &mut dyn FnMut(&ActionEvent) -> ControlFlow<()>,
     ) -> Result<AssistantTurn> {
         if self.stream {
             return self.run_streamed("respond", spec, on_event);
         }
-        let turn = assistant_turn(&self.run("respond", spec)?);
-        for event in &turn.events {
-            if on_event(event).is_break() {
+        let invocation = self.run("respond", spec)?;
+        for action in invocation.actions() {
+            if on_event(action).is_break() {
                 break;
             }
         }
-        Ok(turn)
+        Ok(assistant_turn(&invocation))
     }
 
     /// Read the report a finished `oneharness run` wrote, classify it, and record
@@ -904,6 +948,31 @@ impl OneharnessProvider {
     /// the engine set, or none when it set none.
     fn judge_side_history_name(&self, call: JudgeSideCall) -> Option<String> {
         history_name(self.history_scope.borrow().as_ref(), call)
+    }
+
+    /// The labels a run for `role` on assistant turn `turn` records under:
+    /// `session=<base>` once the engine has scoped the run, `turn=<n>`,
+    /// `role=<role>`, and on a judge-side run `judge=<label>` — this provider's
+    /// label in a panel, else `oneharness`, the name
+    /// [`Provider::take_judge_tools`] reports it under. The same keys an llmlint
+    /// judge's runs carry, so one `--label session=<base>` selects a whole run.
+    fn history_labels(&self, role: LabelledRole, turn: usize) -> BTreeMap<String, String> {
+        let mut labels = BTreeMap::new();
+        if let Some(scope) = self.history_scope.borrow().as_ref() {
+            labels.insert("session".to_string(), scope.base().to_string());
+        }
+        labels.insert("turn".to_string(), turn.to_string());
+        labels.insert("role".to_string(), role.as_str().to_string());
+        if role != LabelledRole::Worker {
+            labels.insert(
+                "judge".to_string(),
+                self.judge_label
+                    .borrow()
+                    .clone()
+                    .unwrap_or_else(|| "oneharness".to_string()),
+            );
+        }
+        labels
     }
 
     /// Run a judge/simulated-user turn under the judge config, threading `session`
@@ -980,8 +1049,14 @@ impl OneharnessProvider {
             None => self.judge_config.iter().cloned().collect(),
         };
         let events = evaluator.is_some_and(|evaluator| evaluator.events);
-        let spec = |session: Option<&str>, control: bool| {
-            self.mocked(judge_side_spec(
+        let role = match call {
+            JudgeSideCall::User => LabelledRole::Supervisor,
+            JudgeSideCall::Judge | JudgeSideCall::Assess => LabelledRole::Judge,
+        };
+        let labels = self.history_labels(role, self.labelled_turn.get());
+        let spec = |session: Option<&str>, control: bool| TurnSpec {
+            labels: labels.clone(),
+            ..self.mocked(judge_side_spec(
                 configs.clone(),
                 session,
                 history_name.as_deref(),
@@ -1071,7 +1146,7 @@ impl OneharnessProvider {
         &self,
         op: &str,
         spec: &TurnSpec,
-        on_event: &mut dyn FnMut(&ToolEvent) -> ControlFlow<()>,
+        on_event: &mut dyn FnMut(&ActionEvent) -> ControlFlow<()>,
     ) -> Result<AssistantTurn> {
         let Execution::Process(bin) = &self.execution else {
             return match library::run_streaming(op, spec, on_event)? {
@@ -1390,6 +1465,8 @@ fn respond_spec(
         // it if oneharness reports the harness cannot bind a session.
         session: session.map(str::to_string),
         history_name: history_name.map(str::to_string),
+        // Set by the caller, which knows the run, turn and role this is.
+        labels: BTreeMap::new(),
         events: true,
         stream,
         // Turn control is addressed by the `--session` name, which is why it only
@@ -1425,6 +1502,8 @@ fn judge_side_spec(
         mock_harness: Vec::new(),
         session: session.map(str::to_string),
         history_name: history_name.map(str::to_string),
+        // Set by the caller, which knows the run, turn and role this is.
+        labels: BTreeMap::new(),
         events,
         // Streaming is about the long agent turn, not the short judgement calls:
         // a judge's events arrive on its finished report.
@@ -1567,6 +1646,25 @@ impl Provider for OneharnessProvider {
         session: Option<&str>,
         on_event: &mut dyn FnMut(&ToolEvent) -> ControlFlow<()>,
     ) -> Result<AssistantTurn> {
+        self.run_respond(
+            skill.instructions,
+            skill.dir,
+            messages,
+            session,
+            &mut |action| match tool_event(action) {
+                Some(event) => on_event(&event),
+                None => ControlFlow::Continue(()),
+            },
+        )
+    }
+
+    fn respond_observing(
+        &self,
+        skill: &SkillRef<'_>,
+        messages: &[Message],
+        session: Option<&str>,
+        on_event: &mut dyn FnMut(&ActionEvent) -> ControlFlow<()>,
+    ) -> Result<AssistantTurn> {
         self.run_respond(skill.instructions, skill.dir, messages, session, on_event)
     }
 
@@ -1576,6 +1674,7 @@ impl Provider for OneharnessProvider {
         messages: &[Message],
         session: Option<&str>,
     ) -> Result<UserTurn> {
+        self.labelled_turn.set(assistant_turns(messages));
         let prompt = build_user_prompt(persona, messages);
         let result = self.run_judge_side(
             "user",
@@ -1599,6 +1698,7 @@ impl Provider for OneharnessProvider {
         messages: &[Message],
         session: Option<&str>,
     ) -> Result<SupervisorTurn> {
+        self.labelled_turn.set(query.turn_index);
         let evaluator = self.evaluator(query.worktree)?;
         let base = supervisor_prompt(
             query,
@@ -1638,6 +1738,7 @@ impl Provider for OneharnessProvider {
         session: Option<&str>,
         evidence: EvidenceContext<'_>,
     ) -> Result<SupervisorTurn> {
+        self.labelled_turn.set(query.turn_index);
         let evaluator = evidence
             .worktree
             .map(|worktree| self.evaluator(worktree))
@@ -1700,6 +1801,7 @@ impl Provider for OneharnessProvider {
     }
 
     fn judge(&self, query: &JudgeQuery<'_>, messages: &[Message]) -> Result<JudgeVerdict> {
+        self.labelled_turn.set(assistant_turns(messages));
         // Judging is stateless — no session to continue.
         let prompt = build_judge_prompt(query, messages);
         let result = self.run_judge_side(
@@ -1722,6 +1824,7 @@ impl Provider for OneharnessProvider {
         messages: &[Message],
         evidence: EvidenceContext<'_>,
     ) -> Result<JudgeVerdict> {
+        self.labelled_turn.set(assistant_turns(messages));
         let evaluator = evidence
             .worktree
             .map(|worktree| self.evaluator(worktree))
@@ -1779,6 +1882,7 @@ impl Provider for OneharnessProvider {
     }
 
     fn assess(&self, prompt: &str, messages: &[Message]) -> Result<Assessment> {
+        self.labelled_turn.set(assistant_turns(messages));
         let prompt = build_assessment_prompt(prompt, messages);
         let result = self.run_judge_side(
             "assess",
@@ -1808,6 +1912,7 @@ impl Provider for OneharnessProvider {
         messages: &[Message],
         evidence: EvidenceContext<'_>,
     ) -> Result<Assessment> {
+        self.labelled_turn.set(assistant_turns(messages));
         let evaluator = evidence
             .worktree
             .map(|worktree| self.evaluator(worktree))

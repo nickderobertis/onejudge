@@ -8,6 +8,8 @@
 
 use std::ops::ControlFlow;
 
+use oneharness_core::domain::events::ActionEvent;
+
 use crate::{
     Assessment, AssistantTurn, CommandProvider, EvidenceContext, JudgeAbilities, JudgeEntry,
     JudgePanel, JudgeQuery, JudgeVerdict, LlmlintProvider, Message, OneharnessProvider, Provider,
@@ -195,7 +197,12 @@ impl Provider for AnyProvider {
             AnyProvider::Oneharness(p) => p.set_history_scope(scope),
             AnyProvider::Command(p) => p.set_history_scope(scope),
             AnyProvider::Llmlint(p) => p.set_history_scope(scope),
-            AnyProvider::Split { judges, .. } => judges.set_history_scope(scope),
+            // Both sides label their runs `session=<base>`; only the judges
+            // name records after it (see `SplitProvider::set_history_scope`).
+            AnyProvider::Split { skill, judges } => {
+                skill.set_history_scope(scope);
+                judges.set_history_scope(scope);
+            }
         }
     }
 
@@ -308,6 +315,23 @@ impl Provider for AnyProvider {
             AnyProvider::Llmlint(p) => p.respond_streaming(skill, messages, session, on_event),
             AnyProvider::Split { skill: s, .. } => {
                 s.respond_streaming(skill, messages, session, on_event)
+            }
+        }
+    }
+
+    fn respond_observing(
+        &self,
+        skill: &SkillRef<'_>,
+        messages: &[Message],
+        session: Option<&str>,
+        on_event: &mut dyn FnMut(&ActionEvent) -> ControlFlow<()>,
+    ) -> crate::Result<AssistantTurn> {
+        match self {
+            AnyProvider::Oneharness(p) => p.respond_observing(skill, messages, session, on_event),
+            AnyProvider::Command(p) => p.respond_observing(skill, messages, session, on_event),
+            AnyProvider::Llmlint(p) => p.respond_observing(skill, messages, session, on_event),
+            AnyProvider::Split { skill: s, .. } => {
+                s.respond_observing(skill, messages, session, on_event)
             }
         }
     }
