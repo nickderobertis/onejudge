@@ -103,7 +103,7 @@ pub use command::CommandProvider;
 pub use control::{ControlAddress, ControlOutcome};
 pub use engine::{
     Conversation, Engine, JudgeDecided, JudgeTool, Observation, Outcome, Settings, SimulatedUser,
-    Skill, StreamEvent, TurnClosed, TurnMessage, TurnOpened, NOOP_SETTLE_LIMIT,
+    Skill, StreamEvent, TurnAction, TurnClosed, TurnMessage, TurnOpened, NOOP_SETTLE_LIMIT,
 };
 pub use error::{Error, ProviderErrorKind, Result};
 pub use history_name::{HistoryScope, JudgeSideCall};
@@ -113,6 +113,9 @@ pub use note::{
     Note, NoteInbox, NoteRefused, NoteText, Notes, Party, Undelivered,
 };
 pub use oneharness::OneharnessProvider;
+/// oneharness's normalized event, re-exported because it is the payload of
+/// [`Observation::Action`] and of [`Provider::respond_observing`].
+pub use oneharness_core::domain::events::ActionEvent;
 pub use panel::{is_valid_label, JudgeAbilities, JudgeEntry, JudgePanel};
 pub use provider::{
     build_assessment_prompt, build_assessment_prompt_with_evidence, build_judge_prompt,

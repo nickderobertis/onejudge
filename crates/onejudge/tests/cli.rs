@@ -2167,6 +2167,7 @@ user:
         seen.push(match observation {
             Observation::TurnOpened(o) => format!("opened/{:?}/{}", o.role, o.instruction),
             Observation::Tool(e) => format!("tool/{}", e.event.summary()),
+            Observation::Action(a) => format!("action/{}", a.event.kind),
             Observation::Message(m) => format!("said/{:?}/{}", m.role, m.text),
             Observation::TurnClosed(c) => format!("closed/{:?}/{}", c.role, c.usage.is_some()),
             Observation::JudgeDecided(d) => {
@@ -2185,6 +2186,7 @@ user:
         vec![
             "opened/Assistant/please commit".to_string(),
             r#"tool/bash({"command":"git commit -m fix"})"#.to_string(),
+            "action/tool_call".to_string(),
             "said/Assistant/echo: please commit".to_string(),
             "closed/Assistant/true".to_string(),
             // The supervisor completed the run, so it appended nothing to the
@@ -2559,6 +2561,7 @@ fn an_observing_plan_run_delivers_each_judges_decision_inside_the_supervisor_tur
         seen.push(match observation {
             Observation::TurnOpened(o) => format!("opened/{:?}", o.role),
             Observation::Tool(e) => format!("tool/{}", e.event.summary()),
+            Observation::Action(a) => format!("action/{}", a.event.kind),
             Observation::Message(m) => format!("said/{:?}", m.role),
             Observation::TurnClosed(c) => format!("closed/{:?}", c.role),
             Observation::JudgeDecided(d) => {
@@ -2611,6 +2614,7 @@ fn an_observing_plan_run_delivers_each_judges_decision_inside_the_supervisor_tur
             Observation::Message(m) => format!("said/{:?}", m.role),
             Observation::TurnClosed(c) => format!("closed/{:?}", c.role),
             Observation::Tool(_) => "tool".to_string(),
+            Observation::Action(_) => "action".to_string(),
             Observation::JudgeTool(t) => format!("judge-tool/{}", t.judge),
         });
         ControlFlow::Continue(())
@@ -4616,6 +4620,7 @@ fn an_observed_run_delivers_a_judges_tool_events_after_its_turn_opens_and_before
             seen.push(match observation {
                 Observation::TurnOpened(o) => format!("opened/{:?}/{}", o.role, o.turn),
                 Observation::Tool(e) => format!("tool/{}", e.turn),
+                Observation::Action(a) => format!("action/{}", a.turn),
                 Observation::Message(m) => format!("said/{:?}/{}", m.role, m.turn),
                 Observation::TurnClosed(c) => format!("closed/{:?}/{}", c.role, c.turn),
                 Observation::JudgeDecided(d) => format!("judged/{}/{}", d.turn, d.judge),

@@ -114,14 +114,18 @@ impl Invocation {
             .unwrap_or_default()
     }
 
-    /// The turn's normalized tool events, lifted from oneharness's [`ActionEvent`].
+    /// The turn's normalized tool events, lifted from oneharness's [`ActionEvent`]
+    /// — tool activity only; see [`tool_event`].
     pub(crate) fn events(&self) -> Vec<ToolEvent> {
+        self.actions().iter().filter_map(tool_event).collect()
+    }
+
+    /// Every normalized event the turn reported, exactly as oneharness reported it
+    /// — the agent's own `message` and `reasoning` items beside its tool activity.
+    pub(crate) fn actions(&self) -> &[ActionEvent] {
         self.result()
             .and_then(|result| result.events.as_deref())
             .unwrap_or_default()
-            .iter()
-            .map(tool_event)
-            .collect()
     }
 
     /// The turn's token/cost accounting, or `None` when nothing was reported.
@@ -191,18 +195,46 @@ pub(crate) fn millis(value: Option<u128>) -> Option<u64> {
     value.and_then(|v| u64::try_from(v).ok())
 }
 
-/// Lift one of oneharness's normalized actions into onejudge's transcript event.
+/// Lift one of oneharness's normalized actions into onejudge's transcript event,
+/// or `None` for one that is not tool activity.
+///
+/// Only `tool_call` / `tool_result` become a [`ToolEvent`]: the agent's own
+/// `message` and `reasoning` items are its words, not what it did, and a
+/// [`ToolEvent`] is what a judge prompt summarizes as `[tool]` lines and what a
+/// `did` assertion counts. Those items reach a reader through the text view
+/// instead ([`Observation::Action`](crate::Observation::Action)).
+///
 /// oneharness's [`ActionEvent`] carries history-only lifecycle fields on top of
 /// these; the transcript keeps what a consumer asserts on — the four content
 /// fields, the ordering, and the call identity that joins a call to its result.
-pub(crate) fn tool_event(event: &ActionEvent) -> ToolEvent {
-    ToolEvent {
+pub(crate) fn tool_event(event: &ActionEvent) -> Option<ToolEvent> {
+    event.is_tool_activity().then(|| ToolEvent {
         kind: event.kind.clone(),
         name: event.name.clone(),
         input: event.input.clone(),
         output: event.output.clone(),
         index: event.index,
         tool_call_id: event.tool_call_id.clone(),
+    })
+}
+
+/// The [`ActionEvent`] a [`ToolEvent`] was lifted from, as far as the lift kept it:
+/// the content fields, the ordering and the call identity, with the history-only
+/// lifecycle fields unknown. What a backend that reports only [`ToolEvent`]s — a
+/// command provider, a judge's recorded events — hands a reader of actions.
+pub(crate) fn action_event(event: &ToolEvent) -> ActionEvent {
+    ActionEvent {
+        kind: event.kind.clone(),
+        name: event.name.clone(),
+        input: event.input.clone(),
+        output: event.output.clone(),
+        index: event.index,
+        tool_call_id: event.tool_call_id.clone(),
+        started_at: None,
+        finished_at: None,
+        duration_ms: None,
+        status: None,
+        timing_source: None,
     }
 }
 

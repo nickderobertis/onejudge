@@ -16,6 +16,8 @@
 
 use std::ops::ControlFlow;
 
+use oneharness_core::domain::events::ActionEvent;
+
 use crate::error::Result;
 use crate::provider::{
     Assessment, AssistantTurn, EvidenceContext, JudgeQuery, JudgeVerdict, Provider, SkillRef,
@@ -134,6 +136,17 @@ impl<S: Provider, J: Provider> Provider for SplitProvider<S, J> {
     ) -> Result<AssistantTurn> {
         self.skill
             .respond_streaming(skill, messages, session, on_event)
+    }
+
+    fn respond_observing(
+        &self,
+        skill: &SkillRef<'_>,
+        messages: &[Message],
+        session: Option<&str>,
+        on_event: &mut dyn FnMut(&ActionEvent) -> ControlFlow<()>,
+    ) -> Result<AssistantTurn> {
+        self.skill
+            .respond_observing(skill, messages, session, on_event)
     }
 
     fn simulate_user(

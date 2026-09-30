@@ -93,6 +93,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
 
+use oneharness_core::domain::events::ActionEvent;
+
 use crate::control::{ControlAddress, ControlOutcome};
 use crate::error::{Error, ProviderErrorKind, Result};
 use crate::history_name::{history_name, HistoryScope, JudgeSideCall};
@@ -112,7 +114,7 @@ use crate::telemetry::{
 use crate::transcript::{Message, ToolEvent};
 use crate::usage::Usage;
 
-pub(crate) use report::tool_event;
+pub(crate) use report::{action_event, tool_event};
 use report::{parse_report, parse_report_value, ControlSocket, Invocation};
 use turn::TurnSpec;
 
@@ -751,7 +753,7 @@ impl OneharnessProvider {
         worktree: &str,
         messages: &[Message],
         session: Option<&str>,
-        on_event: &mut dyn FnMut(&ToolEvent) -> ControlFlow<()>,
+        on_event: &mut dyn FnMut(&ActionEvent) -> ControlFlow<()>,
     ) -> Result<AssistantTurn> {
         let mut session = session;
         if let Some(name) = session {
@@ -849,18 +851,18 @@ impl OneharnessProvider {
     fn respond_once(
         &self,
         spec: &TurnSpec,
-        on_event: &mut dyn FnMut(&ToolEvent) -> ControlFlow<()>,
+        on_event: &mut dyn FnMut(&ActionEvent) -> ControlFlow<()>,
     ) -> Result<AssistantTurn> {
         if self.stream {
             return self.run_streamed("respond", spec, on_event);
         }
-        let turn = assistant_turn(&self.run("respond", spec)?);
-        for event in &turn.events {
-            if on_event(event).is_break() {
+        let invocation = self.run("respond", spec)?;
+        for action in invocation.actions() {
+            if on_event(action).is_break() {
                 break;
             }
         }
-        Ok(turn)
+        Ok(assistant_turn(&invocation))
     }
 
     /// Read the report a finished `oneharness run` wrote, classify it, and record
@@ -1071,7 +1073,7 @@ impl OneharnessProvider {
         &self,
         op: &str,
         spec: &TurnSpec,
-        on_event: &mut dyn FnMut(&ToolEvent) -> ControlFlow<()>,
+        on_event: &mut dyn FnMut(&ActionEvent) -> ControlFlow<()>,
     ) -> Result<AssistantTurn> {
         let Execution::Process(bin) = &self.execution else {
             return match library::run_streaming(op, spec, on_event)? {
@@ -1566,6 +1568,25 @@ impl Provider for OneharnessProvider {
         messages: &[Message],
         session: Option<&str>,
         on_event: &mut dyn FnMut(&ToolEvent) -> ControlFlow<()>,
+    ) -> Result<AssistantTurn> {
+        self.run_respond(
+            skill.instructions,
+            skill.dir,
+            messages,
+            session,
+            &mut |action| match tool_event(action) {
+                Some(event) => on_event(&event),
+                None => ControlFlow::Continue(()),
+            },
+        )
+    }
+
+    fn respond_observing(
+        &self,
+        skill: &SkillRef<'_>,
+        messages: &[Message],
+        session: Option<&str>,
+        on_event: &mut dyn FnMut(&ActionEvent) -> ControlFlow<()>,
     ) -> Result<AssistantTurn> {
         self.run_respond(skill.instructions, skill.dir, messages, session, on_event)
     }

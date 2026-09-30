@@ -7,6 +7,7 @@ use std::cell::{Cell, RefCell};
 use std::ops::ControlFlow;
 use std::time::Instant;
 
+use oneharness_core::domain::events::ActionEvent;
 use onemessagebus::{Closed, Delivered};
 
 use crate::control::ControlOutcome;
@@ -720,14 +721,27 @@ impl<'a> Engine<'a> {
             }
             let mut broke = false;
             let turn = if streaming {
-                self.provider.respond_streaming(
+                self.provider.respond_observing(
                     &skill,
                     &transcript.messages,
                     Some(skill_session.as_str()),
-                    &mut |event| {
-                        let flow = on_observation(&Observation::Tool(StreamEvent {
+                    &mut |action| {
+                        // Tool activity first, exactly as it always reached a
+                        // streaming sink — a sink that stops on it is handed
+                        // nothing after — then the whole event for a reader.
+                        if let Some(event) = crate::oneharness::tool_event(action) {
+                            let flow = on_observation(&Observation::Tool(StreamEvent {
+                                turn: turn_index,
+                                event: &event,
+                            }));
+                            if flow.is_break() {
+                                broke = true;
+                                return flow;
+                            }
+                        }
+                        let flow = on_observation(&Observation::Action(TurnAction {
                             turn: turn_index,
-                            event,
+                            event: action,
                         }));
                         broke |= flow.is_break();
                         flow
@@ -1345,6 +1359,13 @@ pub enum Observation<'a> {
     TurnOpened(TurnOpened<'a>),
     /// A tool event, exactly as [`Engine::run_streaming`] delivers it.
     Tool(StreamEvent<'a>),
+    /// Every normalized event the worker's harness reported, as oneharness
+    /// reported it: its own `message` and `reasoning` items as well as its tool
+    /// activity. A tool event is delivered as [`Tool`](Observation::Tool) first
+    /// and then as this; the agent's words are delivered only as this, and never
+    /// become a [`ToolEvent`] — they are rendered for a reader, not summarized for
+    /// a judge.
+    Action(TurnAction<'a>),
     /// A party's own words for a turn, as they are appended to the transcript.
     Message(TurnMessage<'a>),
     /// A turn ended, with what it cost and when it ran.
@@ -1362,6 +1383,21 @@ pub enum Observation<'a> {
     /// [`Tool`](Observation::Tool) carries, so one renderer serves the worker's
     /// events and a judge's.
     JudgeTool(JudgeTool<'a>),
+}
+
+/// One normalized event the worker's harness reported during a turn.
+///
+/// The payload is oneharness's own [`ActionEvent`], so a reader draws it with
+/// oneharness's renderer (`oneharness_core::domain::render::render_event`) and
+/// shows exactly what `oneharness run --stream --format text` would.
+#[derive(serde::Serialize)]
+#[cfg_attr(feature = "sdk-schema", derive(schemars::JsonSchema))]
+pub struct TurnAction<'a> {
+    /// 1-based assistant-turn index within this run, as [`StreamEvent::turn`].
+    pub turn: usize,
+    /// The event, exactly as oneharness reported it — or, from a backend that
+    /// reports only tool events, the [`ActionEvent`] its tool event describes.
+    pub event: &'a ActionEvent,
 }
 
 /// One tool event a judge's harness reported while deciding a supervisor turn.
@@ -2356,6 +2392,7 @@ mod tests {
                         Observation::Message(m) => (format!("said/{:?}", m.role), false),
                         Observation::TurnClosed(c) => (format!("closed/{:?}", c.role), false),
                         Observation::Tool(_) => ("tool".into(), false),
+                        Observation::Action(_) => ("action".into(), false),
                     };
                     seen.push(kind);
                     if stop {
@@ -2463,6 +2500,7 @@ mod tests {
                         Observation::Message(m) => format!("said/{:?}", m.role),
                         Observation::TurnClosed(c) => format!("closed/{:?}", c.role),
                         Observation::Tool(_) => "tool".into(),
+                        Observation::Action(_) => "action".into(),
                     });
                     ControlFlow::Continue(())
                 },

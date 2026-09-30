@@ -29,6 +29,7 @@
 use std::io::BufRead;
 use std::ops::ControlFlow;
 
+use oneharness_core::domain::events::ActionEvent;
 use oneharness_core::domain::report::RunStreamEnvelope;
 use serde_json::Value;
 
@@ -48,8 +49,8 @@ pub(crate) enum StreamOutcome {
 
 /// One recognized line of the streamed protocol.
 enum StreamLine {
-    /// A live tool event.
-    Event(ToolEvent),
+    /// A live normalized event, exactly as oneharness declared it.
+    Event(ActionEvent),
     /// The terminal report.
     Report(Value),
 }
@@ -59,9 +60,10 @@ fn protocol(op: &str, message: impl std::fmt::Display) -> Error {
     Error::provider_classified(op.to_string(), message, ProviderErrorKind::Protocol)
 }
 
-/// Consume a streamed provider's stdout, delivering each tool event to `on_event`
-/// as it arrives and collecting it into `events`, until the terminal report line
-/// (or an abort) ends the turn.
+/// Consume a streamed provider's stdout, delivering each normalized event to
+/// `on_event` as it arrives — the agent's `message` and `reasoning` items as well
+/// as its tool activity — and collecting the tool activity into `events`, until
+/// the terminal report line (or an abort) ends the turn.
 ///
 /// # Errors
 /// A classified [`ProviderErrorKind::Protocol`] error if a line is unreadable, is
@@ -72,7 +74,7 @@ pub(crate) fn read_stream(
     op: &str,
     reader: &mut dyn BufRead,
     events: &mut Vec<ToolEvent>,
-    on_event: &mut dyn FnMut(&ToolEvent) -> ControlFlow<()>,
+    on_event: &mut dyn FnMut(&ActionEvent) -> ControlFlow<()>,
 ) -> Result<StreamOutcome> {
     let mut line = String::new();
     loop {
@@ -94,7 +96,7 @@ pub(crate) fn read_stream(
         match parse_line(op, trimmed)? {
             StreamLine::Event(event) => {
                 let flow = on_event(&event);
-                events.push(event);
+                events.extend(tool_event(&event));
                 if flow.is_break() {
                     return Ok(StreamOutcome::Aborted);
                 }
@@ -174,7 +176,7 @@ fn parse_line(op: &str, line: &str) -> Result<StreamLine> {
         )
     })?;
     match envelope {
-        RunStreamEnvelope::Event { event } => Ok(StreamLine::Event(tool_event(&event))),
+        RunStreamEnvelope::Event { event } => Ok(StreamLine::Event(event)),
         // Re-take the report from the raw line: the envelope has already proven it
         // is a well-formed report, and the report reader owns which candidate in it
         // is the turn.
@@ -196,7 +198,7 @@ mod tests {
             "respond",
             &mut bytes,
             &mut events,
-            &mut |_event: &ToolEvent| {
+            &mut |_event: &ActionEvent| {
                 seen += 1;
                 ControlFlow::Continue(())
             },
@@ -238,6 +240,37 @@ mod tests {
             }
             StreamOutcome::Aborted => panic!("expected the terminal report"),
         }
+    }
+
+    #[test]
+    fn the_agents_own_words_reach_the_sink_but_never_the_turns_tool_events() {
+        let said = |kind: &str, index: usize, text: &str| {
+            let mut event = fixture::event(index, "", "");
+            event.kind = kind.into();
+            event.name = None;
+            event.input = None;
+            event.output = Some(text.into());
+            serde_json::to_string(&serde_json::json!({ "type": "event", "event": event })).unwrap()
+        };
+        let stream = format!(
+            "{}\n{}\n{}\n{}\n",
+            said("reasoning", 0, "look first"),
+            event_line(1, "bash", "ls"),
+            said("message", 2, "listed it"),
+            result_line("done")
+        );
+        let mut bytes = stream.as_bytes();
+        let mut events = Vec::new();
+        let mut kinds = Vec::new();
+        read_stream("respond", &mut bytes, &mut events, &mut |event| {
+            kinds.push(event.kind.clone());
+            ControlFlow::Continue(())
+        })
+        .unwrap();
+        assert_eq!(kinds, ["reasoning", "tool_call", "message"]);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].kind, "tool_call");
+        assert_eq!(events[0].index, 1);
     }
 
     #[test]
