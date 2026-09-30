@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.0](https://github.com/nickderobertis/onejudge/compare/v0.16.0...v0.17.0) - 2026-09-30
+
+### Added
+
+- *(output)* readable live --format text by default, and onejudge watch over onemessagebus ([#131](https://github.com/nickderobertis/onejudge/pull/131))
+
 ## [0.16.0](https://github.com/nickderobertis/onejudge/compare/v0.15.0...v0.16.0) - 2026-09-29
 
 ### Added
