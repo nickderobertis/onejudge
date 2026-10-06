@@ -1,0 +1,40 @@
+# Comment on each pull request with the lint/type-check suppressions it adds, so a
+# reviewer sees every bypass (rule, reason, link) without reading the diff line by
+# line. Kept in step with the create-repo skill's `notignored.yml.template`.
+#
+# Deliberately NOT a required status check: it skips fork pull requests (whose
+# read-only token cannot upsert a comment), and a required context that never
+# reports would block them forever. It is a review artifact; the gate is `just check`.
+#
+# The comment behaviour belongs to nickderobertis/notignored and is tested there.
+# This file's wiring (trigger, permissions, fork guard, full history, and that no
+# required job needs it) is held by `crates/onejudge/tests/workflows.rs`.
+
+name: notignored
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+# Cancel superseded runs on the same ref: only the newest comment is wanted.
+concurrency:
+  group: notignored-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  suppressions:
+    # A fork's pull request is granted a read-only token, so the comment upsert
+    # would fail on something the contributor has no way to fix.
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The scan diffs against the base branch, which a shallow checkout omits.
+          fetch-depth: 0
+
+      # Floating major: picks up released 0.x fixes; all inputs keep their defaults.
+      - uses: nickderobertis/notignored@v0

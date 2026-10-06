@@ -145,13 +145,17 @@ jobs:
       - uses: extractions/setup-just@v3
       - uses: astral-sh/setup-uv@v6   # setup-llmlint.sh installs oneharness + llmlint via `uv tool`
       - name: Install the Claude Code harness
-        # llmlint drives the claude-code harness (llmlint.yml); oneharness shells
-        # out to the `claude` binary, so the harness itself must be on PATH too.
+        # oneharness.toml's fallback chain resolves to claude-code here (codex is
+        # absent); oneharness shells out to the `claude` binary, so it must be on PATH.
         run: npm install -g @anthropic-ai/claude-code
       - name: Install oneharness + llmlint
         run: |
           ./scripts/setup-llmlint.sh
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Validate llmlint config (deterministic, no credential)
+        # Config, ignore directives and fragment version bumps — no model call, so a
+        # broken config fails here before the paid step below spends a harness call.
+        run: just lint-llm-validate --diff-base origin/main
       - name: Lint changed files
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}

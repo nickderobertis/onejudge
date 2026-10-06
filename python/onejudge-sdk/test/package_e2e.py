@@ -41,6 +41,10 @@ def main() -> None:
         names = archive.namelist()
         if not any(name.endswith("onejudge_sdk/_generated/schemas.json") for name in names):
             raise AssertionError("SDK wheel omitted generated runtime schemas")
+        # PEP 561: without the marker a consumer's type checker reads every
+        # imported name as `Any`, however fully the package is annotated.
+        if "onejudge_sdk/py.typed" not in names:
+            raise AssertionError("SDK wheel omitted the onejudge_sdk/py.typed marker")
         metadata_name = next(name for name in names if name.endswith(".dist-info/METADATA"))
         metadata = email.message_from_bytes(archive.read(metadata_name))
         version = cargo_version()
@@ -48,6 +52,8 @@ def main() -> None:
             raise AssertionError("SDK wheel version differs from Cargo")
         if f"onejudge-cli=={version}" not in metadata.get_all("Requires-Dist", []):
             raise AssertionError("SDK wheel CLI dependency differs from Cargo")
+        if "Typing :: Typed" not in metadata.get_all("Classifier", []):
+            raise AssertionError("SDK wheel METADATA lacks Classifier: Typing :: Typed")
 
     environment = wheel_dir / "venv"
     subprocess.run(

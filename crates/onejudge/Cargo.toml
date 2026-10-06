@@ -61,6 +61,10 @@ serde_json = { workspace = true }
 # one, because the schema promises exactly that of whoever reads the document.
 # Already in the tree via `oneharness-core`, so this costs no new dependency.
 toml = "1"
+# `tests/workflows.rs` holds the CI wiring branch protection depends on (required
+# contexts, notignored, the llmlint validate step) to a parsed contract. The same
+# parser the `skill` feature uses, so this costs no new dependency.
+serde_yaml_ng = "0.10"
 
 [features]
 # The deterministic test doubles the e2e suite drives as real subprocesses.
