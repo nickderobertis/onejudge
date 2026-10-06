@@ -1,8 +1,9 @@
 # The live tier
 
 The deterministic gate (`just check`) fakes only the model — it drives the real
-engine across a real subprocess boundary against the `fake-provider` test
-doubles, so everything except a live harness/model is genuine. The **live tier**
+engine across a real subprocess boundary against the test doubles (the
+unpublished `onejudge-test-doubles` crate's bins), so everything except a live
+harness/model is genuine. The **live tier**
 is the one place that faking is replaced by the real call: it drives a real
 `oneharness` binary and, through it, a real harness and model, proving the
 `OneharnessProvider` path against the genuine external service.
@@ -11,8 +12,9 @@ is the one place that faking is replaced by the real call: it drives a real
 
 It is non-deterministic (a real model), needs `oneharness` plus an authenticated
 harness installed, and makes network calls — the opposite of the deterministic,
-offline gate. So every live test is `#[ignore]`-d (`crates/onejudge/tests/live.rs`)
-and never runs in `just check`. It still **compiles** in the normal build, so the
+offline gate. So every live test is `#[ignore]`-d (`crates/onejudge-live/tests/live.rs`,
+the `onejudge-live` project, which the gate leaves out) and never runs in
+`just check`. It still **compiles** in the normal build, so the
 live code can't rot; it just does not execute there.
 
 ## Running it

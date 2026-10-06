@@ -131,15 +131,15 @@ POSIX process-group leader, a two-party run where each party's harness stand-in
 groups the hook handed back, and an assertion — from outside the tree, over each
 stand-in's liveness socket — that every one of them is gone.
 
-- `tests/e2e.rs`'s
+- `crates/onejudge-e2e/tests/e2e.rs`'s
   `an_embedder_group_reaps_the_whole_two_party_harness_tree_on_a_kill_cancel`
   builds the providers itself (`SplitProvider` + `with_spawn_hook`).
-- `tests/cli.rs`'s
+- `crates/onejudge-cli-e2e/tests/cli.rs`'s
   `a_plan_driven_embedders_group_reaps_the_whole_two_party_harness_tree_on_a_kill_cancel`
   drives a **plan** (`Config` → `into_plan` → `with_spawn_hook` → `run_plan`),
   the entry point a plan-driven embedder actually uses.
 
-The shared helpers live in `tests/support/mod.rs`.
+The shared helpers live in `crates/onejudge-test-doubles/src/support.rs`.
 
 Without the seam neither test can be written: the spawned processes sit in
 onejudge's own group, which is the caller's, so the only available `killpg` would

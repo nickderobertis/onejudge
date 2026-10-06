@@ -151,7 +151,8 @@ executable, which is exactly a deterministic seam — the same one oneharness's 
 (`oneharness-mock-harness`, behind its unpublished `mock-harness` feature), not
 the mechanism.
 
-So onejudge ships its own: `onejudge-fake-harness` (`src/bin/fake_harness.rs`), a
+So onejudge ships its own: `onejudge-fake-harness`
+(`crates/onejudge-test-doubles/src/bin/fake_harness.rs`), a
 claude-code stand-in reached through `[harness.claude-code] bin`. Faking a
 *harness* rather than faking `oneharness` means the whole of oneharness — harness
 selection, argv construction, event normalization, streaming, cancellation,
