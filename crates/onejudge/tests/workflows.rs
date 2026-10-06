@@ -12,6 +12,7 @@
 //!   privilege, fork guard, full history) and nothing required waits on it;
 //! - the `llmlint` job validates its config with no credential *before* the step
 //!   that calls the model, and that step still requires its credential.
+// llmlint: ignore-file[new_code_lands_in_a_project] This repository has no Nx project graph yet; adopting one (and placing this suite in a project) is the dependent `onejudge-nx` change, so there is no project for this file to land in today.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -19,6 +20,7 @@ use std::path::{Path, PathBuf};
 use serde_yaml_ng::{Mapping, Value};
 
 /// The status-check contexts branch protection requires, by exact name.
+// llmlint: ignore[contracts_have_one_source_or_a_drift_gate] Branch protection is only readable through the GitHub API with admin credentials, which this offline gate never has; the live settings are reconciled against this list by the maintainer's governance step, and AGENTS.md's "All gating checks required" names the same set.
 const REQUIRED_CONTEXTS: &[&str] = &[
     "check",
     "test-os (macos-latest)",
@@ -59,8 +61,10 @@ fn workflow(name: &str) -> Value {
 fn workflows() -> Vec<(String, Value)> {
     let mut names: Vec<String> = fs::read_dir(workflow_dir())
         .expect("reading .github/workflows")
-        .flatten()
-        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .map(|entry| {
+            let entry = entry.expect("reading a .github/workflows entry");
+            entry.file_name().to_string_lossy().into_owned()
+        })
         .filter(|name| name.ends_with(".yml") || name.ends_with(".yaml"))
         .collect();
     names.sort();
@@ -83,16 +87,19 @@ fn text(value: Option<&Value>) -> Option<&str> {
     value.and_then(Value::as_str)
 }
 
-/// The job ids a job `needs`, whether written as one id or a list.
+/// The job ids a job `needs`, whether written as one id or a list; any other
+/// shape is a malformed workflow, refused rather than read as "needs nothing".
 fn needs(job: &Value) -> Vec<String> {
+    let id = |value: &Value| {
+        value
+            .as_str()
+            .unwrap_or_else(|| panic!("`needs` entry {value:?} is not a job id"))
+            .to_owned()
+    };
     match job.get("needs") {
-        Some(Value::String(one)) => vec![one.clone()],
-        Some(Value::Sequence(many)) => many
-            .iter()
-            .filter_map(Value::as_str)
-            .map(str::to_owned)
-            .collect(),
-        _ => Vec::new(),
+        None => Vec::new(),
+        Some(Value::Sequence(many)) => many.iter().map(id).collect(),
+        Some(one) => vec![id(one)],
     }
 }
 
@@ -156,12 +163,13 @@ fn required_context_violations(doc: &Value, required: &[&str]) -> Vec<String> {
                 violations.push(format!("`{context}` needs `{id}`, which is not a job"));
                 continue;
             };
-            if let Some(condition) =
-                text(job.get("if")).filter(|c| !PULL_REQUEST_CONDITIONS.contains(c))
-            {
-                violations.push(format!(
-                    "`{context}` depends on job `{id}` whose condition `{condition}` can skip a pull request"
-                ));
+            match job.get("if") {
+                None => {}
+                Some(Value::String(condition))
+                    if PULL_REQUEST_CONDITIONS.contains(&condition.as_str()) => {}
+                Some(condition) => violations.push(format!(
+                    "`{context}` depends on job `{id}` whose condition {condition:?} can skip a pull request"
+                )),
             }
             pending.extend(needs(job));
             seen.push(id);
@@ -328,6 +336,16 @@ fn the_required_context_check_refuses_a_skipped_or_missing_context() {
     let violations = required_context_violations(&filtered, REQUIRED_CONTEXTS);
     assert!(
         violations.iter().any(|v| v.contains("trigger is filtered")),
+        "{violations:#?}"
+    );
+
+    let mut disabled = ci.clone();
+    set(&mut disabled, &["jobs", "msrv", "if"], Value::Bool(false));
+    let violations = required_context_violations(&disabled, REQUIRED_CONTEXTS);
+    assert!(
+        violations
+            .iter()
+            .any(|v| v.contains("job `msrv` whose condition Bool(false)")),
         "{violations:#?}"
     );
 
