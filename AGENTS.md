@@ -52,12 +52,22 @@ Built up from the `create-repo` skill's reference axes, not a single template.
   CLI deps (`clap`, `serde_yaml_ng`) never reach a `cargo add onejudge` consumer.
 - **Language(s):** rust (`languages/rust.md`) — stable toolchain, `rustfmt` +
   `clippy -D warnings`, `cargo nextest`, `cargo llvm-cov` coverage gate, `cargo
-  deny` + `cargo machete` supply-chain job.
+  deny` + `cargo machete` supply-chain job. python (`languages/python.md`) for
+  the typed async SDK in `python/onejudge-sdk/` (published as `onejudge`) —
+  `requires-python >=3.9`, built with `uv_build`, `ruff`, `mypy --strict`,
+  `unittest` under `coverage` at `fail_under = 95`, all in `just
+  python-sdk-check`. Its departures from python.md (3.9 rather than 3.14, `mypy`
+  rather than `ty`, `unittest` + `coverage` rather than `pytest`/`pytest-cov`, a
+  `src/` module root, and `jsonschema` against the Rust-exported schemas rather
+  than Pydantic) have one recorded reason: #22 (`7241522`) built the SDK to
+  mirror oneharness's `python/oneharness-sdk/` — package layout, `pyproject.toml`,
+  `test/` and the `python-sdk-*` recipes — and named its `jsonschema` dependency.
 - **Cross-cutting:** `ci.md` (always) and `releasing.md` (applies — the crate is
   a versioned artifact published to crates.io; `release-plz` drives it, and a
   tag push also builds per-platform CLI archives, see below).
 - **References composed:** base.md, shapes/library.md, shapes/cli.md,
-  languages/rust.md, intersections/rust-cli.md, ci.md, llmlint.md, releasing.md
+  languages/rust.md, languages/python.md, intersections/rust-cli.md, ci.md,
+  llmlint.md, releasing.md
 - **Excluded, and why:** `monorepo.md` — one crate, one language, no orchestrator
   (the CLI is a feature-gated `[[bin]]` in the single crate, **not** a second
   crate); `src` layout / asdf / direnv — not idiomatic for a single Cargo crate.
