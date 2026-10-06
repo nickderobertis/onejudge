@@ -281,8 +281,9 @@ class OneJudgeTests(unittest.IsolatedAsyncioTestCase):
             {}, "fixture task", on_event=events.append, on_judge_tool=tools.append
         )
         self.assertEqual(len(events), 1)
-        self.assertEqual([(t["turn"], t["judge"], t["event"]["name"]) for t in tools],
-                         [(1, "reviewer", "Bash")])
+        self.assertEqual(
+            [(t["turn"], t["judge"], t["event"]["name"]) for t in tools], [(1, "reviewer", "Bash")]
+        )
         self.assertEqual(result.exit_code, 0)
         # Either handler alone streams the run; the other kind of line is still
         # read and validated, just not handed to anyone.
