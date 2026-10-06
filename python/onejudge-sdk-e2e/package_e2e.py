@@ -72,10 +72,10 @@ def main() -> None:
     consumer = """
 import asyncio
 import sys
-from onejudge_sdk import OneJudge, __version__
+from onejudge_sdk import OneJudge, RunConfig, __version__
 
 async def main():
-    config = {"provider": {"kind": "command", "command": [sys.argv[2]]}}
+    config: RunConfig = {"provider": {"kind": "command", "command": [sys.argv[2]]}}
     result = await OneJudge(executable=sys.argv[1]).run(config, "installed SDK")
     assert __version__ == sys.argv[3]
     assert result.completed and result.assistant_turns == 1

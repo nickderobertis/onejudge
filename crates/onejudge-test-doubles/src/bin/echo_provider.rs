@@ -49,7 +49,6 @@
 //!
 //! Lives in the `publish = false` `onejudge-test-doubles` crate; never shipped to a
 //! consumer.
-#![allow(missing_docs)]
 
 use std::io::{Read as _, Write as _};
 

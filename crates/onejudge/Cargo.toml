@@ -31,7 +31,7 @@ onemessagebus = { workspace = true }
 # CLI config and SKILL.md frontmatter. Both are opt-in, kept off the library's
 # (and the MSRV's) default surface.
 clap = { version = "4", features = ["derive"], optional = true }
-serde_yaml_ng = { version = "0.10", optional = true }
+serde_yaml_ng = { workspace = true, optional = true }
 # Non-optional, because `onemessagebus::Message` is sealed on `JsonSchema` and
 # `Note` implements it (`note.rs`) on every build: the note channel `Sender<Note,
 # Accepted>` does not exist without it, and `Engine::with_notes` is library

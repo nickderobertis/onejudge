@@ -185,10 +185,12 @@ fn main() {
         }
         let mut calls = 0;
         for (kind, text) in &events {
-            let block = match *kind {
-                "say" => format!(r#"{{"type":"text","text":{}}}"#, json_string(text)),
-                "think" => format!(r#"{{"type":"thinking","thinking":{}}}"#, json_string(text)),
-                _ => {
+            let block = match kind {
+                Activity::Say => format!(r#"{{"type":"text","text":{}}}"#, json_string(text)),
+                Activity::Think => {
+                    format!(r#"{{"type":"thinking","thinking":{}}}"#, json_string(text))
+                }
+                Activity::Event => {
                     let block = format!(
                         r#"{{"type":"tool_use","id":"t{calls}","name":"Bash","input":{{"command":{}}}}}"#,
                         json_string(text)
@@ -421,12 +423,35 @@ fn marker(text: &str, name: &str) -> Option<String> {
     markers(text, name).into_iter().next()
 }
 
+/// One kind of scripted worker activity, named by the marker that scripts it.
+#[derive(Clone, Copy)]
+enum Activity {
+    /// `[[event:CMD]]`: a `Bash` tool call running `CMD`.
+    Event,
+    /// `[[say:TEXT]]`: visible text.
+    Say,
+    /// `[[think:TEXT]]`: a reasoning block.
+    Think,
+}
+
+impl Activity {
+    const ALL: [Activity; 3] = [Activity::Event, Activity::Say, Activity::Think];
+
+    fn marker(self) -> &'static str {
+        match self {
+            Activity::Event => "event",
+            Activity::Say => "say",
+            Activity::Think => "think",
+        }
+    }
+}
+
 /// The worker's scripted activity — every `[[event:CMD]]`, `[[say:TEXT]]` and
-/// `[[think:TEXT]]` in `text` — as `(marker, value)` in the order it appears.
-fn activity(text: &str) -> Vec<(&'static str, String)> {
-    let mut found: Vec<(usize, &'static str, String)> = Vec::new();
-    for kind in ["event", "say", "think"] {
-        let open = format!("[[{kind}:");
+/// `[[think:TEXT]]` in `text` — as `(kind, value)` in the order it appears.
+fn activity(text: &str) -> Vec<(Activity, String)> {
+    let mut found: Vec<(usize, Activity, String)> = Vec::new();
+    for kind in Activity::ALL {
+        let open = format!("[[{}:", kind.marker());
         let mut from = 0;
         while let Some(at) = text[from..].find(&open) {
             let start = from + at + open.len();
