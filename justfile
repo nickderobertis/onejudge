@@ -198,10 +198,10 @@ _rust-format crate:
 _rust-format-check crate:
     cargo fmt -p {{crate}} --check
 
-# Clippy with warnings denied, then the crate's place in the project graph.
+# The crate's place in the project graph, then clippy with warnings denied.
 _rust-lint crate features=gate_features:
-    cargo clippy --locked -p {{crate}} --all-targets {{ if features == "" { "" } else { "--features " + features } }} -- -D warnings
     node scripts/check-project-boundaries.mjs {{crate}}
+    cargo clippy --locked -p {{crate}} --all-targets {{ if features == "" { "" } else { "--features " + features } }} -- -D warnings
 
 _rust-build crate features=gate_features:
     cargo build --locked -p {{crate}} --bins {{ if features == "" { "" } else { "--features " + features } }}
@@ -283,8 +283,8 @@ _py-format-check dir:
     {{py_sdk}} ruff format --check {{dir}}
 
 _py-lint dir project:
-    {{py_sdk}} ruff check {{dir}}
     node scripts/check-project-boundaries.mjs {{project}}
+    {{py_sdk}} ruff check {{dir}}
 
 _py-typecheck +paths:
     {{py_sdk}} mypy --config-file python/onejudge-sdk/pyproject.toml {{paths}}
