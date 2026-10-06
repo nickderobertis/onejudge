@@ -1,0 +1,21 @@
+# The `onejudge` CLI's journeys (`tests/cli.rs`) and the replay fixtures they are
+# held to (`tests/golden/`): the run driver in process and the built binary as a
+# subprocess, against the deterministic doubles. A `publish = false` member
+# holding only `tests/`, whose Nx `test` depends on the CLI build.
+[package]
+name = "onejudge-cli-e2e"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[dev-dependencies]
+# `sdk-schema` (which includes `cli`) for the frame schemas the journeys validate.
+onejudge = { path = "../onejudge", features = ["sdk-schema"] }
+onejudge-test-doubles = { path = "../onejudge-test-doubles" }
+oneharness-core = { workspace = true }
+onemessagebus = { workspace = true }
+serde_json = { workspace = true }

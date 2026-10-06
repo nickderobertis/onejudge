@@ -4,20 +4,29 @@
 //! the process tree whether it is still alive, and the POSIX half of the
 //! embedder-owned grouping a [`onejudge::SpawnHook`] exists to give back.
 //!
-//! `e2e.rs` drives these against the engine, `cli.rs` against a
-//! [`Plan`](onejudge::cli::Plan) — the same defect reached through the two entry
-//! points a consumer has, so the helpers live here rather than being copied.
-//!
-//! `dead_code` is allowed because each test binary compiles this module
-//! separately and uses the subset its own journeys need (and the Windows matrix
-//! job compiles the portable half with the `unix` journeys cfg'd out).
+//! `onejudge-e2e` drives these against the engine, `onejudge-cli-e2e` against a
+//! `onejudge::cli::Plan` — the same defect reached through the two entry
+//! points a consumer has, so the helpers live in the crate both suites already
+//! depend on rather than being copied into each.
 
-#![allow(dead_code)]
+/// `<target>/tmp`: the directory Cargo hands an integration test as
+/// `CARGO_TARGET_TMPDIR`, derived at run time because that variable is set only
+/// while compiling the test itself, never this library.
+fn target_tmpdir() -> std::path::PathBuf {
+    let exe = std::env::current_exe().expect("the running test binary has a path");
+    let target = exe
+        .ancestors()
+        .nth(3)
+        .unwrap_or_else(|| panic!("{} is not under <target>/<profile>/deps", exe.display()));
+    let dir = target.join("tmp");
+    std::fs::create_dir_all(&dir).unwrap_or_else(|e| panic!("creating {}: {e}", dir.display()));
+    dir
+}
 
 /// A unique path under the integration-test tmp dir, removed if it survived an
 /// earlier run.
 pub fn scratch_path(name: &str) -> std::path::PathBuf {
-    let path = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(name);
+    let path = target_tmpdir().join(name);
     let _ = std::fs::remove_file(&path);
     // …and the coverage marker published beside it, so an earlier run's marker can
     // never satisfy this run's `assert_profile_is_detached`.
@@ -89,7 +98,7 @@ fn addressable_store_root(leaf: &str, store_within: &[&str]) -> std::path::PathB
 /// directory its handle and its `control/<name>.sock` live under. Never the
 /// platform default, which is the developer's own store.
 ///
-/// Deliberately NOT under `CARGO_TARGET_TMPDIR` like every other scratch path:
+/// Deliberately NOT under the target tmp dir like every other scratch path:
 /// a target dir nested under a worktree path blows the socket-address budget
 /// before the socket name is even appended. See [`addressable_store_root`] for
 /// the budget and how the root is chosen against it.
@@ -114,7 +123,7 @@ pub fn control_store(name: &str) -> std::path::PathBuf {
 /// store, where a `control/<session>.sock` keyed only by session name would
 /// collide between two checkouts running the same journey.
 ///
-/// Rooted outside `CARGO_TARGET_TMPDIR`, and measured, for the reason
+/// Rooted outside the target tmp dir, and measured, for the reason
 /// [`addressable_store_root`] gives — doubly so here, because oneharness nests
 /// its store a further `oneharness/sessions` under the state home, and that
 /// nesting is what pushed a macOS runner's address to 120 bytes against a

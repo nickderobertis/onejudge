@@ -6,10 +6,9 @@
 //! rendering, and verdict parsing all run for real — the only faked thing is the
 //! model, exactly as a consumer would fake it.
 //!
-//! The whole file is gated on the `fake-provider` feature, since the doubles only
-//! exist under it; the gate (`just check`, `just test-e2e`, coverage) always
-//! enables it, so these journeys always run — they are never `#[ignore]`-d out.
-#![cfg(feature = "fake-provider")]
+//! The doubles are the `onejudge-test-doubles` crate's bins, built by the
+//! `onejudge-test-doubles:build` target this project's `test` depends on, so these
+//! journeys always run in the gate — they are never `#[ignore]`-d out.
 
 use std::ops::ControlFlow;
 
@@ -20,7 +19,7 @@ use onejudge::{
     Skill, SplitProvider, ToolQuery, Usage, SCHEMA_VERSION,
 };
 
-mod support;
+use onejudge_test_doubles::{self as doubles, support};
 
 use support::{
     assert_profile_is_detached, await_path, descendant_handle, descendant_is_running, scratch_path,
@@ -30,15 +29,12 @@ use support::{kill_group, process_exists, OwnedProcessGroups};
 
 /// A [`CommandProvider`] pointed at the built echo test double.
 fn echo() -> CommandProvider {
-    CommandProvider::new(vec![
-        env!("CARGO_BIN_EXE_onejudge-echo-provider").to_string()
-    ])
-    .unwrap()
+    CommandProvider::new(vec![doubles::echo_provider().to_string()]).unwrap()
 }
 
 /// An [`OneharnessProvider`] pointed at the built fake-oneharness test double.
 fn fake_oneharness() -> OneharnessProvider {
-    OneharnessProvider::new().with_bin(env!("CARGO_BIN_EXE_onejudge-fake-oneharness"))
+    OneharnessProvider::new().with_bin(doubles::fake_oneharness())
 }
 
 fn settings() -> Settings {
@@ -450,10 +446,7 @@ fn command_provider_rejects_a_wrong_protocol_reply() {
     // speaks a different protocol: its report has no `message` field, so the
     // response fails to parse and surfaces as a classified protocol error rather
     // than a silent empty turn.
-    let provider = CommandProvider::new(vec![
-        env!("CARGO_BIN_EXE_onejudge-fake-oneharness").to_string()
-    ])
-    .unwrap();
+    let provider = CommandProvider::new(vec![doubles::fake_oneharness().to_string()]).unwrap();
     let engine = Engine::new(&provider, settings());
     let err = engine
         .run(&Conversation::single_turn(skill_with("x"), "hi"))
@@ -1368,7 +1361,7 @@ fn split_drives_a_multi_turn_conversation_across_both_backends() {
 
 /// The echo double with extra argv markers (see its module docs).
 fn echo_with(markers: &[&str]) -> CommandProvider {
-    let mut argv = vec![env!("CARGO_BIN_EXE_onejudge-echo-provider").to_string()];
+    let mut argv = vec![doubles::echo_provider().to_string()];
     argv.extend(markers.iter().map(|m| (*m).to_string()));
     CommandProvider::new(argv).unwrap()
 }
@@ -1864,7 +1857,7 @@ fn a_panel_conjoins_boolean_verdicts_and_stacks_assessments_under_headers() {
 
 /// The built fake-llmlint double's path.
 fn fake_llmlint_bin() -> &'static str {
-    env!("CARGO_BIN_EXE_onejudge-fake-llmlint")
+    doubles::fake_llmlint()
 }
 
 /// Script the double for this test process: `exits` is its per-run outcome list
@@ -3573,7 +3566,7 @@ fn harness_project_on(harness: &str, name: &str) -> std::path::PathBuf {
         format!(
             "harnesses = [\"{harness}\"]\nhistory_dir = {:?}\n\n[harness.{harness}]\nbin = {:?}\n",
             dir.join("history").display().to_string(),
-            env!("CARGO_BIN_EXE_onejudge-fake-harness"),
+            doubles::fake_harness(),
         ),
     )
     .unwrap();
@@ -3625,7 +3618,7 @@ fn the_linked_core_writes_a_history_pointer_for_every_run_and_reads_it_back_type
              [harness.claude-code]\nbin = {:?}\n",
             dir.join("history").display().to_string(),
             pointer_file.display().to_string(),
-            env!("CARGO_BIN_EXE_onejudge-fake-harness"),
+            doubles::fake_harness(),
         ),
     )
     .unwrap();
@@ -3664,7 +3657,7 @@ fn restrictive_evaluators_recover_full_history_and_cannot_mutate_or_escape_git_t
         format!(
             "harnesses = [\"claude-code\"]\nhistory_dir = {:?}\n\n[harness.claude-code]\nbin = {:?}\n",
             history_dir.display().to_string(),
-            env!("CARGO_BIN_EXE_onejudge-fake-harness"),
+            doubles::fake_harness(),
         ),
     ).unwrap();
     let git = |args: &[&str]| {

@@ -8,11 +8,11 @@
 //! * **Subprocess** — spawn the built `onejudge` binary against a YAML config that
 //!   points at the same double, asserting on stdout, the `--format json`
 //!   [`Report`](onejudge::Report), and the process exit code — the true CLI
-//!   surface, only the model faked, exactly as `tests/e2e.rs` does for the engine.
+//!   surface, only the model faked, exactly as `onejudge-e2e` does for the engine.
 //!
-//! Gated on `cli` + `fake-provider`: the binary needs `cli`, the double needs
-//! `fake-provider`. The Linux `check` gate enables both, so these always run.
-#![cfg(all(feature = "cli", feature = "fake-provider"))]
+//! This crate enables `cli` and `sdk-schema` on its `onejudge` dependency, and its
+//! Nx `test` target builds the `onejudge` binary and the doubles first, so these
+//! always run in the gate.
 
 use std::ops::ControlFlow;
 use std::path::Path;
@@ -66,7 +66,7 @@ const _: StreamingPlanFn = run_plan_streaming_reporting_failure;
 const _: StreamingEngineFn = Engine::run_streaming;
 const _: fn(&RunFailure) -> &Option<Telemetry> = |failure| &failure.telemetry;
 
-mod support;
+use onejudge_test_doubles::{self as doubles, support};
 
 use support::{await_path, descendant_handle, descendant_is_running, scratch_path};
 #[cfg(unix)]
@@ -74,20 +74,19 @@ use support::{kill_group, process_exists, OwnedProcessGroups};
 
 /// The built echo test double's path (a `CommandProvider` backend).
 fn echo_bin() -> String {
-    env!("CARGO_BIN_EXE_onejudge-echo-provider").to_string()
+    doubles::echo_provider().to_string()
 }
 
 /// The built `onejudge` binary under test.
 fn onejudge_bin() -> &'static str {
-    env!("CARGO_BIN_EXE_onejudge")
+    doubles::onejudge_cli()
 }
 
 /// The built fake-oneharness double (an `OneharnessProvider` backend).
 fn fake_oneharness_bin() -> String {
-    env!("CARGO_BIN_EXE_onejudge-fake-oneharness").to_string()
+    doubles::fake_oneharness().to_string()
 }
 
-#[cfg(feature = "sdk-schema")]
 fn assert_supervisor_v8_frames_validate(frames: &[serde_json::Value]) {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
@@ -1974,7 +1973,7 @@ fn in_process_project(name: &str, instructions: &str) -> std::path::PathBuf {
         format!(
             "harnesses = [\"claude-code\"]\nhistory_dir = {:?}\n\n[harness.claude-code]\nbin = {:?}\n",
             dir.join("history").display().to_string(),
-            env!("CARGO_BIN_EXE_onejudge-fake-harness"),
+            doubles::fake_harness(),
         ),
     )
     .unwrap();
@@ -2025,7 +2024,7 @@ fn agent_config_project(name: &str, flat: bool) -> std::path::PathBuf {
     );
     let selection = format!(
         "harnesses = [\"claude-code\"]\n\n[harness.claude-code]\nbin = {:?}\n",
-        env!("CARGO_BIN_EXE_onejudge-fake-harness"),
+        doubles::fake_harness(),
     );
     if flat {
         std::fs::write(dir.join("oneharness.toml"), history + &selection).unwrap();
@@ -2672,7 +2671,7 @@ fn an_observing_plan_run_delivers_each_judges_decision_inside_the_supervisor_tur
 
 /// The built fake-llmlint double's path.
 fn fake_llmlint_bin() -> &'static str {
-    env!("CARGO_BIN_EXE_onejudge-fake-llmlint")
+    doubles::fake_llmlint()
 }
 
 /// The argv lines the double recorded at `path`, in arrival order.
@@ -3660,7 +3659,7 @@ fn run_with_judge_history(
     std::fs::create_dir_all(dir.join("xdg")).unwrap();
     let harness = format!(
         "harnesses = [\"claude-code\"]\n\n[harness.claude-code]\nbin = {:?}\n",
-        env!("CARGO_BIN_EXE_onejudge-fake-harness"),
+        doubles::fake_harness(),
     );
     std::fs::write(dir.join("SKILL.md"), "[[reply:wrote the plan]]").unwrap();
     std::fs::write(dir.join("oneharness.toml"), &harness).unwrap();
@@ -4071,7 +4070,7 @@ fn an_in_process_turn_records_history_without_reading_the_legacy_index_or_the_st
 
 /// The fake harness double, reached as `claude-code` through `[harness.*] bin`.
 fn fake_harness_bin() -> &'static str {
-    env!("CARGO_BIN_EXE_onejudge-fake-harness")
+    doubles::fake_harness()
 }
 
 /// Which seam a posture journey's providers run on.

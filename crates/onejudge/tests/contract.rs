@@ -479,38 +479,3 @@ fn the_contract_doc_generates_the_bundle_with_the_example_the_crate_declares() {
     assert!(include_str!("../Cargo.toml")
         .contains("name = \"generate_sdk_schema\"\nrequired-features = [\"sdk-schema\"]"));
 }
-
-#[cfg(feature = "fake-provider")]
-#[test]
-fn the_contract_doc_builds_a_report_the_way_the_api_does() {
-    use onejudge::{CommandProvider, Conversation, Engine, Settings, Skill};
-
-    let example = fenced("rust");
-    for call in [
-        "engine.run(&conversation)?",
-        "engine.judge_boolean(\"the change was committed\", &outcome.transcript)?",
-        "outcome.into_report(",
-        "onejudge::NamedVerdict::new(\"the change was committed\", onejudge::JudgeKind::Boolean, verdict)",
-        "assert_eq!(report.schema_version, onejudge::SCHEMA_VERSION);",
-    ] {
-        assert!(example.contains(call), "the example no longer makes `{call}`");
-    }
-    // The same calls, over the echo double.
-    let provider =
-        CommandProvider::new(vec![env!("CARGO_BIN_EXE_onejudge-echo-provider").into()]).unwrap();
-    let engine = Engine::new(&provider, Settings::new());
-    let conversation = Conversation::single_turn(
-        Skill::new("demo", "/skills/demo", ""),
-        "the change was committed",
-    );
-    let outcome = engine.run(&conversation).unwrap();
-    let verdict = engine
-        .judge_boolean("the change was committed", &outcome.transcript)
-        .unwrap();
-    let report = outcome.into_report(vec![NamedVerdict::new(
-        "the change was committed",
-        JudgeKind::Boolean,
-        verdict,
-    )]);
-    assert_eq!(report.schema_version, SCHEMA_VERSION);
-}

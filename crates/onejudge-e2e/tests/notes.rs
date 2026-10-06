@@ -15,7 +15,6 @@
 //! note demonstrably arrives while that party's turn is live rather than between
 //! turns — and the dwell is an order of magnitude longer than the wait's poll
 //! interval, so the window is not a race.
-#![cfg(feature = "fake-provider")]
 
 use std::ops::ControlFlow;
 use std::sync::mpsc;
@@ -28,26 +27,21 @@ use onejudge::{
     Note, NoteInbox, Notes, Observation, OneharnessProvider, Party, Role, Settings, SimulatedUser,
     Skill, SplitProvider, Undelivered,
 };
-// The plan is the second entry point an embedder has, and it lives behind the
-// non-default `cli` feature — so only the journey that drives it is gated on one.
-#[cfg(feature = "cli")]
+// The plan is the second entry point an embedder has, behind the non-default
+// `cli` feature this crate enables on its `onejudge` dependency.
 use onejudge::cli;
-
-mod support;
+use onejudge_test_doubles::{self as doubles, support};
 
 use support::{await_path, scratch_path};
 
 /// A [`CommandProvider`] pointed at the built echo test double.
 fn echo() -> CommandProvider {
-    CommandProvider::new(vec![
-        env!("CARGO_BIN_EXE_onejudge-echo-provider").to_string()
-    ])
-    .unwrap()
+    CommandProvider::new(vec![doubles::echo_provider().to_string()]).unwrap()
 }
 
 /// An [`OneharnessProvider`] pointed at the built fake-oneharness test double.
 fn fake_oneharness() -> OneharnessProvider {
-    OneharnessProvider::new().with_bin(env!("CARGO_BIN_EXE_onejudge-fake-oneharness"))
+    OneharnessProvider::new().with_bin(doubles::fake_oneharness())
 }
 
 /// Every request the echo double logged, in the order it received them.
@@ -161,7 +155,7 @@ fn normalize_paths(serialized: &str) -> String {
     let mut text = serialized.to_string();
     for (path, placeholder) in [
         (env!("CARGO_TARGET_TMPDIR"), "{{TMP}}"),
-        (env!("CARGO_BIN_EXE_onejudge-echo-provider"), "{{ECHO}}"),
+        (doubles::echo_provider(), "{{ECHO}}"),
     ] {
         let escaped = serde_json::to_string(path).unwrap();
         text = text
@@ -594,7 +588,7 @@ fn a_note_arriving_during_a_panels_turn_reaches_every_judge_and_re_takes_every_d
 
     let judge = |log: &std::path::Path| {
         CommandProvider::new(vec![
-            env!("CARGO_BIN_EXE_onejudge-echo-provider").to_string(),
+            doubles::echo_provider().to_string(),
             format!("[[record:{}]]", log.display()),
         ])
         .unwrap()
@@ -1077,7 +1071,6 @@ fn a_bound_criterion_enters_the_acceptance_criteria_whichever_side_of_the_first_
     }
 }
 
-#[cfg(feature = "cli")]
 #[test]
 fn a_bound_criterion_reaches_the_authoritative_re_judge_a_plan_settles_on() {
     let (notes, inbox) = Notes::channel();
@@ -1094,7 +1087,7 @@ fn a_bound_criterion_reaches_the_authoritative_re_judge_a_plan_settles_on() {
 
     let plan = cli::Plan {
         provider: cli::ProviderSpec::Command {
-            command: vec![env!("CARGO_BIN_EXE_onejudge-echo-provider").to_string()],
+            command: vec![doubles::echo_provider().to_string()],
         },
         settings: Settings::new(),
         conversation: Conversation::single_turn(
@@ -1259,7 +1252,6 @@ fn a_note_sent_to_a_channel_no_conversation_ever_read_raises() {
     );
 }
 
-#[cfg(feature = "cli")]
 #[test]
 fn a_note_sent_to_a_plan_whose_provider_never_built_raises_that_no_conversation_read_it() {
     let (notes, inbox) = Notes::channel();

@@ -1,0 +1,24 @@
+# The engine's end-to-end journeys (`tests/e2e.rs`, `tests/notes.rs`,
+# `tests/contract_doc.rs`): the real engine driven across a real subprocess
+# boundary at the deterministic doubles. A `publish = false` member holding only
+# `tests/`, so a change to the library reruns it while a change elsewhere cannot.
+[package]
+name = "onejudge-e2e"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[dev-dependencies]
+# `cli` for the `Plan` entry point the note journeys drive.
+onejudge = { path = "../onejudge", features = ["cli"] }
+onejudge-test-doubles = { path = "../onejudge-test-doubles" }
+oneharness-core = { workspace = true }
+onemessagebus = { workspace = true }
+serde_json = { workspace = true }
+
+[target.'cfg(unix)'.dev-dependencies]
+rustix = { workspace = true }

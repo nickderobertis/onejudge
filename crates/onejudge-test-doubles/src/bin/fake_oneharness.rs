@@ -151,7 +151,8 @@
 //! to the harness argv and prompt a real oneharness produces, exactly as the
 //! in-process seam is. See [`engine`].
 //!
-//! Built only under the `fake-provider` feature; never shipped to a consumer.
+//! Lives in the `publish = false` `onejudge-test-doubles` crate; never shipped to a
+//! consumer.
 #![allow(missing_docs)]
 
 use std::collections::HashMap;

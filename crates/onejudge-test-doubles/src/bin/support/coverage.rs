@@ -5,9 +5,11 @@
 //! started it can still be writing its own profile at that moment, and a
 //! half-written file fails the merge — `invalid instrumentation profile data
 //! (file header is corrupt)` — on a run where every test passed. That failed the
-//! v0.3.8 *and* v0.3.9 release gates. `src/bin/` is excluded from coverage
-//! anyway, so those profiles have nothing to contribute: sending them elsewhere
-//! removes the race rather than making it rarer.
+//! v0.3.8 *and* v0.3.9 release gates. The gate builds the doubles uninstrumented
+//! (`onejudge-test-doubles:build`), but any double built under `cargo llvm-cov`
+//! writes a profile, and this crate is excluded from the coverage report anyway,
+//! so those profiles have nothing to contribute: sending them elsewhere removes
+//! the race rather than making it rarer.
 //!
 //! This lives in one file that every double reaches by `#[path]`, because the
 //! processes that need it are spawned from more than one binary — and a copy per

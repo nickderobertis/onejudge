@@ -4,7 +4,7 @@
 # `oneharness-core` 0.24.0 indexes history in dated segments under `.index.d/`; a
 # run recorded before that has only its session file and the legacy
 # `.index.jsonl`. onejudge must still read such a run's record back (its
-# `history_id`), and `tests/cli.rs` proves it against the store this script
+# `history_id`), and `onejudge-cli-e2e`'s `tests/cli.rs` proves it against the store this script
 # writes, so the comparison is against bytes a release wrote rather than a
 # hand-written imitation of them.
 #
@@ -12,12 +12,12 @@
 #
 # `oneharness` 0.20.0 links `oneharness-core` 0.22.0, the last core before the
 # cutover (`cargo install oneharness --version 0.20.0 --locked --root <dir>`).
-# The fake harness is this tree's double (`cargo build --features fake-provider
+# The fake harness is this tree's double (`cargo build -p onejudge-test-doubles
 # --bin onejudge-fake-harness`), reached as `claude-code` through ordinary
 # oneharness config, so the record names the harness onejudge's fake oneharness
 # reports. The project lives at a fixed path so the store's project slug does
 # not name the capturing host. The store is written to
-# `crates/onejudge/tests/golden/pre-cutover-history/store/`, replacing it.
+# `crates/onejudge-cli-e2e/tests/golden/pre-cutover-history/store/`, replacing it.
 #
 # Quiet on success; loud with the failing step otherwise.
 set -euo pipefail
@@ -54,7 +54,7 @@ if [ -e "$work/store/.index.d" ]; then
     exit 1
 fi
 
-dest=crates/onejudge/tests/golden/pre-cutover-history/store
+dest=crates/onejudge-cli-e2e/tests/golden/pre-cutover-history/store
 rm -rf "$dest"
 mkdir -p "$(dirname "$dest")"
 cp -R "$work/store" "$dest"

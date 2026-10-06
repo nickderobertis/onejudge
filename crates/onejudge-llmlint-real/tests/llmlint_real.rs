@@ -15,11 +15,12 @@
 //! the offline gate and runs via `just test-llmlint` — in CI, the
 //! `llmlint-real` job, which installs llmlint first. An absent llmlint fails it;
 //! nothing here skips.
-#![cfg(all(feature = "cli", feature = "fake-provider"))]
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+
+use onejudge_test_doubles as doubles;
 
 /// The executable the journey drives: `llmlint` on `PATH`.
 const LLMLINT: &str = "llmlint";
@@ -90,7 +91,7 @@ fn a_panels_llmlint_judge_runs_are_labelled_and_each_decision_names_its_history_
     // Two judges: the echo reviewer continues until the worker has echoed its
     // "next step" question back (two supervisor turns), and the real llmlint,
     // clean on every run.
-    let echo = serde_json::to_string(env!("CARGO_BIN_EXE_onejudge-echo-provider")).unwrap();
+    let echo = serde_json::to_string(doubles::echo_provider()).unwrap();
     let config = worktree.join("run.yaml");
     std::fs::write(
         &config,
@@ -103,7 +104,7 @@ fn a_panels_llmlint_judge_runs_are_labelled_and_each_decision_names_its_history_
         ),
     )
     .unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_onejudge"))
+    let output = Command::new(doubles::onejudge_cli())
         .args(["run", config.to_str().unwrap(), "--format", "json"])
         .args(["--session", SESSION])
         .current_dir(&worktree)

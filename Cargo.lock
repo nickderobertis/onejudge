@@ -910,9 +910,74 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml_ng",
- "signal-hook",
  "thiserror",
+]
+
+[[package]]
+name = "onejudge-cli-e2e"
+version = "0.17.1"
+dependencies = [
+ "oneharness-core",
+ "onejudge",
+ "onejudge-test-doubles",
+ "onemessagebus",
+ "serde_json",
+]
+
+[[package]]
+name = "onejudge-e2e"
+version = "0.17.1"
+dependencies = [
+ "oneharness-core",
+ "onejudge",
+ "onejudge-test-doubles",
+ "onemessagebus",
+ "rustix",
+ "serde_json",
+]
+
+[[package]]
+name = "onejudge-live"
+version = "0.17.1"
+dependencies = [
+ "onejudge",
+]
+
+[[package]]
+name = "onejudge-llmlint-real"
+version = "0.17.1"
+dependencies = [
+ "onejudge",
+ "onejudge-test-doubles",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "onejudge-release-targets"
+version = "0.17.1"
+dependencies = [
+ "onejudge-repo",
+]
+
+[[package]]
+name = "onejudge-repo"
+version = "0.17.1"
+dependencies = [
+ "serde",
+ "serde_yaml_ng",
  "toml",
+]
+
+[[package]]
+name = "onejudge-test-doubles"
+version = "0.17.1"
+dependencies = [
+ "oneharness-core",
+ "onejudge",
+ "rustix",
+ "serde_json",
+ "signal-hook",
 ]
 
 [[package]]

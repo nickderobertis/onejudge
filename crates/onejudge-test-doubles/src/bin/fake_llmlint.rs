@@ -41,7 +41,8 @@
 //!   deterministic — and `fake-<n>` over every lint run for an unlabelled one.
 //!   Both counts read the argv record, so a stable id needs it set.
 //!
-//! Built only under the `fake-provider` feature; never shipped to a consumer.
+//! Lives in the `publish = false` `onejudge-test-doubles` crate; never shipped to a
+//! consumer.
 #![allow(missing_docs)]
 
 use std::io::Write as _;

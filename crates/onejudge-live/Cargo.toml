@@ -1,0 +1,15 @@
+# The live tier (`tests/live.rs`): a REAL oneharness and an authenticated
+# harness. Every test is `#[ignore]`-d and runs only via `just test-live` / the
+# credentialed `live` workflow; it still compiles in every build.
+[package]
+name = "onejudge-live"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[dev-dependencies]
+onejudge = { path = "../onejudge" }

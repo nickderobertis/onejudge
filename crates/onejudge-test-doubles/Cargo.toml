@@ -1,0 +1,51 @@
+# The deterministic test doubles every onejudge suite drives as real
+# subprocesses, plus the helpers more than one suite shares. Never published:
+# the doubles are test infrastructure, so they live here rather than behind a
+# feature of the published `onejudge` crate, and nothing a consumer installs can
+# build them.
+[package]
+name = "onejudge-test-doubles"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[dependencies]
+# `onejudge-fake-oneharness` keys its judge scripting off the engine's own prompt
+# marker, and `support` implements the engine's `SpawnHook`: the doubles are a
+# consumer of the library, never the reverse.
+onejudge = { path = "../onejudge" }
+oneharness-core = { workspace = true }
+serde_json = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+# `support`'s process-group hook and liveness checks.
+rustix = { workspace = true }
+# `onejudge-fake-oneharness` must *catch* SIGTERM to model oneharness's teardown
+# (an uncatchable SIGKILL is exactly what that double proves is not enough).
+signal-hook = { workspace = true }
+
+# Each double is spawned by the suites, never tested on its own: its behaviour is
+# asserted through the journeys that drive it.
+[[bin]]
+name = "onejudge-echo-provider"
+path = "src/bin/echo_provider.rs"
+test = false
+
+[[bin]]
+name = "onejudge-fake-oneharness"
+path = "src/bin/fake_oneharness.rs"
+test = false
+
+[[bin]]
+name = "onejudge-fake-harness"
+path = "src/bin/fake_harness.rs"
+test = false
+
+[[bin]]
+name = "onejudge-fake-llmlint"
+path = "src/bin/fake_llmlint.rs"
+test = false

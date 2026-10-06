@@ -47,7 +47,8 @@
 //! * `[[record:PATH]]` — as the request marker, but for this judge's requests
 //!   alone, so two judges of one panel log to two files.
 //!
-//! Built only under the `fake-provider` feature; never shipped to a consumer.
+//! Lives in the `publish = false` `onejudge-test-doubles` crate; never shipped to a
+//! consumer.
 #![allow(missing_docs)]
 
 use std::io::{Read as _, Write as _};
