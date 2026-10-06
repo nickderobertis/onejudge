@@ -965,6 +965,7 @@ name = "onejudge-repo"
 version = "0.17.1"
 dependencies = [
  "serde",
+ "serde_json",
  "serde_yaml_ng",
  "toml",
 ]

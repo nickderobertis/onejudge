@@ -3,7 +3,7 @@
 //! Branch protection names status-check contexts by string, so a renamed job, a
 //! path filter, or a `needs` edge onto a job that skips leaves a required context
 //! unreported and every pull request blocked — and nothing in the workflow files
-//! says so. Three properties are held here, each by a checker that returns its
+//! says so. Four properties are held here, each by a checker that returns its
 //! violations, and each checker is also driven against a mutated workflow to show
 //! it refuses the break it exists for:
 //!
@@ -11,8 +11,10 @@
 //! - `notignored.yml` is the review-comment workflow (pull_request trigger, least
 //!   privilege, fork guard, full history) and nothing required waits on it;
 //! - the `llmlint` job validates its config with no credential *before* the step
-//!   that calls the model, and that step still requires its credential.
-// llmlint: ignore-file[new_code_lands_in_a_project] This repository has no Nx project graph yet; adopting one (and placing this suite in a project) is the dependent `onejudge-nx` change, so there is no project for this file to land in today.
+//!   that calls the model, and that step still requires its credential;
+//! - the gate jobs take their tier from `scripts/ci-tier.mjs` over a full-history
+//!   checkout and hand it to the one gate recipe (`tests/ci_tier.rs` drives that
+//!   script with each event it routes).
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -39,6 +41,9 @@ const PULL_REQUEST_CONDITIONS: &[&str] = &[
 ];
 
 const NOTIGNORED_JOB: &str = "suppressions";
+/// The gate jobs, and the recipe each hands the selected tier to.
+const GATE_JOBS: &[(&str, &str)] = &[("check", "just check"), ("test-os", "just test-fast")];
+const TIER_SCRIPT: &str = "node scripts/ci-tier.mjs >> \"$GITHUB_OUTPUT\"";
 const LLMLINT_VALIDATE: &str = "just lint-llm-validate --diff-base origin/main";
 const LLMLINT_CREDENTIAL: &str = "CLAUDE_CODE_OAUTH_TOKEN";
 
@@ -279,6 +284,76 @@ fn llmlint_job_violations(doc: &Value) -> Vec<String> {
     violations
 }
 
+/// Why a gate job would not run the tier `scripts/ci-tier.mjs` selects, if it would
+/// not: it must check out full history (the merge base the affected tier is keyed
+/// off), record the script's output under a step id, and then run its recipe with
+/// that step's `base` as `NX_BASE` and its `flags` as the recipe's arguments.
+fn tier_routing_violations(doc: &Value) -> Vec<String> {
+    let mut violations = Vec::new();
+    for (id, recipe) in GATE_JOBS {
+        let steps = jobs(doc)
+            .get(*id)
+            .and_then(|job| job.get("steps"))
+            .and_then(Value::as_sequence)
+            .cloned()
+            .unwrap_or_default();
+        let position = |pred: &dyn Fn(&Value) -> bool| steps.iter().position(pred);
+        let checkout = position(&|step| {
+            text(step.get("uses")).is_some_and(|u| u.starts_with("actions/checkout@"))
+        });
+        if checkout
+            .and_then(|at| steps[at].get("with"))
+            .and_then(|with| with.get("fetch-depth"))
+            .and_then(Value::as_u64)
+            != Some(0)
+        {
+            violations.push(format!(
+                "`{id}` must check out full history (fetch-depth: 0)"
+            ));
+        }
+        let select = position(&|step| text(step.get("run")) == Some(TIER_SCRIPT));
+        let Some(select) = select else {
+            violations.push(format!("`{id}` never runs `{TIER_SCRIPT}`"));
+            continue;
+        };
+        let Some(step_id) = text(steps[select].get("id")) else {
+            violations.push(format!(
+                "`{id}`'s tier step has no `id` to read its output by"
+            ));
+            continue;
+        };
+        let run = position(&|step| text(step.get("run")).is_some_and(|run| run.contains(recipe)));
+        let Some(run) = run else {
+            violations.push(format!("`{id}` never runs `{recipe}`"));
+            continue;
+        };
+        if run < select {
+            violations.push(format!("`{id}` runs `{recipe}` before it selects the tier"));
+        }
+        let env = |key: &str| {
+            steps[run]
+                .get("env")
+                .and_then(|env| env.get(key))
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        };
+        for (key, output) in [("NX_BASE", "base"), ("FLAGS", "flags")] {
+            let expected = format!("${{{{ steps.{step_id}.outputs.{output} }}}}");
+            if env(key).as_deref() != Some(expected.as_str()) {
+                violations.push(format!("`{id}` must pass {key}: {expected} to `{recipe}`"));
+            }
+        }
+        if !text(steps[run].get("run"))
+            .is_some_and(|run| run.contains(&format!("{recipe} ${{FLAGS:+\"$FLAGS\"}}")))
+        {
+            violations.push(format!(
+                "`{id}` must run `{recipe}` with the selected flags"
+            ));
+        }
+    }
+    violations
+}
+
 fn set(doc: &mut Value, path: &[&str], value: Value) {
     let (last, parents) = path.split_last().expect("non-empty path");
     let mut node = doc;
@@ -475,5 +550,87 @@ fn the_llmlint_check_refuses_a_late_or_credentialed_validate_step() {
     assert!(
         violations.iter().any(|v| v.contains("must require")),
         "{violations:#?}"
+    );
+}
+
+#[test]
+fn the_gate_jobs_run_the_tier_the_routing_script_selects() {
+    let violations = tier_routing_violations(&workflow("ci.yml"));
+    assert!(violations.is_empty(), "{violations:#?}");
+}
+
+#[test]
+fn the_tier_routing_check_refuses_each_broken_property() {
+    let ci = workflow("ci.yml");
+    let steps = |doc: &Value, id: &str| -> Vec<Value> {
+        doc.get("jobs")
+            .and_then(|jobs| jobs.get(id))
+            .and_then(|job| job.get("steps"))
+            .and_then(Value::as_sequence)
+            .cloned()
+            .expect("steps")
+    };
+    let rewrite = |id: &str, edit: &dyn Fn(&mut Vec<Value>)| {
+        let mut doc = ci.clone();
+        let mut list = steps(&doc, id);
+        edit(&mut list);
+        set(&mut doc, &["jobs", id, "steps"], Value::Sequence(list));
+        tier_routing_violations(&doc)
+    };
+    let find = |list: &[Value], needle: &str| {
+        list.iter()
+            .position(|step| {
+                text(step.get("run")).is_some_and(|run| run.contains(needle))
+                    || text(step.get("uses")).is_some_and(|uses| uses.contains(needle))
+            })
+            .expect("step present")
+    };
+
+    let shallow = rewrite("check", &|list| {
+        let at = find(list, "actions/checkout@");
+        list[at].as_mapping_mut().unwrap().remove("with");
+    });
+    assert!(
+        shallow.iter().any(|v| v.contains("fetch-depth: 0")),
+        "{shallow:#?}"
+    );
+
+    let unrouted = rewrite("test-os", &|list| {
+        let at = find(list, "scripts/ci-tier.mjs");
+        list.remove(at);
+    });
+    assert!(
+        unrouted.iter().any(|v| v.contains("never runs")),
+        "{unrouted:#?}"
+    );
+
+    let unbased = rewrite("check", &|list| {
+        let at = find(list, "just check");
+        list[at].as_mapping_mut().unwrap().remove("env");
+    });
+    assert!(
+        unbased.iter().any(|v| v.contains("must pass NX_BASE")),
+        "{unbased:#?}"
+    );
+
+    let late = rewrite("check", &|list| {
+        let at = find(list, "scripts/ci-tier.mjs");
+        let step = list.remove(at);
+        list.push(step);
+    });
+    assert!(
+        late.iter().any(|v| v.contains("before it selects")),
+        "{late:#?}"
+    );
+
+    let flagless = rewrite("test-os", &|list| {
+        let at = find(list, "just test-fast");
+        set(&mut list[at], &["run"], Value::from("just test-fast"));
+    });
+    assert!(
+        flagless
+            .iter()
+            .any(|v| v.contains("with the selected flags")),
+        "{flagless:#?}"
     );
 }

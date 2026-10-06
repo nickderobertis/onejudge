@@ -55,7 +55,13 @@ fn find(dir: &Path, file_name: &str, found: &mut Vec<PathBuf>) {
         let name = entry.file_name();
         let name = name.to_string_lossy();
         if path.is_dir() {
-            if matches!(name.as_ref(), "target" | ".git" | "node_modules" | ".venv") {
+            // `python/dist` is where the SDK's packer stages a stamped copy of its
+            // manifest — build output, like `target`, that the gate's own wheel
+            // journey writes while this suite may be reading the tree.
+            if matches!(
+                name.as_ref(),
+                "target" | ".git" | "node_modules" | ".venv" | ".nx" | "dist"
+            ) {
                 continue;
             }
             find(&path, file_name, found);

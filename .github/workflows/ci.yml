@@ -1,6 +1,12 @@
 # Prove the artifact from a clean checkout: bootstrap the dev toolchain, then run
-# the full gate. The pinned toolchain comes from rust-toolchain.toml (rustup reads
-# it), so local and CI run the same compiler. See the create-repo skill's ci.md.
+# the gate at the tier this run is for. The pinned toolchain comes from
+# rust-toolchain.toml (rustup reads it), so local and CI run the same compiler.
+# See the create-repo skill's ci.md, "Staged gates".
+#
+# Tiers (scripts/ci-tier.mjs decides, from the event): pull requests and pushes to
+# main run the AFFECTED tier against an explicitly derived merge base; release-plz's
+# release pull request runs the BROADER tier, because releases are batched there
+# (AGENTS.md, "Commits, releases, and merging").
 
 name: ci
 
@@ -18,25 +24,41 @@ permissions:
   contents: read
 
 jobs:
-  # THE gate: format, lint, doc, coverage-enforced tests (incl. e2e), and the
-  # supply-chain audit. Linux-only, because the audit runs once (not per-OS).
+  # THE gate: format, lint, doc, the generated-contract checks, coverage-enforced
+  # tests (incl. e2e and the Python SDK) and the drift checks of every affected
+  # project; the release PR's broader sweep adds the supply-chain audit.
+  # Linux-only, because coverage and the audit run once (not per-OS).
   check:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # the merge base the affected tier is keyed off
       - name: Install pinned toolchain (from rust-toolchain.toml)
         run: rustup show
       - uses: extractions/setup-just@v3
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - uses: astral-sh/setup-uv@v6   # the Python SDK's projects run inside this gate
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-nextest,cargo-llvm-cov,cargo-deny,cargo-machete
       - name: Bootstrap
         run: just bootstrap
+      - name: Select the gate tier
+        id: tier
+        run: node scripts/ci-tier.mjs >> "$GITHUB_OUTPUT"
       - name: Check
-        run: just check
+        env:
+          NX_BASE: ${{ steps.tier.outputs.base }}
+          FLAGS: ${{ steps.tier.outputs.flags }}
+        run: |
+          [ -n "$NX_BASE" ] || unset NX_BASE
+          just check ${FLAGS:+"$FLAGS"}
 
-  # Keep the Python SDK's full gate separate from the deterministic Rust gate so
-  # its uv-managed toolchain is explicit and matches local `python-sdk-check`.
+  # The Python SDK's targets alone, as the SDK's own status (`just
+  # python-sdk-check`); the `check` job above runs the same targets inside the gate.
   python-sdk:
     runs-on: ubuntu-latest
     steps:
@@ -44,12 +66,16 @@ jobs:
       - name: Install pinned toolchain (from rust-toolchain.toml)
         run: rustup show
       - uses: extractions/setup-just@v3
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
       - uses: astral-sh/setup-uv@v6
       - name: Check Python SDK
         run: just python-sdk-check
 
-  # Portability: run the test suite (no coverage/audit) on macOS and Windows so
-  # the engine and its real-subprocess e2e are proven cross-platform.
+  # Portability: the affected Rust suites (no coverage/audit) on macOS and
+  # Windows, so the engine and its real-subprocess e2e are proven cross-platform —
+  # at the same tier, against the same base, as `check`.
   test-os:
     strategy:
       fail-fast: false
@@ -58,16 +84,31 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - name: Install pinned toolchain (from rust-toolchain.toml)
         run: rustup show
       - uses: extractions/setup-just@v3
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-nextest
+      - name: Select the gate tier
+        id: tier
+        shell: bash
+        run: node scripts/ci-tier.mjs >> "$GITHUB_OUTPUT"
       - name: Test
         # test-fast (plain nextest, no coverage): coverage is enforced once, on
         # the Linux `check` job; these prove the engine + e2e are cross-platform.
-        run: just test-fast
+        shell: bash
+        env:
+          NX_BASE: ${{ steps.tier.outputs.base }}
+          FLAGS: ${{ steps.tier.outputs.flags }}
+        run: |
+          [ -n "$NX_BASE" ] || unset NX_BASE
+          just test-fast ${FLAGS:+"$FLAGS"}
 
   # MSRV: the crate still builds on the declared minimum Rust (Cargo.toml
   # `rust-version`). A real, checked commitment, not just documentation.
@@ -78,6 +119,9 @@ jobs:
       - name: Install MSRV toolchain
         run: rustup toolchain install 1.89.0 --profile minimal
       - uses: extractions/setup-just@v3
+      - uses: oven-sh/setup-bun@v2   # `just msrv` runs `workspace:msrv` through Nx
+        with:
+          bun-version-file: package.json
       - run: just msrv
 
   # Prove the end-user install path: the publishable crate packages cleanly and
@@ -108,23 +152,6 @@ jobs:
         run: just build-cli
       - name: Smoke-test the binary
         run: ./target/release/onejudge schema >/dev/null
-
-  # Build the actual PyPI artifact and invoke its installed console command.
-  # This catches missing CLI features or wheel entry-point drift before release.
-  pypi-wheel:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install pinned toolchain (from rust-toolchain.toml)
-        run: rustup show
-      - uses: astral-sh/setup-uv@v6
-      - name: Build and install the wheel
-        run: |
-          uvx maturin build --release --locked --out dist
-          uv venv wheel-smoke
-          uv pip install --python wheel-smoke/bin/python dist/*.whl
-      - name: Smoke-test the packaged console command
-        run: wheel-smoke/bin/onejudge --help >/dev/null
 
   # LLM-judge tier (llmlint) — a blocking PR check, SEPARATE from `check`. It is
   # non-deterministic and needs an authenticated harness, so it never runs inside
@@ -179,6 +206,9 @@ jobs:
       - name: Install pinned toolchain (from rust-toolchain.toml)
         run: rustup show
       - uses: extractions/setup-just@v3
+      - uses: oven-sh/setup-bun@v2   # `just test-llmlint` runs `onejudge-llmlint-real:test` through Nx
+        with:
+          bun-version-file: package.json
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-nextest

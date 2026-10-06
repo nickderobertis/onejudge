@@ -219,14 +219,13 @@ _rust-build crate features=gate_features:
 _rust-test crate features=gate_features binaries="" ignored="default":
     #!/usr/bin/env bash
     set -euo pipefail
-    target_dir="$(./scripts/cargo-target-dir.sh)"
-    export ONEJUDGE_TEST_DOUBLES_DIR="$target_dir/debug"
     args=(--locked -p {{crate}} --run-ignored {{ignored}})
     features="{{features}}"
     [ -z "$features" ] || args+=(--features "$features")
     if [ "${ONEJUDGE_COVERAGE:-1}" = 0 ]; then
         exec cargo nextest run "${args[@]}"
     fi
+    export ONEJUDGE_TEST_DOUBLES_DIR="$(./scripts/cargo-target-dir.sh)/debug"
     binaries="{{binaries}}"
     [ -z "$binaries" ] || args+=(-p "$binaries" -E 'package({{crate}})')
     exec cargo llvm-cov nextest --no-report "${args[@]}"
@@ -234,7 +233,7 @@ _rust-test crate features=gate_features binaries="" ignored="default":
 # Empty the shared profile directory before any instrumented suite writes to it,
 # so the aggregate never merges a profile an earlier run left behind.
 _coverage-clean:
-    rm -f "$(./scripts/cargo-target-dir.sh)"/llvm-cov-target/*.profraw
+    [ "${ONEJUDGE_COVERAGE:-1}" = 0 ] || rm -f "$(./scripts/cargo-target-dir.sh)"/llvm-cov-target/*.profraw
 
 # The aggregate Rust coverage gate over every suite's profiles.
 #

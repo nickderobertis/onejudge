@@ -23,3 +23,5 @@ toml = { workspace = true }
 [dev-dependencies]
 # `tests/workflows.rs` holds the CI wiring to a parsed contract.
 serde_yaml_ng = { workspace = true }
+# `tests/ci_tier.rs` writes the GitHub event payloads it routes.
+serde_json = { workspace = true }
