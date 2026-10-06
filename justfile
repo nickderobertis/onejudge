@@ -280,11 +280,11 @@ _py-format dir:
     {{py_sdk}} ruff format {{dir}}
 
 _py-format-check dir:
-    {{py_sdk}} ruff format --check {{dir}}
+    {{py_sdk}} ruff format --check --no-cache {{dir}}
 
 _py-lint dir project:
     node scripts/check-project-boundaries.mjs {{project}}
-    {{py_sdk}} ruff check {{dir}}
+    {{py_sdk}} ruff check --no-cache {{dir}}
 
 _py-typecheck +paths:
     {{py_sdk}} mypy --config-file python/onejudge-sdk/pyproject.toml {{paths}}
