@@ -71,7 +71,7 @@ Built up from the `create-repo` skill's reference axes, not a single template.
 - **References composed:** base.md, shapes/library.md, shapes/cli.md,
   languages/rust.md, languages/python.md, intersections/rust-cli.md,
   project-graph.md, ci.md, llmlint.md, releasing.md
-<!-- llmlint: ignore-block[agents_md_durable_and_terse] the composition record has to describe the crates the tree is built from and record the published feature this tree no longer has, because it is what a later reader audits the composition against; nx.json and the manifests say what each project is, not which of them is the published contract or why the doubles left it. -->
+[//]: # "llmlint: ignore-block[agents_md_durable_and_terse] the composition record has to describe the crates the tree is built from and record the published feature this tree no longer has, because it is what a later reader audits the composition against; nx.json and the manifests say what each project is, not which of them is the published contract or why the doubles left it."
 - **Crates:** the published `onejudge` library + CLI is the one `type:contract`
   project and depends on nothing here; `onejudge-test-doubles` (unpublished)
   holds the doubles every suite spawns; each suite tier is a `publish = false`
@@ -80,7 +80,7 @@ Built up from the `create-repo` skill's reference axes, not a single template.
 - **The test doubles are never a feature of the published crate**, so its
   former `fake-provider` feature was removed (a breaking change; no consumer
   enabled it, and a suite in another package cannot reach a feature-gated bin).
-<!-- llmlint: ignore-end[agents_md_durable_and_terse] -->
+[//]: # "llmlint: ignore-end[agents_md_durable_and_terse]"
 - **Excluded, and why:** `src` layout / asdf / direnv — not idiomatic for a Cargo
   workspace whose toolchains pin themselves (`rust-toolchain.toml`, the
   `packageManager` bun pin, the SDK's uv environment).
@@ -89,7 +89,7 @@ Built up from the `create-repo` skill's reference axes, not a single template.
 
 Use the `just` recipes; do not hand-roll equivalents. `just --list` is the index.
 
-<!-- llmlint: ignore-block[agents_md_durable_and_terse] this section has always named the gate and its steps; it is kept true here rather than removed, and the one fact recipe comments cannot carry is which recipe is the gate and that its tier is a flag. -->
+[//]: # "llmlint: ignore-block[agents_md_durable_and_terse] this section has always named the gate and its steps; it is kept true here rather than removed, and the one fact recipe comments cannot carry is which recipe is the gate and that its tier is a flag."
 - `just bootstrap` — toolchains, cargo tools, the locked Nx install, `cargo fetch`.
 - `just check` (alias: `just gate`) — the gate, through Nx: by default the
   **affected tier** against `NX_BASE` (a plain ref or SHA) or the merge base with
@@ -99,7 +99,7 @@ Use the `just` recipes; do not hand-roll equivalents. `just --list` is the index
   individual steps; `just test-live` / `test-llmlint` / `test-release-targets` —
   the external tiers, out of `check`.
 - `just upgrade` — `cargo update` + `bun update`, then the sweep.
-<!-- llmlint: ignore-end[agents_md_durable_and_terse] -->
+[//]: # "llmlint: ignore-end[agents_md_durable_and_terse]"
 - `just lint-llm` / `just lint-llm-diff` — the llmlint LLM-judge tier, separate
   from `check` and non-deterministic; config in `llmlint.yml`. `just setup-llmlint`
   installs its toolchain.
