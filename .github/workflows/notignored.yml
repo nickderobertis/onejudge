@@ -1,6 +1,6 @@
 # Comment on each pull request with the lint/type-check suppressions it adds, so a
 # reviewer sees every bypass (rule, reason, link) without reading the diff line by
-# line. From the create-repo `notignored.yml.template`, comments condensed.
+# line. Kept in step with the create-repo skill's `notignored.yml.template`.
 #
 # Deliberately NOT a required status check: it skips fork pull requests (whose
 # read-only token cannot upsert a comment), and a required context that never
