@@ -392,18 +392,18 @@ fn the_required_context_check_refuses_a_skipped_or_missing_context() {
     set(
         &mut gated,
         &["jobs", "package", "needs"],
-        Value::from("python-sdk"),
+        Value::from("cli-binary"),
     );
     set(
         &mut gated,
-        &["jobs", "python-sdk", "if"],
+        &["jobs", "cli-binary", "if"],
         Value::from("github.event_name == 'push'"),
     );
     let violations = required_context_violations(&gated, REQUIRED_CONTEXTS);
     assert!(
         violations
             .iter()
-            .any(|v| v.contains("`package` depends on job `python-sdk`")),
+            .any(|v| v.contains("`package` depends on job `cli-binary`")),
         "{violations:#?}"
     );
 
