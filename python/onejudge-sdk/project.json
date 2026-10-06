@@ -1,0 +1,61 @@
+{
+  "name": "onejudge-python-sdk",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "//": "The typed async Python SDK, published to PyPI as `onejudge`. Its declarations are generated from the library's Rust wire types (`generate-check`), and its tests drive the real `onejudge` binary and the doubles, so it depends on both.",
+  "projectType": "library",
+  "sourceRoot": "python/onejudge-sdk/src",
+  "tags": [
+    "type:sdk",
+    "lang:python"
+  ],
+  "implicitDependencies": [
+    "onejudge",
+    "onejudge-test-doubles"
+  ],
+  "targets": {
+    "generate-check": {
+      "command": "just _py-generate-check"
+    },
+    "format": {
+      "command": "just _py-format python/onejudge-sdk"
+    },
+    "format-check": {
+      "command": "just _py-format-check python/onejudge-sdk"
+    },
+    "lint": {
+      "command": "just _py-lint python/onejudge-sdk onejudge-python-sdk",
+      "inputs": [
+        "default",
+        "^default",
+        "{workspaceRoot}/nx.json",
+        "{workspaceRoot}/scripts/check-project-boundaries.mjs"
+      ]
+    },
+    "typecheck": {
+      "command": "just _py-typecheck python/onejudge-sdk/src python/onejudge-sdk/scripts python/onejudge-sdk/test"
+    },
+    "test": {
+      "command": "just _py-test",
+      "dependsOn": [
+        {
+          "projects": [
+            "onejudge"
+          ],
+          "target": "build"
+        },
+        {
+          "projects": [
+            "onejudge-test-doubles"
+          ],
+          "target": "build"
+        }
+      ]
+    },
+    "coverage": {
+      "command": "just _py-coverage",
+      "dependsOn": [
+        "test"
+      ]
+    }
+  }
+}

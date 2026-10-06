@@ -1,0 +1,156 @@
+#!/usr/bin/env bash
+# Which tier the gate runs, against which base, over which projects — the
+# selection behind `just check` (and `just test` / `test-fast` / `lint` /
+# `format-check`, which narrow it). The recipe runs Nx; this decides what for.
+#
+#   scripts/gate-plan.sh [--sweep] [--targets a,b] [--projects p] [--print-plan]
+#
+# Prints shell assignments for the recipe to `eval` (every value validated or
+# produced by Nx/git, never echoed from input): GATE_TIER, GATE_BASE, GATE_TARGETS,
+# GATE_PROJECTS / GATE_EXCLUDE (the gate-eligible projects selected, and every
+# other project), GATE_EXTERNALS and GATE_STATIC. With `--print-plan` it prints
+# the plan for a reader instead, as `#` lines (what the CI routing and the
+# selection journeys read), and the recipe stops there.
+#
+# AFFECTED tier (default): the projects the diff from the merge base can reach,
+# as `nx show projects --affected` computes them. The base is explicit, never
+# Nx's implicit default:
+#   * NX_BASE, when set — a plain ref name or commit SHA, nothing else: anything
+#     else fails closed, naming NX_BASE, because it reaches git as a revision;
+#   * otherwise `git merge-base origin/main HEAD`.
+# It escalates to the broader tier, saying why, when no merge base can be derived
+# (a shallow or tag checkout without origin/main) or when the diff touches a file
+# no project owns — a root file is owned by the `workspace` project, which every
+# project builds or is checked against (the toolchain, the lockfiles, the
+# justfile, the docs and schemas the contract suites read, the CI), so a change
+# there is a change to every project.
+#
+# BROADER tier (`--sweep`): every gate-eligible project, plus the targets promoted
+# out of the affected tier (`audit`, which contacts the advisory database).
+#
+# Both tiers leave the external tiers (`onejudge-live`, `onejudge-llmlint-real`,
+# `onejudge-release-targets`) out of everything but their static targets
+# (GATE_STATIC: format-check, lint — their code is formatted and linted in the
+# gate as it always was): they contact a real harness, llmlint, or the public
+# registries, keep their `#[ignore]`, and run from their own recipes and workflows.
+set -euo pipefail
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+
+STATIC_TARGETS="format-check lint"
+EXTERNAL="onejudge-live,onejudge-llmlint-real,onejudge-release-targets"
+
+usage() {
+    sed -n '6p' "$0" | sed 's/^# *//' >&2
+    exit 2
+}
+
+tier=affected
+targets=""
+projects=""
+print_plan=false
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --sweep) tier=sweep ;;
+        --targets) targets="${2:?--targets needs a list}"; shift ;;
+        --targets=*) targets="${1#*=}" ;;
+        --projects) projects="${2:?--projects needs a value}"; shift ;;
+        --projects=*) projects="${1#*=}" ;;
+        --print-plan) print_plan=true ;;
+        *) echo "gate: unknown argument '$1'" >&2; usage ;;
+    esac
+    shift
+done
+
+# A plain ref name or a commit SHA: what `git check-ref-format` accepts as a
+# one-level-or-more name, starting with a letter or digit (so never an option),
+# with no revision syntax (`~`, `^`, `:`, `@{`, `..`) — or 7 to 64 hex digits.
+plain_revision() {
+    case "$1" in
+        *[!A-Za-z0-9._/-]* | -* | .* | */ | *..* | *.lock | '') return 1 ;;
+    esac
+    git check-ref-format --allow-onelevel "$1" >/dev/null 2>&1 ||
+        printf '%s' "$1" | grep -Eq '^[0-9a-f]{7,64}$'
+}
+
+base=""
+reason=""
+if [ "$tier" = affected ]; then
+    if [ -n "${NX_BASE+set}" ]; then
+        if ! plain_revision "$NX_BASE"; then
+            echo "gate: NX_BASE='$NX_BASE' is not a plain ref name or commit SHA; refusing to run (unset it to use the merge base with origin/main)" >&2
+            exit 2
+        fi
+        if ! base="$(git rev-parse --verify --quiet "$NX_BASE^{commit}")"; then
+            echo "gate: NX_BASE='$NX_BASE' names no commit in this checkout; fetch it, or unset NX_BASE to use the merge base with origin/main" >&2
+            exit 2
+        fi
+        reason="NX_BASE=$NX_BASE"
+    elif base="$(git merge-base origin/main HEAD 2>/dev/null)"; then
+        reason="merge base with origin/main"
+    else
+        echo "gate: no merge base with origin/main in this checkout (shallow, or origin/main not fetched), so the broader tier runs instead" >&2
+        tier=sweep
+        reason="no merge base with origin/main"
+    fi
+fi
+
+if [ "$tier" = affected ]; then
+    # Every project's root but the workspace's own (`.`), to find a changed file
+    # that only the root project owns.
+    roots="$(git ls-files --cached --others --exclude-standard -- '*project.json' |
+        sed -n 's|/project\.json$||p')"
+    while IFS= read -r path; do
+        [ -n "$path" ] || continue
+        owned=false
+        while IFS= read -r project_root; do
+            case "$path" in "$project_root"/*) owned=true; break ;; esac
+        done <<<"$roots"
+        if [ "$owned" = false ]; then
+            echo "gate: $path belongs to the workspace root, which every project builds or is checked against, so the broader tier runs" >&2
+            tier=sweep
+            reason="$path is a workspace-root file"
+            break
+        fi
+    done < <({ git diff --name-only "$base"; git ls-files --others --exclude-standard; } | sort -u)
+fi
+
+listed() { NX_SHOW_OUTPUT=1 ./scripts/nx show projects "$@" | tr -d '[]"' | tr ',' '\n' | sed '/^$/d' | sort; }
+lines() { tr ', ' '\n\n' | sed '/^$/d' | sort -u; }
+joined() { paste -sd"$1" -; }
+
+everything="$(listed --json)"
+if [ "$tier" = affected ]; then
+    selected="$(listed --affected --base="$base" --json)"
+else
+    selected="$everything"
+fi
+if [ -n "$projects" ]; then
+    selected="$(comm -12 <(printf '%s\n' "$selected") <(listed --projects="$projects" --json))"
+fi
+external="$(lines <<<"$EXTERNAL")"
+eligible="$(comm -23 <(printf '%s\n' "$selected" | sed '/^$/d') <(printf '%s\n' "$external"))"
+externals="$(comm -12 <(printf '%s\n' "$selected" | sed '/^$/d') <(printf '%s\n' "$external"))"
+excluded="$(comm -23 <(printf '%s\n' "$everything") <(printf '%s\n' "$eligible" | sed '/^$/d'))"
+target_list="$(lines <<<"$targets" | joined ' ')"
+static=""
+if [ -n "$targets" ]; then
+    static="$(comm -12 <(lines <<<"$targets") <(lines <<<"$STATIC_TARGETS") | joined ' ')"
+else
+    static="$STATIC_TARGETS"
+fi
+
+if [ "$print_plan" = true ]; then
+    if [ "$tier" = affected ]; then
+        echo "# tier: affected (base $base, from $reason)"
+    else
+        echo "# tier: sweep${reason:+ (escalated from the affected tier: $reason)}"
+    fi
+    echo "# projects: $(joined ' ' <<<"$eligible")"
+    echo "# external tiers, static targets only: $(joined ' ' <<<"$externals")"
+    echo "GATE_PRINT_ONLY=1"
+    exit 0
+fi
+echo "gate: tier=$tier${reason:+ ($reason${base:+, base $base})}; projects: $(joined ' ' <<<"$eligible")" >&2
+printf 'GATE_TIER=%s\nGATE_BASE=%s\nGATE_TARGETS=%q\nGATE_PROJECTS=%s\nGATE_EXCLUDE=%s\nGATE_EXTERNALS=%s\nGATE_STATIC=%q\n' \
+    "$tier" "$base" "$target_list" "$(joined , <<<"$eligible")" "$(joined , <<<"$excluded")" \
+    "$(joined , <<<"$externals")" "$static"

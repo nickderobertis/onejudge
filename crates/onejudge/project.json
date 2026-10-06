@@ -1,0 +1,56 @@
+{
+  "name": "onejudge",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "//": "The published library and its `onejudge` CLI binary: the Report and command-provider JSON-lines wire contracts other repositories read. Its own tests are the unit tests and the contract and drift suites; every suite that spawns a process lives in a project of its own, so nothing here depends on its consumers.",
+  "projectType": "library",
+  "sourceRoot": "crates/onejudge/src",
+  "tags": [
+    "type:contract",
+    "lang:rust"
+  ],
+  "implicitDependencies": [],
+  "targets": {
+    "format": {
+      "command": "just _rust-format onejudge"
+    },
+    "format-check": {
+      "command": "just _rust-format-check onejudge"
+    },
+    "lint": {
+      "executor": "nx:run-commands",
+      "options": {
+        "commands": [
+          "just _rust-lint onejudge",
+          "just _check-generated-schemas"
+        ],
+        "parallel": false
+      },
+      "inputs": [
+        "default",
+        "^default",
+        "{workspaceRoot}/nx.json",
+        "{workspaceRoot}/scripts/check-project-boundaries.mjs",
+        "{workspaceRoot}/schemas/*",
+        "{workspaceRoot}/scripts/check-judge-seat-frames.sh"
+      ]
+    },
+    "doc": {
+      "command": "just _doc"
+    },
+    "build": {
+      "command": "just _rust-build onejudge"
+    },
+    "test": {
+      "command": "just _rust-test onejudge",
+      "dependsOn": [
+        {
+          "projects": [
+            "workspace"
+          ],
+          "target": "coverage-clean"
+        }
+      ],
+      "parallelism": false
+    }
+  }
+}

@@ -1,0 +1,53 @@
+{
+  "name": "onejudge-python-sdk-e2e",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "//": "The installed-wheel journey: the SDK wheel built, installed into a fresh venv and driving the real `onejudge` binary through its public import.",
+  "projectType": "application",
+  "sourceRoot": "python/onejudge-sdk-e2e",
+  "tags": [
+    "type:e2e",
+    "lang:python"
+  ],
+  "implicitDependencies": [
+    "onejudge-python-sdk",
+    "onejudge",
+    "onejudge-test-doubles"
+  ],
+  "targets": {
+    "format": {
+      "command": "just _py-format python/onejudge-sdk-e2e"
+    },
+    "format-check": {
+      "command": "just _py-format-check python/onejudge-sdk-e2e"
+    },
+    "lint": {
+      "command": "just _py-lint python/onejudge-sdk-e2e onejudge-python-sdk-e2e",
+      "inputs": [
+        "default",
+        "^default",
+        "{workspaceRoot}/nx.json",
+        "{workspaceRoot}/scripts/check-project-boundaries.mjs"
+      ]
+    },
+    "typecheck": {
+      "command": "just _py-typecheck python/onejudge-sdk-e2e"
+    },
+    "test": {
+      "command": "just _py-package-e2e",
+      "dependsOn": [
+        {
+          "projects": [
+            "onejudge"
+          ],
+          "target": "build"
+        },
+        {
+          "projects": [
+            "onejudge-test-doubles"
+          ],
+          "target": "build"
+        }
+      ]
+    }
+  }
+}

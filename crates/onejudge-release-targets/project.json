@@ -1,0 +1,35 @@
+{
+  "name": "onejudge-release-targets",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "//": "External tier: what the public registries serve for every declared release target, and whether the canonical schema moved upstream. Out of the gate; #[ignore]-d, runs via `just test-release-targets` and the `release-targets` workflow. Nothing may depend on it.",
+  "projectType": "application",
+  "sourceRoot": "crates/onejudge-release-targets/tests",
+  "tags": [
+    "type:external",
+    "lang:rust"
+  ],
+  "implicitDependencies": [
+    "onejudge-repo"
+  ],
+  "targets": {
+    "format": {
+      "command": "just _rust-format onejudge-release-targets"
+    },
+    "format-check": {
+      "command": "just _rust-format-check onejudge-release-targets"
+    },
+    "lint": {
+      "command": "just _rust-lint onejudge-release-targets ''",
+      "inputs": [
+        "default",
+        "^default",
+        "{workspaceRoot}/nx.json",
+        "{workspaceRoot}/scripts/check-project-boundaries.mjs"
+      ]
+    },
+    "test": {
+      "command": "ONEJUDGE_COVERAGE=0 just _rust-test onejudge-release-targets '' '' only",
+      "parallelism": false
+    }
+  }
+}

@@ -1,0 +1,35 @@
+{
+  "name": "onejudge-live",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "//": "External tier: a REAL oneharness and an authenticated harness. Out of the gate (scripts/gate-plan.sh leaves it out); every test is #[ignore]-d and runs via `just test-live` and the credentialed `live` workflow. Nothing may depend on it.",
+  "projectType": "application",
+  "sourceRoot": "crates/onejudge-live/tests",
+  "tags": [
+    "type:external",
+    "lang:rust"
+  ],
+  "implicitDependencies": [
+    "onejudge"
+  ],
+  "targets": {
+    "format": {
+      "command": "just _rust-format onejudge-live"
+    },
+    "format-check": {
+      "command": "just _rust-format-check onejudge-live"
+    },
+    "lint": {
+      "command": "just _rust-lint onejudge-live",
+      "inputs": [
+        "default",
+        "^default",
+        "{workspaceRoot}/nx.json",
+        "{workspaceRoot}/scripts/check-project-boundaries.mjs"
+      ]
+    },
+    "test": {
+      "command": "ONEJUDGE_COVERAGE=0 just _rust-test onejudge-live onejudge/sdk-schema '' all",
+      "parallelism": false
+    }
+  }
+}

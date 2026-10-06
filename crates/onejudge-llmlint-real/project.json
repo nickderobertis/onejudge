@@ -1,0 +1,50 @@
+{
+  "name": "onejudge-llmlint-real",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "//": "External tier: the built CLI against the RELEASED llmlint. Out of the gate; #[ignore]-d, runs via `just test-llmlint` and the `llmlint-real` CI job. Nothing may depend on it.",
+  "projectType": "application",
+  "sourceRoot": "crates/onejudge-llmlint-real/tests",
+  "tags": [
+    "type:external",
+    "lang:rust"
+  ],
+  "implicitDependencies": [
+    "onejudge",
+    "onejudge-test-doubles"
+  ],
+  "targets": {
+    "format": {
+      "command": "just _rust-format onejudge-llmlint-real"
+    },
+    "format-check": {
+      "command": "just _rust-format-check onejudge-llmlint-real"
+    },
+    "lint": {
+      "command": "just _rust-lint onejudge-llmlint-real",
+      "inputs": [
+        "default",
+        "^default",
+        "{workspaceRoot}/nx.json",
+        "{workspaceRoot}/scripts/check-project-boundaries.mjs"
+      ]
+    },
+    "test": {
+      "command": "PATH=\"$HOME/.local/bin:$PATH\" ONEJUDGE_COVERAGE=0 just _rust-test onejudge-llmlint-real onejudge/sdk-schema '' all",
+      "dependsOn": [
+        {
+          "projects": [
+            "onejudge"
+          ],
+          "target": "build"
+        },
+        {
+          "projects": [
+            "onejudge-test-doubles"
+          ],
+          "target": "build"
+        }
+      ],
+      "parallelism": false
+    }
+  }
+}

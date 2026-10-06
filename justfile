@@ -1,73 +1,101 @@
 # Canonical command surface for onejudge. `just --list` is the index.
 #
-# `just bootstrap` must work from a clean clone; `just check` is the full quality
-# gate and fails on any issue (no warnings-only mode). The gate is deterministic
-# and offline: the model is faked by real subprocess test doubles, never mocked.
+# `just bootstrap` must work from a clean clone; `just check` is the quality gate
+# and fails on any issue (no warnings-only mode). The gate is deterministic and
+# offline: the model is faked by real subprocess test doubles, never mocked.
+#
+# Every gate recipe delegates to the Nx project graph (`nx.json`, one
+# `project.json` per project) through `scripts/nx`; the `_`-prefixed recipes at
+# the bottom are what each project's targets run. See AGENTS.md "Command surface".
 
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
+# The line-coverage floor, enforced once over the union of every Rust suite's
+# profiles (`workspace:coverage`). The Python SDK's floor is its own
+# `fail_under` in python/onejudge-sdk/pyproject.toml.
 coverage_min := "95"
+
+# The `onejudge` feature set every Rust target that links it builds against: the
+# CLI and the schema export, so both public export surfaces stay gated, and one
+# feature set everywhere, so every suite links the same instrumented library and
+# the aggregate coverage report merges one build of each function.
+gate_features := "onejudge/sdk-schema"
+
+# `uv` and `llmlint` install into ~/.local/bin, which a CI runner's PATH may not
+# carry; appended, so anything already on PATH still wins.
+export PATH := if os_family() == "windows" { env("PATH") } else { env("PATH") + ":" + home_directory() + "/.local/bin" }
+
+# What the coverage report measures: the published library's source, never its
+# thin `onejudge` entrypoint or the test doubles' crate.
+coverage_ignore := "(src/bin/|crates/onejudge-test-doubles/)"
+
+# The Python SDK's pinned tool environment.
+py_sdk := "uv run --no-project --python 3.9 --with-requirements python/onejudge-sdk/requirements-dev.txt"
 
 # List available recipes.
 default:
     @just --list
 
-# Set up from a clean clone: pinned toolchain, cargo tools, fetched deps.
+# Set up from a clean clone: pinned toolchain, cargo tools, the Nx install, fetched deps.
 bootstrap:
     rustup show active-toolchain >/dev/null   # installs the rust-toolchain.toml channel + components
     for t in cargo-nextest cargo-llvm-cov cargo-deny cargo-machete; do \
         command -v "$t" >/dev/null 2>&1 || cargo install "$t" --locked; \
     done
+    ./scripts/node-modules.sh                 # bun (pinned in package.json) + the locked Nx install
+    command -v uv >/dev/null 2>&1 || { curl -LsSf https://astral.sh/uv/install.sh | sh; }
     cargo fetch --locked
 
-# Full quality gate: format, lint, doc, coverage-enforced tests, audit, and the
-# release-target drift gate.
-check: format-check lint doc test audit check-release-targets check-python-sdk-release-trigger check-judge-seat-frames check-note-schema
+# The quality gate. Default: the AFFECTED tier — every gate target of the projects
+# the diff from the merge base can reach (base: NX_BASE, a ref name or commit SHA,
+# else `git merge-base origin/main HEAD`). `--sweep`: the BROADER tier — every
+# gate-eligible project plus the targets promoted out of the affected tier.
+# `--targets a,b` / `--projects p` narrow it; `--print-plan` only prints what
+# would run. scripts/gate-plan.sh decides the tier, base and projects.
+check *flags:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    plan="$(./scripts/gate-plan.sh {{flags}})"
+    eval "$plan"
+    if [ -n "${GATE_PRINT_ONLY:-}" ]; then printf '%s\n' "$plan" | sed -n 's/^# //p'; exit 0; fi
+    if [ -n "$GATE_PROJECTS" ] && [ "$GATE_TIER" = affected ]; then
+        ./scripts/nx affected --base="$GATE_BASE" --exclude="$GATE_EXCLUDE" --outputStyle=static \
+            -t ${GATE_TARGETS:-format-check lint typecheck generate-check doc build test coverage}
+    elif [ -n "$GATE_PROJECTS" ]; then
+        ./scripts/nx run-many --projects="$GATE_PROJECTS" --outputStyle=static \
+            -t ${GATE_TARGETS:-format-check lint typecheck generate-check doc build test coverage audit}
+    fi
+    if [ -n "$GATE_EXTERNALS" ] && [ -n "$GATE_STATIC" ]; then
+        ./scripts/nx run-many --projects="$GATE_EXTERNALS" --outputStyle=static -t $GATE_STATIC
+    fi
 
 # `just gate` is the same gate under the name callers outside this repo use for
 # it. An alias, not a second recipe, so the two can never drift apart.
 alias gate := check
 
-# The deterministic gate enables the test doubles, CLI, and SDK schema export,
-# never `--all-features`. Every model call goes through oneharness; the gate
-# fakes only the model via real subprocess doubles. Coverage excludes src/bin/.
+# The coverage-enforced suites: every `test` target (Rust instrumented) and the
+# `coverage` aggregates, at the tier `check` would pick.
+test *flags:
+    just check --targets test,coverage {{flags}}
 
-# The offline gate's feature set: the e2e test doubles PLUS the standalone `cli`
-# binary and schema generator, so both public export surfaces remain gated.
-gate_features := "fake-provider,cli,sdk-schema"
-
-# Gate test step: whole suite (unit + integration + e2e + cli), coverage enforced.
-#
-# `--failure-mode all` is load-bearing, not laxity. The suite kills instrumented
-# processes on purpose, and a child killed while the profiling runtime is still
-# flushing leaves a truncated `.profraw` in the merge set. `llvm-profdata`
-# defaults to `any`, where that one file aborts the merge of every other profile
-# in the run and the step fails as if a test had — which is how the v0.5.0
-# release chain died with 310/310 green and published nothing. `all` fails only
-# when *every* profile is unmergeable, so a genuinely broken merge still stops
-# the gate, and `--fail-under-lines` below still catches any real coverage loss.
-# tests/coverage.rs plants that artifact, so every gate run proves this.
-test:
-    cargo llvm-cov nextest --features {{gate_features}} --ignore-filename-regex 'src/bin/' \
-        --failure-mode all --fail-under-lines {{coverage_min}}
-
-# Quick inner loop: the suite with no coverage instrumentation.
-test-fast:
-    cargo nextest run --features {{gate_features}}
+# Quick inner loop: the Rust suites with no coverage instrumentation, at the tier
+# `check` would pick. Also what the macOS and Windows CI jobs run.
+test-fast *flags:
+    ONEJUDGE_COVERAGE=0 just check --targets test --projects 'tag:lang:rust' {{flags}}
 
 # The end-to-end suites alone (real subprocess boundary, test-double binaries).
 test-e2e:
-    cargo nextest run --features {{gate_features}} --test e2e --test cli --test notes
+    ONEJUDGE_COVERAGE=0 ./scripts/nx run-many -t test -p onejudge-e2e,onejudge-cli-e2e
 
 # Opt-in live tier: drive a REAL oneharness + harness (never in `check`). See docs/live-tier.md.
 test-live:
-    cargo nextest run --features fake-provider --test live --run-ignored all
+    ./scripts/nx run onejudge-live:test
 
 # Opt-in real-llmlint tier: the CLI's llmlint judge over the RELEASED llmlint (no
 # model, no credential — its rules match nothing), read back through
 # `llmlint history`. Needs llmlint on PATH at the floor: `just setup-llmlint`.
 test-llmlint:
-    PATH="$HOME/.local/bin:$PATH" cargo nextest run --features {{gate_features}} --test llmlint_real --run-ignored all
+    ./scripts/nx run onejudge-llmlint-real:test
 
 # Drives `scripts/release-probe.sh` against the REAL public registries (no
 # credential, just network) for every target `release-targets.toml` declares, and
@@ -75,7 +103,7 @@ test-llmlint:
 # with the one implementation that defines it (nickderobertis/onevcs).
 # Opt-in network tier: the answers that need a network, never in offline `check`.
 test-release-targets:
-    cargo nextest run --features {{gate_features}} --test release_targets --run-ignored all
+    ./scripts/nx run onejudge-release-targets:test
 
 # Build the shipped `onejudge` CLI binary — the artifact the `cli-binary` PR job
 # smoke-tests and `release-binaries.yml` packages. Optional `target`
@@ -83,45 +111,46 @@ test-release-targets:
 build-cli target="":
     cargo build --release --locked --features cli --bin onejudge {{ if target == "" { "" } else { "--target " + target } }}
 
-# Lint: clippy across every target, warnings denied (gate feature set).
-lint:
-    cargo clippy --all-targets --features {{gate_features}} -- -D warnings
+# Lint every affected project: clippy (warnings denied), ruff, the project
+# boundaries, and the generated-schema drift checks.
+lint *flags:
+    just check --targets lint {{flags}}
 
 # Format the codebase in place.
 format:
-    cargo fmt --all
+    ./scripts/nx run-many -t format
 
-# Fail if anything is unformatted (used by the gate).
-format-check:
-    cargo fmt --all --check
+# Fail if anything affected is unformatted.
+format-check *flags:
+    just check --targets format-check {{flags}}
 
 # Build the docs as a gate: broken intra-doc links and doc warnings fail.
 doc:
-    RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --features {{gate_features}}
+    ./scripts/nx run onejudge:doc
 
 # Supply-chain audit: advisories + license policy and unused dependencies.
 audit:
-    cargo deny check
-    cargo machete
+    ./scripts/nx run workspace:audit
 
 # Drift gate: every target install.sh downloads is built by release-binaries.yml
 # (deterministic, offline). Keeps the shipped-archive naming in one enforced place.
 check-release-targets:
-    ./scripts/check-release-targets.sh
+    ./scripts/nx run workspace:lint
 
 # Prove SDK-only conventional commits are attributed to the release-plz package.
 check-python-sdk-release-trigger:
-    ./scripts/check-python-sdk-release-trigger.sh
+    ./scripts/nx run workspace:test
 
 # Check the crate still builds on the declared MSRV (needs 1.89.0 installed),
 # denying warnings like every other gate step: a floor-only diagnostic fails here.
 msrv:
-    RUSTFLAGS="-D warnings" cargo +1.89.0 check --locked --all-targets --features fake-provider
+    ./scripts/nx run workspace:msrv
 
-# Upgrade dependencies, then re-run the full gate; commit the refreshed lockfile.
+# Upgrade dependencies, then re-run the broader gate; commit the refreshed lockfile.
 upgrade:
     cargo update
-    @just check
+    bun update
+    @just check --sweep
 
 # Install/refresh the llmlint toolchain (oneharness + llmlint). Idempotent.
 setup-llmlint:
@@ -142,38 +171,145 @@ lint-llm-validate *args:
 
 # Regenerate Python declarations and runtime schemas from Rust wire types.
 python-sdk-generate:
-    uv run --no-project --python 3.9 --with-requirements python/onejudge-sdk/requirements-dev.txt python python/onejudge-sdk/scripts/generate.py
+    {{py_sdk}} python python/onejudge-sdk/scripts/generate.py
 
 # Verify the committed schema-link bundle is generated from the frame types.
 check-judge-seat-frames:
-    ./scripts/check-judge-seat-frames.sh
+    ./scripts/nx run onejudge:lint
 
 # Verify the committed note bundle is generated from `note::Note` itself.
 check-note-schema:
-    cargo run -q -p onejudge --features sdk-schema --example generate_note_schema -- --check
+    ./scripts/nx run onejudge:lint
 
-# Strict Python SDK gate: generated-contract drift, lint, types, coverage, and
-# an installed-wheel smoke test through the real onejudge subprocess.
+# Strict Python SDK gate: generated-contract drift, ruff format + lint, mypy,
+# coverage, and the installed-wheel journey through the real onejudge subprocess.
 python-sdk-check:
+    ./scripts/nx run-many -t generate-check format-check lint typecheck test coverage -p onejudge-python-sdk,onejudge-python-sdk-e2e
+
+# Show the project graph (`--file=graph.html` writes it out).
+graph *args:
+    NX_SHOW_OUTPUT=1 ./scripts/nx graph {{args}}
+
+# --- Project targets: what each project.json's targets run. ------------------
+# `features` is the `--features` list a crate builds with: the gate's feature set
+# for every crate that links `onejudge`, empty for the two that do not.
+
+_rust-format crate:
+    cargo fmt -p {{crate}}
+
+_rust-format-check crate:
+    cargo fmt -p {{crate}} --check
+
+# Clippy with warnings denied, then the crate's place in the project graph.
+_rust-lint crate features=gate_features:
+    cargo clippy --locked -p {{crate}} --all-targets {{ if features == "" { "" } else { "--features " + features } }} -- -D warnings
+    node scripts/check-project-boundaries.mjs {{crate}}
+
+_rust-build crate features=gate_features:
+    cargo build --locked -p {{crate}} --bins {{ if features == "" { "" } else { "--features " + features } }}
+
+# A Rust crate's `test`. Instrumented by default: its profiles land in the shared
+# `target/llvm-cov-target` directory for `workspace:coverage` to merge, and it
+# drives the uninstrumented doubles `onejudge-test-doubles:build` built.
+# `ONEJUDGE_COVERAGE=0` runs it plain (`just test-fast`, the macOS/Windows jobs,
+# the external tiers). `binaries` names a package whose bins the suite spawns and
+# which, under coverage, is built instrumented beside it — the `onejudge` CLI, so
+# the lines it runs in a subprocess still count. `ignored` is nextest's
+# `--run-ignored`, which only the external tiers change.
+_rust-test crate features=gate_features binaries="" ignored="default":
     #!/usr/bin/env bash
     set -euo pipefail
-    log=$(mktemp)
-    trap 'rm -f "$log"' EXIT
-    if ! (
-        set -euo pipefail
-        command -v uv >/dev/null 2>&1 || { echo "uv not installed: https://docs.astral.sh/uv/getting-started/installation/" >&2; exit 1; }
-        cargo build --locked --features {{gate_features}} --bins
-        run=(uv run --no-project --python 3.9 --with-requirements python/onejudge-sdk/requirements-dev.txt)
-        "${run[@]}" python python/onejudge-sdk/scripts/generate.py --check
-        "${run[@]}" ruff format --check python/onejudge-sdk
-        "${run[@]}" ruff check python/onejudge-sdk
-        "${run[@]}" mypy --config-file python/onejudge-sdk/pyproject.toml python/onejudge-sdk/src python/onejudge-sdk/scripts python/onejudge-sdk/test
-        rm -f target/python-sdk.coverage
-        COVERAGE_FILE=target/python-sdk.coverage PYTHONPATH=python/onejudge-sdk/src "${run[@]}" coverage run --rcfile=python/onejudge-sdk/pyproject.toml -m unittest discover -s python/onejudge-sdk/test -p 'test_*.py'
-        COVERAGE_FILE=target/python-sdk.coverage "${run[@]}" coverage report --rcfile=python/onejudge-sdk/pyproject.toml
-        "${run[@]}" python python/onejudge-sdk/test/package_e2e.py
-    ) >"$log" 2>&1; then
-        cat "$log" >&2
-        exit 1
+    target_dir="$(./scripts/cargo-target-dir.sh)"
+    export ONEJUDGE_TEST_DOUBLES_DIR="$target_dir/debug"
+    args=(--locked -p {{crate}} --run-ignored {{ignored}})
+    features="{{features}}"
+    [ -z "$features" ] || args+=(--features "$features")
+    if [ "${ONEJUDGE_COVERAGE:-1}" = 0 ]; then
+        exec cargo nextest run "${args[@]}"
     fi
-    echo "python-sdk-check: ok"
+    binaries="{{binaries}}"
+    [ -z "$binaries" ] || args+=(-p "$binaries" -E 'package({{crate}})')
+    exec cargo llvm-cov nextest --no-report "${args[@]}"
+
+# Empty the shared profile directory before any instrumented suite writes to it,
+# so the aggregate never merges a profile an earlier run left behind.
+_coverage-clean:
+    rm -f "$(./scripts/cargo-target-dir.sh)"/llvm-cov-target/*.profraw
+
+# The aggregate Rust coverage gate over every suite's profiles.
+#
+# `--failure-mode all` is load-bearing, not laxity. The suites kill instrumented
+# processes on purpose, and a child killed while the profiling runtime is still
+# flushing leaves a truncated `.profraw` in the merge set. `llvm-profdata`
+# defaults to `any`, where that one file aborts the merge of every other profile
+# in the run and the step fails as if a test had — which is how the v0.5.0
+# release chain died with 310/310 green and published nothing. `all` fails only
+# when *every* profile is unmergeable, so a genuinely broken merge still stops
+# the gate, and `--fail-under-lines` below still catches any real coverage loss.
+# crates/onejudge/tests/coverage.rs plants that artifact, so every gate run
+# proves this.
+_coverage:
+    cargo llvm-cov report --ignore-filename-regex '{{coverage_ignore}}' \
+        --failure-mode all --fail-under-lines {{coverage_min}} --summary-only
+
+_audit:
+    cargo deny check
+    cargo machete
+
+# The MSRV build of what a consumer compiles — the library and its doubles,
+# every target — as the crate built it before the doubles moved out.
+_msrv:
+    RUSTFLAGS="-D warnings" cargo +1.89.0 check --locked -p onejudge -p onejudge-test-doubles --all-targets
+
+_check-release-targets:
+    ./scripts/check-release-targets.sh
+
+_check-python-sdk-release-trigger:
+    ./scripts/check-python-sdk-release-trigger.sh
+
+# The library's generated-schema drift checks, run under `onejudge:lint`.
+_check-generated-schemas:
+    ./scripts/check-judge-seat-frames.sh
+    cargo run -q --locked -p onejudge --features sdk-schema --example generate_note_schema -- --check
+
+_doc:
+    RUSTDOCFLAGS="-D warnings" cargo doc --locked --no-deps -p onejudge --features sdk-schema
+
+# The Python SDK's targets, from the repository root in its pinned environment.
+_py-generate-check:
+    {{py_sdk}} python python/onejudge-sdk/scripts/generate.py --check
+
+_py-format dir:
+    {{py_sdk}} ruff format {{dir}}
+
+_py-format-check dir:
+    {{py_sdk}} ruff format --check {{dir}}
+
+_py-lint dir project:
+    {{py_sdk}} ruff check {{dir}}
+    node scripts/check-project-boundaries.mjs {{project}}
+
+_py-typecheck +paths:
+    {{py_sdk}} mypy --config-file python/onejudge-sdk/pyproject.toml {{paths}}
+
+_py-test:
+    rm -f target/python-sdk.coverage
+    COVERAGE_FILE=target/python-sdk.coverage PYTHONPATH=python/onejudge-sdk/src {{py_sdk}} coverage run --rcfile=python/onejudge-sdk/pyproject.toml -m unittest discover -s python/onejudge-sdk/test -p 'test_*.py'
+
+_py-coverage:
+    COVERAGE_FILE=target/python-sdk.coverage {{py_sdk}} coverage report --rcfile=python/onejudge-sdk/pyproject.toml
+
+_py-package-e2e:
+    {{py_sdk}} python python/onejudge-sdk-e2e/package_e2e.py
+
+# The PyPI CLI wheel (maturin, the root pyproject.toml): build it, then install it
+# into a fresh venv and run the packaged console command.
+_pypi-build:
+    rm -rf target/pypi-wheel
+    uvx maturin build --release --locked --out target/pypi-wheel
+
+_pypi-test:
+    rm -rf target/pypi-wheel/smoke
+    uv venv --quiet target/pypi-wheel/smoke
+    uv pip install --quiet --python target/pypi-wheel/smoke/bin/python target/pypi-wheel/*.whl
+    target/pypi-wheel/smoke/bin/onejudge --help >/dev/null

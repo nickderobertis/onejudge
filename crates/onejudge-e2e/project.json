@@ -1,0 +1,50 @@
+{
+  "name": "onejudge-e2e",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "//": "The engine's end-to-end journeys across a real subprocess boundary against the doubles. Depends on what it tests and nothing else, so only a change to the library or the doubles reaches it.",
+  "projectType": "application",
+  "sourceRoot": "crates/onejudge-e2e/tests",
+  "tags": [
+    "type:e2e",
+    "lang:rust"
+  ],
+  "implicitDependencies": [
+    "onejudge",
+    "onejudge-test-doubles"
+  ],
+  "targets": {
+    "format": {
+      "command": "just _rust-format onejudge-e2e"
+    },
+    "format-check": {
+      "command": "just _rust-format-check onejudge-e2e"
+    },
+    "lint": {
+      "command": "just _rust-lint onejudge-e2e",
+      "inputs": [
+        "default",
+        "^default",
+        "{workspaceRoot}/nx.json",
+        "{workspaceRoot}/scripts/check-project-boundaries.mjs"
+      ]
+    },
+    "test": {
+      "command": "just _rust-test onejudge-e2e",
+      "dependsOn": [
+        {
+          "projects": [
+            "onejudge-test-doubles"
+          ],
+          "target": "build"
+        },
+        {
+          "projects": [
+            "workspace"
+          ],
+          "target": "coverage-clean"
+        }
+      ],
+      "parallelism": false
+    }
+  }
+}

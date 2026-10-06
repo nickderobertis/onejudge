@@ -1,0 +1,56 @@
+{
+  "name": "onejudge-cli-e2e",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "//": "The `onejudge` CLI's journeys: the run driver in process and the built binary as a subprocess, held to the golden replay fixtures. Its `test` depends on the CLI build and the doubles' build.",
+  "projectType": "application",
+  "sourceRoot": "crates/onejudge-cli-e2e/tests",
+  "tags": [
+    "type:e2e",
+    "lang:rust"
+  ],
+  "implicitDependencies": [
+    "onejudge",
+    "onejudge-test-doubles"
+  ],
+  "targets": {
+    "format": {
+      "command": "just _rust-format onejudge-cli-e2e"
+    },
+    "format-check": {
+      "command": "just _rust-format-check onejudge-cli-e2e"
+    },
+    "lint": {
+      "command": "just _rust-lint onejudge-cli-e2e",
+      "inputs": [
+        "default",
+        "^default",
+        "{workspaceRoot}/nx.json",
+        "{workspaceRoot}/scripts/check-project-boundaries.mjs"
+      ]
+    },
+    "test": {
+      "command": "just _rust-test onejudge-cli-e2e onejudge/sdk-schema onejudge",
+      "dependsOn": [
+        {
+          "projects": [
+            "onejudge"
+          ],
+          "target": "build"
+        },
+        {
+          "projects": [
+            "onejudge-test-doubles"
+          ],
+          "target": "build"
+        },
+        {
+          "projects": [
+            "workspace"
+          ],
+          "target": "coverage-clean"
+        }
+      ],
+      "parallelism": false
+    }
+  }
+}

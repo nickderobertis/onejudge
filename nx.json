@@ -1,0 +1,45 @@
+{
+  "$schema": "./node_modules/nx/schemas/nx-schema.json",
+  "defaultBase": "origin/main",
+  "cacheDirectory": ".nx/cache",
+  "namedInputs": {
+    "sharedGlobals": [
+      "{workspaceRoot}/Cargo.toml",
+      "{workspaceRoot}/Cargo.lock",
+      "{workspaceRoot}/rust-toolchain.toml",
+      "{workspaceRoot}/.cargo/config.toml",
+      "{workspaceRoot}/clippy.toml",
+      "{workspaceRoot}/rustfmt.toml",
+      "{workspaceRoot}/justfile",
+      "{workspaceRoot}/package.json",
+      "{workspaceRoot}/bun.lock"
+    ],
+    "default": ["{projectRoot}/**/*", "sharedGlobals"]
+  },
+  "boundaries": {
+    "//": "Which project types may depend on which, by tag; every project carries exactly one `type:` tag. Enforced by scripts/check-project-boundaries.mjs in every project's `lint` target, over the real Nx project graph (`nx graph`) joined with Cargo's path dependencies, so an edge is checked whether it is declared in a project.json or drawn by a Cargo.toml. The contract crate depends on nothing in this repository; the e2e suites and the external tiers are reachable only from the workspace root.",
+    "allow": {
+      "type:contract": [],
+      "type:test-support": ["type:contract"],
+      "type:sdk": ["type:contract", "type:test-support"],
+      "type:packaging": ["type:contract"],
+      "type:e2e": ["type:contract", "type:test-support", "type:sdk"],
+      "type:external": ["type:contract", "type:test-support", "type:repo"],
+      "type:repo": [],
+      "type:workspace": ["type:contract", "type:test-support", "type:e2e"]
+    }
+  },
+  "targetDefaults": {
+    "format": { "cache": false },
+    "format-check": { "cache": true, "inputs": ["default"] },
+    "lint": { "cache": true, "inputs": ["default", "^default"] },
+    "typecheck": { "cache": true, "inputs": ["default", "^default"] },
+    "generate-check": { "cache": true, "inputs": ["default", "^default"] },
+    "doc": { "cache": true, "inputs": ["default", "^default"] },
+    "build": { "cache": false },
+    "test": { "cache": false },
+    "coverage": { "cache": false },
+    "audit": { "cache": false },
+    "msrv": { "cache": false }
+  }
+}
