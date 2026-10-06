@@ -977,6 +977,7 @@ dependencies = [
  "oneharness-core",
  "onejudge",
  "rustix",
+ "serde",
  "serde_json",
  "signal-hook",
 ]

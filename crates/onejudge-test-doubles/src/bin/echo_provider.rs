@@ -52,7 +52,73 @@
 
 use std::io::{Read as _, Write as _};
 
+use onejudge::note::DeliveredNote;
+use onejudge::{Message, Role};
+use serde::Deserialize;
 use serde_json::{json, Value};
+
+/// One protocol request, read into the frame shapes `docs/protocol.md` defines —
+/// the fields this double reads, typed, so a request missing one or carrying it
+/// in the wrong type is refused here instead of being read as empty. Fields the
+/// double does not read (`session`, `task`, `worktree`, `evidence`, ...) are
+/// allowed through, as a command must allow them.
+#[derive(Deserialize)]
+#[serde(tag = "op", rename_all = "lowercase")]
+enum Request {
+    Respond {
+        skill: Skill,
+        messages: Vec<Message>,
+    },
+    User {
+        persona: String,
+    },
+    Supervisor {
+        persona: String,
+        #[serde(default)]
+        done_when: Option<String>,
+        #[serde(default)]
+        notes: Vec<DeliveredNote>,
+        turn: Turn,
+        messages: Vec<Message>,
+    },
+    Judge(Judgement),
+    Assess {
+        prompt: String,
+        messages: Vec<Message>,
+    },
+}
+
+#[derive(Deserialize)]
+struct Skill {
+    instructions: String,
+}
+
+/// The outcome of the worker turn a supervisor decides on.
+#[derive(Deserialize)]
+#[serde(tag = "outcome", rename_all = "lowercase")]
+enum Turn {
+    Taken,
+    Lost {
+        #[allow(dead_code, reason = "read for its shape: a lost turn names its cause")]
+        cause: String,
+    },
+}
+
+/// A `judge` request, by the kind of verdict it asks for.
+#[derive(Deserialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+enum Judgement {
+    Boolean {
+        criterion: String,
+        messages: Vec<Message>,
+    },
+    Numeric {
+        criterion: String,
+        min: f64,
+        max: f64,
+        messages: Vec<Message>,
+    },
+}
 
 fn main() {
     let mut input = String::new();
@@ -70,9 +136,9 @@ fn main() {
     if input.contains("[[emit-exit]]") {
         fail("deliberate non-zero exit for the e2e error path");
     }
-    let request: Value = match serde_json::from_str(input.trim()) {
-        Ok(v) => v,
-        Err(e) => fail(&format!("request was not valid JSON: {e}")),
+    let request: Request = match serde_json::from_str(input.trim()) {
+        Ok(request) => request,
+        Err(e) => fail(&format!("request is not a protocol frame: {e}")),
     };
     if let Some(path) = marker(&input, "record").or_else(|| marker(&argv, "record")) {
         let mut line = input.trim().to_string();
@@ -85,8 +151,7 @@ fn main() {
         file.write_all(line.as_bytes())
             .unwrap_or_else(|e| fail(&format!("could not write the request log: {e}")));
     }
-    let op = request.get("op").and_then(Value::as_str).unwrap_or("");
-    if op == "respond" {
+    if matches!(request, Request::Respond { .. }) {
         if let Some(path) = marker(&input, "emit-exit-once") {
             if !std::path::Path::new(path).exists() {
                 std::fs::write(path, b"failed once\n")
@@ -95,19 +160,43 @@ fn main() {
             }
         }
     }
-    let response = match op {
-        "respond" => respond(&request),
-        "user" => user(&request),
-        "supervisor" => supervisor(&request, &argv),
-        "judge" => judge(&request),
-        "assess" => assess(&request),
-        other => fail(&format!("unknown op `{other}`")),
+    let response = match &request {
+        Request::Respond { skill, messages } => respond(&skill.instructions, messages),
+        Request::User { persona } => user(persona),
+        Request::Supervisor {
+            persona,
+            done_when,
+            notes,
+            turn,
+            messages,
+        } => supervisor(
+            &Decision {
+                persona,
+                done_when: done_when.as_deref().unwrap_or(""),
+                noted: !notes.is_empty(),
+                turn,
+                messages,
+            },
+            &argv,
+        ),
+        Request::Judge(judgement) => judge(judgement),
+        Request::Assess { prompt, messages } => assess(prompt, messages),
     };
-    let mut out = serde_json::to_string(&response).expect("response serializes");
+    let mut out = response.to_string();
     out.push('\n');
     std::io::stdout()
         .write_all(out.as_bytes())
-        .expect("write response");
+        .unwrap_or_else(|e| fail(&format!("could not write the response: {e}")));
+}
+
+/// What a `supervisor` request asks this double to decide on.
+struct Decision<'a> {
+    persona: &'a str,
+    done_when: &'a str,
+    /// Whether any note has been delivered into the run.
+    noted: bool,
+    turn: &'a Turn,
+    messages: &'a [Message],
 }
 
 /// Print an error to stderr and exit non-zero — the protocol's failure signal.
@@ -116,22 +205,12 @@ fn fail(message: &str) -> ! {
     std::process::exit(1);
 }
 
-fn latest_user(messages: &[Value]) -> String {
+fn latest_user(messages: &[Message]) -> &str {
     messages
         .iter()
         .rev()
-        .find(|m| m.get("role").and_then(Value::as_str) == Some("user"))
-        .and_then(|m| m.get("content").and_then(Value::as_str))
-        .unwrap_or("")
-        .to_string()
-}
-
-fn messages_of(request: &Value) -> Vec<Value> {
-    request
-        .get("messages")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default()
+        .find(|m| m.role == Role::User)
+        .map_or("", |m| m.content.as_str())
 }
 
 /// Extract the argument of a `[[marker:ARG]]` directive, if present in `text`.
@@ -157,14 +236,8 @@ fn dwell(spec: &str) {
     std::thread::sleep(std::time::Duration::from_millis(millis));
 }
 
-fn respond(request: &Value) -> Value {
-    let messages = messages_of(request);
-    let latest = latest_user(&messages);
-    let instructions = request
-        .get("skill")
-        .and_then(|s| s.get("instructions"))
-        .and_then(Value::as_str)
-        .unwrap_or("");
+fn respond(instructions: &str, messages: &[Message]) -> Value {
+    let latest = latest_user(messages);
     let scope = format!("{instructions}\n{latest}");
     if let Some(spec) = marker(&scope, "worker-dwell") {
         dwell(spec);
@@ -189,8 +262,7 @@ fn respond(request: &Value) -> Value {
     response
 }
 
-fn user(request: &Value) -> Value {
-    let persona = request.get("persona").and_then(Value::as_str).unwrap_or("");
+fn user(persona: &str) -> Value {
     let stop = persona.contains("[[stop]]");
     json!({
         "message": "Thanks — and what about the next step?",
@@ -200,8 +272,8 @@ fn user(request: &Value) -> Value {
     })
 }
 
-fn supervisor(request: &Value, argv: &str) -> Value {
-    let persona = request.get("persona").and_then(Value::as_str).unwrap_or("");
+fn supervisor(request: &Decision<'_>, argv: &str) -> Value {
+    let persona = request.persona;
     if let Some(spec) = marker(persona, "judge-dwell") {
         dwell(spec);
     }
@@ -227,7 +299,7 @@ fn supervisor(request: &Value, argv: &str) -> Value {
         fail("deliberate non-zero exit on the supervisor op");
     }
     if let Some(message) = marker(argv, "supervisor-continue-on-lost") {
-        return if request.pointer("/turn/outcome").and_then(Value::as_str) == Some("lost") {
+        return if matches!(request.turn, Turn::Lost { .. }) {
             json!({"completion": false, "message": message, "reason": "recover the lost turn"})
         } else {
             json!({"completion": true, "reason": "the recovery turn was taken"})
@@ -243,22 +315,13 @@ fn supervisor(request: &Value, argv: &str) -> Value {
         return json!({"completion": true, "reason": reason, "usage": {"input_tokens": 1, "output_tokens": 1}});
     }
     // The judge failing on the decision re-taken carrying the note.
-    if persona.contains("[[supervisor-exit-on-note]]")
-        && request
-            .get("notes")
-            .and_then(Value::as_array)
-            .is_some_and(|notes| !notes.is_empty())
-    {
+    if persona.contains("[[supervisor-exit-on-note]]") && request.noted {
         fail("deliberate non-zero exit on the supervisor op shown a note");
     }
     // The judge passing the work with the note in hand: completion is answered only
     // on the decision that was re-taken carrying the note, never the one before it.
     if persona.contains("[[complete-on-note]]") {
-        let shown = request
-            .get("notes")
-            .and_then(Value::as_array)
-            .is_some_and(|notes| !notes.is_empty());
-        return if shown {
+        return if request.noted {
             json!({"completion": true, "reason": "the note was in hand when the work was passed", "usage": {"input_tokens": 1, "output_tokens": 1}})
         } else {
             json!({"completion": false, "message": "Thanks — and what about the next step?", "reason": "no note yet", "usage": {"input_tokens": 1, "output_tokens": 1}})
@@ -288,11 +351,8 @@ fn supervisor(request: &Value, argv: &str) -> Value {
             "usage": {"input_tokens": 1, "output_tokens": 1},
         });
     }
-    let criterion = request
-        .get("done_when")
-        .and_then(Value::as_str)
-        .unwrap_or("");
-    let transcript = render(&messages_of(request)).to_lowercase();
+    let criterion = request.done_when;
+    let transcript = render(request.messages).to_lowercase();
     let completion = persona.contains("[[stop]]")
         || (!criterion.is_empty() && transcript.contains(&criterion.to_lowercase()));
     if completion {
@@ -311,46 +371,49 @@ fn epoch_millis() -> u128 {
 
 /// Render the transcript the judge is given, including tool-event summaries, so a
 /// criterion can match on what the skill *did*.
-fn render(messages: &[Value]) -> String {
+fn render(messages: &[Message]) -> String {
     let mut out = String::new();
     for m in messages {
-        let role = m.get("role").and_then(Value::as_str).unwrap_or("");
-        let content = m.get("content").and_then(Value::as_str).unwrap_or("");
-        out.push_str(role);
+        out.push_str(match m.role {
+            Role::User => "user",
+            Role::Assistant => "assistant",
+            Role::System => "system",
+        });
         out.push_str(": ");
-        out.push_str(content);
+        out.push_str(&m.content);
         out.push('\n');
-        if let Some(events) = m.get("events").and_then(Value::as_array) {
-            for e in events {
-                if let Some(input) = e.get("input") {
-                    out.push_str(&serde_json::to_string(input).unwrap_or_default());
-                    out.push('\n');
-                }
-            }
+        for input in m.events.iter().filter_map(|e| e.input.as_ref()) {
+            out.push_str(&input.to_string());
+            out.push('\n');
         }
     }
     out
 }
 
-fn judge(request: &Value) -> Value {
-    let kind = request
-        .get("kind")
-        .and_then(Value::as_str)
-        .unwrap_or("boolean");
-    let criterion = request
-        .get("criterion")
-        .and_then(Value::as_str)
-        .unwrap_or("");
-    let transcript = render(&messages_of(request)).to_lowercase();
+fn judge(judgement: &Judgement) -> Value {
+    // A boolean query carries no scale; one answered with the wrong type (below)
+    // is scored on the scale the protocol's numeric default would use.
+    let (criterion, messages, scale) = match judgement {
+        Judgement::Boolean {
+            criterion,
+            messages,
+        } => (criterion, messages, None),
+        Judgement::Numeric {
+            criterion,
+            min,
+            max,
+            messages,
+        } => (criterion, messages, Some((*min, *max))),
+    };
+    let transcript = render(messages).to_lowercase();
     let matched = !criterion.is_empty() && transcript.contains(&criterion.to_lowercase());
 
     // `[[wrong-type]]` returns the *opposite* value type so the engine's verdict
     // type-check error path is exercised end to end.
     let wrong_type = criterion.contains("[[wrong-type]]");
-    let numeric = (kind == "numeric") != wrong_type;
+    let numeric = scale.is_some() != wrong_type;
     let value = if numeric {
-        let max = request.get("max").and_then(Value::as_f64).unwrap_or(10.0);
-        let min = request.get("min").and_then(Value::as_f64).unwrap_or(0.0);
+        let (min, max) = scale.unwrap_or((0.0, 10.0));
         json!(if matched { max } else { min })
     } else {
         json!(matched)
@@ -363,8 +426,7 @@ fn judge(request: &Value) -> Value {
     })
 }
 
-fn assess(request: &Value) -> Value {
-    let prompt = request.get("prompt").and_then(Value::as_str).unwrap_or("");
+fn assess(prompt: &str, messages: &[Message]) -> Value {
     // `[[assess-empty]]` returns a well-formed reply whose assessment text is
     // empty, so the provider's empty-assessment guard is exercised end to end
     // across the subprocess boundary (a parsed-but-empty reply, not no output).
@@ -375,7 +437,7 @@ fn assess(request: &Value) -> Value {
                        "cache_read_tokens": 3, "cache_write_tokens": 1 },
         });
     }
-    let transcript = render(&messages_of(request));
+    let transcript = render(messages);
     let tool_note = if transcript.contains("\"command\"") {
         " Tool actions were included."
     } else {

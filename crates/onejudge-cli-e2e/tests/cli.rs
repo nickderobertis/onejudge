@@ -77,7 +77,6 @@ fn echo_bin() -> String {
     doubles::echo_provider().to_string()
 }
 
-/// The built `onejudge` binary under test.
 fn onejudge_bin() -> &'static str {
     doubles::onejudge_cli()
 }
@@ -111,7 +110,6 @@ fn config_yaml(body: &str) -> String {
     format!("provider:\n  kind: command\n  command: [{echo}]\n{body}")
 }
 
-/// Build a plan from `body` and drive it in-process (no progress sink needed).
 fn plan_from(body: &str) -> onejudge::cli::RunSummary {
     let cfg = Config::from_yaml(&config_yaml(body)).unwrap();
     let plan = cfg.into_plan().unwrap();
@@ -162,7 +160,6 @@ evals:
         .unwrap();
     assert!(matches!(numeric.outcome, EvalOutcome::Numeric(n) if n == 5.0));
 
-    // The human rendering reflects completion.
     let rendered = render_human(&summary);
     assert!(rendered.contains("Status: completed"));
     assert!(rendered.contains("[PASS] echo"));
@@ -668,7 +665,6 @@ fn split_kind_json_covers_buffered_respond_and_judge() {
 
 // --- Subprocess: the real `onejudge` binary --------------------------------
 
-/// Write `body`'s config to a file under the integration-test tmp dir.
 fn write_config(name: &str, body: &str) -> std::path::PathBuf {
     let dir = Path::new(env!("CARGO_TARGET_TMPDIR"));
     let path = dir.join(name);
@@ -834,7 +830,6 @@ fn binary_init_scaffolds_onejudge_and_oneharness_configs() {
         .status()
         .unwrap();
     assert!(status.success());
-    // The loop-only onejudge.yaml is a valid config.
     let written = std::fs::read_to_string(dir.join("onejudge.yaml")).unwrap();
     assert!(Config::from_yaml(&written).is_ok());
     // Both oneharness config files were scaffolded by the shelled-out `init`.
@@ -903,16 +898,17 @@ fn binary_run_discovers_default_config_in_cwd() {
 
 #[test]
 fn binary_run_without_a_config_falls_back_to_defaults() {
-    // No config file and no default in cwd: the run starts from an empty config
-    // (default `oneharness` provider). With `oneharness` absent from PATH the spawn
-    // fails — a classified engine error, exit 2 — proving the flags-only path runs.
+    // No config file and no default in cwd: the run starts from an empty config,
+    // whose default provider runs the turn through the linked oneharness engine.
+    // With an empty PATH no harness can be found, so the turn fails — a classified
+    // engine error, exit 2 — proving the flags-only path reached the run.
     let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("no-cfg");
     std::fs::create_dir_all(&dir).unwrap();
     let _ = std::fs::remove_file(dir.join("onejudge.yaml"));
     let output = Command::new(onejudge_bin())
         .args(["run", "--task", "do a thing"])
         .current_dir(&dir)
-        .env("PATH", "") // ensure `oneharness` cannot be found
+        .env("PATH", "") // no harness can be found
         .output()
         .unwrap();
     assert_eq!(output.status.code(), Some(2));
@@ -978,7 +974,6 @@ system_prompt: Be warm.
 ",
     );
 
-    // Env wins over the file.
     let output = Command::new(onejudge_bin())
         .args(["run", config.to_str().unwrap()])
         .env("ONEJUDGE_TASK", "from the env")
@@ -989,7 +984,6 @@ system_prompt: Be warm.
     assert!(stdout.contains("from the env"), "env task drives the run");
     assert!(!stdout.contains("from the file"), "env beats the file");
 
-    // A --task flag wins over the env var.
     let output = Command::new(onejudge_bin())
         .args(["run", config.to_str().unwrap(), "--task", "from the flag"])
         .env("ONEJUDGE_TASK", "from the env")
@@ -1887,7 +1881,6 @@ fn a_plan_driven_embedders_group_reaps_the_whole_two_party_harness_tree_on_a_kil
         );
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
-    // Every process the plan itself spawned is gone too.
     for pgid in &groups {
         assert!(
             !process_exists(*pgid),
@@ -2669,7 +2662,6 @@ fn an_observing_plan_run_delivers_each_judges_decision_inside_the_supervisor_tur
 // llmlint's own verdict is faked; the config layer, the panel, the run driver
 // and the built binary are all real.
 
-/// The built fake-llmlint double's path.
 fn fake_llmlint_bin() -> &'static str {
     doubles::fake_llmlint()
 }
@@ -2750,7 +2742,6 @@ fn run_binary_with_llmlint(
 /// One decision's link as `(turn, judge, labels, run_id)`.
 type LinkedDecision<'a> = (usize, &'a str, &'a Labels, Option<&'a str>);
 
-/// A decision's `labels`.
 type Labels = std::collections::BTreeMap<String, String>;
 
 /// The labels the `lint` judge's run deciding on `turn` is passed, as the map
@@ -2806,7 +2797,6 @@ fn llmlint_lint_argv(turn: usize) -> Vec<String> {
 /// One judge's decision on one supervisor turn as `(judge, kind, decision, reason)`.
 type DecidedBy = (String, String, onejudge::Decision, String);
 
-/// Every supervisor turn's decisions, by turn.
 fn decided(report: &onejudge::Report) -> Vec<(usize, Vec<DecidedBy>)> {
     report
         .judge_decisions
@@ -3791,7 +3781,6 @@ fn copy_tree(from: &Path, to: &Path) {
     }
 }
 
-/// The agent invocation's attribution off a finished report.
 fn agent_attribution(report: &onejudge::Report) -> &onejudge::HarnessAttribution {
     report
         .telemetry
@@ -4239,12 +4228,10 @@ fn prompt_of(call: &serde_json::Value) -> String {
     argv[at + 1].clone()
 }
 
-/// A harness invocation's argv.
 fn argv_of(call: &serde_json::Value) -> Vec<String> {
     serde_json::from_value(call["argv"].clone()).unwrap()
 }
 
-/// The `judge_config:` line naming `path`.
 fn judge_config_line(path: &Path) -> String {
     format!(
         "judge_config: {}",
@@ -4311,8 +4298,7 @@ impl PostureRun {
         path
     }
 
-    /// A split whose skill and every judge are oneharness providers on this
-    /// run's seam; each judge entry's extra lines are its own.
+    /// Set `key` to `value` in the environment of every run this posture makes.
     fn with_env(mut self, key: &str, value: &str) -> Self {
         self.env.push((key.into(), value.into()));
         self
@@ -4371,7 +4357,6 @@ impl PostureRun {
         yaml
     }
 
-    /// The run config: `provider` over the shared conversation.
     fn yaml(&self, provider: &str, task_extra: &str) -> String {
         let task = format!(
             "do it [[record-harness:{}]] [[evaluate]]{task_extra}",
@@ -4400,7 +4385,6 @@ impl PostureRun {
         std::fs::write(&config, self.yaml(provider, task_extra)).unwrap();
         let mut command = Command::new(bin);
         command.args(["run", config.to_str().unwrap()]);
-        // `--format json` unless the journey chose its own.
         if !args.contains(&"--format") {
             command.args(["--format", "json"]);
         }
@@ -4635,7 +4619,7 @@ fn with_no_mode_configured_the_harness_argv_and_judge_prompts_are_the_0_15_0_one
 }
 
 #[test]
-fn a_judge_with_no_mode_differs_from_0_15_0_only_by_the_leading_defaults_config() {
+fn a_judge_with_no_mode_differs_from_0_15_0_by_the_defaults_config_no_mode_and_run_labels() {
     // The intended changes to what onejudge asks oneharness for: an evaluator
     // call leads with onejudge's defaults file and carries no `--mode`, and every
     // run carries the `--history-label`s that say which run, turn, role and judge
@@ -4834,7 +4818,6 @@ fn an_auto_judge_config_grants_the_judge_a_shell_and_records_what_it_did() {
                     .collect();
                 assert_eq!(configs, [files[0].as_str().unwrap(), "{{RUN}}/judge.toml"]);
                 assert!(!argv.iter().any(|arg| arg == "--mode"), "{argv:?}");
-                // It asked for the events it recorded.
                 assert!(argv.iter().any(|arg| arg == "--events"), "{argv:?}");
             }
         }
@@ -5269,7 +5252,6 @@ fn text_output_draws_the_workers_events_and_each_judges_through_oneharnesss_rend
         let worker = rendered_worker_events(&records);
         let kinds: Vec<&str> = worker.iter().map(|(kind, _)| kind.as_str()).collect();
         assert_eq!(kinds, ["reasoning", "tool_call", "message"], "{seam:?}");
-        // The worker's lines are exactly what `render_event` returns for them.
         let lines: Vec<String> = worker.into_iter().map(|(_, line)| line).collect();
         assert_lines_in_order(stdout, &lines);
 

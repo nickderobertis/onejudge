@@ -108,8 +108,7 @@ fn main() {
     // test reads and then answer until something reaps us.
     if args.first().map(String::as_str) == Some("--descendant") {
         let Some(handle) = args.get(1) else {
-            eprintln!("onejudge-fake-harness: --descendant needs a handle path");
-            std::process::exit(2);
+            fail("--descendant needs a handle path");
         };
         descendant(handle);
         return;
@@ -296,11 +295,11 @@ fn record_invocation(path: &str, args: &[String], stdin: &str) {
         .create(true)
         .append(true)
         .open(path)
-        .expect("the harness record opens");
+        .unwrap_or_else(|e| fail(&format!("could not open the harness record {path}: {e}")));
     // One write per line: a panel's judges run concurrently and append to the
     // same record, and a line split across two writes can interleave with theirs.
     file.write_all(format!("{line}\n").as_bytes())
-        .expect("the harness record is written");
+        .unwrap_or_else(|e| fail(&format!("could not write the harness record {path}: {e}")));
 }
 
 /// Answer a judge-side turn in its own shape; see `[[evaluate]]`.
@@ -337,9 +336,13 @@ fn artifact_evaluator_reply(prompt: &str, args: &[String]) -> Option<String> {
     write!(file, "{prompt}\n=== end of prompt ===\n").ok()?;
     drop(file);
     if prompt.contains("completion supervisor") {
-        let wanted = marker(prompt, "artifact-supervisor-turns")
-            .and_then(|n| n.parse::<usize>().ok())
-            .unwrap_or(1);
+        let wanted = marker(prompt, "artifact-supervisor-turns").map_or(1, |n| {
+            n.parse::<usize>().unwrap_or_else(|e| {
+                fail(&format!(
+                    "`[[artifact-supervisor-turns:{n}]]` is not a turn count: {e}"
+                ))
+            })
+        });
         let asked = std::fs::read_to_string(&log)
             .unwrap_or_default()
             .split("=== end of prompt ===")
@@ -395,10 +398,13 @@ fn steering(args: &[String]) -> (String, String) {
     let mut text = args.join("\u{1f}");
     let mut buffer = String::new();
     if let Some(format) = args.windows(2).find(|w| w[0] == "--input-format") {
-        if format[1] == "text" {
-            let _ = std::io::Read::read_to_string(&mut std::io::stdin().lock(), &mut buffer);
+        let read = if format[1] == "text" {
+            std::io::Read::read_to_string(&mut std::io::stdin().lock(), &mut buffer)
         } else {
-            let _ = std::io::BufRead::read_line(&mut std::io::stdin().lock(), &mut buffer);
+            std::io::BufRead::read_line(&mut std::io::stdin().lock(), &mut buffer)
+        };
+        if let Err(e) = read {
+            fail(&format!("could not read the prompt from stdin: {e}"));
         }
         text.push('\u{1f}');
         text.push_str(&buffer);
@@ -494,9 +500,16 @@ fn emit(line: &str) {
 /// `value` as a JSON string literal. Enough for the marker text these doubles
 /// carry; a control character or a lone surrogate is not something a marker can
 /// express.
+/// `value` as a JSON string literal, every character escaped as JSON requires.
 fn json_string(value: &str) -> String {
-    let escaped = value.replace('\\', r"\\").replace('"', "\\\"");
-    format!("\"{escaped}\"")
+    serde_json::Value::from(value).to_string()
+}
+
+/// Report why this harness cannot go on, and exit non-zero — what a real harness
+/// does on an error the turn cannot recover from.
+fn fail(message: &str) -> ! {
+    eprintln!("onejudge-fake-harness: {message}");
+    std::process::exit(2);
 }
 
 /// Block until `path` exists, failing loudly rather than hanging if it never does.
@@ -528,7 +541,8 @@ fn idle(limit: Duration) {
 /// harness's, because that group is exactly what oneharness terminates when it
 /// tears the tree down. A descendant that escaped the group would prove nothing.
 fn spawn_descendant(handle: &str) {
-    let exe = std::env::current_exe().expect("the fake harness's own path");
+    let exe = std::env::current_exe()
+        .unwrap_or_else(|e| fail(&format!("could not resolve this harness's own path: {e}")));
     // The `Child` is dropped, not waited on: dropping it does not kill the
     // process, which is the point — it must survive this harness the way a real
     // harness's own descendants do, so that only oneharness's teardown reaps it.
@@ -548,7 +562,7 @@ fn spawn_descendant(handle: &str) {
         // profile set `cargo llvm-cov` merges when the suite ends.
         .envs(detached_profile())
         .spawn()
-        .expect("the descendant spawns");
+        .unwrap_or_else(|e| fail(&format!("could not spawn the descendant: {e}")));
     wait_for(Path::new(handle));
 }
 
@@ -561,13 +575,18 @@ fn descendant(handle: &str) {
     // Before the handle, so a test that waits on the handle can read this without
     // racing it.
     publish_profile(handle);
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a liveness port");
-    let port = listener.local_addr().expect("the bound address").port();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap_or_else(|e| fail(&format!("could not bind a liveness port: {e}")));
+    let port = listener
+        .local_addr()
+        .unwrap_or_else(|e| fail(&format!("could not read the liveness port: {e}")))
+        .port();
     // Written whole, then renamed, so a reader never sees a half-written handle.
     let staging = format!("{handle}.partial");
     std::fs::write(&staging, format!("{} {port}", std::process::id()))
-        .expect("the handle is written");
-    std::fs::rename(&staging, handle).expect("the handle is published");
+        .unwrap_or_else(|e| fail(&format!("could not write the handle {staging}: {e}")));
+    std::fs::rename(&staging, handle)
+        .unwrap_or_else(|e| fail(&format!("could not publish the handle {handle}: {e}")));
     let deadline = Instant::now() + SILENT_LIMIT;
     while Instant::now() < deadline {
         drop(listener.accept());

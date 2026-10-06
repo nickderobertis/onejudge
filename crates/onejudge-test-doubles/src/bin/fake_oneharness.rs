@@ -235,13 +235,13 @@ fn main() {
 
     // `json` is the only view this double prints; the real `run` would print a
     // human-readable text view under `--format text`, which no reader parses.
-    if let Some(format) = flags.get("--format").filter(|f| f.as_str() != "json") {
+    if let Some(format) = flags.value("--format").filter(|f| *f != "json") {
         emit_error(&format!(
             "`--format {format}` is not machine-readable (the fake prints only json)"
         ));
     }
-    let system = flags.get("--system").map_or("", String::as_str);
-    let session = flags.get("--session").cloned();
+    let system = flags.value("--system").unwrap_or("");
+    let session = flags.value("--session").map(str::to_string);
 
     // Marker for the e2e non-zero-exit error path: a real oneharness process
     // failure (as opposed to a harness failure, which is reported in the JSON).
@@ -275,7 +275,7 @@ fn main() {
     // `--control` is validated before anything runs, exactly as oneharness
     // validates it: every refusal here is a usage error the caller must be able to
     // degrade from without having paid for a turn.
-    let control_wanted = flags.contains_key("--control");
+    let control_wanted = flags.switch("--control");
     if control_wanted {
         control::validate(session.as_deref(), steering);
     }
@@ -335,7 +335,11 @@ fn main() {
         respond_result(
             system,
             session.as_deref(),
-            flags.get("--mock-harness").map(String::as_str),
+            // Every `--mock-harness` given, comma-joined, so a marker can echo
+            // back each value rather than only the last.
+            Some(flags.values("--mock-harness").join(","))
+                .filter(|joined| !joined.is_empty())
+                .as_deref(),
             &prompt,
         )
     };
@@ -439,10 +443,10 @@ fn main() {
     // the candidate that RAN — which a fallback chain does not know until now.
     let control = control_wanted.then(|| {
         control::open(
-            session
-                .as_deref()
-                .expect("validate refuses --control without --session"),
-            flags.get("--cwd").map_or(".", String::as_str),
+            session.as_deref().unwrap_or_else(|| {
+                emit_error("--control needs --session, as oneharness's validation requires")
+            }),
+            flags.value("--cwd").unwrap_or("."),
             ran_index.map_or(HARNESS, |index| results[index].harness_id.as_str()),
             steering,
         )
@@ -480,7 +484,8 @@ fn main() {
         results,
     };
 
-    let mut document = serde_json::to_value(&report).expect("the report serializes");
+    let mut document = serde_json::to_value(&report)
+        .unwrap_or_else(|e| emit_error(&format!("could not serialize the report: {e}")));
     // Without an on-disk history store there is no record to name, so the id rides
     // on the result instead — the "producer supplies its own history id" case.
     // `[[history:PATH]]` exercises the real store, which is the only source of a
@@ -496,7 +501,7 @@ fn main() {
         }
     }
 
-    if flags.contains_key("--stream") {
+    if flags.switch("--stream") {
         emit_stream(system, &document);
     } else {
         write_line(&document);
@@ -509,7 +514,11 @@ fn main() {
 
 /// The measured trace oneharness reports on the result it ran.
 fn provider_measured(is_agent: bool) -> ExecutionTelemetry {
-    let at = |instant: &str| instant.parse().expect("a run instant");
+    let at = |instant: &str| {
+        instant
+            .parse()
+            .unwrap_or_else(|e| emit_error(&format!("`{instant}` is not a run instant: {e}")))
+    };
     ExecutionTelemetry::ProviderMeasured {
         started_at: at(if is_agent {
             "2026-01-01T00:00:00.000Z"
@@ -659,11 +668,17 @@ fn status(token: &str) -> Status {
 
 /// Write one JSON document as a line on stdout, flushed immediately.
 fn write_line(value: &Value) {
-    let mut out = serde_json::to_string(value).expect("value serializes");
-    out.push('\n');
+    write_raw(&format!("{value}\n"));
+}
+
+/// Write `text` to stdout as-is, flushed; a consumer that has gone is an error
+/// this process reports and exits on, never a panic.
+fn write_raw(text: &str) {
     let mut stdout = std::io::stdout();
-    stdout.write_all(out.as_bytes()).expect("write line");
-    stdout.flush().expect("flush line");
+    stdout
+        .write_all(text.as_bytes())
+        .and_then(|()| stdout.flush())
+        .unwrap_or_else(|e| emit_error(&format!("could not write to stdout: {e}")));
 }
 
 /// Append oneharness's own per-attempt history lines for `results` to `path`.
@@ -734,7 +749,7 @@ fn write_history(path: &str, results: &[RunResult]) {
             error: None,
         };
         let line = serde_json::to_string(&HistoryLine::Run(HistoryRunRecord::from_record(&record)))
-            .expect("a history record serializes");
+            .unwrap_or_else(|e| emit_error(&format!("could not serialize a history record: {e}")));
         if writeln!(file, "{line}").is_err() {
             emit_error(&format!("could not append a history record to {path}"));
         }
@@ -751,9 +766,7 @@ fn emit_stream(system: &str, report: &Value) {
         return;
     }
     if system.contains("[[stream-garbage]]") {
-        let mut stdout = std::io::stdout();
-        stdout.write_all(b"not json at all\n").expect("write line");
-        stdout.flush().expect("flush line");
+        write_raw("not json at all\n");
         return;
     }
     let events = report["results"]
@@ -989,8 +1002,7 @@ fn run_descendant(handle: &str) -> ! {
 /// Like [`write_line`], but reports a broken pipe instead of panicking on it —
 /// the signal a consumer that closed the stream is meant to deliver.
 fn write_line_checked(value: &Value) -> std::io::Result<()> {
-    let mut out = serde_json::to_string(value).expect("value serializes");
-    out.push('\n');
+    let out = format!("{value}\n");
     let mut stdout = std::io::stdout();
     stdout.write_all(out.as_bytes())?;
     stdout.flush()
@@ -1026,72 +1038,124 @@ fn run_init(args: &[String]) -> ! {
     std::process::exit(0);
 }
 
-/// Parse argv, mirroring the real `oneharness run` flag contract so an invalid
-/// flag onejudge might pass (e.g. a `--format` that `run` does not accept) is
-/// caught here instead of slipping through a lenient double. Unrecognized `--`
-/// flags exit non-zero, exactly as the real CLI would.
-fn parse_flags() -> HashMap<String, String> {
-    // The value-bearing and toggle flags `oneharness run` actually exposes.
-    const VALUE_FLAGS: &[&str] = &[
-        "--harness",
-        "--model",
-        "--config",
-        "--system",
-        "--system-file",
-        "--session",
-        "--session-dir",
-        "--prompt",
-        "--prompt-file",
-        "--output-format",
-        "--format",
-        "--cwd",
-        "--history-name",
-        "--mode",
-        // Repeatable on the real CLI, and accumulated as such below.
-        "--mock-harness",
-        "--history-label",
-    ];
-    const TOGGLES: &[&str] = &[
-        "--events",
-        "--compact",
-        "--history",
-        "--stream",
-        "--control",
-    ];
+/// How one `oneharness run` flag takes its argument, as oneharness declares it.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Arity {
+    /// `--flag VALUE` (repeatable flags too: each occurrence carries one value).
+    Value,
+    /// `--flag`, alone.
+    Switch,
+}
 
-    let args: Vec<String> = std::env::args().skip(1).collect();
+/// Every flag `oneharness run` accepts and how it takes its argument — read from
+/// `oneharness_core::domain::capability::CAPABILITIES`, the declaration oneharness
+/// reconciles against its own clap tree, rather than restated here: a flag the
+/// released CLI drops or renames is one this double refuses in the same release.
+fn run_flags() -> HashMap<&'static str, Arity> {
+    use oneharness_core::domain::capability::{FlagKind, CAPABILITIES};
     let mut flags = HashMap::new();
-    let mut i = 0;
-    while i < args.len() {
-        let arg = args[i].as_str();
-        if VALUE_FLAGS.contains(&arg) {
-            let value = args
-                .get(i + 1)
-                .cloned()
-                .unwrap_or_else(|| emit_error(&format!("{arg} needs a value")));
-            // A repeatable flag accumulates comma-joined, so a marker can echo back
-            // every value it was given rather than only the last.
-            flags
-                .entry(arg.to_string())
-                .and_modify(|seen: &mut String| {
-                    seen.push(',');
-                    seen.push_str(&value);
-                })
-                .or_insert(value);
-            i += 2;
-            continue;
+    for capability in CAPABILITIES.iter().filter(|c| c.argv == ["run"]) {
+        for binding in capability.bindings {
+            match binding.kind {
+                FlagKind::Value(flag) | FlagKind::Repeated(flag) | FlagKind::KeyValue(flag) => {
+                    flags.insert(flag, Arity::Value);
+                }
+                FlagKind::Switch(flag) => {
+                    flags.insert(flag, Arity::Switch);
+                }
+                FlagKind::Positional | FlagKind::Trailing | FlagKind::Window(_) => {}
+            }
         }
-        if TOGGLES.contains(&arg) {
-            flags.insert(arg.to_string(), String::new());
-        } else if arg.starts_with("--") {
-            emit_error(&format!(
-                "unrecognized flag `{arg}` (the fake mirrors `oneharness run`)"
-            ));
+        // A flag the capability always emits is followed by its value when it
+        // takes one (`--format json`), and stands alone when it does not.
+        for (at, token) in capability.always.iter().enumerate() {
+            if token.starts_with("--") {
+                let takes_value = capability
+                    .always
+                    .get(at + 1)
+                    .is_some_and(|next| !next.starts_with("--"));
+                flags.insert(
+                    token,
+                    if takes_value {
+                        Arity::Value
+                    } else {
+                        Arity::Switch
+                    },
+                );
+            }
         }
-        // `run` (the subcommand) and any trailing positional fall through.
-        i += 1;
+        // The flags no SDK option renders are the run's on/off switches.
+        for uncovered in capability.uncovered {
+            flags.entry(uncovered.flag).or_insert(Arity::Switch);
+        }
     }
     flags
+}
+
+/// The flags one `oneharness run` invocation was given, by arity: a value flag
+/// keeps every value it was given, in order; a switch is only present or not.
+struct RunArgs {
+    values: HashMap<&'static str, Vec<String>>,
+    switches: std::collections::HashSet<&'static str>,
+}
+
+impl RunArgs {
+    /// The value `flag` was given (the last, for a repeated flag), if any.
+    fn value(&self, flag: &str) -> Option<&str> {
+        self.values
+            .get(flag)
+            .and_then(|all| all.last())
+            .map(String::as_str)
+    }
+
+    /// Every value a repeatable `flag` was given, in order.
+    fn values(&self, flag: &str) -> &[String] {
+        self.values.get(flag).map_or(&[], Vec::as_slice)
+    }
+
+    fn switch(&self, flag: &str) -> bool {
+        self.switches.contains(flag)
+    }
+}
+
+/// Parse `oneharness run`'s argv against the flags the real CLI declares, refusing
+/// whatever it would refuse — an unknown flag, a value flag with no value (or
+/// another flag where its value belongs), a stray positional — so an invalid
+/// invocation onejudge might build is caught here instead of slipping through a
+/// lenient double.
+fn parse_flags() -> RunArgs {
+    let declared = run_flags();
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let Some(("run", args)) = args.split_first().map(|(verb, rest)| (verb.as_str(), rest)) else {
+        emit_error("the scripted mode serves `oneharness run` only");
+    };
+    let mut parsed = RunArgs {
+        values: HashMap::new(),
+        switches: std::collections::HashSet::new(),
+    };
+    let mut args = args.iter();
+    while let Some(arg) = args.next() {
+        let Some((&flag, &arity)) = declared.get_key_value(arg.as_str()) else {
+            emit_error(&if arg.starts_with("--") {
+                format!("unrecognized flag `{arg}` (the fake mirrors `oneharness run`)")
+            } else {
+                format!("unexpected argument `{arg}` (the fake mirrors `oneharness run`)")
+            });
+        };
+        match arity {
+            Arity::Switch => {
+                parsed.switches.insert(flag);
+            }
+            Arity::Value => {
+                let value = args
+                    .next()
+                    .filter(|value| !value.starts_with("--"))
+                    .unwrap_or_else(|| emit_error(&format!("{flag} needs a value")));
+                parsed.values.entry(flag).or_default().push(value.clone());
+            }
+        }
+    }
+    parsed
 }
 
 fn usage(text: &str) -> Usage {
@@ -1188,9 +1252,9 @@ fn respond_result(
 /// `message`, and its `reasoning`, each indexed by its position in the run as
 /// oneharness indexes every kind.
 fn activity(system: &str) -> Vec<ActionEvent> {
-    let mut found: Vec<(usize, &str, &str)> = Vec::new();
-    for kind in ["event", "say", "think"] {
-        let open = format!("[[{kind}:");
+    let mut found: Vec<(usize, Activity, &str)> = Vec::new();
+    for kind in Activity::ALL {
+        let open = format!("[[{}:", kind.marker());
         let mut from = 0;
         while let Some(at) = system[from..].find(&open) {
             let start = from + at + open.len();
@@ -1206,9 +1270,9 @@ fn activity(system: &str) -> Vec<ActionEvent> {
         .into_iter()
         .enumerate()
         .map(|(index, (_, kind, text))| match kind {
-            "event" => tool_event(index, text),
-            said => ActionEvent {
-                kind: if said == "say" {
+            Activity::Event => tool_event(index, text),
+            Activity::Say | Activity::Think => ActionEvent {
+                kind: if matches!(kind, Activity::Say) {
                     "message"
                 } else {
                     "reasoning"
@@ -1221,6 +1285,29 @@ fn activity(system: &str) -> Vec<ActionEvent> {
             },
         })
         .collect()
+}
+
+/// One kind of scripted activity, named by the marker that scripts it.
+#[derive(Clone, Copy)]
+enum Activity {
+    /// `[[event:CMD]]`: a `bash` tool call.
+    Event,
+    /// `[[say:TEXT]]`: the agent's own message.
+    Say,
+    /// `[[think:TEXT]]`: its reasoning.
+    Think,
+}
+
+impl Activity {
+    const ALL: [Activity; 3] = [Activity::Event, Activity::Say, Activity::Think];
+
+    fn marker(self) -> &'static str {
+        match self {
+            Activity::Event => "event",
+            Activity::Say => "say",
+            Activity::Think => "think",
+        }
+    }
 }
 
 /// Build a judge verdict as the harness reply text, deciding `true` iff the
@@ -1422,9 +1509,9 @@ mod control {
         }
         vec![ControlEvent::Served {
             verb: ControlVerb::Interrupt,
-            at: "2026-01-01T00:00:00.010Z"
-                .parse()
-                .expect("a control instant"),
+            at: "2026-01-01T00:00:00.010Z".parse().unwrap_or_else(|e| {
+                super::emit_error(&format!("the scripted control instant does not parse: {e}"))
+            }),
             redirected: true,
         }]
     }
@@ -1697,7 +1784,7 @@ mod engine {
                 .append(true)
                 .open(log)
                 .unwrap_or_else(|e| emit_error(&format!("could not open the argv log: {e}")));
-            let line = serde_json::to_string(argv).expect("an argv serializes");
+            let line = serde_json::Value::from(argv.to_vec()).to_string();
             // One write per line: concurrent panel judges append to the same log.
             file.write_all(format!("{line}\n").as_bytes())
                 .unwrap_or_else(|e| emit_error(&format!("could not write the argv log: {e}")));
@@ -1711,18 +1798,27 @@ mod engine {
         }
     }
 
-    /// `oneharness run`, for the flags onejudge passes. Anything else is refused,
-    /// as the scripted mode refuses it, so the double cannot quietly accept a flag
-    /// the real CLI would reject.
+    /// `oneharness run`, for the flags onejudge passes, each mapped onto the
+    /// `RunRequest` field the real CLI fills from it. A flag oneharness does not
+    /// declare (`super::run_flags`) is refused as the real CLI refuses it, and so
+    /// is a declared one onejudge never passes: the double cannot quietly accept a
+    /// flag, or a flag in a value's place, that the real CLI would reject.
     fn run_turn(args: &[String]) -> ! {
+        let declared = super::run_flags();
         let mut request = RunRequest::default();
         let mut stream = false;
         let mut i = 0;
         while i < args.len() {
             let flag = args[i].as_str();
+            if !declared.contains_key(flag) {
+                emit_error(&format!(
+                    "unrecognized flag `{flag}` (the fake mirrors `oneharness run`)"
+                ));
+            }
             let mut value = || -> String {
                 i += 1;
                 args.get(i)
+                    .filter(|value| !value.starts_with("--"))
                     .cloned()
                     .unwrap_or_else(|| emit_error(&format!("{flag} needs a value")))
             };
@@ -1796,7 +1892,8 @@ mod engine {
     /// for the same `--config` list `run` was given and the same working directory.
     fn explain(args: &[String]) -> ! {
         let mut explicit = Vec::new();
-        let mut cwd = std::env::current_dir().expect("a working directory");
+        let mut cwd = std::env::current_dir()
+            .unwrap_or_else(|e| emit_error(&format!("could not read the working directory: {e}")));
         let mut i = 0;
         while i < args.len() {
             let next = args.get(i + 1).cloned();
@@ -1810,10 +1907,9 @@ mod engine {
         let layers = oneharness_core::io::config::load_layers(&explicit, false, Path::new(&cwd))
             .unwrap_or_else(|e| emit_error(&e.to_string()));
         let report = oneharness_core::domain::config::explain(&layers);
-        println!(
-            "{}",
-            serde_json::to_string(&report).expect("the config report serializes")
-        );
+        let report = serde_json::to_string(&report)
+            .unwrap_or_else(|e| emit_error(&format!("could not serialize the config report: {e}")));
+        println!("{report}");
         std::process::exit(0);
     }
 }

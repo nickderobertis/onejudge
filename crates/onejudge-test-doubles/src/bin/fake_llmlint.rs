@@ -63,6 +63,49 @@ const CLEAN_REPORT: &str = "0 failed, 4 passed, 0 skipped, 0 not relevant\n";
 /// scripts nothing — the shape of llmlint's own operational error.
 const INCOMPLETE_STDERR: &str = "error: could not resolve harness `claude-code`: not installed\n";
 
+/// How one scripted run ends: llmlint's own exit code, or death by signal.
+#[derive(Clone, Copy)]
+enum Outcome {
+    Exit(i32),
+    Signal,
+}
+
+impl Outcome {
+    /// One entry of `ONEJUDGE_FAKE_LLMLINT_EXIT`: an exit code, or `signal`.
+    fn parse(entry: &str) -> Self {
+        if entry == "signal" {
+            return Self::Signal;
+        }
+        entry.parse().map(Self::Exit).unwrap_or_else(|e| {
+            fail(&format!(
+                "ONEJUDGE_FAKE_LLMLINT_EXIT entry `{entry}` is neither an exit code nor `signal`: {e}"
+            ))
+        })
+    }
+}
+
+/// Whether the run writes llmlint's results pointer to stderr.
+enum Pointer {
+    /// Exactly when llmlint itself does: on a run that completed (exit 0 or 1).
+    Default,
+    Off,
+    Always,
+}
+
+impl Pointer {
+    fn from_env() -> Self {
+        match std::env::var("ONEJUDGE_FAKE_LLMLINT_POINTER").as_deref() {
+            Err(std::env::VarError::NotPresent) | Ok("") => Self::Default,
+            Ok("off") => Self::Off,
+            Ok("always") => Self::Always,
+            Ok(other) => fail(&format!(
+                "ONEJUDGE_FAKE_LLMLINT_POINTER is `{other}`, not `off` or `always`"
+            )),
+            Err(e) => fail(&format!("ONEJUDGE_FAKE_LLMLINT_POINTER is unreadable: {e}")),
+        }
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let earlier = record(&args);
@@ -75,26 +118,28 @@ fn main() {
         std::process::exit(env_int("ONEJUDGE_FAKE_LLMLINT_VERSION_EXIT").unwrap_or(0));
     }
 
-    let outcome = std::env::var("ONEJUDGE_FAKE_LLMLINT_EXIT")
+    let scripted = std::env::var("ONEJUDGE_FAKE_LLMLINT_EXIT")
         .ok()
         .filter(|v| !v.is_empty())
         .unwrap_or_else(|| "0".to_string());
-    let outcomes: Vec<&str> = outcome.split(',').map(str::trim).collect();
+    let outcomes: Vec<Outcome> = scripted
+        .split(',')
+        .map(str::trim)
+        .map(Outcome::parse)
+        .collect();
     let outcome = outcomes
         .get(lint_runs_so_far)
         .or_else(|| outcomes.last())
         .copied()
-        .unwrap_or("0");
+        .unwrap_or(Outcome::Exit(0));
+    let completed = matches!(outcome, Outcome::Exit(0 | 1));
 
     let default_stdout = match outcome {
-        "0" => CLEAN_REPORT,
-        "1" => FAILING_REPORT,
+        Outcome::Exit(0) => CLEAN_REPORT,
+        Outcome::Exit(1) => FAILING_REPORT,
         _ => "",
     };
-    let default_stderr = match outcome {
-        "0" | "1" => "",
-        _ => INCOMPLETE_STDERR,
-    };
+    let default_stderr = if completed { "" } else { INCOMPLETE_STDERR };
     let stdout = match std::env::var("ONEJUDGE_FAKE_LLMLINT_STDOUT") {
         Ok(text) if text == "none" => String::new(),
         Ok(text) => text,
@@ -102,10 +147,10 @@ fn main() {
     };
     let mut stderr = std::env::var("ONEJUDGE_FAKE_LLMLINT_STDERR")
         .unwrap_or_else(|_| default_stderr.to_string());
-    let pointer = match std::env::var("ONEJUDGE_FAKE_LLMLINT_POINTER").as_deref() {
-        Ok("off") => false,
-        Ok("always") => true,
-        _ => matches!(outcome, "0" | "1"),
+    let pointer = match Pointer::from_env() {
+        Pointer::Off => false,
+        Pointer::Always => true,
+        Pointer::Default => completed,
     };
     if pointer {
         if !stderr.is_empty() && !stderr.ends_with('\n') {
@@ -115,16 +160,25 @@ fn main() {
     }
 
     let mut out = std::io::stdout().lock();
-    let _ = out.write_all(stdout.as_bytes());
-    let _ = out.flush();
+    out.write_all(stdout.as_bytes())
+        .and_then(|()| out.flush())
+        .unwrap_or_else(|e| fail(&format!("could not write the report to stdout: {e}")));
     let mut err = std::io::stderr().lock();
-    let _ = err.write_all(stderr.as_bytes());
-    let _ = err.flush();
+    err.write_all(stderr.as_bytes())
+        .and_then(|()| err.flush())
+        .unwrap_or_else(|e| fail(&format!("could not write to stderr: {e}")));
 
-    if outcome == "signal" {
-        std::process::abort();
+    match outcome {
+        Outcome::Signal => std::process::abort(),
+        Outcome::Exit(code) => std::process::exit(code),
     }
-    std::process::exit(outcome.parse().unwrap_or(2));
+}
+
+/// Report a scripting or I/O error and exit 2 — llmlint's own "could not run"
+/// code, which the provider classifies as an incomplete run, never a pass.
+fn fail(message: &str) -> ! {
+    eprintln!("onejudge-fake-llmlint: {message}");
+    std::process::exit(2);
 }
 
 /// llmlint's results pointer for this run, given the `lint` runs recorded before
@@ -177,30 +231,45 @@ fn record(args: &[String]) -> Vec<Vec<String>> {
     if path.is_empty() {
         return Vec::new();
     }
-    let so_far = std::fs::read_to_string(&path)
-        .map(|recorded| {
-            recorded
-                .lines()
-                .filter(|line| line.starts_with("[\"lint\""))
-                .filter_map(|line| serde_json::from_str(line).ok())
-                .collect()
+    let recorded = match std::fs::read_to_string(&path) {
+        Ok(recorded) => recorded,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => fail(&format!("could not read the argv record {path}: {e}")),
+    };
+    let so_far = recorded
+        .lines()
+        .filter(|line| line.starts_with("[\"lint\""))
+        .map(|line| {
+            serde_json::from_str(line).unwrap_or_else(|e| {
+                fail(&format!(
+                    "the argv record {path} holds a corrupt line `{line}`: {e}"
+                ))
+            })
         })
-        .unwrap_or_default();
+        .collect();
     let mut file = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
         .open(&path)
-        .expect("the argv record is writable");
+        .unwrap_or_else(|e| fail(&format!("could not open the argv record {path}: {e}")));
     // One `write_all` of the whole line, newline included. The judges of a panel
     // run at the same time, so two doubles append to this record at once; append
     // mode keeps each single write whole, but `writeln!` issues the text and its
     // newline as two, which interleave into two arrays on one line.
-    let line = serde_json::to_string(args).expect("argv serializes") + "\n";
+    let line = serde_json::Value::from(args.to_vec()).to_string() + "\n";
     file.write_all(line.as_bytes())
-        .expect("the argv record is writable");
+        .unwrap_or_else(|e| fail(&format!("could not write the argv record {path}: {e}")));
     so_far
 }
 
+/// The integer `name` scripts, if it is set: one that is set but not an integer is
+/// a scripting error, not the default.
 fn env_int(name: &str) -> Option<i32> {
-    std::env::var(name).ok()?.trim().parse().ok()
+    let value = std::env::var(name).ok()?;
+    Some(
+        value
+            .trim()
+            .parse()
+            .unwrap_or_else(|e| fail(&format!("{name} is `{value}`, not an integer: {e}"))),
+    )
 }

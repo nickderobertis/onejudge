@@ -19,6 +19,7 @@ publish = false
 # consumer of the library, never the reverse.
 onejudge = { path = "../onejudge" }
 oneharness-core = { workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
