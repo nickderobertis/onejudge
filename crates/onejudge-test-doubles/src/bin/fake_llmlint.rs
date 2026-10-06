@@ -108,10 +108,18 @@ impl Pointer {
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    // The two invocations the provider makes: the `--version` probe, and
+    // `lint …` (whose trailing arguments are the caller's own, passed through).
+    let probe = args == ["--version"];
+    if !probe && args.first().map(String::as_str) != Some("lint") {
+        fail(&format!(
+            "expected `--version` or `lint …`, as the provider invokes llmlint, not {args:?}"
+        ));
+    }
     let earlier = record(&args);
     let lint_runs_so_far = earlier.len();
 
-    if args.iter().any(|arg| arg == "--version") {
+    if probe {
         let version =
             std::env::var("ONEJUDGE_FAKE_LLMLINT_VERSION").unwrap_or_else(|_| "0.4.3".to_string());
         println!("llmlint {version}");
@@ -211,11 +219,16 @@ fn labels(args: &[String]) -> std::collections::BTreeMap<String, String> {
     let mut args = args.iter();
     while let Some(arg) = args.next() {
         let pair = if arg == "--label" {
-            args.next().map(String::as_str)
+            Some(args.next().map_or("", String::as_str))
         } else {
             arg.strip_prefix("--label=")
         };
-        if let Some((key, value)) = pair.and_then(|pair| pair.split_once('=')) {
+        if let Some(pair) = pair {
+            let Some((key, value)) = pair.split_once('=').filter(|(key, _)| !key.is_empty()) else {
+                fail(&format!(
+                    "`--label {pair}` is not KEY=VALUE, as llmlint requires"
+                ));
+            };
             labels.insert(key.to_string(), value.to_string());
         }
     }

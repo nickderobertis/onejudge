@@ -13,7 +13,7 @@
 // ships is one no merge job swept (AGENTS.md, "Commits, releases, and merging").
 // So the broader tier runs on that pull request, and only there:
 //
-//   * a pull request from a `release-plz-` branch   -> the broader tier;
+//   * a pull request from release-plz's branch     -> the broader tier;
 //   * any other pull request                       -> the affected tier, against
 //     the merge base of the pull request's base commit and the checked-out head;
 //   * a push to main                               -> the affected tier, against
@@ -30,10 +30,30 @@
 // reaches the output unvalidated.
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
-const RELEASE_BRANCH_PREFIX = "release-plz-";
-// The subject release-plz's release pull request squash-merges as.
+const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+
+// The subject release-plz's release pull request squash-merges as: release-plz's
+// default title, which nothing in this repository configures. If release-plz ever
+// titles it differently, the push that lands it is gated again — the safe side.
 const RELEASE_COMMIT = /^chore: release v\d+\.\d+\.\d+\S* \(#\d+\)$/;
+
+/**
+ * The branch release-plz opens its release pull request from, read from the
+ * auto-merge step of `.github/workflows/release-plz.yml` — the one place this
+ * repository names it — so the pull request this script sweeps is the one that
+ * workflow merges. Null when it cannot be read, which sweeps every pull request.
+ */
+function releaseBranchPrefix() {
+  try {
+    const workflow = readFileSync(join(root, ".github/workflows/release-plz.yml"), "utf8");
+    return workflow.match(/startswith\("([A-Za-z0-9._/-]+)"\)/)?.[1] ?? null;
+  } catch {
+    return null;
+  }
+}
 const SHA = /^[0-9a-f]{40}([0-9a-f]{24})?$/;
 
 function note(message) {
@@ -73,8 +93,12 @@ if (event === null || typeof event !== "object" || Array.isArray(event)) {
 }
 
 if (name === "pull_request") {
+  const prefix = releaseBranchPrefix();
+  if (!prefix) {
+    emit("sweep", null, "release-plz.yml names no release branch prefix, so no pull request can be scoped");
+  }
   const head = event.pull_request?.head?.ref ?? "";
-  if (typeof head === "string" && head.startsWith(RELEASE_BRANCH_PREFIX)) {
+  if (typeof head === "string" && head.startsWith(prefix)) {
     emit("sweep", null, "release-plz's release pull request: the commit that ships is swept here");
   }
   const base = mergeBase(event.pull_request?.base?.sha);

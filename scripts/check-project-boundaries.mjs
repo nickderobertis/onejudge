@@ -92,11 +92,28 @@ function cargoEdges() {
   return edges;
 }
 
-const allow = JSON.parse(readFileSync(join(root, "nx.json"), "utf8")).boundaries?.allow;
-if (!allow) {
+let nxJson;
+try {
+  nxJson = JSON.parse(readFileSync(join(root, "nx.json"), "utf8"));
+} catch (error) {
+  fail([`nx.json could not be read: ${error.message}`, "ACTION: restore a readable, valid nx.json"]);
+}
+const allow = nxJson?.boundaries?.allow;
+const typeTag = /^type:[a-z][a-z0-9-]*$/;
+const wellFormed =
+  allow !== null &&
+  typeof allow === "object" &&
+  !Array.isArray(allow) &&
+  Object.entries(allow).every(
+    ([type, allowed]) =>
+      typeTag.test(type) &&
+      Array.isArray(allowed) &&
+      allowed.every((target) => typeof target === "string" && target in allow),
+  );
+if (!wellFormed) {
   fail([
-    'nx.json has no "boundaries.allow" table to enforce',
-    "ACTION: restore it — one entry per `type:` tag, listing the types that tag may depend on",
+    'nx.json has no well-formed "boundaries.allow" table to enforce',
+    "ACTION: restore it — one `type:` tag per key, each listing the declared `type:` tags it may depend on",
   ]);
 }
 

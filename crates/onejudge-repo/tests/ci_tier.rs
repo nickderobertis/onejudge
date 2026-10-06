@@ -70,8 +70,13 @@ fn repo() -> Repo {
 
 /// The script's `key=value` lines for `event` as `name`, from `repo`'s checkout.
 fn route(repo: &Repo, name: &str, event: &serde_json::Value) -> (String, String, String) {
+    route_payload(repo, name, &event.to_string())
+}
+
+/// The same, for a payload file holding exactly `payload`.
+fn route_payload(repo: &Repo, name: &str, payload_text: &str) -> (String, String, String) {
     let payload = repo.dir.join(format!("{name}-event.json"));
-    std::fs::write(&payload, event.to_string()).unwrap();
+    std::fs::write(&payload, payload_text).unwrap();
     let output = Command::new("node")
         .arg(script())
         .current_dir(&repo.dir)
@@ -219,4 +224,44 @@ fn any_other_event_runs_the_broader_tier() {
             "{name}"
         );
     }
+}
+
+#[test]
+fn a_payload_that_is_not_an_event_object_runs_the_broader_tier() {
+    let repo = repo();
+    let sweep = ("sweep".to_owned(), String::new(), "--sweep".to_owned());
+    for payload in ["{ not json", "null", "[]", "\"pull_request\""] {
+        assert_eq!(
+            route_payload(&repo, "pull_request", payload),
+            sweep,
+            "{payload}"
+        );
+    }
+    // And one the runner never wrote at all.
+    let output = Command::new("node")
+        .arg(script())
+        .current_dir(&repo.dir)
+        .env("GITHUB_EVENT_NAME", "pull_request")
+        .env("GITHUB_EVENT_PATH", repo.dir.join("no-such-event.json"))
+        .output()
+        .expect("node runs");
+    assert!(output.status.success());
+    assert!(String::from_utf8_lossy(&output.stdout).contains("tier=sweep"));
+}
+
+#[test]
+fn the_release_branch_is_the_one_release_plzs_workflow_merges() {
+    // The prefix the script routes on is read from release-plz.yml's auto-merge
+    // step, so a pull request from any other prefix is an ordinary one.
+    let workflow = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.github/workflows/release-plz.yml"),
+    )
+    .unwrap();
+    assert!(
+        workflow.contains("startswith(\"release-plz-\")"),
+        "release-plz.yml no longer names the release branch the way this suite drives it"
+    );
+    let repo = repo();
+    let ordinary = pull_request("release-please--branches--main", &repo.moved);
+    assert_eq!(route(&repo, "pull_request", &ordinary).0, "affected");
 }

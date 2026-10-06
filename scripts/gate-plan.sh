@@ -40,9 +40,13 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 STATIC_TARGETS="format-check lint"
 
 usage() {
-    sed -n '6p' "$0" | sed 's/^# *//' >&2
+    echo "usage: scripts/gate-plan.sh [--sweep] [--targets a,b] [--projects SELECTOR] [--print-plan]" >&2
     exit 2
 }
+
+# The targets the gate knows: a name outside them selects no task, which would
+# read as a pass, so it is refused instead.
+KNOWN_TARGETS="format-check lint typecheck generate-check doc build test coverage audit"
 
 tier=affected
 targets=""
@@ -75,6 +79,13 @@ plain_revision() {
     git check-ref-format --allow-onelevel "$1" >/dev/null 2>&1 ||
         printf '%s' "$1" | grep -Eq '^[0-9a-f]{7,64}$'
 }
+
+for target in $(tr ',' ' ' <<<"$targets"); do
+    case " $KNOWN_TARGETS " in
+        *" $target "*) ;;
+        *) echo "gate: unknown target '$target' (the gate's targets: $KNOWN_TARGETS)" >&2; exit 2 ;;
+    esac
+done
 
 base=""
 source=""

@@ -1020,12 +1020,21 @@ fn emit_error(message: &str) -> ! {
 /// refuse to clobber an existing file without `--force`, else write a minimal
 /// valid toml and print the confirmation line the real CLI emits.
 fn run_init(args: &[String]) -> ! {
-    let force = args.iter().any(|a| a == "--force");
-    let path = args
-        .iter()
-        .find(|a| !a.starts_with("--"))
-        .cloned()
-        .unwrap_or_else(|| "oneharness.toml".to_string());
+    let mut force = false;
+    let mut path = None;
+    for arg in args {
+        match arg.as_str() {
+            "--force" => force = true,
+            flag if flag.starts_with("--") => {
+                emit_error(&format!(
+                    "`init` does not take `{flag}` (it takes [PATH] [--force])"
+                ));
+            }
+            positional if path.is_none() => path = Some(positional.to_string()),
+            extra => emit_error(&format!("`init` takes one PATH, not also `{extra}`")),
+        }
+    }
+    let path = path.unwrap_or_else(|| "oneharness.toml".to_string());
     if std::path::Path::new(&path).exists() && !force {
         eprintln!("{path} already exists (use --force to overwrite)");
         std::process::exit(1);
@@ -1398,22 +1407,27 @@ fn supervisor_text(prompt: &str) -> String {
     }
 }
 
-/// Parse `(min, max)` out of a `scale from X to Y` phrase, defaulting to `(0,10)`.
+/// Parse `(min, max)` out of the numeric judge prompt's `scale from X to Y`
+/// phrase. A numeric prompt that does not state its scale is a broken producer,
+/// so it is refused rather than scored on a scale this double made up.
 fn parse_scale(prompt: &str) -> (f64, f64) {
-    let tail = match prompt.split("scale from ").nth(1) {
-        Some(t) => t,
-        None => return (0.0, 10.0),
+    let Some(tail) = prompt.split("scale from ").nth(1) else {
+        emit_error("a numeric judge prompt with no `scale from X to Y`");
     };
-    let tokens: Vec<&str> = tail.split_whitespace().collect();
     // Shape: "<min> to <max> (inclusive)."
-    let min = tokens.first().and_then(|t| t.parse().ok());
-    let max = tokens
-        .get(2)
-        .and_then(|t| t.trim_end_matches(['.', ',']).parse().ok());
-    match (min, max) {
-        (Some(lo), Some(hi)) => (lo, hi),
-        _ => (0.0, 10.0),
+    let tokens: Vec<&str> = tail.split_whitespace().collect();
+    let bound = |at: usize| -> f64 {
+        tokens
+            .get(at)
+            .and_then(|t| t.trim_end_matches(['.', ',']).parse().ok())
+            .unwrap_or_else(|| {
+                emit_error(&format!("the numeric scale `{tail:.40}` does not parse"))
+            })
+    };
+    if tokens.get(1) != Some(&"to") {
+        emit_error(&format!("the numeric scale `{tail:.40}` is not `X to Y`"));
     }
+    (bound(0), bound(2))
 }
 
 /// Out-of-band turn control, modelled with **oneharness's own** control values:
@@ -1426,9 +1440,9 @@ fn parse_scale(prompt: &str) -> (f64, f64) {
 /// What is *not* oneharness's own any more is the listener's state machine; see
 /// `run_server`.
 ///
-/// The store lives wherever `ONEJUDGE_FAKE_SESSION_DIR` says. A real oneharness
-/// falls back to the platform state dir; the double refuses to, because a test
-/// must never write into the developer's own session store.
+/// The store lives wherever the run's `[[control-store:DIR]]` marker says. A real
+/// oneharness falls back to the platform state dir; the double refuses to, because
+/// a test must never write into the developer's own session store.
 ///
 /// `[[control-unsupported]]` refuses the ask the way a harness with no control
 /// mechanism does, and `[[control-linger:SINK]]` hands the socket to a child that
@@ -1896,10 +1910,16 @@ mod engine {
             .unwrap_or_else(|e| emit_error(&format!("could not read the working directory: {e}")));
         let mut i = 0;
         while i < args.len() {
-            let next = args.get(i + 1).cloned();
+            let next = args
+                .get(i + 1)
+                .filter(|value| !value.starts_with("--"))
+                .cloned();
             match (args[i].as_str(), next) {
                 ("--config", Some(path)) => explicit.push(PathBuf::from(path)),
                 ("--cwd", Some(dir)) => cwd = PathBuf::from(dir),
+                (flag @ ("--config" | "--cwd"), None) => {
+                    emit_error(&format!("{flag} needs a value"))
+                }
                 (other, _) => emit_error(&format!("`config` does not take `{other}` here")),
             }
             i += 2;

@@ -32,8 +32,6 @@
       "Bash(just msrv)",
       "Bash(just python-sdk-check)",
       "Bash(just graph:*)",
-      "Bash(./scripts/nx run:*)",
-      "Bash(./scripts/nx run-many:*)",
       "Bash(./scripts/nx show:*)",
       "Bash(./scripts/gate-plan.sh:*)",
       "Bash(just upgrade)",

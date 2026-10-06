@@ -143,7 +143,6 @@ evals:
     assert_eq!(summary.report.transcript.assistant_turns(), 1);
     assert_eq!(exit_code(&summary), 0);
 
-    // The done_when + both evals are recorded as verdicts in the report.
     assert_eq!(summary.report.verdicts.len(), 3);
     // The boolean eval "echo" matched (the reply is "echo: please commit").
     let echo_eval = summary
@@ -656,7 +655,6 @@ fn split_kind_json_covers_buffered_respond_and_judge() {
     let mut sink = |_: &str| {};
     let summary = run_plan(plan, Format::Json, &mut sink).unwrap();
     assert_eq!(summary.report.transcript.assistant_turns(), 2);
-    // The echo judge scored the "working" criterion against the transcript.
     assert!(matches!(
         summary.eval_results[0].outcome,
         EvalOutcome::Boolean(true)
@@ -733,7 +731,6 @@ assessment: Identify follow-up work and mention tool actions.
         .unwrap();
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
-    // The stdout is the versioned Report contract — parse it back.
     let report: onejudge::Report = serde_json::from_str(&stdout).unwrap();
     assert_eq!(report.schema_version, onejudge::SCHEMA_VERSION);
     assert!(!report.verdicts.is_empty());
@@ -832,7 +829,6 @@ fn binary_init_scaffolds_onejudge_and_oneharness_configs() {
     assert!(status.success());
     let written = std::fs::read_to_string(dir.join("onejudge.yaml")).unwrap();
     assert!(Config::from_yaml(&written).is_ok());
-    // Both oneharness config files were scaffolded by the shelled-out `init`.
     assert!(dir.join("oneharness.toml").exists());
     assert!(dir.join("oneharness.judge.toml").exists());
 
@@ -1014,7 +1010,6 @@ fn binary_env_selects_the_provider_backend() {
     )
     .unwrap();
 
-    // Without the env override, `command` under `kind: oneharness` is rejected.
     let output = Command::new(onejudge_bin())
         .args(["run", path.to_str().unwrap()])
         .env_remove("ONEJUDGE_PROVIDER")
@@ -1025,7 +1020,6 @@ fn binary_env_selects_the_provider_backend() {
         .unwrap()
         .contains("command"));
 
-    // ONEJUDGE_PROVIDER=command flips the kind so the echo argv is valid.
     let output = Command::new(onejudge_bin())
         .args(["run", path.to_str().unwrap()])
         .env("ONEJUDGE_PROVIDER", "command")
@@ -1234,14 +1228,12 @@ fn binary_skill_body_and_system_prompt_both_reach_the_harness() {
         .args(["run", config.to_str().unwrap()])
         .output()
         .unwrap();
-    // The skill body's `[[done]]` ended the loop before the 4-turn cap (completed).
     assert!(
         output.status.success(),
         "skill body's [[done]] reached the harness"
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains("Status: completed"));
-    // The system prompt's `[[event]]` reached the harness (drawn in the text).
     assert!(
         stdout.contains("$ git status"),
         "system prompt's event reached the harness: {stdout}"
@@ -2327,7 +2319,6 @@ fn binary_run_json_reports_each_judges_decision_and_labels_the_judge_side() {
         report.completion_reason.as_deref(),
         Some("[reviewer] looks right; [lint] completion criterion found in transcript")
     );
-    // The label rides the judge side's process records and none of the agent's.
     for process in &report.processes {
         match process.role {
             onejudge::TelemetryRole::Agent => assert_eq!(process.judge, None, "{process:?}"),
@@ -2478,7 +2469,6 @@ fn binary_run_json_writes_both_judges_decisions_into_the_failure_report() {
     assert_eq!(turn.decisions[0].decision, onejudge::Decision::Error);
     assert_eq!(turn.decisions[1].judge, "lint");
     assert_eq!(turn.decisions[1].decision, onejudge::Decision::Continue);
-    // The judge-side processes of the failed run are labelled too.
     assert!(failure
         .processes
         .iter()
@@ -3867,7 +3857,7 @@ fn a_run_recorded_before_the_segment_cutover_is_still_read_back() {
 
 #[cfg(unix)]
 #[test]
-fn an_in_process_turn_records_history_without_reading_the_legacy_index_or_the_store() {
+fn recording_in_process_history_reads_no_legacy_index_and_changes_no_other_session() {
     use oneharness_core::domain::history::HistoryId;
     use oneharness_core::domain::history_index::{
         HistoryIndexEntry, SegmentKind, UtcDate, INDEX_DIR, LEGACY_EVENT_INDEX_FILE,
@@ -4498,7 +4488,6 @@ fn default_posture_run(seam: Seam, bin: &str) -> (PostureRun, PostureOutcome) {
     );
     let outcome = run.run_bin(bin, &provider, "", &[]);
     assert_eq!(outcome.code, Some(0), "{}", outcome.stderr);
-    // The supervisor completed the run in the fake harness's own words.
     let report: serde_json::Value = serde_json::from_str(&outcome.stdout).unwrap();
     assert_eq!(report["completion_reason"], "evaluated", "{report}");
     (run, outcome)
@@ -5141,7 +5130,6 @@ fn a_bare_oneharness_providers_judge_publishes_its_events_under_its_own_label() 
             .all(|t| t["judge"] == "oneharness" && t["turn"] == 1));
         let report = outcome.report();
         assert!(report.get("judge_decisions").is_none(), "{report}");
-        // The posture still rides the judge side's attribution.
         let judged: Vec<&serde_json::Value> = report["telemetry"]["attribution"]
             .as_array()
             .unwrap()
@@ -5320,7 +5308,6 @@ fn text_output_draws_the_workers_events_and_each_judges_through_oneharnesss_rend
                 "{seam:?}: {prompt}"
             );
         }
-        // …and the report's transcript carries the same single tool event.
         let report = outcome.report_from_watch(&records);
         assert_eq!(
             report["transcript"]["messages"][1]["events"]

@@ -12,8 +12,8 @@
 #
 # `oneharness` 0.20.0 links `oneharness-core` 0.22.0, the last core before the
 # cutover (`cargo install oneharness --version 0.20.0 --locked --root <dir>`).
-# The fake harness is this tree's double (`cargo build -p onejudge-test-doubles
-# --bin onejudge-fake-harness`), reached as `claude-code` through ordinary
+# The fake harness is this tree's double (`./scripts/nx run
+# onejudge-test-doubles:build` puts it in `target/debug/`), reached as `claude-code` through ordinary
 # oneharness config, so the record names the harness onejudge's fake oneharness
 # reports. The project lives at a fixed path so the store's project slug does
 # not name the capturing host. The store is written to

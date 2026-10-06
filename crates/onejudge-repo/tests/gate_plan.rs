@@ -259,3 +259,82 @@ fn an_nx_base_that_is_not_a_plain_ref_or_sha_fails_closed_naming_it() {
     assert_eq!(output.status.code(), Some(2));
     assert!(String::from_utf8_lossy(&output.stderr).contains("names no commit"));
 }
+
+/// `gate-plan.sh [flags]` without `--print-plan`: the assignments `just check`
+/// evaluates, read back the way it reads them — through a shell.
+fn assignments(
+    dir: &Path,
+    base: &str,
+    flags: &[&str],
+) -> std::collections::BTreeMap<String, String> {
+    let script = format!(
+        "eval \"$(bash scripts/gate-plan.sh {})\" && for v in GATE_TIER GATE_BASE GATE_TARGETS GATE_PROJECTS GATE_EXCLUDE GATE_EXTERNALS GATE_STATIC; do printf '%s=%s\\n' \"$v\" \"${{!v}}\"; done",
+        flags.join(" ")
+    );
+    let output = Command::new("bash")
+        .current_dir(dir)
+        .args(["-c", &script])
+        .env("NX_BASE", base)
+        .output()
+        .expect("bash runs");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| line.split_once('='))
+        .map(|(key, value)| (key.to_owned(), value.to_owned()))
+        .collect()
+}
+
+#[test]
+fn the_recipe_reads_the_plan_as_shell_assignments() {
+    let (dir, base) = workspace();
+    change(&dir, "lib/src.txt");
+    let plan = assignments(&dir, &base, &[]);
+    assert_eq!(plan["GATE_TIER"], "affected");
+    assert_eq!(plan["GATE_BASE"], base);
+    // No narrowing: the recipe's own default target list applies.
+    assert_eq!(plan["GATE_TARGETS"], "");
+    assert_eq!(plan["GATE_PROJECTS"], "lib,lib-e2e,sdk");
+    // Everything not selected is excluded, the external tier included.
+    assert_eq!(plan["GATE_EXCLUDE"], "live");
+    assert_eq!(plan["GATE_EXTERNALS"], "live");
+    assert_eq!(plan["GATE_STATIC"], "format-check lint");
+}
+
+#[test]
+fn targets_and_projects_narrow_the_plan() {
+    let (dir, base) = workspace();
+    change(&dir, "lib/src.txt");
+    // A tag selector intersects with what the change reaches.
+    let plan = assignments(&dir, &base, &["--projects", "tag:type:e2e"]);
+    assert_eq!(plan["GATE_PROJECTS"], "lib-e2e");
+    assert_eq!(plan["GATE_EXCLUDE"], "lib,live,sdk");
+    assert_eq!(plan["GATE_EXTERNALS"], "");
+    // A target list narrows what runs; the external tier keeps only the static
+    // targets it names.
+    let plan = assignments(&dir, &base, &["--targets", "test,lint"]);
+    assert_eq!(plan["GATE_TARGETS"], "lint test");
+    assert_eq!(plan["GATE_STATIC"], "lint");
+    let plan = assignments(&dir, &base, &["--targets", "test,coverage"]);
+    assert_eq!(plan["GATE_STATIC"], "");
+}
+
+#[test]
+fn an_unknown_target_or_a_missing_value_is_refused() {
+    let (dir, base) = workspace();
+    for (flags, expected) in [
+        (&["--targets", "tset"][..], "unknown target 'tset'"),
+        (&["--targets"][..], "--targets needs a list"),
+        (&["--projects"][..], "--projects needs a selector"),
+        (&["--bogus"][..], "usage: scripts/gate-plan.sh"),
+    ] {
+        let output = plan(&dir, Some(&base), flags);
+        assert_eq!(output.status.code(), Some(2), "{flags:?}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains(expected), "{flags:?}: {stderr}");
+    }
+}

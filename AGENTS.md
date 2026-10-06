@@ -123,11 +123,9 @@ Use the `just` recipes; do not hand-roll equivalents. `just --list` is the index
   it becomes the squash body.
 - **Where each gate tier runs (ci.md "Staged gates").** onejudge **batches**
   releases: the release-plz PR accumulates every merge since the last release, so
-  the commit that ships is one no merge job swept. So pull requests and pushes to
-  main run the **affected tier** against an explicitly derived merge base, and the
-  **broader tier** runs on the release-plz PR — and the push that lands it is not
-  gated again (`scripts/ci-tier.mjs` routes by event; `tests/ci_tier.rs` drives it).
-  `check` gates the Python SDK's projects too, so no separate job re-runs them.
+  the commit that ships is one no merge job swept. So the **broader tier** runs on
+  that PR and nowhere else, and every other run is the affected tier
+  (`scripts/ci-tier.mjs`).
 - **Releases: fully automated, no manual deploy step.** `release-plz` opens a
   release PR from the merged Conventional-Commits history; merging it writes the
   version + `CHANGELOG.md`, tags `vX.Y.Z`, and publishes to crates.io. Nobody has

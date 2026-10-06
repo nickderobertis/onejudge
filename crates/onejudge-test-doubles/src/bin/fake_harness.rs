@@ -398,13 +398,24 @@ fn steering(args: &[String]) -> (String, String) {
     let mut text = args.join("\u{1f}");
     let mut buffer = String::new();
     if let Some(format) = args.windows(2).find(|w| w[0] == "--input-format") {
-        let read = if format[1] == "text" {
-            std::io::Read::read_to_string(&mut std::io::stdin().lock(), &mut buffer)
-        } else {
-            std::io::BufRead::read_line(&mut std::io::stdin().lock(), &mut buffer)
+        let read = match format[1].as_str() {
+            "text" => std::io::Read::read_to_string(&mut std::io::stdin().lock(), &mut buffer),
+            "stream-json" => std::io::BufRead::read_line(&mut std::io::stdin().lock(), &mut buffer),
+            other => fail(&format!(
+                "`--input-format {other}` is not one oneharness sends"
+            )),
         };
         if let Err(e) = read {
             fail(&format!("could not read the prompt from stdin: {e}"));
+        }
+        // A control stream's prompt frame is one JSON object on one line.
+        if format[1] == "stream-json"
+            && !serde_json::from_str::<serde_json::Value>(&buffer)
+                .is_ok_and(|frame| frame.is_object())
+        {
+            fail(&format!(
+                "the stream-json prompt frame is not a JSON object: {buffer:?}"
+            ));
         }
         text.push('\u{1f}');
         text.push_str(&buffer);
@@ -493,13 +504,11 @@ fn markers(text: &str, name: &str) -> Vec<String> {
 /// streaming journeys assert.
 fn emit(line: &str) {
     let mut out = std::io::stdout();
-    let _ = writeln!(out, "{line}");
-    let _ = out.flush();
+    writeln!(out, "{line}")
+        .and_then(|()| out.flush())
+        .unwrap_or_else(|e| fail(&format!("could not write to stdout: {e}")));
 }
 
-/// `value` as a JSON string literal. Enough for the marker text these doubles
-/// carry; a control character or a lone surrogate is not something a marker can
-/// express.
 /// `value` as a JSON string literal, every character escaped as JSON requires.
 fn json_string(value: &str) -> String {
     serde_json::Value::from(value).to_string()

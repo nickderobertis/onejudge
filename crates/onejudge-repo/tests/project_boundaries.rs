@@ -225,6 +225,18 @@ fn a_missing_table_or_an_unknown_project_is_refused_with_a_next_step() {
     allow(&dir, false);
     refuses(
         &check(&dir, &[]),
-        "nx.json has no \"boundaries.allow\" table to enforce",
+        "nx.json has no well-formed \"boundaries.allow\" table to enforce",
     );
+    // A table whose entry is not a list of declared types is no table at all: a
+    // string would otherwise be matched by substring.
+    write(
+        &dir.join("nx.json"),
+        r#"{"boundaries":{"allow":{"type:contract":[],"type:e2e":"type:contract","type:sdk":[]}}}"#,
+    );
+    refuses(
+        &check(&dir, &[]),
+        "nx.json has no well-formed \"boundaries.allow\" table to enforce",
+    );
+    write(&dir.join("nx.json"), "{ not json");
+    refuses(&check(&dir, &[]), "nx.json could not be read");
 }
