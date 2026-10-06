@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 
 pub use schema::Declaration;
 
+// llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] this restatement's drift gate is `onejudge-release-targets`' `the_restated_schema_matches_the_canonical_definition`, which reconciles every constant and key list below with onevcs's own implementation; it reads the network, so by the rule that external contact leaves the affected tier it runs on its schedule and workflow rather than in `check`.
 /// The canonical release-target schema, as a reader that refuses.
 ///
 /// A restatement of somebody else's contract is a thing that drifts, so this is
@@ -47,6 +48,7 @@ pub mod schema {
     pub const TARGET_KEYS: [&str; 6] = ["id", "name", "what", "published_by", "manifest", "covers"];
     pub const RETIRED_KEYS: [&str; 2] = ["id", "why"];
 
+    // llmlint: ignore-block[invalid_states_unrepresentable] these are the serde shapes of another repository's document (nickderobertis/onevcs's canonical release-target schema), moved verbatim from the test that owned them; nothing builds one except `parse`, which refuses every malformed id, name and prose field before it returns, so no unvalidated value reaches a caller.
     /// What one repository publishes, as its own `release-targets.toml` declares it.
     #[derive(Debug, Deserialize)]
     pub struct Declaration {
@@ -64,7 +66,6 @@ pub mod schema {
         pub retired: Vec<RetiredArtifact>,
     }
 
-    // llmlint: ignore-block[invalid_states_unrepresentable] these are the serde shapes of another repository's document (nickderobertis/onevcs's canonical release-target schema), moved verbatim from the test that owned them; nothing builds one except `parse`, which refuses every malformed id, name and prose field before it returns, so no unvalidated value reaches a caller.
     /// One consumable artifact: something a dependent names in order to depend on it.
     #[derive(Debug, Deserialize)]
     pub struct DeclaredTarget {
@@ -428,7 +429,9 @@ pub mod schema {
         Ok(())
     }
 }
+// llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
 
+// llmlint: ignore-block[no_panics_on_recoverable_errors] test support for the two release-target suites, and nothing else links it: each panic here is the failed assertion the calling test reports, naming what was missing, exactly as an `assert!` in the test would.
 /// The workspace root: the checkout the declaration and the release configuration
 /// both live in.
 pub fn repo_root() -> PathBuf {
@@ -542,3 +545,4 @@ pub mod probe {
         assert!(elapsed < BOUND, "{args:?} took {elapsed:?}");
     }
 }
+// llmlint: ignore-end[no_panics_on_recoverable_errors]

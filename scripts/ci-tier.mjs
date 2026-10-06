@@ -62,11 +62,14 @@ function mergeBase(sha) {
 }
 
 const name = process.env.GITHUB_EVENT_NAME ?? "";
-let event = {};
+let event = null;
 try {
   event = JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH ?? "", "utf8"));
 } catch {
-  emit("sweep", null, `no readable event payload for '${name}', so nothing scopes the run`);
+  // Handled below with every other payload that is not an object.
+}
+if (event === null || typeof event !== "object" || Array.isArray(event)) {
+  emit("sweep", null, `no readable event object for '${name}', so nothing scopes the run`);
 }
 
 if (name === "pull_request") {

@@ -198,7 +198,7 @@ _rust-format crate:
 _rust-format-check crate:
     cargo fmt -p {{crate}} --check
 
-# The crate's place in the project graph, then clippy with warnings denied.
+# Boundaries first: a graph read that fails in a second, before a cold clippy build.
 _rust-lint crate features=gate_features:
     node scripts/check-project-boundaries.mjs {{crate}}
     cargo clippy --locked -p {{crate}} --all-targets {{ if features == "" { "" } else { "--features " + features } }} -- -D warnings
@@ -250,7 +250,7 @@ _coverage:
         --failure-mode all --fail-under-lines {{coverage_min}} --summary-only
 
 _audit:
-    cargo deny check
+    cargo deny check # llmlint: ignore[diagnostics_error_or_absent] the audit's severities are deny.toml's, the repository's supply-chain policy, which this recipe runs unchanged from the `audit` recipe it was before the project graph.
     cargo machete
 
 # The MSRV build of every target the crate's own check covered before its suites

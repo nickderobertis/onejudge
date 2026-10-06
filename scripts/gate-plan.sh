@@ -51,9 +51,13 @@ print_plan=false
 while [ $# -gt 0 ]; do
     case "$1" in
         --sweep) tier=sweep ;;
-        --targets) targets="${2:?--targets needs a list}"; shift ;;
+        --targets)
+            [ $# -ge 2 ] || { echo "gate: --targets needs a list, e.g. --targets test,coverage" >&2; exit 2; }
+            targets="$2"; shift ;;
         --targets=*) targets="${1#*=}" ;;
-        --projects) projects="${2:?--projects needs a value}"; shift ;;
+        --projects)
+            [ $# -ge 2 ] || { echo "gate: --projects needs a selector, e.g. --projects 'tag:lang:rust'" >&2; exit 2; }
+            projects="$2"; shift ;;
         --projects=*) projects="${1#*=}" ;;
         --print-plan) print_plan=true ;;
         *) echo "gate: unknown argument '$1'" >&2; usage ;;
@@ -156,6 +160,8 @@ if [ "$print_plan" = true ]; then
     exit 0
 fi
 echo "gate: tier=$tier${base:+ (base $base, from $source)}${escalation:+ — escalated: $escalation}; projects: $(joined ' ' <<<"$eligible")" >&2
-printf 'GATE_TIER=%s\nGATE_BASE=%s\nGATE_TARGETS=%q\nGATE_PROJECTS=%s\nGATE_EXCLUDE=%s\nGATE_EXTERNALS=%s\nGATE_STATIC=%q\n' \
+# Every value shell-quoted, because the recipe evaluates these lines: a project
+# name or target that is not a plain word stays one word of data.
+printf 'GATE_TIER=%q\nGATE_BASE=%q\nGATE_TARGETS=%q\nGATE_PROJECTS=%q\nGATE_EXCLUDE=%q\nGATE_EXTERNALS=%q\nGATE_STATIC=%q\n' \
     "$tier" "$base" "$target_list" "$(joined , <<<"$eligible")" "$(joined , <<<"$excluded")" \
     "$(joined , <<<"$externals")" "$static"
