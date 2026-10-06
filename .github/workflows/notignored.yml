@@ -6,9 +6,9 @@
 # read-only token cannot upsert a comment), and a required context that never
 # reports would block them forever. It is a review artifact; the gate is `just check`.
 #
-# No in-repo e2e: the comment behaviour belongs to nickderobertis/notignored and is
-# tested there. This file only wires it (trigger, permissions, fork guard, full
-# history), which actionlint checks; nothing here gates a merge.
+# The comment behaviour belongs to nickderobertis/notignored and is tested there.
+# This file's wiring (trigger, permissions, fork guard, full history, and that no
+# required job needs it) is held by `crates/onejudge/tests/workflows.rs`.
 
 name: notignored
 
