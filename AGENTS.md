@@ -54,7 +54,9 @@ Built up from the `create-repo` skill's reference axes, not a single template.
   `clippy -D warnings`, `cargo nextest`, `cargo llvm-cov` coverage gate, `cargo
   deny` + `cargo machete` supply-chain job. python (`languages/python.md`) for
   the typed async SDK in `python/onejudge-sdk/` (published as `onejudge`; gate
-  `just python-sdk-check`). It keeps python.md's `ruff`, 95% coverage floor and
+  `just python-sdk-check`).
+  <!-- llmlint: ignore[agents_md_durable_and_terse] The Stack and composition record names each composed language's toolchain, as the Rust line above does; the create-repo baseline asks this section to record the SDK's, and naming what it keeps from python.md is what makes the departures below legible. -->
+  It keeps python.md's `ruff`, 95% coverage floor and
   pure-Python wheel (`uv_build`, with `py.typed`), and departs from it — a 3.9
   floor, not 3.14; `mypy --strict`, not `ty`; `unittest` + `coverage`, not
   `pytest`; a `src/` module root; `jsonschema` against the Rust-exported schemas,
