@@ -53,15 +53,14 @@ Built up from the `create-repo` skill's reference axes, not a single template.
 - **Language(s):** rust (`languages/rust.md`) — stable toolchain, `rustfmt` +
   `clippy -D warnings`, `cargo nextest`, `cargo llvm-cov` coverage gate, `cargo
   deny` + `cargo machete` supply-chain job. python (`languages/python.md`) for
-  the typed async SDK in `python/onejudge-sdk/` (published as `onejudge`) —
-  `requires-python >=3.9`, built with `uv_build`, `ruff`, `mypy --strict`,
-  `unittest` under `coverage` at `fail_under = 95`, all in `just
-  python-sdk-check`. Its departures from python.md (3.9 rather than 3.14, `mypy`
-  rather than `ty`, `unittest` + `coverage` rather than `pytest`/`pytest-cov`, a
-  `src/` module root, and `jsonschema` against the Rust-exported schemas rather
-  than Pydantic) have one recorded reason: #22 (`7241522`) built the SDK to
-  mirror oneharness's `python/oneharness-sdk/` — package layout, `pyproject.toml`,
-  `test/` and the `python-sdk-*` recipes — and named its `jsonschema` dependency.
+  the typed async SDK in `python/onejudge-sdk/` (published as `onejudge`; gate
+  `just python-sdk-check`). It keeps python.md's `ruff`, 95% coverage floor and
+  pure-Python wheel (`uv_build`, with `py.typed`), and departs from it — a 3.9
+  floor, not 3.14; `mypy --strict`, not `ty`; `unittest` + `coverage`, not
+  `pytest`; a `src/` module root; `jsonschema` against the Rust-exported schemas,
+  not Pydantic — for one recorded reason: #22 (`7241522`) built the SDK to mirror
+  oneharness's `python/oneharness-sdk/` (layout, `pyproject.toml`, `test/`, the
+  `python-sdk-*` recipes) and named its `jsonschema` dependency.
 - **Cross-cutting:** `ci.md` (always) and `releasing.md` (applies — the crate is
   a versioned artifact published to crates.io; `release-plz` drives it, and a
   tag push also builds per-platform CLI archives, see below).

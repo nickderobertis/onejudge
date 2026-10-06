@@ -1,23 +1,20 @@
-# Comment on every pull request with the lint and type-check suppressions it adds.
+# Comment on each pull request with the lint/type-check suppressions it adds, so a
+# reviewer sees every bypass (rule, reason, link) without reading the diff line by
+# line. From the create-repo `notignored.yml.template`, comments condensed.
 #
-# A `# noqa`, an `#[allow(dead_code)]`, an `llmlint: ignore` — each costs one line
-# to add and scrolls past review unremarked, and in agent-written code silencing a
-# rule is often easier than fixing it. notignored posts one sticky comment listing
-# the suppressions *this change introduced*, each with its rule, its stated reason,
-# and a link to the line — so a human reviewing at a high level sees every bypass
-# without reading the diff line by line. It is drop-in: no config, no install.
-#
-# Deliberately NOT a required status check. It skips fork pull requests (whose
+# Deliberately NOT a required status check: it skips fork pull requests (whose
 # read-only token cannot upsert a comment), and a required context that never
-# reports would block them forever. It is a review artifact, not a gate — the gate
-# is `just check`. See references/ci.md.
+# reports would block them forever. It is a review artifact; the gate is `just check`.
+#
+# No in-repo e2e: the comment behaviour belongs to nickderobertis/notignored and is
+# tested there. This file only wires it (trigger, permissions, fork guard, full
+# history), which actionlint checks; nothing here gates a merge.
 
 name: notignored
 
 on:
   pull_request:
 
-# Least privilege: read the tree, write the one sticky comment, nothing else.
 permissions:
   contents: read
   pull-requests: write
@@ -39,10 +36,5 @@ jobs:
           # The scan diffs against the base branch, which a shallow checkout omits.
           fetch-depth: 0
 
-      # `@v0` is a floating major tag: it follows every 0.x release and moves only
-      # once that release's artifacts have published, so it never resolves to
-      # unreleased work. Pin exactly (`@v0.1.11`) only where a reproducible build
-      # matters more than picking up fixes. Every input has a usable default —
-      # `diff-base` is the PR's base branch, `paths` the whole repo — so a repo
-      # that wants the default review artifact passes none.
+      # Floating major: picks up released 0.x fixes; all inputs keep their defaults.
       - uses: nickderobertis/notignored@v0
