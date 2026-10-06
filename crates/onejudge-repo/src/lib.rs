@@ -64,6 +64,7 @@ pub mod schema {
         pub retired: Vec<RetiredArtifact>,
     }
 
+    // llmlint: ignore-block[invalid_states_unrepresentable] these are the serde shapes of another repository's document (nickderobertis/onevcs's canonical release-target schema), moved verbatim from the test that owned them; nothing builds one except `parse`, which refuses every malformed id, name and prose field before it returns, so no unvalidated value reaches a caller.
     /// One consumable artifact: something a dependent names in order to depend on it.
     #[derive(Debug, Deserialize)]
     pub struct DeclaredTarget {
@@ -91,6 +92,7 @@ pub mod schema {
         /// Why it is not published any more, and what replaced it if anything did.
         pub why: String,
     }
+    // llmlint: ignore-end[invalid_states_unrepresentable]
 
     /// Read one declaration's text, or say what is wrong with it and where.
     ///

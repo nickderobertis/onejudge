@@ -1,7 +1,7 @@
 {
   "name": "onejudge-python-sdk",
   "$schema": "../../node_modules/nx/schemas/project-schema.json",
-  "//": "The typed async Python SDK, published to PyPI as `onejudge`. Its declarations are generated from the library's Rust wire types (`generate-check`), and its tests drive the real `onejudge` binary and the doubles, so it depends on both.",
+  "//": "The typed async Python SDK, published to PyPI as `onejudge`. Its declarations are generated from the library's Rust wire types (`generate-check`), and its tests drive the real `onejudge` binary and the doubles, so it depends on both. llmlint: ignore-file[projects_stay_in_one_uv_workspace] JSON has no comment to scope this to a line. The SDK runs in its pinned requirements-dev.txt environment through `uv run --no-project`, mirroring oneharness's SDK (the departure AGENTS.md \"Stack and composition\" records); a uv workspace would have to take in the root maturin pyproject.toml that the unchanged release-pypi.yml builds, which is a change to the release path this project definition does not make.",
   "projectType": "library",
   "sourceRoot": "python/onejudge-sdk/src",
   "tags": [

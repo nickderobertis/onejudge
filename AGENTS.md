@@ -71,25 +71,15 @@ Built up from the `create-repo` skill's reference axes, not a single template.
 - **References composed:** base.md, shapes/library.md, shapes/cli.md,
   languages/rust.md, languages/python.md, intersections/rust-cli.md,
   project-graph.md, ci.md, llmlint.md, releasing.md
-- **Projects** (`nx.json`; one `project.json` and one nested `AGENTS.md` each,
-  tagged by the one `type:` that `nx.json` `boundaries.allow` judges every edge
-  by): the published `onejudge` crate (`type:contract` — the `Report` and
-  command-provider wire contracts; it depends on nothing here, and the CLI stays
-  its feature-gated `[[bin]]` because `cargo install onejudge --features cli` is
-  a published path); `onejudge-test-doubles` (`publish = false`; the four doubles
-  and the helpers the suites share); one `publish = false` test crate per suite
-  tier — `onejudge-e2e`, `onejudge-cli-e2e` (`type:e2e`), `onejudge-repo` (the
-  CI-wiring and release-target drift checks) and the external tiers
-  `onejudge-live`, `onejudge-llmlint-real`, `onejudge-release-targets`
-  (`type:external`, reachable from nothing); `onejudge-python-sdk` and
-  `onejudge-python-sdk-e2e`; `onejudge-pypi`, the maturin CLI wheel, whose
-  definition is `pypi/project.json` because its manifest is the root
-  `pyproject.toml` (`release-pypi.yml` builds it at the root) and the root's one
-  `project.json` is the `workspace` project.
-- **`fake-provider` was removed from the published crate** (a breaking change).
-  It only built the test doubles, which a consumer never needed and which a suite
-  in another package could not reach through Cargo anyway; they are now the
-  unpublished `onejudge-test-doubles` crate's bins.
+- **Project graph:** one `project.json` and nested `AGENTS.md` per project, each
+  with one `type:` tag that `nx.json`'s `boundaries.allow` judges every edge by.
+  The published crate is the `type:contract` project and depends on nothing here;
+  the e2e suites and the `type:external` tiers are reachable only from the
+  `workspace` root.
+- **The test doubles are never a feature of the published crate.** They are the
+  unpublished `onejudge-test-doubles` crate's bins; its former `fake-provider`
+  feature was removed for that reason (a breaking change — no consumer enabled
+  it, and a suite in another package cannot reach a feature-gated bin anyway).
 - **Excluded, and why:** `src` layout / asdf / direnv — not idiomatic for a Cargo
   workspace whose toolchains pin themselves (`rust-toolchain.toml`, the
   `packageManager` bun pin, the SDK's uv environment).
@@ -98,23 +88,15 @@ Built up from the `create-repo` skill's reference axes, not a single template.
 
 Use the `just` recipes; do not hand-roll equivalents. `just --list` is the index.
 
-- `just bootstrap` — the pinned toolchain, cargo tools, the locked Nx install and
-  `cargo fetch`, from a clean clone.
-- `just check` (alias: `just gate`) — the gate, through Nx (`scripts/nx`):
-  format check, clippy (deny warnings) and the project boundaries, doc build, the
-  generated-contract checks, coverage-enforced tests **including e2e and the
-  Python SDK**, and the drift checks. By default the **affected tier** against
-  `NX_BASE` (a plain ref or SHA) or the merge base with `origin/main`;
-  `--sweep` is the **broader tier**, adding the supply-chain audit. A diff
-  touching a workspace-root file sweeps, because every project builds against
-  them (`scripts/gate-plan.sh`; `--print-plan` shows the choice).
-- `just test` (coverage-enforced) / `just test-fast` / `just test-e2e` /
-  `just lint` / `just format` / `just audit` / `just msrv` — individual steps,
-  each delegating to Nx; `just graph` shows the project graph.
-- `just test-live` / `just test-llmlint` / `just test-release-targets` — the
-  external tiers, out of `check`.
-- `just upgrade` — `cargo update` + `bun update`, then the sweep; commit the
-  refreshed lockfiles.
+- `just bootstrap` — toolchains, cargo tools, the locked Nx install, `cargo fetch`.
+- `just check` (alias: `just gate`) — the gate, through Nx: by default the
+  **affected tier** against `NX_BASE` (a plain ref or SHA) or the merge base with
+  `origin/main`; `--sweep` runs the **broader tier**. A diff touching a
+  workspace-root file sweeps. `--print-plan` shows what would run.
+- `just test` / `test-fast` / `test-e2e` / `lint` / `format` / `audit` / `msrv` —
+  individual steps; `just test-live` / `test-llmlint` / `test-release-targets` —
+  the external tiers, out of `check`.
+- `just upgrade` — `cargo update` + `bun update`, then the sweep.
 - `just lint-llm` / `just lint-llm-diff` — the llmlint LLM-judge tier, separate
   from `check` and non-deterministic; config in `llmlint.yml`. `just setup-llmlint`
   installs its toolchain.
@@ -141,8 +123,7 @@ Use the `just` recipes; do not hand-roll equivalents. `just --list` is the index
   the commit that ships is one no merge job swept. So pull requests and pushes to
   main run the **affected tier** against an explicitly derived merge base, and the
   **broader tier** runs on the release-plz PR (`scripts/ci-tier.mjs` routes by
-  event; `tests/ci_tier.rs` drives it). No affected-tier time threshold is
-  recorded yet (deferred by the 2026-10-06 budgets ruling).
+  event; `tests/ci_tier.rs` drives it).
 - **Releases: fully automated, no manual deploy step.** `release-plz` opens a
   release PR from the merged Conventional-Commits history; merging it writes the
   version + `CHANGELOG.md`, tags `vX.Y.Z`, and publishes to crates.io. Nobody has
@@ -207,18 +188,11 @@ Use the `just` recipes; do not hand-roll equivalents. `just --list` is the index
 
 ## Coverage and e2e (the gate's depth)
 
-- **Coverage — enforced, once, over the union.** Each Rust suite's `test` target
-  writes `cargo llvm-cov --no-report` profiles into the shared directory, and
-  `workspace:coverage` merges them all and enforces the floor — so a suite in
-  another crate still counts toward the library's number. The floor and the
-  gate's feature set are declared once, in the justfile (`coverage_min`,
-  `gate_features`). It measures the library's source only: the doubles' crate
-  **and** the thin `onejudge` entrypoint are excluded (the CLI's real logic lives
-  in the covered `src/cli/` library modules, and `onejudge-cli-e2e` spawns an
-  instrumented build of it). The merge's `--failure-mode all` is load-bearing
-  rather than slack: see the justfile comment on `_coverage`, which
-  `crates/onejudge/tests/coverage.rs` keeps honest by planting the artifact it
-  exists for. The SDK's own floor is its `fail_under` (`onejudge-python-sdk:coverage`).
+- **Coverage — enforced, once, over the union.** Every Rust suite's profiles are
+  merged by `workspace:coverage` and held to one floor over the library's source,
+  so a suite in another crate still counts toward the library's number and no
+  crate's own number is ever the gate. The floor and feature set are declared
+  once, in the justfile; the SDK's floor is its own `fail_under`.
 - **E2E — real, in the gate.** `crates/onejudge-e2e/tests/e2e.rs` drives the real
   engine across a **real subprocess boundary**: it points `CommandProvider` and
   `OneharnessProvider` at deterministic test-double binaries
