@@ -73,7 +73,8 @@ plain_revision() {
 }
 
 base=""
-reason=""
+source=""
+escalation=""
 if [ "$tier" = affected ]; then
     if [ -n "${NX_BASE+set}" ]; then
         if ! plain_revision "$NX_BASE"; then
@@ -84,13 +85,13 @@ if [ "$tier" = affected ]; then
             echo "gate: NX_BASE='$NX_BASE' names no commit in this checkout; fetch it, or unset NX_BASE to use the merge base with origin/main" >&2
             exit 2
         fi
-        reason="NX_BASE=$NX_BASE"
+        source="NX_BASE=$NX_BASE"
     elif base="$(git merge-base origin/main HEAD 2>/dev/null)"; then
-        reason="merge base with origin/main"
+        source="the merge base with origin/main"
     else
         echo "gate: no merge base with origin/main in this checkout (shallow, or origin/main not fetched), so the broader tier runs instead" >&2
         tier=sweep
-        reason="no merge base with origin/main"
+        escalation="no merge base with origin/main"
     fi
 fi
 
@@ -108,7 +109,7 @@ if [ "$tier" = affected ]; then
         if [ "$owned" = false ]; then
             echo "gate: $path belongs to the workspace root, which every project builds or is checked against, so the broader tier runs" >&2
             tier=sweep
-            reason="$path is a workspace-root file"
+            escalation="$path is a workspace-root file"
             break
         fi
     done < <({ git diff --name-only "$base"; git ls-files --others --exclude-standard; } | sort -u)
@@ -141,16 +142,18 @@ fi
 
 if [ "$print_plan" = true ]; then
     if [ "$tier" = affected ]; then
-        echo "# tier: affected (base $base, from $reason)"
+        echo "# tier: affected (base $base, from $source)"
+    elif [ -n "$escalation" ]; then
+        echo "# tier: sweep (escalated from the affected tier${base:+ against base $base, from $source}: $escalation)"
     else
-        echo "# tier: sweep${reason:+ (escalated from the affected tier: $reason)}"
+        echo "# tier: sweep"
     fi
     echo "# projects: $(joined ' ' <<<"$eligible")"
     echo "# external tiers, static targets only: $(joined ' ' <<<"$externals")"
     echo "GATE_PRINT_ONLY=1"
     exit 0
 fi
-echo "gate: tier=$tier${reason:+ ($reason${base:+, base $base})}; projects: $(joined ' ' <<<"$eligible")" >&2
+echo "gate: tier=$tier${base:+ (base $base, from $source)}${escalation:+ — escalated: $escalation}; projects: $(joined ' ' <<<"$eligible")" >&2
 printf 'GATE_TIER=%s\nGATE_BASE=%s\nGATE_TARGETS=%q\nGATE_PROJECTS=%s\nGATE_EXCLUDE=%s\nGATE_EXTERNALS=%s\nGATE_STATIC=%q\n' \
     "$tier" "$base" "$target_list" "$(joined , <<<"$eligible")" "$(joined , <<<"$excluded")" \
     "$(joined , <<<"$externals")" "$static"
