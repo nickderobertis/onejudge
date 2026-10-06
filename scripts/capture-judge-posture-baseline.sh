@@ -31,5 +31,6 @@ if ! { cargo build -p onejudge-test-doubles -p onejudge --features onejudge/cli 
         --test cli -E 'test(with_no_mode_configured)'; } >"$log" 2>&1; then
     cat "$log" >&2
     echo "capture-judge-posture-baseline: the capture run failed; see above" >&2
+    echo "ACTION: fix the build or journey the log names, then re-run $0 with the released 0.15.0 binary" >&2
     exit 1
 fi

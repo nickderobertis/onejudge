@@ -5,7 +5,8 @@
 //! (`tests/workflows.rs` holds that wiring), so what it selects here is what CI
 //! runs: the broader tier on release-plz's release pull request — where onejudge's
 //! batched releases are swept — and the affected tier, against a base it derived
-//! with `git merge-base`, on every other pull request and every push to main. A
+//! with `git merge-base`, on every other pull request and every push to main but
+//! the one that lands the release commit, which that pull request already swept. A
 //! base it cannot derive falls back to the broader tier rather than to nothing.
 
 use std::path::{Path, PathBuf};
@@ -138,6 +139,41 @@ fn a_push_to_main_runs_the_affected_tier_against_the_tip_it_replaced() {
         route(&repo, "push", &event),
         ("affected".into(), repo.base.clone(), String::new())
     );
+}
+
+#[test]
+fn the_push_that_lands_release_plzs_release_commit_is_not_gated_again() {
+    let repo = repo();
+    git(&repo.dir, &["checkout", "-q", "main"]);
+    git(
+        &repo.dir,
+        &["merge", "-q", "--ff-only", "--no-edit", &repo.moved],
+    );
+    let push = |subject: &str, commits: usize| {
+        serde_json::json!({
+            "ref": "refs/heads/main",
+            "before": repo.base,
+            "head_commit": { "message": format!("{subject}\n\nbody") },
+            "commits": vec![serde_json::json!({}); commits],
+        })
+    };
+    assert_eq!(
+        route(&repo, "push", &push("chore: release v0.18.0 (#141)", 1)),
+        ("skip".into(), String::new(), String::new())
+    );
+    // Anything else on main is gated: a release commit pushed with another, or an
+    // ordinary commit that merely mentions a release.
+    for (subject, commits) in [
+        ("chore: release v0.18.0 (#141)", 2),
+        ("fix: release the lock on cancel (#142)", 1),
+        ("chore: release v0.18.0", 1),
+    ] {
+        assert_eq!(
+            route(&repo, "push", &push(subject, commits)),
+            ("affected".into(), repo.base.clone(), String::new()),
+            "{subject} x{commits}"
+        );
+    }
 }
 
 #[test]

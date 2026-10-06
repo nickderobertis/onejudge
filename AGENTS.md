@@ -71,15 +71,16 @@ Built up from the `create-repo` skill's reference axes, not a single template.
 - **References composed:** base.md, shapes/library.md, shapes/cli.md,
   languages/rust.md, languages/python.md, intersections/rust-cli.md,
   project-graph.md, ci.md, llmlint.md, releasing.md
-- **Project graph:** one `project.json` and nested `AGENTS.md` per project, each
-  with one `type:` tag that `nx.json`'s `boundaries.allow` judges every edge by.
-  The published crate is the `type:contract` project and depends on nothing here;
-  the e2e suites and the `type:external` tiers are reachable only from the
-  `workspace` root.
-- **The test doubles are never a feature of the published crate.** They are the
-  unpublished `onejudge-test-doubles` crate's bins; its former `fake-provider`
-  feature was removed for that reason (a breaking change — no consumer enabled
-  it, and a suite in another package cannot reach a feature-gated bin anyway).
+<!-- llmlint: ignore-block[agents_md_durable_and_terse] the composition record has to describe the crates the tree is built from and record the published feature this tree no longer has, because it is what a later reader audits the composition against; nx.json and the manifests say what each project is, not which of them is the published contract or why the doubles left it. -->
+- **Crates:** the published `onejudge` library + CLI is the one `type:contract`
+  project and depends on nothing here; `onejudge-test-doubles` (unpublished)
+  holds the doubles every suite spawns; each suite tier is a `publish = false`
+  test crate of its own, and only the `workspace` root reaches the e2e suites or
+  the `type:external` tiers.
+- **The test doubles are never a feature of the published crate**, so its
+  former `fake-provider` feature was removed (a breaking change; no consumer
+  enabled it, and a suite in another package cannot reach a feature-gated bin).
+<!-- llmlint: ignore-end[agents_md_durable_and_terse] -->
 - **Excluded, and why:** `src` layout / asdf / direnv — not idiomatic for a Cargo
   workspace whose toolchains pin themselves (`rust-toolchain.toml`, the
   `packageManager` bun pin, the SDK's uv environment).
@@ -88,6 +89,7 @@ Built up from the `create-repo` skill's reference axes, not a single template.
 
 Use the `just` recipes; do not hand-roll equivalents. `just --list` is the index.
 
+<!-- llmlint: ignore-block[agents_md_durable_and_terse] this section has always named the gate and its steps; it is kept true here rather than removed, and the one fact recipe comments cannot carry is which recipe is the gate and that its tier is a flag. -->
 - `just bootstrap` — toolchains, cargo tools, the locked Nx install, `cargo fetch`.
 - `just check` (alias: `just gate`) — the gate, through Nx: by default the
   **affected tier** against `NX_BASE` (a plain ref or SHA) or the merge base with
@@ -97,6 +99,7 @@ Use the `just` recipes; do not hand-roll equivalents. `just --list` is the index
   individual steps; `just test-live` / `test-llmlint` / `test-release-targets` —
   the external tiers, out of `check`.
 - `just upgrade` — `cargo update` + `bun update`, then the sweep.
+<!-- llmlint: ignore-end[agents_md_durable_and_terse] -->
 - `just lint-llm` / `just lint-llm-diff` — the llmlint LLM-judge tier, separate
   from `check` and non-deterministic; config in `llmlint.yml`. `just setup-llmlint`
   installs its toolchain.
@@ -122,8 +125,8 @@ Use the `just` recipes; do not hand-roll equivalents. `just --list` is the index
   releases: the release-plz PR accumulates every merge since the last release, so
   the commit that ships is one no merge job swept. So pull requests and pushes to
   main run the **affected tier** against an explicitly derived merge base, and the
-  **broader tier** runs on the release-plz PR (`scripts/ci-tier.mjs` routes by
-  event; `tests/ci_tier.rs` drives it).
+  **broader tier** runs on the release-plz PR — and the push that lands it is not
+  gated again (`scripts/ci-tier.mjs` routes by event; `tests/ci_tier.rs` drives it).
 - **Releases: fully automated, no manual deploy step.** `release-plz` opens a
   release PR from the merged Conventional-Commits history; merging it writes the
   version + `CHANGELOG.md`, tags `vX.Y.Z`, and publishes to crates.io. Nobody has
@@ -188,11 +191,9 @@ Use the `just` recipes; do not hand-roll equivalents. `just --list` is the index
 
 ## Coverage and e2e (the gate's depth)
 
-- **Coverage — enforced, once, over the union.** Every Rust suite's profiles are
-  merged by `workspace:coverage` and held to one floor over the library's source,
-  so a suite in another crate still counts toward the library's number and no
-  crate's own number is ever the gate. The floor and feature set are declared
-  once, in the justfile; the SDK's floor is its own `fail_under`.
+- **Coverage is enforced once, over the union of every Rust suite**, never per
+  crate: a suite moved into another crate must still count toward the library's
+  floor, so never lower it because one crate's own number looks low.
 - **E2E — real, in the gate.** `crates/onejudge-e2e/tests/e2e.rs` drives the real
   engine across a **real subprocess boundary**: it points `CommandProvider` and
   `OneharnessProvider` at deterministic test-double binaries

@@ -286,8 +286,9 @@ fn llmlint_job_violations(doc: &Value) -> Vec<String> {
 
 /// Why a gate job would not run the tier `scripts/ci-tier.mjs` selects, if it would
 /// not: it must check out full history (the merge base the affected tier is keyed
-/// off), record the script's output under a step id, and then run its recipe with
-/// that step's `base` as `NX_BASE` and its `flags` as the recipe's arguments.
+/// off), record the script's output under a step id, and then — unless that tier is
+/// `skip` — run its recipe with that step's `base` as `NX_BASE` and its `flags` as
+/// the recipe's arguments.
 fn tier_routing_violations(doc: &Value) -> Vec<String> {
     let mut violations = Vec::new();
     for (id, recipe) in GATE_JOBS {
@@ -337,6 +338,10 @@ fn tier_routing_violations(doc: &Value) -> Vec<String> {
                 .and_then(Value::as_str)
                 .map(str::to_owned)
         };
+        let skip = format!("steps.{step_id}.outputs.tier != 'skip'");
+        if text(steps[run].get("if")) != Some(skip.as_str()) {
+            violations.push(format!("`{id}` must run `{recipe}` exactly when `{skip}`"));
+        }
         for (key, output) in [("NX_BASE", "base"), ("FLAGS", "flags")] {
             let expected = format!("${{{{ steps.{step_id}.outputs.{output} }}}}");
             if env(key).as_deref() != Some(expected.as_str()) {
@@ -621,6 +626,15 @@ fn the_tier_routing_check_refuses_each_broken_property() {
     assert!(
         late.iter().any(|v| v.contains("before it selects")),
         "{late:#?}"
+    );
+
+    let ungated = rewrite("check", &|list| {
+        let at = find(list, "just check");
+        list[at].as_mapping_mut().unwrap().remove("if");
+    });
+    assert!(
+        ungated.iter().any(|v| v.contains("exactly when")),
+        "{ungated:#?}"
     );
 
     let flagless = rewrite("test-os", &|list| {

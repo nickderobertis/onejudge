@@ -5,6 +5,3 @@
   the gate on drift.
 - **Its tests drive the real `onejudge` binary and the doubles**, never a mock of
   the process boundary.
-- **Releases ride the crate's.** release-plz sees only the Rust package, so a
-  release-worthy SDK-only change is attributed to it by the
-  `python-sdk-release-trigger` workflow.

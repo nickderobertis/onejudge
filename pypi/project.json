@@ -1,7 +1,7 @@
 {
   "name": "onejudge-pypi",
   "$schema": "../node_modules/nx/schemas/project-schema.json",
-  "//": "The `onejudge-cli` PyPI wheel: maturin wraps the `onejudge` binary per platform. Its manifest is the ROOT pyproject.toml, because release-pypi.yml builds it at the repository root; the root's one project.json is the workspace project, so this definition lives here and names that manifest as its input.",
+  "//": "The `onejudge-cli` PyPI wheel: maturin wraps the `onejudge` binary per platform. See AGENTS.md here for why this definition is not beside its manifest.",
   "projectType": "application",
   "sourceRoot": "pypi",
   "tags": [
