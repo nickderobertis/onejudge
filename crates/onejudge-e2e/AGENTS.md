@@ -6,11 +6,10 @@
   not mock the layer under test — the model is the only faked thing, and it is
   faked by a *real subprocess*, not a stub. Add the happy path **and** a
   failure/recovery path for every journey.
-- **Nothing here is `#[ignore]`-d**, and a journey always drives freshly built
-  doubles (`test` depends on `onejudge-test-doubles:build`). A judge of a
-  **panel** is handed the same persona and transcript as every other judge, so a
-  journey that needs two judges to differ steers each through its own **argv** —
-  the echo double scans its arguments for markers too.
+- **Nothing here is `#[ignore]`-d.** A judge of a **panel** is handed the same
+  persona and transcript as every other judge, so a journey that needs two judges
+  to differ steers each through its own **argv** — the echo double scans its
+  arguments for markers too.
 - **`notes.rs` drives the note delivery seam through the library API**, never a
   command line, and asserts each party's framing against the text the *double
   received*. A live turn is held open with the dwell markers and the sender waits

@@ -253,10 +253,10 @@ _audit:
     cargo deny check
     cargo machete
 
-# The MSRV build of what a consumer compiles — the library and its doubles,
-# every target — as the crate built it before the doubles moved out.
+# The MSRV build of every target the crate's own check covered before its suites
+# moved out — the library, its tests, the doubles, and the engine's e2e suites.
 _msrv:
-    RUSTFLAGS="-D warnings" cargo +1.89.0 check --locked -p onejudge -p onejudge-test-doubles --all-targets
+    RUSTFLAGS="-D warnings" cargo +1.89.0 check --locked -p onejudge -p onejudge-test-doubles -p onejudge-e2e --all-targets
 
 _doc:
     RUSTDOCFLAGS="-D warnings" cargo doc --locked --no-deps -p onejudge --features sdk-schema
