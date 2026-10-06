@@ -28,8 +28,9 @@
 # BROADER tier (`--sweep`): every gate-eligible project, plus the targets promoted
 # out of the affected tier (`audit`, which contacts the advisory database).
 #
-# Both tiers leave the external tiers (`onejudge-live`, `onejudge-llmlint-real`,
-# `onejudge-release-targets`) out of everything but their static targets
+# Both tiers leave the external tiers (the `type:external` projects:
+# `onejudge-live`, `onejudge-llmlint-real`, `onejudge-release-targets`) out of
+# everything but their static targets
 # (GATE_STATIC: format-check, lint — their code is formatted and linted in the
 # gate as it always was): they contact a real harness, llmlint, or the public
 # registries, keep their `#[ignore]`, and run from their own recipes and workflows.
@@ -37,7 +38,6 @@ set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
 STATIC_TARGETS="format-check lint"
-EXTERNAL="onejudge-live,onejudge-llmlint-real,onejudge-release-targets"
 
 usage() {
     sed -n '6p' "$0" | sed 's/^# *//' >&2
@@ -128,7 +128,9 @@ fi
 if [ -n "$projects" ]; then
     selected="$(comm -12 <(printf '%s\n' "$selected") <(listed --projects="$projects" --json))"
 fi
-external="$(lines <<<"$EXTERNAL")"
+# The external tiers are the projects tagged `type:external`: the tag is the one
+# declaration, so a new external tier is out of the gate the moment it is tagged.
+external="$(listed --projects='tag:type:external' --json)"
 eligible="$(comm -23 <(printf '%s\n' "$selected" | sed '/^$/d') <(printf '%s\n' "$external"))"
 externals="$(comm -12 <(printf '%s\n' "$selected" | sed '/^$/d') <(printf '%s\n' "$external"))"
 excluded="$(comm -23 <(printf '%s\n' "$everything") <(printf '%s\n' "$eligible" | sed '/^$/d'))"

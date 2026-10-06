@@ -21,7 +21,8 @@
       "options": {
         "commands": [
           "just _rust-lint onejudge",
-          "just _check-generated-schemas"
+          "just check-judge-seat-frames",
+          "just check-note-schema"
         ],
         "parallel": false
       },

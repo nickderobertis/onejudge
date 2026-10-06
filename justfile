@@ -133,11 +133,11 @@ audit:
 # Drift gate: every target install.sh downloads is built by release-binaries.yml
 # (deterministic, offline). Keeps the shipped-archive naming in one enforced place.
 check-release-targets:
-    ./scripts/nx run workspace:lint
+    ./scripts/check-release-targets.sh
 
 # Prove SDK-only conventional commits are attributed to the release-plz package.
 check-python-sdk-release-trigger:
-    ./scripts/nx run workspace:test
+    ./scripts/check-python-sdk-release-trigger.sh
 
 # Check the crate still builds on the declared MSRV (needs 1.89.0 installed),
 # denying warnings like every other gate step: a floor-only diagnostic fails here.
@@ -173,11 +173,11 @@ python-sdk-generate:
 
 # Verify the committed schema-link bundle is generated from the frame types.
 check-judge-seat-frames:
-    ./scripts/nx run onejudge:lint
+    ./scripts/check-judge-seat-frames.sh
 
 # Verify the committed note bundle is generated from `note::Note` itself.
 check-note-schema:
-    ./scripts/nx run onejudge:lint
+    cargo run -q --locked -p onejudge --features sdk-schema --example generate_note_schema -- --check
 
 # Strict Python SDK gate: generated-contract drift, ruff format + lint, mypy,
 # coverage, and the installed-wheel journey through the real onejudge subprocess.
@@ -257,17 +257,6 @@ _audit:
 # every target — as the crate built it before the doubles moved out.
 _msrv:
     RUSTFLAGS="-D warnings" cargo +1.89.0 check --locked -p onejudge -p onejudge-test-doubles --all-targets
-
-_check-release-targets:
-    ./scripts/check-release-targets.sh
-
-_check-python-sdk-release-trigger:
-    ./scripts/check-python-sdk-release-trigger.sh
-
-# The library's generated-schema drift checks, run under `onejudge:lint`.
-_check-generated-schemas:
-    ./scripts/check-judge-seat-frames.sh
-    cargo run -q --locked -p onejudge --features sdk-schema --example generate_note_schema -- --check
 
 _doc:
     RUSTDOCFLAGS="-D warnings" cargo doc --locked --no-deps -p onejudge --features sdk-schema

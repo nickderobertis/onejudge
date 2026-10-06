@@ -17,7 +17,7 @@
       "executor": "nx:run-commands",
       "options": {
         "commands": [
-          "just _check-release-targets",
+          "just check-release-targets",
           "node scripts/check-project-boundaries.mjs workspace"
         ],
         "parallel": false
@@ -33,7 +33,7 @@
       ]
     },
     "test": {
-      "command": "just _check-python-sdk-release-trigger"
+      "command": "just check-python-sdk-release-trigger"
     },
     "coverage-clean": {
       "command": "just _coverage-clean",

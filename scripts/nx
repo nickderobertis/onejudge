@@ -29,7 +29,9 @@ fi
 mkdir -p .nx/logs
 log="$(mktemp .nx/logs/nx.XXXXXX)"
 if "${nx[@]}" "$@" >"$log" 2>&1; then
-    summary="$(grep -E 'Successfully ran|No tasks were run|Nx read the output from the cache' "$log" | tail -n 1 | sed 's/^[^A-Za-z]*//')"
+    # The last of Nx's own summary lines, or nothing: a run Nx summarizes some
+    # other way still succeeded, and must not fail here for want of a match.
+    summary="$(grep -E 'Successfully ran|No tasks were run|Nx read the output from the cache' "$log" | tail -n 1 | sed 's/^[^A-Za-z]*//' || true)"
     echo "nx $*: ${summary:-ok} (log: $log)"
     exit 0
 fi

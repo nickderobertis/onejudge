@@ -34,12 +34,18 @@ function fail(lines) {
   process.exit(1);
 }
 
+/** `what`'s failure, with its own stderr and the next step, as a failed run. */
+function failedRun(what, error, action) {
+  const stderr = String(error.stderr ?? error.message ?? error).trim();
+  fail([`${what} failed: ${stderr || "no output"}`, `ACTION: ${action}`]);
+}
+
 /** The project graph exactly as Nx computes it for this checkout. */
 function nxGraph() {
-  const manifest = require.resolve("nx/package.json");
-  const nx = join(dirname(manifest), require(manifest).bin.nx);
   const scratch = mkdtempSync(join(tmpdir(), "onejudge-graph-"));
   try {
+    const manifest = require.resolve("nx/package.json");
+    const nx = join(dirname(manifest), require(manifest).bin.nx);
     const file = join(scratch, "graph.json");
     execFileSync(process.execPath, [nx, "graph", `--file=${file}`], {
       cwd: root,
@@ -47,6 +53,12 @@ function nxGraph() {
       stdio: ["ignore", "ignore", "pipe"],
     });
     return JSON.parse(readFileSync(file, "utf8")).graph;
+  } catch (error) {
+    return failedRun(
+      "computing the Nx project graph (`nx graph`)",
+      error,
+      "run `bash scripts/node-modules.sh` to heal the Nx install, then fix the project.json the message names",
+    );
   } finally {
     rmSync(scratch, { recursive: true, force: true });
   }
@@ -54,13 +66,22 @@ function nxGraph() {
 
 /** Cargo's path dependencies between workspace members, as [fromDir, toDir]. */
 function cargoEdges() {
-  const metadata = JSON.parse(
-    execFileSync("cargo", ["metadata", "--format-version", "1", "--no-deps"], {
+  let output;
+  try {
+    output = execFileSync("cargo", ["metadata", "--format-version", "1", "--no-deps"], {
       cwd: root,
       encoding: "utf8",
       maxBuffer: 64 * 1024 * 1024,
-    }),
-  );
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+  } catch (error) {
+    return failedRun(
+      "reading the Cargo workspace (`cargo metadata`)",
+      error,
+      "fix the Cargo.toml the message names (`cargo metadata --no-deps` reproduces it)",
+    );
+  }
+  const metadata = JSON.parse(output);
   const edges = [];
   for (const pkg of metadata.packages) {
     const from = relative(root, dirname(pkg.manifest_path));
@@ -72,7 +93,12 @@ function cargoEdges() {
 }
 
 const allow = JSON.parse(readFileSync(join(root, "nx.json"), "utf8")).boundaries?.allow;
-if (!allow) fail(['nx.json has no "boundaries.allow" table to enforce']);
+if (!allow) {
+  fail([
+    'nx.json has no "boundaries.allow" table to enforce',
+    "ACTION: restore it — one entry per `type:` tag, listing the types that tag may depend on",
+  ]);
+}
 
 const graph = nxGraph();
 const projects = graph.nodes;
@@ -91,7 +117,12 @@ for (const [name, node] of Object.entries(projects)) {
 
 const requested = process.argv.slice(2);
 for (const name of requested) {
-  if (!(name in projects)) fail([`no project named ${name} in the Nx graph`]);
+  if (!(name in projects)) {
+    fail([
+      `no project named ${name} in the Nx graph (projects: ${Object.keys(projects).sort().join(", ")})`,
+      "ACTION: pass a listed project, or add a project.json naming it",
+    ]);
+  }
 }
 const checked = new Set(requested.length > 0 ? requested : Object.keys(projects));
 
