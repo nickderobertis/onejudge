@@ -9,7 +9,14 @@ if ! metadata="$(cargo metadata --format-version 1 --no-deps)"; then
     exit 1
 fi
 node -e '
-const dir = JSON.parse(require("fs").readFileSync(0, "utf8")).target_directory;
+let dir;
+try {
+  dir = JSON.parse(require("fs").readFileSync(0, "utf8")).target_directory;
+} catch (error) {
+  console.error(`cargo-target-dir: cargo metadata printed no JSON: ${error.message}`);
+  console.error("ACTION: check `cargo metadata --no-deps` with this toolchain (rust-toolchain.toml)");
+  process.exit(1);
+}
 if (typeof dir !== "string" || dir === "") {
   console.error("cargo-target-dir: cargo metadata named no target_directory");
   console.error("ACTION: check `cargo metadata --no-deps` with this toolchain (rust-toolchain.toml)");

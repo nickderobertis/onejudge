@@ -72,7 +72,6 @@ use support::{await_path, descendant_handle, descendant_is_running, scratch_path
 #[cfg(unix)]
 use support::{kill_group, process_exists, OwnedProcessGroups};
 
-/// The built echo test double's path (a `CommandProvider` backend).
 fn echo_bin() -> String {
     doubles::echo_provider().to_string()
 }
@@ -81,7 +80,6 @@ fn onejudge_bin() -> &'static str {
     doubles::onejudge_cli()
 }
 
-/// The built fake-oneharness double (an `OneharnessProvider` backend).
 fn fake_oneharness_bin() -> String {
     doubles::fake_oneharness().to_string()
 }
@@ -144,14 +142,12 @@ evals:
     assert_eq!(exit_code(&summary), 0);
 
     assert_eq!(summary.report.verdicts.len(), 3);
-    // The boolean eval "echo" matched (the reply is "echo: please commit").
     let echo_eval = summary
         .eval_results
         .iter()
         .find(|r| r.criterion == "echo")
         .unwrap();
     assert!(matches!(echo_eval.outcome, EvalOutcome::Boolean(true)));
-    // The numeric eval scored the top of its scale (the criterion matched).
     let numeric = summary
         .eval_results
         .iter()
@@ -398,7 +394,6 @@ fn split_provider_kind_composes_two_backends() {
     assert_eq!(summary.report.transcript.assistant_turns(), 2);
     assert!(summary.hit_max_turns);
     assert_eq!(exit_code(&summary), 1);
-    // The agent turns came from the oneharness skill backend (its `[[reply]]`).
     assert_eq!(summary.report.transcript.messages[1].content, "working");
 }
 
@@ -631,7 +626,6 @@ fn oneharness_kind_json_covers_buffered_respond_and_user() {
     let summary = run_plan(plan, Format::Json, &mut sink).unwrap();
     assert_eq!(summary.report.transcript.assistant_turns(), 2);
     assert!(summary.hit_max_turns);
-    // The oneharness double's prompt-cache counts aggregate into the report usage.
     let usage = summary.report.usage.as_ref().expect("usage aggregated");
     assert!(usage.cache_read_tokens.unwrap_or(0) >= 7);
     assert!(usage.cache_write_tokens.unwrap_or(0) >= 2);
@@ -689,8 +683,6 @@ user:
         .unwrap();
     assert!(output.status.success(), "expected exit 0");
     let stdout = String::from_utf8(output.stdout).unwrap();
-    // A turn section, its tool call drawn once by oneharness's renderer, and the
-    // closing summary — no raw JSON anywhere.
     assert!(stdout.starts_with("── turn 1 · worker ──"), "{stdout}");
     assert_eq!(
         stdout.matches("$ git commit -m fix\n").count(),
@@ -703,7 +695,6 @@ user:
     );
     assert!(stdout.contains("Status: completed"));
     assert!(!stdout.contains('{'), "{stdout}");
-    // The `Usage:` line surfaces the aggregated prompt-cache reads/writes.
     assert!(stdout.contains("cache_read="), "usage shows cache reads");
     assert!(stdout.contains("cache_write="), "usage shows cache writes");
 }
@@ -739,7 +730,6 @@ assessment: Identify follow-up work and mention tool actions.
         Some("Assessment for `Identify follow-up work and mention tool actions.`. Tool actions were included.")
     );
     assert_eq!(report.transcript.assistant_turns(), 1);
-    // Prompt-cache counts survive the real binary + JSON contract round-trip.
     let usage = report.usage.expect("usage in the report");
     assert!(usage.cache_read_tokens.unwrap_or(0) >= 3);
     assert!(usage.cache_write_tokens.unwrap_or(0) >= 1);
@@ -864,7 +854,6 @@ system_prompt: Be warm.
         .output()
         .unwrap();
     assert!(output.status.success());
-    // With --output, stdout carries no report; the file does.
     assert!(String::from_utf8(output.stdout).unwrap().trim().is_empty());
     let report: onejudge::Report =
         serde_json::from_str(&std::fs::read_to_string(&out_path).unwrap()).unwrap();
@@ -904,7 +893,7 @@ fn binary_run_without_a_config_falls_back_to_defaults() {
     let output = Command::new(onejudge_bin())
         .args(["run", "--task", "do a thing"])
         .current_dir(&dir)
-        .env("PATH", "") // no harness can be found
+        .env("PATH", "")
         .output()
         .unwrap();
     assert_eq!(output.status.code(), Some(2));
@@ -1985,7 +1974,6 @@ fn an_oneharness_config_that_names_no_bin_runs_the_turn_in_process() {
         summary.report.transcript.messages[1].content,
         "done in process"
     );
-    // Nothing was spawned by onejudge, which is the whole point of the default.
     assert!(summary.report.processes.is_empty());
     assert_eq!(exit_code(&summary), 0);
 }
@@ -2281,7 +2269,6 @@ fn binary_run_json_reports_each_judges_decision_and_labels_the_judge_side() {
         report.transcript.messages[2].content,
         "## Judge `lint` (command)\n\nThanks — and what about the next step?"
     );
-    /// One supervisor turn's decisions as `(judge, kind, decision)`.
     type Decided<'a> = Vec<(&'a str, &'a str, onejudge::Decision)>;
     let decided: Vec<(usize, Decided<'_>)> = report
         .judge_decisions
@@ -2656,7 +2643,6 @@ fn fake_llmlint_bin() -> &'static str {
     doubles::fake_llmlint()
 }
 
-/// The argv lines the double recorded at `path`, in arrival order.
 fn recorded_llmlint_argv(path: &Path) -> Vec<Vec<String>> {
     std::fs::read_to_string(path)
         .expect("the double recorded its argv")
@@ -2702,7 +2688,6 @@ user:
   max_turns: 4
 ";
 
-/// The base session every llmlint binary run below is named after.
 const LLMLINT_SESSION: &str = "lint-loop";
 
 /// Run the built binary over `config` under `--session` [`LLMLINT_SESSION`] and
@@ -2729,7 +2714,6 @@ fn run_binary_with_llmlint(
     (output, argv)
 }
 
-/// One decision's link as `(turn, judge, labels, run_id)`.
 type LinkedDecision<'a> = (usize, &'a str, &'a Labels, Option<&'a str>);
 
 type Labels = std::collections::BTreeMap<String, String>;
@@ -2784,7 +2768,6 @@ fn llmlint_lint_argv(turn: usize) -> Vec<String> {
     .collect()
 }
 
-/// One judge's decision on one supervisor turn as `(judge, kind, decision, reason)`.
 type DecidedBy = (String, String, onejudge::Decision, String);
 
 fn decided(report: &onejudge::Report) -> Vec<(usize, Vec<DecidedBy>)> {
@@ -3439,7 +3422,6 @@ fn a_single_judge_controlled_config_runs_as_0_8_1_did_except_the_supervisor_addr
     for volatile in ["schema_version", "telemetry", "processes"] {
         object.remove(volatile);
     }
-    // The one deliberate difference: the judge's address, which 0.8.1 omitted.
     let supervisor = object
         .remove("supervisor_control")
         .expect("always on the wire");
@@ -3479,10 +3461,14 @@ fn a_single_judge_controlled_config_runs_as_0_8_1_did_except_the_supervisor_addr
         "the report differs from what onejudge 0.8.1 wrote for this config"
     );
 
-    // The judge was handed byte-for-byte the prompts 0.8.1 handed it.
+    // The judge was handed byte for byte the prompts 0.8.1 handed it. The capture
+    // script writes them as `prompts.log`; `supervisor-prompts.log` holds the same
+    // capture under the name an earlier replay read, so both are held to the run.
     let prompts = normalize(&std::fs::read_to_string(&record).unwrap());
-    let baseline = std::fs::read_to_string(fixture.join("supervisor-prompts.log")).unwrap();
-    assert_eq!(prompts, baseline);
+    for name in ["prompts.log", "supervisor-prompts.log"] {
+        let baseline = std::fs::read_to_string(fixture.join(name)).unwrap();
+        assert_eq!(prompts, baseline, "the judge's prompts differ from {name}");
+    }
     let _ = std::fs::remove_dir_all(&ctl);
 }
 
@@ -3756,8 +3742,9 @@ fn file_snapshot(dir: &Path) -> std::collections::BTreeMap<String, Vec<u8>> {
     out
 }
 
-/// Copy the checked-in store a released pre-cutover oneharness wrote
-/// (`tests/golden/pre-cutover-history/store`, `scripts/capture-pre-cutover-history.sh`).
+/// Recursively copy `from` into `to`, so a journey works on a scratch copy of a
+/// checked-in store (`tests/golden/pre-cutover-history/store`, captured by
+/// `scripts/capture-pre-cutover-history.sh`) and never on the golden itself.
 fn copy_tree(from: &Path, to: &Path) {
     std::fs::create_dir_all(to).unwrap();
     for entry in std::fs::read_dir(from).unwrap() {
@@ -4172,7 +4159,6 @@ impl PostureOutcome {
         last["report"].clone()
     }
 
-    /// Every line of a `--stream` run's stdout.
     fn stream_lines(&self) -> Vec<serde_json::Value> {
         self.stdout
             .lines()
@@ -4180,7 +4166,6 @@ impl PostureOutcome {
             .collect()
     }
 
-    /// The first supervisor decision's record for `judge`.
     fn decision(&self, judge: &str) -> serde_json::Value {
         let report = self.report();
         report["judge_decisions"][0]["decisions"]
@@ -4287,7 +4272,6 @@ impl PostureRun {
         path
     }
 
-    /// Set `key` to `value` in the environment of every run this posture makes.
     fn with_env(mut self, key: &str, value: &str) -> Self {
         self.env.push((key.into(), value.into()));
         self
@@ -5142,7 +5126,8 @@ fn a_bare_oneharness_providers_judge_publishes_its_events_under_its_own_label() 
 
 // --- The text view, the published stream, and `onejudge watch` ---------------
 
-/// A fresh, empty directory `onejudge watch` streams are kept in.
+/// The `onejudge watch` stream directory for one journey, with any earlier test
+/// run's streams cleared away.
 fn watch_dir(name: &str) -> std::path::PathBuf {
     let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("watch-dir-{name}"));
     let _ = std::fs::remove_dir_all(&dir);
@@ -5242,7 +5227,6 @@ fn text_output_draws_the_workers_events_and_each_judges_through_oneharnesss_rend
         let lines: Vec<String> = worker.into_iter().map(|(_, line)| line).collect();
         assert_lines_in_order(stdout, &lines);
 
-        // The judge's own tool event, through the same renderer, under its label.
         let judged: Vec<String> = records
             .iter()
             .filter(|record| record["type"] == "judge_tool")

@@ -224,15 +224,32 @@ fn labels(args: &[String]) -> std::collections::BTreeMap<String, String> {
             arg.strip_prefix("--label=")
         };
         if let Some(pair) = pair {
-            let Some((key, value)) = pair.split_once('=').filter(|(key, _)| !key.is_empty()) else {
+            let Some((key, value)) = pair
+                .split_once('=')
+                .filter(|(key, value)| label(key, value))
+            else {
                 fail(&format!(
-                    "`--label {pair}` is not KEY=VALUE, as llmlint requires"
+                    "`--label {pair}` is not a KEY=VALUE label llmlint accepts"
                 ));
             };
             labels.insert(key.to_string(), value.to_string());
         }
     }
     labels
+}
+
+/// Whether llmlint accepts `key=value` as a label: KEY is 1-64 ASCII letters,
+/// digits, `.`, `_` or `-`, beginning with a letter or digit; VALUE is 1-256
+/// characters with no control characters (`llmlint lint --help`, `--label`).
+fn label(key: &str, value: &str) -> bool {
+    let key_ok = (1..=64).contains(&key.len())
+        && key.starts_with(|c: char| c.is_ascii_alphanumeric())
+        && key
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'));
+    let value_ok =
+        (1..=256).contains(&value.chars().count()) && !value.chars().any(char::is_control);
+    key_ok && value_ok
 }
 
 /// Append this invocation's argv to the record, if one is named, and return the

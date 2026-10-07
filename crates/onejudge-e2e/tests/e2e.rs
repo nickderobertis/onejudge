@@ -252,7 +252,7 @@ fn a_supervisor_with_no_next_instruction_settles_the_run_instead_of_killing_it()
 fn done_when_reads_tool_events_and_stops_early() {
     // The skill runs `git commit` on its first turn; the done_when judge sees that
     // event in the transcript and ends the conversation after one turn — proving
-    // events reach the judge (Improvement 1) end to end.
+    // a tool event reaches the judge's transcript end to end.
     let provider = echo();
     let engine = Engine::new(&provider, settings());
     let user = SimulatedUser::new("A tester.")
@@ -299,7 +299,8 @@ fn simulated_user_stop_ends_the_conversation() {
 
 #[test]
 fn events_backed_query_reads_what_the_skill_did() {
-    // Improvement 2: assert on tool events directly, no judge call or mock/spy.
+    // A query over the skill's tool events is answered from the transcript itself:
+    // no judge call, and no mock or spy standing in for one.
     let provider = echo();
     let engine = Engine::new(&provider, settings());
     let skill = skill_with("Commit it. [[event:git commit -m fix]]");
@@ -2717,10 +2718,10 @@ fn a_per_turn_timeout_is_classified_rather_than_banked_as_an_empty_turn() {
 
 #[test]
 fn the_per_candidate_history_record_is_read_back_through_oneharnesss_own_reader() {
-    // oneharness writes one normalized history record per ATTEMPTED candidate, and
-    // that record — not the run report — is where it keeps the invocation's
-    // measurements. onejudge reads the session file back with oneharness's own
-    // reader, so every attempt is attributable to an identity and a record id.
+    // oneharness writes one normalized history record per ATTEMPTED candidate.
+    // onejudge reads the session file back with oneharness's own reader for each
+    // attempt's record id, so every attempt is attributable to an identity and a
+    // record — while its measurements still come from the run report, below.
     let history = scratch_path("attribution-history.jsonl");
     let provider = fake_oneharness();
     let engine = Engine::new(&provider, settings().with_session_name("attributed"));

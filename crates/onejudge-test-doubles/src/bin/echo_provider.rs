@@ -100,8 +100,27 @@ enum Turn {
     Taken,
     Lost {
         #[allow(dead_code, reason = "read for its shape: a lost turn names its cause")]
-        cause: String,
+        cause: Cause,
     },
+}
+
+/// A lost turn's cause as the protocol bounds it: one line of 1 to 80 characters.
+#[derive(Deserialize)]
+#[serde(try_from = "String")]
+struct Cause(#[allow(dead_code, reason = "held only once validated")] String);
+
+impl TryFrom<String> for Cause {
+    type Error = String;
+
+    fn try_from(cause: String) -> Result<Self, String> {
+        let length = cause.chars().count();
+        if !(1..=80).contains(&length) || cause.contains(['\r', '\n']) {
+            return Err(format!(
+                "a lost turn's cause is one line of 1 to 80 characters, not {cause:?}"
+            ));
+        }
+        Ok(Self(cause))
+    }
 }
 
 /// A `judge` request, by the kind of verdict it asks for.
@@ -403,7 +422,14 @@ fn judge(judgement: &Judgement) -> Value {
             min,
             max,
             messages,
-        } => (criterion, messages, Some((*min, *max))),
+        } => {
+            if min > max {
+                fail(&format!(
+                    "a numeric judge request's scale runs backwards: {min} to {max}"
+                ));
+            }
+            (criterion, messages, Some((*min, *max)))
+        }
     };
     let transcript = render(messages).to_lowercase();
     let matched = !criterion.is_empty() && transcript.contains(&criterion.to_lowercase());

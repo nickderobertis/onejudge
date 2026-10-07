@@ -59,7 +59,12 @@ function nxGraph() {
       typeof graph.nodes === "object" &&
       graph.dependencies &&
       typeof graph.dependencies === "object" &&
-      nodes.every((node) => typeof node?.data?.root === "string") &&
+      nodes.every(
+        (node) =>
+          typeof node?.data?.root === "string" &&
+          (node.data.tags === undefined ||
+            (Array.isArray(node.data.tags) && node.data.tags.every((tag) => typeof tag === "string"))),
+      ) &&
       Object.values(graph.dependencies).every(
         (deps) => Array.isArray(deps) && deps.every((dep) => typeof dep?.target === "string"),
       );
@@ -93,7 +98,16 @@ function cargoEdges() {
       "fix the Cargo.toml the message names (`cargo metadata --no-deps` reproduces it)",
     );
   }
-  const metadata = JSON.parse(output);
+  let metadata;
+  try {
+    metadata = JSON.parse(output);
+  } catch (error) {
+    failedRun(
+      "reading the Cargo workspace (`cargo metadata`)",
+      error,
+      "check `cargo metadata --format-version 1 --no-deps` with this toolchain (rust-toolchain.toml)",
+    );
+  }
   const shaped =
     Array.isArray(metadata?.packages) &&
     metadata.packages.every(

@@ -10,9 +10,8 @@
 - **Feature names are published.** `cli`, `skill` and `sdk-schema` are what
   consumers enable (`cargo install onejudge --features cli`); renaming or removing
   one is a breaking change.
-- **`tests/coverage.rs` plants a corrupt profile on purpose**, so every coverage
-  merge must keep `--failure-mode all`: run `just test`, never a hand-rolled
-  `cargo llvm-cov`.
+- **Measure coverage through `just test`**, never a hand-rolled `cargo llvm-cov`:
+  `tests/coverage.rs` is why.
 - **`src/bin/onejudge.rs` stays thin**: it is outside the coverage report, so the
   CLI's logic belongs in the covered `src/cli/` modules.
 - **Never regenerate `tests/golden/` from the tree.**
