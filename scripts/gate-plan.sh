@@ -113,11 +113,25 @@ if [ "$tier" = affected ]; then
     fi
 fi
 
+# One git listing, or a failure naming it and the next step: an assignment from it
+# stops the plan under `set -e`, rather than planning from a partial list.
+listing() {
+    local out
+    if ! out="$(git "$@")"; then
+        echo "gate: \`git $*\` failed (above), so the changed files cannot be listed" >&2
+        echo "ACTION: repair the checkout (\`git status\` names what is wrong), then re-run the recipe" >&2
+        exit 1
+    fi
+    printf '%s\n' "$out"
+}
+
 if [ "$tier" = affected ] && [ "$escalate" = true ]; then
     # Every project's root but the workspace's own (`.`), to find a changed file
     # — committed, staged, unstaged or untracked — that only the root project owns.
-    roots="$(git ls-files --cached --others --exclude-standard -- '*project.json' |
-        sed -n 's|/project\.json$||p')"
+    manifests="$(listing ls-files --cached --others --exclude-standard -- '*project.json')"
+    roots="$(sed -n 's|/project\.json$||p' <<<"$manifests")"
+    committed="$(listing diff --name-only "$base")"
+    untracked="$(listing ls-files --others --exclude-standard)"
     while IFS= read -r path; do
         [ -n "$path" ] || continue
         owned=false
@@ -130,7 +144,7 @@ if [ "$tier" = affected ] && [ "$escalate" = true ]; then
             escalation="$path is a workspace-root file"
             break
         fi
-    done < <({ git diff --name-only "$base"; git ls-files --others --exclude-standard; } | sort -u)
+    done < <(printf '%s\n%s\n' "$committed" "$untracked" | sort -u)
 fi
 
 # The projects Nx lists, one per line: its JSON is parsed and held to being an
@@ -144,7 +158,8 @@ try {
   names = error;
 }
 if (!Array.isArray(names) || !names.every((n) => typeof n === "string" && /^[A-Za-z0-9._@/-]+$/.test(n))) {
-  console.error("gate: `nx show projects` did not answer with a list of project names");
+  const why = names instanceof Error ? `: ${names.message}` : "";
+  console.error(`gate: \`nx show projects\` did not answer with a list of project names${why}`);
   console.error("ACTION: run `NX_SHOW_OUTPUT=1 ./scripts/nx show projects --json` and fix the project.json it names");
   process.exit(1);
 }

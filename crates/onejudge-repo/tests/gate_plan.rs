@@ -368,6 +368,39 @@ fn a_selector_naming_no_project_is_refused() {
 }
 
 #[test]
+fn a_checkout_git_cannot_list_stops_the_plan_with_the_next_step() {
+    let (dir, base) = workspace();
+    std::fs::write(dir.join(".git/index"), b"not an index").unwrap();
+    let output = plan(&dir, Some(&base), &[]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    assert!(output.stdout.is_empty(), "a plan was printed");
+    assert!(
+        stderr.contains("failed (above), so the changed files cannot be listed"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("ACTION: repair the checkout"), "{stderr}");
+}
+
+#[test]
+fn an_nx_answer_that_is_not_json_is_refused_with_its_parse_error() {
+    let (dir, base) = workspace();
+    let nx = dir.join("scripts/nx");
+    std::fs::write(&nx, "#!/usr/bin/env bash\necho 'NX   not a project list'\n").unwrap();
+    let output = plan(&dir, Some(&base), &[]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    assert!(output.stdout.is_empty(), "a plan was printed");
+    assert!(
+        stderr.contains(
+            "`nx show projects` did not answer with a list of project names: Unexpected token"
+        ),
+        "the parse error was not printed: {stderr}"
+    );
+    assert!(stderr.contains("ACTION: run `NX_SHOW_OUTPUT=1"), "{stderr}");
+}
+
+#[test]
 fn the_nx_wrapper_is_one_line_on_success_and_the_whole_log_on_failure() {
     let (dir, _) = workspace();
     let nx = |target: &str| {
