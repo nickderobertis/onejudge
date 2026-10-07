@@ -13,7 +13,9 @@
 // recipe run over another root, is not.
 //
 // Exit 0: declared. 1: not declared (silent; the caller names the file).
-// 2: no readable, parseable project.json, the reason on stderr.
+// 2: a project.json that cannot be read, is not JSON, or is not shaped as Nx
+// reads one (an object; `targets` and each target's `options` objects;
+// `options.commands` an array), the reason and the next action on stderr.
 import { readFileSync } from "node:fs";
 
 const SHELL_TARGETS = [
@@ -28,20 +30,36 @@ if (dir === undefined || rest.length > 0) {
     process.exit(2);
 }
 
+function refuse(reason) {
+    console.error(`${dir}/project.json: ${reason}`);
+    console.error(`ACTION: fix ${dir}/project.json (nx show project <name> reads it the way Nx does), then re-run the recipe`);
+    process.exit(2);
+}
+
+const isObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
+
 let project;
 try {
     project = JSON.parse(readFileSync(`${dir}/project.json`, "utf8"));
 } catch (error) {
-    console.error(`${dir}/project.json: ${error.message}`);
-    process.exit(2);
+    refuse(error.message);
+}
+if (!isObject(project)) refuse("is not a JSON object");
+const targets = project.targets ?? {};
+if (!isObject(targets)) refuse("`targets` is not an object");
+
+for (const [name, target] of Object.entries(targets)) {
+    if (!isObject(target)) refuse(`target \`${name}\` is not an object`);
+    if (!isObject(target.options ?? {})) refuse(`\`${name}.options\` is not an object`);
+    if (!Array.isArray(target.options?.commands ?? [])) refuse(`\`${name}.options.commands\` is not an array`);
 }
 
 // Every command string a target runs, whichever form the executor takes it in.
 function commands(name) {
-    const target = (project.targets ?? {})[name] ?? {};
+    const target = targets[name] ?? {};
     const options = target.options ?? {};
     return [target.command, options.command, ...(options.commands ?? [])]
-        .map((entry) => (entry !== null && typeof entry === "object" ? entry.command : entry))
+        .map((entry) => (isObject(entry) ? entry.command : entry))
         .filter((command) => typeof command === "string");
 }
 

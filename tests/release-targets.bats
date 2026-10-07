@@ -4,6 +4,7 @@
 # install.sh or workflow has drifted.
 
 load support/helpers
+bats_require_minimum_version 1.5.0
 
 setup() {
     TREE="$BATS_TEST_TMPDIR/tree"
@@ -39,4 +40,24 @@ setup() {
 
     [ "$status" -eq 1 ]
     [ "$output" = "check-release-targets: could not extract target lists — did install.sh / release-binaries.yml change format?" ]
+}
+
+@test "an install.sh with no targets fails, saying the lists could not be extracted, rather than ending silently" {
+    sed -i.bak '/target="/d' "$TREE/install.sh"
+
+    run "$TREE/scripts/check-release-targets.sh"
+
+    [ "$status" -eq 1 ]
+    [ "$output" = "check-release-targets: could not extract target lists — did install.sh / release-binaries.yml change format?" ]
+}
+
+@test "an install.sh it cannot read fails, naming the file, rather than reading as no targets" {
+    chmod 000 "$TREE/install.sh"
+
+    run --separate-stderr "$TREE/scripts/check-release-targets.sh"
+
+    [ "$status" -eq 1 ]
+    [ "${stderr_lines[1]}" = "check-release-targets: reading install.sh failed (above), so its targets are unknown" ]
+    [ "${stderr_lines[2]}" = "  Restore install.sh (git checkout -- install.sh), then re-run." ]
+    [ "${#stderr_lines[@]}" -eq 3 ]
 }

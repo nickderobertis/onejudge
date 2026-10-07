@@ -14,11 +14,23 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-# install.sh's literal `target="<triple>"` assignments. A file with none leaves
-# the list empty for the check below to name, rather than ending the script here.
-install_targets="$(grep -oE 'target="[a-z0-9_.-]+"' install.sh | sed -E 's/target="([^"]+)"/\1/' | sort -u || true)"
+# The matches of the ERE $1 in the file $2, one per line. No match is an empty
+# list, for the check below to name; a file grep cannot read fails the pipeline
+# it feeds, which ends the script with the reason.
+matches() {
+    local status=0
+    grep -oE "$1" "$2" || status=$?
+    if [ "$status" -gt 1 ]; then
+        echo "check-release-targets: reading $2 failed (above), so its targets are unknown" >&2
+        echo "  Restore $2 (git checkout -- $2), then re-run." >&2
+        return 1
+    fi
+}
+
+# install.sh's literal `target="<triple>"` assignments.
+install_targets="$(matches 'target="[a-z0-9_.-]+"' install.sh | sed -E 's/target="([^"]+)"/\1/' | sort -u)"
 # release-binaries.yml's matrix `target: <triple>` entries.
-matrix_targets="$(grep -oE '^[[:space:]]+target: [a-z0-9_.-]+' .github/workflows/release-binaries.yml | sed -E 's/^[[:space:]]+target: //' | sort -u || true)"
+matrix_targets="$(matches '^[[:space:]]+target: [a-z0-9_.-]+' .github/workflows/release-binaries.yml | sed -E 's/^[[:space:]]+target: //' | sort -u)"
 
 if [ -z "$install_targets" ] || [ -z "$matrix_targets" ]; then
     echo "check-release-targets: could not extract target lists — did install.sh / release-binaries.yml change format?" >&2

@@ -73,6 +73,33 @@ setup() {
     [ "$output" = tools/sub/t.sh ]
 }
 
+@test "a project inside another non-root project owns its own scripts" {
+    mkdir -p "$REPO/tools/inner/bin"
+    shell_project tools >"$REPO/tools/project.json"
+    shell_project tools/inner >"$REPO/tools/inner/project.json"
+    printf 'echo t\n' >"$REPO/tools/t.sh"
+    printf 'echo i\n' >"$REPO/tools/inner/bin/i.sh"
+
+    run "$REPO/scripts/shell-files.sh" tools
+    [ "$status" -eq 0 ]
+    [ "$output" = tools/t.sh ]
+
+    run "$REPO/scripts/shell-files.sh" tools/inner
+    [ "$status" -eq 0 ]
+    [ "$output" = tools/inner/bin/i.sh ]
+}
+
+@test "a shell target may run its recipe as a command, an option, a listed object, or one && step" {
+    mkdir -p "$REPO/tools"
+    echo '{"targets":{"format":{"options":{"command":"just _sh-format tools"}},"format-check":{"options":{"commands":[{"command":"just _sh-format-check tools"}]}},"lint":{"command":"node check.mjs tools && just _sh-lint tools tools"}}}' >"$REPO/tools/project.json"
+    printf 'echo t\n' >"$REPO/tools/t.sh"
+
+    run "$REPO/scripts/shell-files.sh" .
+
+    [ "$status" -eq 0 ]
+    [ "$output" = scripts/shell-files.sh ]
+}
+
 @test "a script in a project with no shell targets fails, naming the file and the fix" {
     mkdir -p "$REPO/crate"
     echo '{"targets":{"lint":{"command":"just _rust-lint crate"}}}' >"$REPO/crate/project.json"
@@ -141,8 +168,25 @@ setup() {
 
     [ "$status" -eq 1 ]
     [[ "${stderr_lines[0]}" == "crate/project.json: "* ]]
-    [ "${stderr_lines[1]}" = "shell-files: reading crate/project.json failed (above), so whether it lints crate/x.sh is unknown" ]
-    [ "${stderr_lines[2]}" = "ACTION: fix what the error names for crate/project.json, then re-run the recipe" ]
+    [ "${stderr_lines[1]}" = "ACTION: fix crate/project.json (nx show project <name> reads it the way Nx does), then re-run the recipe" ]
+    [ "${stderr_lines[2]}" = "shell-files: reading crate/project.json failed (above), so whether it lints crate/x.sh is unknown" ]
+}
+
+@test "a project.json Nx could not read as a project fails, naming what is wrong" {
+    mkdir -p "$REPO/crate"
+    printf 'echo x\n' >"$REPO/crate/x.sh"
+    for shape in 'null' '{"targets":[]}' '{"targets":{"lint":"just _sh-lint crate"}}' \
+        '{"targets":{"lint":{"options":[]}}}' '{"targets":{"lint":{"options":{"commands":"just _sh-lint crate"}}}}'; do
+        echo "$shape" >"$REPO/crate/project.json"
+
+        run --separate-stderr "$REPO/scripts/shell-files.sh" .
+
+        [ "$status" -eq 1 ]
+        [[ "${stderr_lines[0]}" == "crate/project.json: "* ]]
+        [ "${stderr_lines[1]}" = "ACTION: fix crate/project.json (nx show project <name> reads it the way Nx does), then re-run the recipe" ]
+        [ "${stderr_lines[2]}" = "shell-files: reading crate/project.json failed (above), so whether it lints crate/x.sh is unknown" ]
+        [ "${#stderr_lines[@]}" -eq 4 ]
+    done
 }
 
 @test "a project.json it cannot read fails, naming it, rather than reading as no shell targets" {
