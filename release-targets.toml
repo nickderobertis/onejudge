@@ -13,7 +13,7 @@
 # a host document and a consumer's plan wait on cannot be derived from the
 # registry half of an identifier.
 #
-# `crates/onejudge/tests/release_targets.rs` holds this document to the schema and
+# `crates/onejudge-repo/tests/release_targets.rs` holds this document to the schema and
 # proves it against the *real* release configuration, in both directions, so an
 # artifact the workflows publish without a target here fails the gate rather than
 # going silently undeclared.

@@ -1,0 +1,64 @@
+{
+  "name": "workspace",
+  "$schema": "node_modules/nx/schemas/project-schema.json",
+  "//": "The workspace root: it owns every file no other project does (toolchain, lockfiles, justfile, docs, schemas, CI), so a change there runs the broader tier. Its targets are the repo-level ones: the aggregate Rust coverage over every suite's profiles, the supply-chain audit, the MSRV build, and the root-file drift checks. It depends on the crates whose suites the coverage aggregate merges, so a change to any of them reruns it.",
+  "projectType": "application",
+  "tags": [
+    "type:workspace"
+  ],
+  "implicitDependencies": [
+    "onejudge",
+    "onejudge-test-doubles",
+    "onejudge-e2e",
+    "onejudge-cli-e2e"
+  ],
+  "targets": {
+    "lint": {
+      "executor": "nx:run-commands",
+      "options": {
+        "commands": [
+          "just check-release-targets",
+          "node scripts/check-project-boundaries.mjs workspace",
+          "node scripts/check-target-commands.mjs workspace"
+        ],
+        "parallel": false
+      },
+      "inputs": [
+        "{workspaceRoot}/install.sh",
+        "{workspaceRoot}/.github/workflows/release-binaries.yml",
+        "{workspaceRoot}/scripts/check-release-targets.sh",
+        "{workspaceRoot}/nx.json",
+        "{workspaceRoot}/**/project.json",
+        "{workspaceRoot}/**/Cargo.toml",
+        "{workspaceRoot}/scripts/check-project-boundaries.mjs",
+        "{workspaceRoot}/scripts/check-target-commands.mjs"
+      ]
+    },
+    "test": {
+      "command": "just check-python-sdk-release-trigger"
+    },
+    "coverage-clean": {
+      "command": "just _coverage-clean",
+      "cache": false
+    },
+    "coverage": {
+      "command": "just _coverage",
+      "dependsOn": [
+        {
+          "projects": [
+            "onejudge",
+            "onejudge-e2e",
+            "onejudge-cli-e2e"
+          ],
+          "target": "test"
+        }
+      ]
+    },
+    "audit": {
+      "command": "just _audit"
+    },
+    "msrv": {
+      "command": "just _msrv"
+    }
+  }
+}

@@ -1,0 +1,18 @@
+# The real-llmlint tier (`tests/llmlint_real.rs`): the built CLI against the
+# RELEASED llmlint. `#[ignore]`-d; runs via `just test-llmlint` / the
+# `llmlint-real` CI job, which installs llmlint first.
+[package]
+name = "onejudge-llmlint-real"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[dev-dependencies]
+onejudge = { path = "../onejudge", features = ["cli"] }
+onejudge-test-doubles = { path = "../onejudge-test-doubles" }
+serde = { workspace = true }
+serde_json = { workspace = true }

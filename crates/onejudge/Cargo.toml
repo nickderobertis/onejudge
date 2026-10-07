@@ -31,7 +31,7 @@ onemessagebus = { workspace = true }
 # CLI config and SKILL.md frontmatter. Both are opt-in, kept off the library's
 # (and the MSRV's) default surface.
 clap = { version = "4", features = ["derive"], optional = true }
-serde_yaml_ng = { version = "0.10", optional = true }
+serde_yaml_ng = { workspace = true, optional = true }
 # Non-optional, because `onemessagebus::Message` is sealed on `JsonSchema` and
 # `Note` implements it (`note.rs`) on every build: the note channel `Sender<Note,
 # Accepted>` does not exist without it, and `Engine::with_notes` is library
@@ -46,32 +46,16 @@ schemars = { workspace = true }
 # with `KILL_ON_JOB_CLOSE`, so ending the child already ends its descendants.
 [target.'cfg(unix)'.dependencies]
 rustix = { workspace = true }
-# Only for the `fake-provider` double, which must *catch* SIGTERM to model
-# oneharness's teardown (an uncatchable SIGKILL is exactly what this proves is not
-# enough). Optional, so it never reaches a library consumer.
-signal-hook = { workspace = true, optional = true }
 
 [dev-dependencies]
 # The contract drift gate (`tests/contract.rs`) serializes the public `Report`
 # and diffs it against a checked-in golden.
 serde_json = { workspace = true }
-# `tests/release_targets.rs` holds `release-targets.toml` to the canonical
-# release-target schema, and reads the Cargo/PyPI manifests the release
-# configuration publishes from. A standard TOML parser rather than a hand-rolled
-# one, because the schema promises exactly that of whoever reads the document.
-# Already in the tree via `oneharness-core`, so this costs no new dependency.
-toml = "1"
-# `tests/workflows.rs` holds the CI wiring branch protection depends on (required
-# contexts, notignored, the llmlint validate step) to a parsed contract. The same
-# parser the `skill` feature uses, so this costs no new dependency.
-serde_yaml_ng = "0.10"
 
+# The deterministic test doubles are not a feature of this crate: they are the
+# `publish = false` `onejudge-test-doubles` crate's bins, so nothing a consumer
+# installs can build them.
 [features]
-# The deterministic test doubles the e2e suite drives as real subprocesses.
-# Non-default so a published `cargo add onejudge` / library build ships only the
-# engine — the doubles are test-only. `just check` and coverage enable it.
-fake-provider = ["dep:signal-hook"]
-
 # Load a skill from disk (a `SKILL.md` directory) into a `SkillDefinition`. This is
 # onejudge's owned skill-execution primitive — a higher-level framework composes
 # over `load_skill` rather than re-implementing the SKILL.md format. Non-default so
@@ -82,9 +66,8 @@ skill = ["dep:serde_yaml_ng"]
 # The standalone `onejudge` binary: drive a harness through a simulated-user loop
 # to complete one task, configured by YAML. Non-default so the library stays lean
 # (clap + the YAML parser never reach a `cargo add onejudge` consumer). Pulls in
-# `skill` for the `skill:` config key. The deterministic gate (`just check`) enables
-# it alongside `fake-provider` and drives the built binary against the test doubles
-# in `tests/cli.rs`.
+# `skill` for the `skill:` config key. The deterministic gate builds it and drives
+# the built binary against the test doubles in `onejudge-cli-e2e`.
 cli = ["dep:clap", "skill"]
 
 # Rust-owned JSON Schema metadata for SDK generators. Config is the CLI's YAML
@@ -109,45 +92,14 @@ required-features = ["sdk-schema"]
 name = "generate_note_schema"
 required-features = ["sdk-schema"]
 
-# The user-facing standalone binary, behind the `cli` feature. Unlike the two
-# `fake-provider` doubles below, this one IS published and installed
-# (`cargo install onejudge --features cli`, release archives). Its logic lives in
-# the covered `cli` library modules; this entrypoint stays thin.
+# The user-facing standalone binary, behind the `cli` feature. This crate's only
+# binary: it IS published and installed (`cargo install onejudge --features cli`,
+# release archives), while the test doubles live in `onejudge-test-doubles`. Its
+# logic lives in the covered `cli` library modules; this entrypoint stays thin.
 [[bin]]
 name = "onejudge"
 path = "src/bin/onejudge.rs"
 required-features = ["cli"]
-
-# `onejudge-echo-provider` speaks the CommandProvider JSON-lines protocol;
-# `onejudge-fake-oneharness` emulates `oneharness run --format json`. Both are
-# deterministic doubles for the e2e suite, gated behind `fake-provider` so they
-# are never built into a normal library consumer's dependency graph.
-[[bin]]
-name = "onejudge-echo-provider"
-path = "src/bin/echo_provider.rs"
-required-features = ["fake-provider"]
-
-[[bin]]
-name = "onejudge-fake-oneharness"
-path = "src/bin/fake_oneharness.rs"
-required-features = ["fake-provider"]
-
-# `onejudge-fake-harness` stands in one level deeper: a *harness* CLI, so a turn
-# run through the linked `oneharness-core` engine has something deterministic to
-# spawn. See its module doc.
-[[bin]]
-name = "onejudge-fake-harness"
-path = "src/bin/fake_harness.rs"
-required-features = ["fake-provider"]
-
-# `onejudge-fake-llmlint` stands in for the `llmlint` CLI the `LlmlintProvider`
-# meets at the process boundary: it answers `--version`, records the argv it was
-# given, and exits 0 / 1 / 2 (or dies by signal) as the test scripts it through
-# the environment. The gate needs no llmlint installed. See its module doc.
-[[bin]]
-name = "onejudge-fake-llmlint"
-path = "src/bin/fake_llmlint.rs"
-required-features = ["fake-provider"]
 
 [lints.rust]
 missing_docs = "warn"

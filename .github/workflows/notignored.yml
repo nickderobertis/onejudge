@@ -8,7 +8,7 @@
 #
 # The comment behaviour belongs to nickderobertis/notignored and is tested there.
 # This file's wiring (trigger, permissions, fork guard, full history, and that no
-# required job needs it) is held by `crates/onejudge/tests/workflows.rs`.
+# required job needs it) is held by `crates/onejudge-repo/tests/workflows.rs`.
 
 name: notignored
 

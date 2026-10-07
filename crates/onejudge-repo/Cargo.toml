@@ -1,0 +1,27 @@
+# The repository-level checks: the CI wiring branch protection depends on
+# (`tests/workflows.rs`) and the offline release-target drift gate
+# (`tests/release_targets.rs`), plus the release-target reader both that gate and
+# the `onejudge-release-targets` network tier share (`src/lib.rs`). They read root
+# files — the workflows, `release-targets.toml`, the manifests — not the library.
+[package]
+name = "onejudge-repo"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[dependencies]
+# The release-target schema reader: `release-targets.toml` is held to the
+# canonical schema with a standard TOML parser, because the schema promises
+# exactly that of whoever reads the document.
+serde = { workspace = true }
+toml = { workspace = true }
+
+[dev-dependencies]
+# `tests/workflows.rs` holds the CI wiring to a parsed contract.
+serde_yaml_ng = { workspace = true }
+# `tests/ci_tier.rs` writes the GitHub event payloads it routes.
+serde_json = { workspace = true }

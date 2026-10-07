@@ -1,0 +1,62 @@
+{
+  "name": "onejudge-python-sdk",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "//": "The typed async Python SDK, published to PyPI as `onejudge`. Its declarations are generated from the library's Rust wire types (`generate-check`), and its tests drive the real `onejudge` binary and the doubles, so it depends on both. llmlint: ignore-file[projects_stay_in_one_uv_workspace] JSON has no comment to scope this to a line. The SDK runs in its pinned requirements-dev.txt environment through `uv run --no-project`, mirroring oneharness's SDK (the departure AGENTS.md \"Stack and composition\" records); a uv workspace would have to take in the root maturin pyproject.toml that the unchanged release-pypi.yml builds, which is a change to the release path this project definition does not make.",
+  "projectType": "library",
+  "sourceRoot": "python/onejudge-sdk/src",
+  "tags": [
+    "type:sdk",
+    "lang:python"
+  ],
+  "implicitDependencies": [
+    "onejudge",
+    "onejudge-test-doubles"
+  ],
+  "targets": {
+    "generate-check": {
+      "command": "just _py-generate-check"
+    },
+    "format": {
+      "command": "just _py-format python/onejudge-sdk"
+    },
+    "format-check": {
+      "command": "just _py-format-check python/onejudge-sdk"
+    },
+    "lint": {
+      "command": "just _py-lint python/onejudge-sdk onejudge-python-sdk",
+      "inputs": [
+        "default",
+        "^default",
+        "{workspaceRoot}/nx.json",
+        "{workspaceRoot}/scripts/check-project-boundaries.mjs",
+        "{workspaceRoot}/scripts/check-target-commands.mjs"
+      ]
+    },
+    "typecheck": {
+      "command": "just _py-typecheck python/onejudge-sdk/src python/onejudge-sdk/scripts python/onejudge-sdk/test"
+    },
+    "test": {
+      "command": "just _py-test",
+      "dependsOn": [
+        {
+          "projects": [
+            "onejudge"
+          ],
+          "target": "build"
+        },
+        {
+          "projects": [
+            "onejudge-test-doubles"
+          ],
+          "target": "build"
+        }
+      ]
+    },
+    "coverage": {
+      "command": "just _py-coverage",
+      "dependsOn": [
+        "test"
+      ]
+    }
+  }
+}

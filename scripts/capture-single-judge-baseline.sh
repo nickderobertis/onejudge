@@ -4,19 +4,23 @@
 # The judge side of a run is a panel of judges, and a panel of ONE has to be
 # byte-identical to what the release before panels existed produced: the same
 # transcript, the same judge-side session names, the same control addresses and
-# usage. That release is 0.8.1, and the proof is a replay: `tests/cli.rs` runs
+# usage. That release is 0.8.1, and the proof is a replay: `onejudge-cli-e2e`'s
+# `tests/cli.rs` runs
 # each checked-in config through the built binary and compares against what 0.8.1
 # wrote for it. This script is how those fixtures were captured, so the comparison
 # is against the release's own run rather than a hand-written expectation.
 #
 #   scripts/capture-single-judge-baseline.sh <onejudge-0.8.1> <onejudge-echo-provider> <onejudge-fake-oneharness>
 #
-# All three are built from the 0.8.1 tree with `--features fake-provider,cli`
+# All three are built from the 0.8.1 tree, where the doubles were still bins of
+# the `onejudge` crate behind its since-removed `fake-provider` feature
 # (`cargo build --features fake-provider,cli --bins` in a checkout of `v0.8.1`).
 # Two fixtures are written:
 #
-#   tests/golden/single-judge/          a command-provider split with one `judge:`
-#   tests/golden/single-judge-control/  the same with `control: true` on both sides,
+#   crates/onejudge-cli-e2e/tests/golden/single-judge/          a command-provider
+#       split with one `judge:`
+#   crates/onejudge-cli-e2e/tests/golden/single-judge-control/  the same with
+#       `control: true` on both sides,
 #                                       over the fake oneharness (unix: it opens
 #                                       real control sockets)
 #
@@ -78,7 +82,7 @@ PY
 }
 
 # --- single-judge: a command-provider split with one `judge:` -----------------
-fixture=crates/onejudge/tests/golden/single-judge
+fixture=crates/onejudge-cli-e2e/tests/golden/single-judge
 record="$work/supervisor-requests.jsonl"
 PLACEHOLDERS=("$record" "{{RECORD}}")
 capture "$fixture" "$record" \
@@ -92,7 +96,7 @@ capture "$fixture" "$record" \
 # (`/tmp/oj-ctl-<pid, 8 digits>/…`), or the usage would differ by the width of a
 # temp dir name. `/tmp` rather than `$TMPDIR` for the same reason: a macOS temp
 # dir is forty characters longer than a Linux one.
-fixture=crates/onejudge/tests/golden/single-judge-control
+fixture=crates/onejudge-cli-e2e/tests/golden/single-judge-control
 ctl="/tmp/oj-ctl-$(printf '%08d' "$$")"
 rm -rf "$ctl"; mkdir -p "$ctl/agent-store" "$ctl/judge-store"
 trap 'rm -rf "$work" "$ctl"' EXIT

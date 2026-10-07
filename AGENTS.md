@@ -53,8 +53,8 @@ Built up from the `create-repo` skill's reference axes, not a single template.
 - **Language(s):** rust (`languages/rust.md`) — stable toolchain, `rustfmt` +
   `clippy -D warnings`, `cargo nextest`, `cargo llvm-cov` coverage gate, `cargo
   deny` + `cargo machete` supply-chain job. python (`languages/python.md`) for
-  the typed async SDK in `python/onejudge-sdk/` (published as `onejudge`; gate
-  `just python-sdk-check`).
+  the typed async SDK in `python/onejudge-sdk/` (published as `onejudge`; its
+  targets run inside `just check`, and `just python-sdk-check` runs them alone).
 
   [//]: # "llmlint: ignore[agents_md_durable_and_terse] The Stack and composition record names each composed language's toolchain, as the Rust line above does; the create-repo baseline asks this section to record the SDK's, and naming what it keeps from python.md is what makes the departures below legible."
   It keeps python.md's `ruff`, 95% coverage floor and pure-Python `uv_build` wheel;
@@ -63,30 +63,43 @@ Built up from the `create-repo` skill's reference axes, not a single template.
   against the Rust-exported schemas, not Pydantic — for one recorded reason: #22 (`7241522`) built the SDK to mirror
   oneharness's `python/oneharness-sdk/` (layout, `pyproject.toml`, `test/`, the
   `python-sdk-*` recipes) and named its `jsonschema` dependency.
-- **Cross-cutting:** `ci.md` (always) and `releasing.md` (applies — the crate is
-  a versioned artifact published to crates.io; `release-plz` drives it, and a
-  tag push also builds per-platform CLI archives, see below).
+- **Cross-cutting:** `project-graph.md` (always — an Nx project graph runs every
+  target; Node/bun is only Nx's toolchain, `package.json` + `bun.lock`), `ci.md`
+  (always) and `releasing.md` (applies — the crate is a versioned artifact
+  published to crates.io; `release-plz` drives it, and a tag push also builds
+  per-platform CLI archives, see below).
 - **References composed:** base.md, shapes/library.md, shapes/cli.md,
-  languages/rust.md, languages/python.md, intersections/rust-cli.md, ci.md,
-  llmlint.md, releasing.md
-- **Excluded, and why:** `monorepo.md` — one crate, one language, no orchestrator
-  (the CLI is a feature-gated `[[bin]]` in the single crate, **not** a second
-  crate); `src` layout / asdf / direnv — not idiomatic for a single Cargo crate.
-  The two `fake-provider` `[[bin]]`s remain test-only doubles (never published);
-  the `onejudge` `[[bin]]` is the one shipped binary.
+  languages/rust.md, languages/python.md, intersections/rust-cli.md,
+  project-graph.md, ci.md, llmlint.md, releasing.md
+[//]: # "llmlint: ignore-block[agents_md_durable_and_terse] the composition record has to describe the crates the tree is built from and record the published feature this tree no longer has, because it is what a later reader audits the composition against; nx.json and the manifests say what each project is, not which of them is the published contract or why the doubles left it."
+- **Crates:** the published `onejudge` library + CLI is the one `type:contract`
+  project and depends on nothing here; `onejudge-test-doubles` (unpublished)
+  holds the doubles every suite spawns; each suite tier is a `publish = false`
+  test crate of its own, and only the `workspace` root reaches the e2e suites or
+  the `type:external` tiers.
+- **The test doubles are never a feature of the published crate**, so its
+  former `fake-provider` feature was removed (a breaking change; no consumer
+  enabled it, and a suite in another package cannot reach a feature-gated bin).
+[//]: # "llmlint: ignore-end[agents_md_durable_and_terse]"
+- **Excluded, and why:** `src` layout / asdf / direnv — not idiomatic for a Cargo
+  workspace whose toolchains pin themselves (`rust-toolchain.toml`, the
+  `packageManager` bun pin, the SDK's uv environment).
 
 ## Command surface
 
 Use the `just` recipes; do not hand-roll equivalents. `just --list` is the index.
 
-- `just bootstrap` — fetch the pinned toolchain + `cargo fetch` from a clean clone.
-- `just check` (alias: `just gate`) — the full gate: format check, clippy (deny
-  warnings), doc build, coverage-enforced tests **including e2e**, and the
-  supply-chain audit. Must pass before any commit or PR.
-- `just test` (coverage-enforced) / `just test-fast` / `just test-e2e` /
-  `just lint` / `just format` / `just audit` / `just msrv` — individual steps.
-- `just test-live` — the credentialed real `oneharness` tier, out of `check`.
-- `just upgrade` — `cargo update`, then re-run the gate; commit refreshed lockfile.
+[//]: # "llmlint: ignore-block[agents_md_durable_and_terse] this section has always named the gate and its steps; it is kept true here rather than removed, and the one fact recipe comments cannot carry is which recipe is the gate and that its tier is a flag."
+- `just bootstrap` — toolchains, cargo tools, the locked Nx install, `cargo fetch`.
+- `just check` (alias: `just gate`) — the gate, through Nx: by default the
+  **affected tier** against `NX_BASE` (a plain ref or SHA) or the merge base with
+  `origin/main`; `--sweep` runs the **broader tier**. A diff touching a
+  workspace-root file sweeps. `--print-plan` shows what would run.
+- `just test` / `test-fast` / `test-e2e` / `lint` / `format` / `audit` / `msrv` —
+  individual steps; `just test-live` / `test-llmlint` / `test-release-targets` —
+  the external tiers, out of `check`.
+- `just upgrade` — `cargo update` + `bun update`, then the sweep.
+[//]: # "llmlint: ignore-end[agents_md_durable_and_terse]"
 - `just lint-llm` / `just lint-llm-diff` — the llmlint LLM-judge tier, separate
   from `check` and non-deterministic; config in `llmlint.yml`. `just setup-llmlint`
   installs its toolchain.
@@ -108,6 +121,9 @@ Use the `just` recipes; do not hand-roll equivalents. `just --list` is the index
   tier is *not* required (credential-gated; fork PRs need maintainer approval).
 - **PRs follow `.github/pull_request_template.md`** — terse **What** and **Why**;
   it becomes the squash body.
+[//]: # "llmlint: ignore[agents_md_durable_and_terse] create-repo's ci.md requires the release model and the one place the broader tier runs to be recorded in this section, as the fact a reader needs to tell a legitimate sweep from a duplicate."
+- **Release model: batched**, so the **broader tier** runs on the release-plz PR
+  and every other CI run is the affected tier (`scripts/ci-tier.mjs`).
 - **Releases: fully automated, no manual deploy step.** `release-plz` opens a
   release PR from the merged Conventional-Commits history; merging it writes the
   version + `CHANGELOG.md`, tags `vX.Y.Z`, and publishes to crates.io. Nobody has
@@ -138,7 +154,7 @@ Use the `just` recipes; do not hand-roll equivalents. `just --list` is the index
   `onejudge` alone names *both* the crate and the SDK wheel and `pypi:` alone
   names two of the three. The probe's **not answered** is not "no release yet": a
   consumer holds on the first indefinitely, and reading it as the second launches
-  work whose dependency never landed. `tests/release_targets.rs` holds the
+  work whose dependency never landed. `onejudge-repo`'s `tests/release_targets.rs` holds the
   document to that schema and keeps it honest by deriving what is published from
   the release configuration, so a new artifact fails the gate rather than going
   undeclared. `scripts/check-release-targets.sh` is *not* that check despite its
@@ -150,7 +166,7 @@ Use the `just` recipes; do not hand-roll equivalents. `just --list` is the index
   all fail on findings. A diagnostic is an error or a documented, tracked suppress.
 - **Never talk to a model directly.** Everything goes through a `Provider`. The
   deterministic gate fakes only the model — via real subprocess test doubles
-  (`fake-provider` bins), never by mocking the layer under test.
+  (the `onejudge-test-doubles` bins), never by mocking the layer under test.
 - Validate every external input at its boundary: provider responses and the
   oneharness report are parsed into typed models (`serde`) before use, and a
   provider that ignores a request contract (empty output, missing verdict field)
@@ -172,16 +188,10 @@ Use the `just` recipes; do not hand-roll equivalents. `just --list` is the index
 
 ## Coverage and e2e (the gate's depth)
 
-- **Coverage — enforced.** `just test` is the coverage step and is wired into
-  `just check`; the floor and the gate's feature set are declared once, in the
-  justfile (`coverage_min`, `gate_features`). It excludes `src/bin/` — the
-  `fake-provider` doubles **and** the thin `onejudge` entrypoint are excluded (the
-  CLI's real logic lives in the covered `src/cli/` library modules). Every model
-  call goes through oneharness; the deterministic gate fakes only the model, via
-  the real subprocess doubles. That step's `--failure-mode all` is load-bearing
-  rather than slack: see the justfile comment on `test`, which `tests/coverage.rs`
-  keeps honest by planting the artifact it exists for.
-- **E2E — real, in the gate.** `crates/onejudge/tests/e2e.rs` drives the real
+- **Coverage is enforced once, over the union of every Rust suite**, never per
+  crate: a suite moved into another crate must still count toward the library's
+  floor, so never lower it because one crate's own number looks low.
+- **E2E — real, in the gate.** `crates/onejudge-e2e/tests/e2e.rs` drives the real
   engine across a **real subprocess boundary**: it points `CommandProvider` and
   `OneharnessProvider` at deterministic test-double binaries
   (`onejudge-echo-provider`, `onejudge-fake-oneharness`) and asserts on the
@@ -190,15 +200,16 @@ Use the `just` recipes; do not hand-roll equivalents. `just --list` is the index
   journey happy-path **and** a failure/recovery path (provider spawn failure,
   empty/malformed output, missing verdict field, non-session-capable fallback),
   plus a `SplitProvider` journey composing two different real-subprocess backends.
-  `crates/onejudge/tests/cli.rs` extends the same discipline to the standalone
+  `crates/onejudge-cli-e2e/tests/cli.rs` extends the same discipline to the standalone
   binary: it drives the real run driver in-process over the echo double **and**
   spawns the built `onejudge` binary as a subprocess, asserting on stdout, the
   `--format json` `Report`, and the exit code — only the model faked.
-- **Out-of-gate tier, credential-gated, `#[ignore]`-d:** `live` (`tests/live.rs`,
-  real `oneharness`; `docs/live-tier.md`). Not in the required-checks set.
-- **Out-of-gate, no credential, `#[ignore]`-d:** `just test-llmlint`
-  (`tests/llmlint_real.rs`, the released llmlint at the provider's floor; the
-  `llmlint-real` CI job installs it via `scripts/setup-llmlint.sh`).
+- **Out-of-gate tier, credential-gated, `#[ignore]`-d:** `onejudge-live` (real
+  `oneharness`; `docs/live-tier.md`). Not in the required-checks set.
+- **Out-of-gate, no credential, `#[ignore]`-d:** `onejudge-llmlint-real`
+  (`just test-llmlint`, the released llmlint at the provider's floor; the
+  `llmlint-real` CI job installs it via `scripts/setup-llmlint.sh`) and
+  `onejudge-release-targets` (`just test-release-targets`, the public registries).
 
 ## The provider boundary
 
@@ -232,7 +243,7 @@ normalized into the same list — and `SplitProvider` takes a panel as its judge
 half, so an embedder composing by hand gets the same semantics. A panel of **one**
 is byte-identical to a bare provider (bare session, no headers, no labels) — proven
 by replaying a fixture captured from the released 0.8.1
-(`tests/golden/single-judge/`, `scripts/capture-single-judge-baseline.sh`); the
+(`onejudge-cli-e2e`'s `tests/golden/single-judge/`, `scripts/capture-single-judge-baseline.sh`); the
 only addition is the per-judge record, drained through
 `Provider::take_judge_decisions` after every supervisor call and kept on the engine
 like telemetry so a failed run still reports it (`Report::judge_decisions`,
@@ -245,7 +256,7 @@ mode on the request, so the judge's config, `ONEHARNESS_*` or a discovered file
 decides; the mode and its source are resolved with the linked core's loader and
 recorded (`oneharness/posture.rs`). Setting `mode` on a judge-side request
 reintroduces the silently-ignored-config defect. The default posture is held to
-0.15.0's harness argv and prompts (`tests/golden/judge-posture-0.15.0/`), and a
+0.15.0's harness argv and prompts (`onejudge-cli-e2e`'s `tests/golden/judge-posture-0.15.0/`), and a
 writable judge in a multi-judge panel needs `allow_writable_judges`
 (`docs/judges.md`).
 
@@ -372,7 +383,7 @@ re-judge), so a moved bar cannot be invisible to the verdict that decides the ru
 And **undelivered is an error**: a note arriving after the conversation completed
 raises `Undelivered`, naming that it was not delivered and why, because a caller can
 choose what to do about a refusal and can do nothing at all about a silence.
-`docs/notes.md` is the contract; `tests/notes.rs` drives each of the four arrival
+`docs/notes.md` is the contract; `onejudge-e2e`'s `tests/notes.rs` drives each of the four arrival
 cases through the library API over the real subprocess doubles, holding a party's
 turn open so the arrival is genuinely live rather than between turns, and holds each
 journey to a capture from the tree before the move below (`tests/golden/notes/`).
@@ -445,8 +456,9 @@ See `docs/contract.md`.
 
 - Rust: stable toolchain (pinned in `rust-toolchain.toml`), `rustfmt` defaults,
   `clippy -D warnings`. Errors use `thiserror`. Public API is re-exported from
-  `lib.rs`; everything else is internal. See `crates/onejudge/tests/AGENTS.md`
-  for test-double conventions.
+  `lib.rs`; everything else is internal. Each project's nested `AGENTS.md` holds
+  its subtree rules; `crates/onejudge-e2e/AGENTS.md` holds the test-double
+  conventions.
 
 ## After the main task: refine and hand off
 

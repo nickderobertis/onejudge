@@ -209,9 +209,9 @@ Drive a deterministic backend instead of a live harness by pointing a
 The command surface is a `just` recipe set; `just --list` is the index.
 
 ```sh
-just bootstrap   # clean-clone setup: toolchain + cargo tools + fetch
-just check       # the full gate: format, lint, doc, coverage-enforced tests, audit
-just test        # fast unit + integration + e2e
+just bootstrap   # clean-clone setup: toolchain + cargo tools + the Nx install + fetch
+just check       # the gate over what your change affects (Nx); --sweep for everything
+just test        # the coverage-enforced suites, unit + integration + e2e
 ```
 
 The gate is deterministic and offline — the model is faked by **real subprocess

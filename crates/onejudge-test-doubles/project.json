@@ -1,0 +1,35 @@
+{
+  "name": "onejudge-test-doubles",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "//": "The deterministic test doubles every suite drives as real subprocesses (`src/bin/`), and the helpers more than one suite shares. `publish = false`. `build` is what every consuming `test` depends on: it is how a suite in another package gets a freshly built double.",
+  "projectType": "library",
+  "sourceRoot": "crates/onejudge-test-doubles/src",
+  "tags": [
+    "type:test-support",
+    "lang:rust"
+  ],
+  "implicitDependencies": [
+    "onejudge"
+  ],
+  "targets": {
+    "format": {
+      "command": "just _rust-format onejudge-test-doubles"
+    },
+    "format-check": {
+      "command": "just _rust-format-check onejudge-test-doubles"
+    },
+    "lint": {
+      "command": "just _rust-lint onejudge-test-doubles",
+      "inputs": [
+        "default",
+        "^default",
+        "{workspaceRoot}/nx.json",
+        "{workspaceRoot}/scripts/check-project-boundaries.mjs",
+        "{workspaceRoot}/scripts/check-target-commands.mjs"
+      ]
+    },
+    "build": {
+      "command": "just _rust-build onejudge-test-doubles"
+    }
+  }
+}

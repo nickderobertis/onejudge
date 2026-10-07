@@ -9,3 +9,6 @@
 .env
 # gh-secrets sync state (local bookkeeping; the manifest itself is committed)
 .gh-secrets-state.json
+# The Nx install (package.json + bun.lock) and its cache, logs and graph data
+/node_modules
+/.nx

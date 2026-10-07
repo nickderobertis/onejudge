@@ -1,6 +1,17 @@
 [workspace]
 resolver = "2"
-members = ["crates/onejudge"]
+# The published library, its test doubles, and one test-only crate per suite
+# tier, so each tier is a project of its own in the Nx graph (`nx.json`).
+members = [
+    "crates/onejudge",
+    "crates/onejudge-test-doubles",
+    "crates/onejudge-e2e",
+    "crates/onejudge-cli-e2e",
+    "crates/onejudge-live",
+    "crates/onejudge-llmlint-real",
+    "crates/onejudge-release-targets",
+    "crates/onejudge-repo",
+]
 
 [workspace.package]
 version = "0.17.2"
@@ -43,9 +54,15 @@ onemessagebus = "0.9.0"
 # A safe wrapper, because this crate forbids `unsafe_code`; already in the tree
 # via `oneharness-core`, so this costs a feature and no new dependency.
 rustix = { version = "1", features = ["process"] }
-# Safe signal registration for the `fake-provider` double that models oneharness's
-# cancellation contract. Test-only: never enabled for a library consumer.
+# Safe signal registration for the `onejudge-fake-oneharness` double that models
+# oneharness's cancellation contract. Test-only: only the `publish = false`
+# `onejudge-test-doubles` crate depends on it.
 signal-hook = "0.3"
+# Parsers the repo-level suites read the release configuration and the CI
+# workflows with. Both already in the tree (via `oneharness-core` and the `skill`
+# feature), so they cost no new dependency.
+toml = "1"
+serde_yaml_ng = "0.10"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"

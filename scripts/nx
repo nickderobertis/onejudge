@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# The one entry point to this workspace's Nx: every gate recipe runs through it.
+#
+# It heals the locked install first (`scripts/node-modules.sh`), so a clean clone
+# or a CI job that never bootstrapped still runs the pinned Nx, and runs Nx under
+# the Node that Nx requires rather than under bun.
+#
+# Quiet on success: Nx's task log goes to a file under `.nx/logs/` and only a
+# one-line summary is printed; on failure the whole log is printed, then the
+# action. `NX_SHOW_OUTPUT=1` streams Nx's output untouched instead, for callers
+# that read it (`nx show projects --json`, `nx graph`).
+set -euo pipefail
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT"
+
+# No resident daemon per checkout: the gate never reaps one, and it buys little.
+export NX_DAEMON="${NX_DAEMON:-false}"
+export NX_NO_CLOUD=true
+bash scripts/node-modules.sh
+
+# The bin entry Nx's own package.json declares, since Nx has moved it between releases.
+if ! nx_js="$(node -p "const p=require('path'),m=require.resolve('nx/package.json');p.join(p.dirname(m),require(m).bin.nx)" 2>&1)"; then
+    echo "nx: cannot find the installed Nx: $nx_js" >&2
+    echo "ACTION: rm -rf node_modules && bash scripts/node-modules.sh, then re-run the recipe" >&2
+    exit 1
+fi
+nx=(node "$nx_js")
+
+if [ "${NX_SHOW_OUTPUT:-}" = 1 ]; then
+    exec "${nx[@]}" "$@"
+fi
+
+mkdir -p .nx/logs
+log="$(mktemp .nx/logs/nx.XXXXXX)"
+if "${nx[@]}" "$@" >"$log" 2>&1; then
+    # The last of Nx's own summary lines, or nothing: a run Nx summarizes some
+    # other way still succeeded, and must not fail here for want of a match.
+    summary="$(grep -E 'Successfully ran|No tasks were run|Nx read the output from the cache' "$log" | tail -n 1 | sed 's/^[^A-Za-z]*//' || true)"
+    echo "nx $*: ${summary:-ok} (log: $log)"
+    exit 0
+fi
+cat "$log" >&2
+echo "nx $*: FAILED — fix the findings above and re-run the same 'just' recipe (log: $log)" >&2
+exit 1

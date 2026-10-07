@@ -19,7 +19,8 @@ on:
     paths:
       - release-targets.toml
       - scripts/release-probe.sh
-      - crates/onejudge/tests/release_targets.rs
+      - crates/onejudge-repo/**
+      - crates/onejudge-release-targets/**
       - .github/workflows/release-targets.yml
   schedule:
     - cron: "17 6 * * *"

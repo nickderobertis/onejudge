@@ -1,0 +1,47 @@
+{
+  "name": "onejudge-pypi",
+  "$schema": "../node_modules/nx/schemas/project-schema.json",
+  "//": "The `onejudge-cli` PyPI wheel: maturin wraps the `onejudge` binary per platform. See AGENTS.md here for why this definition is not beside its manifest.",
+  "projectType": "application",
+  "sourceRoot": "pypi",
+  "tags": [
+    "type:packaging",
+    "lang:python"
+  ],
+  "implicitDependencies": [
+    "onejudge"
+  ],
+  "targets": {
+    "build": {
+      "command": "just _pypi-build",
+      "inputs": [
+        "{workspaceRoot}/pyproject.toml",
+        "{workspaceRoot}/README.md",
+        "^default"
+      ]
+    },
+    "test": {
+      "command": "just _pypi-test",
+      "dependsOn": [
+        "build"
+      ]
+    },
+    "lint": {
+      "executor": "nx:run-commands",
+      "options": {
+        "commands": [
+          "node scripts/check-project-boundaries.mjs onejudge-pypi",
+          "node scripts/check-target-commands.mjs onejudge-pypi"
+        ],
+        "parallel": false
+      },
+      "inputs": [
+        "default",
+        "^default",
+        "{workspaceRoot}/nx.json",
+        "{workspaceRoot}/scripts/check-project-boundaries.mjs",
+        "{workspaceRoot}/scripts/check-target-commands.mjs"
+      ]
+    }
+  }
+}

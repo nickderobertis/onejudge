@@ -1,0 +1,44 @@
+{
+  "name": "onejudge-repo",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "//": "The repository-level checks: the CI wiring branch protection depends on and the offline release-target drift gate, which read the workspace's root files rather than the library. A change to a root file runs the broader tier (scripts/gate-plan.sh), which is how these rerun when a workflow changes.",
+  "projectType": "application",
+  "sourceRoot": "crates/onejudge-repo/src",
+  "tags": [
+    "type:repo",
+    "lang:rust"
+  ],
+  "implicitDependencies": [],
+  "targets": {
+    "format": {
+      "command": "just _rust-format onejudge-repo"
+    },
+    "format-check": {
+      "command": "just _rust-format-check onejudge-repo"
+    },
+    "lint": {
+      "command": "just _rust-lint onejudge-repo \"\"",
+      "inputs": [
+        "default",
+        "^default",
+        "{workspaceRoot}/nx.json",
+        "{workspaceRoot}/scripts/check-project-boundaries.mjs",
+        "{workspaceRoot}/scripts/check-target-commands.mjs"
+      ]
+    },
+    "test": {
+      "command": "just _rust-test onejudge-repo \"\"",
+      "options": {
+        "env": {
+          "ONEJUDGE_COVERAGE": "0"
+        }
+      },
+      "inputs": [
+        "default",
+        "{workspaceRoot}/.github/**/*",
+        "{workspaceRoot}/release-targets.toml",
+        "{workspaceRoot}/scripts/release-probe.sh"
+      ]
+    }
+  }
+}
