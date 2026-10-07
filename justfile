@@ -243,9 +243,14 @@ _rust-test crate features=gate_features binaries="" ignored="default":
     exec cargo llvm-cov nextest --no-report "${args[@]}"
 
 # Empty the shared profile directory before any instrumented suite writes to it,
-# so the aggregate never merges a profile an earlier run left behind.
+# so the aggregate never merges a profile an earlier run left behind — nor a
+# workspace crate's instrumented binary an earlier build left under another hash,
+# which `cargo llvm-cov report` reads like any other and which reports source the
+# tree no longer has. Dependencies' artifacts are kept, so only the workspace
+# crates rebuild: what the single `cargo llvm-cov nextest` the gate ran before its
+# suites split did on every run.
 _coverage-clean:
-    [ "${ONEJUDGE_COVERAGE:-1}" = 0 ] || rm -f "$(./scripts/cargo-target-dir.sh)"/llvm-cov-target/*.profraw
+    [ "${ONEJUDGE_COVERAGE:-1}" = 0 ] || cargo llvm-cov clean --workspace
 
 # The aggregate Rust coverage gate over every suite's profiles.
 #
