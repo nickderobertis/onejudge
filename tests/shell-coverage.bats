@@ -82,3 +82,11 @@ shell_tests() {
     [ "${lines[0]}" = "shell lint: 'x; touch $marker' is not an Nx project name (a-z, 0-9, -)" ]
     [ ! -e "$marker" ]
 }
+
+@test "the shell coverage floor AGENTS.md records is the one the coverage target enforces" {
+    enforced="$(sed -n 's/^shell_coverage_min := "\([0-9][0-9]*\)"$/\1/p' "$ROOT/justfile")"
+    recorded="$(sed -n 's/^- \*\*Shell coverage floor: \([0-9][0-9]*\)% of the merged report.*/\1/p' "$ROOT/AGENTS.md")"
+
+    [ -n "$enforced" ]
+    [ "$recorded" = "$enforced" ]
+}
