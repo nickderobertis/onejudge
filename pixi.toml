@@ -8,7 +8,8 @@
 name = "onejudge-shell-tools"
 channels = ["conda-forge"]
 platforms = ["linux-64", "linux-aarch64", "osx-64", "osx-arm64", "win-64"]
-# The pixi `just bootstrap` installs when none is on PATH.
+# The pixi `just bootstrap` installs when none is on PATH (scripts/shell-toolchain.sh),
+# from the release archive whose digest pixi.sha256 pins per platform: raise both together.
 requires-pixi = ">=0.81.0"
 
 [dependencies]
