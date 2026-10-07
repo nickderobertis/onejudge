@@ -56,8 +56,10 @@ shell_tests() {
 
 @test "a shell test run with a malformed project name or root is refused before anything runs" {
     for args in "tests/support Bad;Name" "nowhere workspace" ". workspace nowhere"; do
+        # SHELLOPTS unset: bashcov's tracing would follow into just's temporary
+        # recipe script, then warn that the deleted file cannot be reported.
         # shellcheck disable=SC2086 # each case is the recipe's argument list, split on purpose.
-        run just --justfile "$ROOT/justfile" --working-directory "$ROOT" _sh-test $args
+        run env -u SHELLOPTS just --justfile "$ROOT/justfile" --working-directory "$ROOT" _sh-test $args
 
         [ "$status" -ne 0 ]
         [[ "${lines[0]}" == "shell coverage: _sh-test needs a project root, an Nx project name (a-z, 0-9, -) and the root it covers; got "* ]]
