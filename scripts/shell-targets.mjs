@@ -76,10 +76,12 @@ for (const [name, target] of Object.entries(targets)) {
     runs[name] = given;
 }
 
-// The command's first three words, which a shell runs before reading anything
-// after them, are the program, the recipe and its root.
+// The command's first invocation — up to the first newline, `;`, `&` or `|`,
+// which a shell runs before reading anything after it — must be `just`, the
+// recipe and its root, as its first three blank-separated words.
 const runsOverRoot = (command, recipe) => {
-    const [program, called, root] = command.trim().split(/\s+/);
+    const [invocation] = command.split(/[\n;&|]/);
+    const [program, called, root] = invocation.trim().split(/[ \t]+/);
     return program === "just" && called === recipe && root === dir;
 };
 

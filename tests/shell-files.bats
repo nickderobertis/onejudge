@@ -116,15 +116,17 @@ setup() {
     [ "$output" = scripts/shell-files.sh ]
 }
 
-@test "a recipe a target only prints, or runs after another step, is not a shell target" {
+@test "a recipe a target only prints, runs after another step, or splits with a separator, is not a shell target" {
     mkdir -p "$REPO/tools"
-    echo '{"targets":{"format":{"command":"echo \"&& just _sh-format tools &&\""},"format-check":{"command":"echo && just _sh-format-check tools"},"lint":{"command":"just _sh-lint tools"}}}' >"$REPO/tools/project.json"
     printf 'echo t\n' >"$REPO/tools/t.sh"
+    for format in '"echo \"&& just _sh-format tools &&\""' '"echo && just _sh-format tools"' '"just _sh-format\n tools"' '"just _sh-format;tools"'; do
+        echo "{\"targets\":{\"format\":{\"command\":$format},\"format-check\":{\"command\":\"just _sh-format-check tools\"},\"lint\":{\"command\":\"just _sh-lint tools\"}}}" >"$REPO/tools/project.json"
 
-    run --separate-stderr "$REPO/scripts/shell-files.sh" .
+        run --separate-stderr "$REPO/scripts/shell-files.sh" .
 
-    [ "$status" -eq 1 ]
-    [ "${stderr_lines[0]}" = "shell-files: tools/t.sh is a shell source of 'tools', whose project.json declares no shell targets" ]
+        [ "$status" -eq 1 ]
+        [ "${stderr_lines[0]}" = "shell-files: tools/t.sh is a shell source of 'tools', whose project.json declares no shell targets" ]
+    done
 }
 
 @test "a script in a project with no shell targets fails, naming the file and the fix" {

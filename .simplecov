@@ -10,14 +10,18 @@ if (project = ENV["SHELL_COVERAGE_PROJECT"])
   # The scripts the project owns, minus its tests (`_sh-test` lists them): the
   # denominator, so a script no test runs counts as uncovered rather than absent.
   scripts = ENV.fetch("SHELL_COVERAGE_FILES", "").split("\n").reject(&:empty?)
-  # Each goes into the track_files glob below, so glob syntax is refused too.
+  # Each must be spelled as the skip filter below compares it (canonical,
+  # relative), resolve inside the repository, and hold no glob syntax, as it
+  # goes into the track_files glob below.
+  root = File.realpath(SimpleCov.root)
   outside = scripts.reject do |script|
-    !script.start_with?("/") && !script.split("/").include?("..") && !script.match?(/[*?\[\]{},\\]/) &&
-      File.file?(script)
+    script == Pathname.new(script).cleanpath.to_s && !script.start_with?("/", "../") &&
+      !script.match?(/[*?\[\]{},\\]/) && File.file?(script) && File.realpath(script).start_with?("#{root}/")
   end
   unless !scripts.empty? && outside.empty?
-    abort "shell coverage: SHELL_COVERAGE_FILES must list the project's scripts, each an existing repository-relative " \
-          "file with no glob characters; got #{outside.empty? ? "none" : outside.map(&:inspect).join(", ")}\n" \
+    abort "shell coverage: SHELL_COVERAGE_FILES must list the project's scripts, each an existing file inside the " \
+          "repository, spelled canonically relative to its root, with no glob characters; got " \
+          "#{outside.empty? ? "none" : outside.map(&:inspect).join(", ")}\n" \
           "ACTION: run the project's test target (just _sh-test), which lists them with scripts/shell-files.sh"
   end
   SimpleCov.coverage_dir File.join("target", "shell-coverage", project)
