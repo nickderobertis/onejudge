@@ -331,27 +331,34 @@ _actionlint:
 # to merge. `covers` is the project itself, or for a suite in a project of its own
 # (onejudge-scripts-e2e), the project whose scripts it drives. The previous report
 # goes first, so the merge never reads a stale one.
+[positional-arguments]
 _sh-test root project covers=root:
     #!/usr/bin/env bash
     set -euo pipefail
-    if ! rm -rf "target/shell-coverage/{{project}}"; then
-        echo "shell coverage: could not remove {{project}}'s previous report (above), so the merge could read a stale one" >&2
-        echo "ACTION: remove target/shell-coverage/{{project}} by hand, then re-run the recipe" >&2
+    root="$1" project="$2" covers="$3"
+    if [[ ! $project =~ ^[a-z0-9][a-z0-9-]*$ ]] || [ ! -f "$root/project.json" ] || [ ! -f "$covers/project.json" ]; then
+        echo "shell coverage: _sh-test needs a project root, an Nx project name (a-z, 0-9, -) and the root it covers; got '$root' '$project' '$covers'" >&2
+        echo "ACTION: call it as the project's test target does (just _sh-test <root> <name> [<covered root>])" >&2
+        exit 2
+    fi
+    if ! rm -rf "target/shell-coverage/$project"; then
+        echo "shell coverage: could not remove $project's previous report (above), so the merge could read a stale one" >&2
+        echo "ACTION: remove target/shell-coverage/$project by hand, then re-run the recipe" >&2
         exit 1
     fi
     ./scripts/node-modules.sh
-    list="$(./scripts/shell-files.sh {{covers}})"
-    export SHELL_COVERAGE_PROJECT={{project}}
+    list="$(./scripts/shell-files.sh "$covers")"
+    export SHELL_COVERAGE_PROJECT="$project"
     found=0
     SHELL_COVERAGE_FILES="$(grep -vE '(^|/)tests/' <<<"$list")" || found=$?
     if [ "$found" -ne 0 ]; then
-        echo "shell coverage: {{project}}'s suite measures no script of {{covers}} (grep exit $found; {{covers}} lists only tests, or the filter failed above)" >&2
+        echo "shell coverage: $project's suite measures no script of $covers (grep exit $found; $covers lists only tests, or the filter failed above)" >&2
         echo "ACTION: run its suite against a project that owns scripts, or drop its test target" >&2
         exit 1
     fi
     export SHELL_COVERAGE_FILES
-    exec pixi run --locked bundle exec bashcov --skip-uncovered --command-name {{project}} \
-        -- node_modules/.bin/bats --print-output-on-failure "{{root}}/tests"
+    exec pixi run --locked bundle exec bashcov --skip-uncovered --command-name "$project" \
+        -- node_modules/.bin/bats --print-output-on-failure "$root/tests"
 
 # The aggregate shell coverage gate: every shell project's bashcov report merged,
 # failing below `shell_coverage_min`. One summary line on stdout; below the floor,

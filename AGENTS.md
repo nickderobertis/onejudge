@@ -220,6 +220,7 @@ Use the `just` recipes; do not hand-roll equivalents. `just --list` is the index
 [//]: # "llmlint: ignore[agents_md_durable_and_terse] create-repo's bash.md alignment requires this file to name the shell toolchain; the pins live in the manifests named, which do not say which tool does what."
 - **Toolchain:** shfmt (style in `.editorconfig`), shellcheck, actionlint, bats,
   and bashcov for coverage — kcov has no conda-forge or arm64 release build to pin.
+[//]: # "llmlint: ignore-block[agents_md_durable_and_terse] create-repo's bash.md allows a shell floor below 95% only with its reason recorded here, and this repository's alignment task requires the floor recorded with the measurement it rests on; the figures are that measurement, re-recorded when the scripts change."
 - **Shell coverage floor: 82% of the merged report, every script counted** —
   below the 95% default for one reason: `scripts/capture-{judge-posture-baseline,
   pre-cutover-history,single-judge-baseline}.sh` (94 of 726 lines) capture goldens
@@ -228,6 +229,7 @@ Use the `just` recipes; do not hand-roll equivalents. `just --list` is the index
   bashcov cannot attribute (`esac ;;`, `} >&2`, `done <<<`, case patterns,
   continuations) and gate-plan.sh's unreachable SHA fallback. Never exclude a
   script to raise it.
+[//]: # "llmlint: ignore-end[agents_md_durable_and_terse]"
 - bashcov exports `SHELLOPTS`, so under coverage a script inherits its caller's
   live `set` options; a bats `run` clears `-e` first, so call scripts through it.
 

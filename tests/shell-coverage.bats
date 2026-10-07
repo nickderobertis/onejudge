@@ -49,7 +49,18 @@ shell_tests() {
     # .simplecov's report directory for SHELL_COVERAGE_PROJECT, and the merge's input.
     grep -qF 'SimpleCov.coverage_dir File.join("target", "shell-coverage", project)' "$ROOT/.simplecov"
     grep -qF 'project = ENV["SHELL_COVERAGE_PROJECT"]' "$ROOT/.simplecov"
-    grep -qF 'export SHELL_COVERAGE_PROJECT={{project}}' "$ROOT/justfile"
-    grep -qF 'rm -rf "target/shell-coverage/{{project}}"' "$ROOT/justfile"
+    grep -qF "export SHELL_COVERAGE_PROJECT=\"\$project\"" "$ROOT/justfile"
+    grep -qF "rm -rf \"target/shell-coverage/\$project\"" "$ROOT/justfile"
     grep -qF 'reports = Dir["target/shell-coverage/*/.resultset.json"].sort' "$ROOT/justfile"
+}
+
+@test "a shell test run with a malformed project name or root is refused before anything runs" {
+    for args in "tests/support Bad;Name" "nowhere workspace" ". workspace nowhere"; do
+        # shellcheck disable=SC2086 # each case is the recipe's argument list, split on purpose.
+        run just --justfile "$ROOT/justfile" --working-directory "$ROOT" _sh-test $args
+
+        [ "$status" -ne 0 ]
+        [[ "${lines[0]}" == "shell coverage: _sh-test needs a project root, an Nx project name (a-z, 0-9, -) and the root it covers; got "* ]]
+        [ "${lines[1]}" = "ACTION: call it as the project's test target does (just _sh-test <root> <name> [<covered root>])" ]
+    done
 }

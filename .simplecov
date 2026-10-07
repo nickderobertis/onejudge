@@ -3,9 +3,19 @@
 # repository root and load this file; only a project's run sets the variables.
 # AGENTS.md, "Shell".
 if (project = ENV["SHELL_COVERAGE_PROJECT"])
+  unless project.match?(/\A[a-z0-9][a-z0-9-]*\z/)
+    abort "shell coverage: SHELL_COVERAGE_PROJECT=#{project.inspect} is not an Nx project name (a-z, 0-9, -)\n" \
+          "ACTION: run the project's test target (just _sh-test), which sets it"
+  end
   # The scripts the project owns, minus its tests (`_sh-test` lists them): the
   # denominator, so a script no test runs counts as uncovered rather than absent.
-  scripts = ENV.fetch("SHELL_COVERAGE_FILES").split("\n").reject(&:empty?)
+  scripts = ENV.fetch("SHELL_COVERAGE_FILES", "").split("\n").reject(&:empty?)
+  outside = scripts.reject { |script| !script.start_with?("/") && !script.split("/").include?("..") && File.file?(script) }
+  unless !scripts.empty? && outside.empty?
+    abort "shell coverage: SHELL_COVERAGE_FILES must list the project's scripts, each an existing repository-relative " \
+          "file; got #{outside.empty? ? "none" : outside.map(&:inspect).join(", ")}\n" \
+          "ACTION: run the project's test target (just _sh-test), which lists them with scripts/shell-files.sh"
+  end
   SimpleCov.coverage_dir File.join("target", "shell-coverage", project)
   # Absolute, as SimpleCov's root filter drops a relative path. `track_files` is
   # the one setting bashcov 4.0.0 reads (`SimpleCov.tracked_files`), so its
