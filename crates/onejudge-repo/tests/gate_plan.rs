@@ -303,23 +303,54 @@ fn the_recipe_reads_the_plan_as_shell_assignments() {
     let plan = assignments(&dir, &base, &[]);
     assert_eq!(plan["GATE_TIER"], "affected");
     assert_eq!(plan["GATE_BASE"], base);
-    // No narrowing: the affected tier's default list, without the promoted audit.
-    assert_eq!(
-        plan["GATE_TARGETS"],
-        "format-check lint typecheck generate-check doc build test coverage"
-    );
+    // No narrowing: the recipe runs its tier's default list.
+    assert_eq!(plan["GATE_TARGETS"], "");
     assert_eq!(plan["GATE_PROJECTS"], "lib,lib-e2e,sdk");
     assert_eq!(plan["GATE_EXCLUDE"], "live");
     assert_eq!(plan["GATE_EXTERNALS"], "live");
     assert_eq!(plan["GATE_STATIC"], "format-check lint");
 
-    // The sweep, asked for or escalated to by a root file, adds the promoted audit.
-    let full = "format-check lint typecheck generate-check doc build test coverage audit";
-    assert_eq!(assignments(&dir, &base, &["--sweep"])["GATE_TARGETS"], full);
+    assert_eq!(assignments(&dir, &base, &["--sweep"])["GATE_TIER"], "sweep");
     change(&dir, "README.md");
     let escalated = assignments(&dir, &base, &[]);
     assert_eq!(escalated["GATE_TIER"], "sweep");
-    assert_eq!(escalated["GATE_TARGETS"], full);
+    assert_eq!(escalated["GATE_TARGETS"], "");
+}
+
+/// The target list after `-t ${GATE_TARGETS:-…}` on the `check` recipe's line
+/// running `nx <command>`.
+fn recipe_default_targets(justfile: &str, command: &str) -> Vec<String> {
+    let needle = format!("./scripts/nx {command} -t ${{GATE_TARGETS:-");
+    let recipe = justfile
+        .split("\ncheck *flags:\n")
+        .nth(1)
+        .expect("the justfile has a `check *flags` recipe");
+    let line = recipe
+        .lines()
+        .find_map(|line| line.trim().strip_prefix(&needle))
+        .unwrap_or_else(|| panic!("`check` runs `{needle}…}}`"));
+    let (list, _) = line.split_once('}').expect("the default list is closed");
+    list.split_whitespace().map(str::to_owned).collect()
+}
+
+#[test]
+fn the_recipe_default_targets_are_the_ones_the_plan_knows() {
+    let root = repo_root();
+    let justfile = std::fs::read_to_string(root.join("justfile")).unwrap();
+    let script = std::fs::read_to_string(root.join("scripts/gate-plan.sh")).unwrap();
+    let known: Vec<String> = script
+        .lines()
+        .find_map(|line| line.strip_prefix("KNOWN_TARGETS=\""))
+        .and_then(|rest| rest.strip_suffix('"'))
+        .expect("gate-plan.sh declares KNOWN_TARGETS")
+        .split_whitespace()
+        .map(str::to_owned)
+        .collect();
+    // The sweep runs every target the plan accepts; the affected tier all but the
+    // one promoted out of it, `audit`, which contacts the advisory database.
+    assert_eq!(recipe_default_targets(&justfile, "run-many"), known);
+    let affected: Vec<String> = known.into_iter().filter(|t| t != "audit").collect();
+    assert_eq!(recipe_default_targets(&justfile, "affected"), affected);
 }
 
 #[test]

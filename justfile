@@ -57,7 +57,9 @@ bootstrap:
 # else `git merge-base origin/main HEAD`). `--sweep`: the BROADER tier — every
 # gate-eligible project plus the targets promoted out of the affected tier.
 # `--targets a,b` / `--projects p` narrow it; `--print-plan` only prints what
-# would run. scripts/gate-plan.sh decides the tier, base and projects.
+# would run. scripts/gate-plan.sh decides the tier, base and projects; the two
+# default target lists are spelled on the Nx lines below, the sweep's adding the
+# promoted `audit`, and onejudge-repo's gate_plan.rs holds them to the script's.
 [positional-arguments]
 check *flags:
     #!/usr/bin/env bash
@@ -66,9 +68,9 @@ check *flags:
     eval "$plan"
     if [ -n "${GATE_PRINT_ONLY:-}" ]; then printf '%s\n' "$plan" | sed -n 's/^# //p'; exit 0; fi
     if [ -n "$GATE_PROJECTS" ] && [ "$GATE_TIER" = affected ]; then
-        ./scripts/nx affected -t $GATE_TARGETS --base="$GATE_BASE" --exclude="$GATE_EXCLUDE" --outputStyle=static
+        ./scripts/nx affected -t ${GATE_TARGETS:-format-check lint typecheck generate-check doc build test coverage} --base="$GATE_BASE" --exclude="$GATE_EXCLUDE" --outputStyle=static
     elif [ -n "$GATE_PROJECTS" ]; then
-        ./scripts/nx run-many -t $GATE_TARGETS --projects="$GATE_PROJECTS" --outputStyle=static
+        ./scripts/nx run-many -t ${GATE_TARGETS:-format-check lint typecheck generate-check doc build test coverage audit} --projects="$GATE_PROJECTS" --outputStyle=static
     fi
     if [ -n "$GATE_EXTERNALS" ] && [ -n "$GATE_STATIC" ]; then
         ./scripts/nx run-many --projects="$GATE_EXTERNALS" --outputStyle=static -t $GATE_STATIC
