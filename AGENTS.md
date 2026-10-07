@@ -63,13 +63,14 @@ Built up from the `create-repo` skill's reference axes, not a single template.
   against the Rust-exported schemas, not Pydantic — for one recorded reason: #22 (`7241522`) built the SDK to mirror
   oneharness's `python/oneharness-sdk/` (layout, `pyproject.toml`, `test/`, the
   `python-sdk-*` recipes) and named its `jsonschema` dependency.
+  bash (`languages/bash.md`) for `install.sh` and `scripts/` — see "Shell".
 - **Cross-cutting:** `project-graph.md` (always — an Nx project graph runs every
   target; Node/bun is only Nx's toolchain, `package.json` + `bun.lock`), `ci.md`
   (always) and `releasing.md` (applies — the crate is a versioned artifact
   published to crates.io; `release-plz` drives it, and a tag push also builds
   per-platform CLI archives, see below).
 - **References composed:** base.md, shapes/library.md, shapes/cli.md,
-  languages/rust.md, languages/python.md, intersections/rust-cli.md,
+  languages/rust.md, languages/python.md, languages/bash.md, intersections/rust-cli.md,
   project-graph.md, ci.md, llmlint.md, releasing.md
 [//]: # "llmlint: ignore-block[agents_md_durable_and_terse] the composition record has to describe the crates the tree is built from and record the published feature this tree no longer has, because it is what a later reader audits the composition against; nx.json and the manifests say what each project is, not which of them is the published contract or why the doubles left it."
 - **Crates:** the published `onejudge` library + CLI is the one `type:contract`
@@ -210,6 +211,28 @@ Use the `just` recipes; do not hand-roll equivalents. `just --list` is the index
   (`just test-llmlint`, the released llmlint at the provider's floor; the
   `llmlint-real` CI job installs it via `scripts/setup-llmlint.sh`) and
   `onejudge-release-targets` (`just test-release-targets`, the public registries).
+
+## Shell
+
+- **Target shell: bash**, not POSIX `sh` (`#!/usr/bin/env bash`, `set -euo
+  pipefail`; `setup-llmlint.sh` and `lint-llm-diff.sh` omit `-e` and say why).
+  `install.sh` and `check-release-targets.sh` stay bash 3.2-safe for macOS.
+- **Toolchain, pinned once at the root:** shellcheck, shfmt (style in
+  `.editorconfig`), actionlint and Ruby from `pixi.toml`/`pixi.lock`; bashcov from
+  `Gemfile.lock`; bats from `package.json`. `just bootstrap` installs them.
+- **The `workspace` project owns every shell source** (`scripts/shell-files.sh`
+  lists a project's and refuses one owned by a project without shell targets): its
+  `format-check`/`lint`/`test` run shfmt, shellcheck + actionlint, and `tests/*.bats`
+  under bashcov; `workspace:coverage` merges every `target/shell-coverage/*` report.
+- **Shell coverage floor: 82% of the merged report, every script counted** —
+  below the 95% default for one reason: `scripts/capture-{judge-posture-baseline,
+  pre-cutover-history,single-judge-baseline}.sh` (94 of 609 lines) capture goldens
+  from released binaries and a real harness, so the gate never runs them. Measured
+  503/609 = 82.6%; every other script is at 503/515 = 97.7%, its misses lines
+  bashcov cannot attribute (`esac ;;`, `} >&2`, continuations) and gate-plan.sh's
+  unreachable SHA fallback. Never exclude a script to raise it.
+- bashcov exports `SHELLOPTS`, so under coverage a script inherits its caller's
+  live `set` options; a bats `run` clears `-e` first, so call scripts through it.
 
 ## The provider boundary
 
