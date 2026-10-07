@@ -39,16 +39,18 @@ setup() {
     run "$TREE/scripts/check-release-targets.sh"
 
     [ "$status" -eq 1 ]
-    [ "$output" = "check-release-targets: could not extract target lists — did install.sh / release-binaries.yml change format?" ]
+    [ "${lines[0]}" = 'check-release-targets: .github/workflows/release-binaries.yml has no matrix "target: <triple>" entry to check against' ]
+    [ "${lines[1]}" = "  Restore the workflow's matrix target entries, or update the pattern in this script to its new form." ]
 }
 
-@test "an install.sh with no targets fails, saying the lists could not be extracted, rather than ending silently" {
+@test "an install.sh with no targets fails, naming the file and the fix, rather than ending silently" {
     sed -i.bak '/target="/d' "$TREE/install.sh"
 
     run "$TREE/scripts/check-release-targets.sh"
 
     [ "$status" -eq 1 ]
-    [ "$output" = "check-release-targets: could not extract target lists — did install.sh / release-binaries.yml change format?" ]
+    [ "${lines[0]}" = 'check-release-targets: install.sh has no literal target="<triple>" assignment to check' ]
+    [ "${lines[1]}" = "  Restore install.sh's os/arch map of target=\"<triple>\" lines, or update the pattern in this script to its new form." ]
 }
 
 @test "an install.sh it cannot read fails, naming the file, rather than reading as no targets" {

@@ -32,8 +32,14 @@ install_targets="$(matches 'target="[a-z0-9_.-]+"' install.sh | sed -E 's/target
 # release-binaries.yml's matrix `target: <triple>` entries.
 matrix_targets="$(matches '^[[:space:]]+target: [a-z0-9_.-]+' .github/workflows/release-binaries.yml | sed -E 's/^[[:space:]]+target: //' | sort -u)"
 
-if [ -z "$install_targets" ] || [ -z "$matrix_targets" ]; then
-    echo "check-release-targets: could not extract target lists — did install.sh / release-binaries.yml change format?" >&2
+if [ -z "$install_targets" ]; then
+    echo "check-release-targets: install.sh has no literal target=\"<triple>\" assignment to check" >&2
+    echo "  Restore install.sh's os/arch map of target=\"<triple>\" lines, or update the pattern in this script to its new form." >&2
+    exit 1
+fi
+if [ -z "$matrix_targets" ]; then
+    echo "check-release-targets: .github/workflows/release-binaries.yml has no matrix \"target: <triple>\" entry to check against" >&2
+    echo "  Restore the workflow's matrix target entries, or update the pattern in this script to its new form." >&2
     exit 1
 fi
 
