@@ -66,9 +66,9 @@ check *flags:
     eval "$plan"
     if [ -n "${GATE_PRINT_ONLY:-}" ]; then printf '%s\n' "$plan" | sed -n 's/^# //p'; exit 0; fi
     if [ -n "$GATE_PROJECTS" ] && [ "$GATE_TIER" = affected ]; then
-        ./scripts/nx affected -t ${GATE_TARGETS:-format-check lint typecheck generate-check doc build test coverage} --base="$GATE_BASE" --exclude="$GATE_EXCLUDE" --outputStyle=static
+        ./scripts/nx affected -t $GATE_TARGETS --base="$GATE_BASE" --exclude="$GATE_EXCLUDE" --outputStyle=static
     elif [ -n "$GATE_PROJECTS" ]; then
-        ./scripts/nx run-many -t ${GATE_TARGETS:-format-check lint typecheck generate-check doc build test coverage audit} --projects="$GATE_PROJECTS" --outputStyle=static
+        ./scripts/nx run-many -t $GATE_TARGETS --projects="$GATE_PROJECTS" --outputStyle=static
     fi
     if [ -n "$GATE_EXTERNALS" ] && [ -n "$GATE_STATIC" ]; then
         ./scripts/nx run-many --projects="$GATE_EXTERNALS" --outputStyle=static -t $GATE_STATIC
@@ -237,7 +237,9 @@ _rust-test crate features=gate_features binaries="" ignored="default":
     if [ "${ONEJUDGE_COVERAGE:-1}" = 0 ]; then
         exec cargo nextest run "${args[@]}"
     fi
-    export ONEJUDGE_TEST_DOUBLES_DIR="$(./scripts/cargo-target-dir.sh)/debug"
+    # Assigned before it is exported: `export` would succeed over a failed lookup.
+    target_dir="$(./scripts/cargo-target-dir.sh)"
+    export ONEJUDGE_TEST_DOUBLES_DIR="$target_dir/debug"
     binaries="{{binaries}}"
     [ -z "$binaries" ] || args+=(-p "$binaries" -E 'package({{crate}})')
     exec cargo llvm-cov nextest --no-report "${args[@]}"

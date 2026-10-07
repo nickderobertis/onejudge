@@ -45,9 +45,12 @@ usage() {
     exit 2
 }
 
-# The targets the gate knows: a name outside them selects no task, which would
-# read as a pass, so it is refused instead.
+# The targets the gate knows, in the order it names them: a name outside them
+# selects no task, which would read as a pass, so it is refused instead. With no
+# `--targets`, the sweep runs all of them and the affected tier all but
+# PROMOTED_TARGETS; the recipe reads that list from GATE_TARGETS and spells none.
 KNOWN_TARGETS="format-check lint typecheck generate-check doc build test coverage audit"
+PROMOTED_TARGETS="audit"
 
 tier=affected
 escalate=true
@@ -190,7 +193,15 @@ external="$(listed --projects='tag:type:external' --json)"
 eligible="$(comm -23 <(printf '%s\n' "$selected" | sed '/^$/d') <(printf '%s\n' "$external"))"
 externals="$(comm -12 <(printf '%s\n' "$selected" | sed '/^$/d') <(printf '%s\n' "$external"))"
 excluded="$(comm -23 <(printf '%s\n' "$everything") <(printf '%s\n' "$eligible" | sed '/^$/d'))"
-target_list="$(lines <<<"$targets" | joined ' ')"
+if [ -n "$targets" ]; then
+    target_list="$(lines <<<"$targets" | joined ' ')"
+elif [ "$tier" = sweep ]; then
+    target_list="$KNOWN_TARGETS"
+else
+    target_list="$(for target in $KNOWN_TARGETS; do
+        case " $PROMOTED_TARGETS " in *" $target "*) ;; *) printf '%s\n' "$target" ;; esac
+    done | joined ' ')"
+fi
 static=""
 if [ -n "$targets" ]; then
     static="$(comm -12 <(lines <<<"$targets") <(lines <<<"$STATIC_TARGETS") | joined ' ')"

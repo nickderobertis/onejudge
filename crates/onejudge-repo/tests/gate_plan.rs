@@ -303,12 +303,23 @@ fn the_recipe_reads_the_plan_as_shell_assignments() {
     let plan = assignments(&dir, &base, &[]);
     assert_eq!(plan["GATE_TIER"], "affected");
     assert_eq!(plan["GATE_BASE"], base);
-    // No narrowing: the recipe's own default target list applies.
-    assert_eq!(plan["GATE_TARGETS"], "");
+    // No narrowing: the affected tier's default list, without the promoted audit.
+    assert_eq!(
+        plan["GATE_TARGETS"],
+        "format-check lint typecheck generate-check doc build test coverage"
+    );
     assert_eq!(plan["GATE_PROJECTS"], "lib,lib-e2e,sdk");
     assert_eq!(plan["GATE_EXCLUDE"], "live");
     assert_eq!(plan["GATE_EXTERNALS"], "live");
     assert_eq!(plan["GATE_STATIC"], "format-check lint");
+
+    // The sweep, asked for or escalated to by a root file, adds the promoted audit.
+    let full = "format-check lint typecheck generate-check doc build test coverage audit";
+    assert_eq!(assignments(&dir, &base, &["--sweep"])["GATE_TARGETS"], full);
+    change(&dir, "README.md");
+    let escalated = assignments(&dir, &base, &[]);
+    assert_eq!(escalated["GATE_TIER"], "sweep");
+    assert_eq!(escalated["GATE_TARGETS"], full);
 }
 
 #[test]
