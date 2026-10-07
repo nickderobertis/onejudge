@@ -1,0 +1,22 @@
+{
+  "name": "onejudge-shell-test-support",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "//": "The helpers every shell suite sources (`helpers.bash`: doubles on PATH, scratch repositories, symlinked scripts). Its own project because two suites in two projects load it — the workspace's offline suite (tests/) and onejudge-scripts-e2e's — and each names it in implicitDependencies, so a change to it reruns both. It has no test of its own: what it does is exercised by every test that loads it.",
+  "projectType": "library",
+  "tags": [
+    "type:test-support",
+    "lang:shell"
+  ],
+  "implicitDependencies": [],
+  "targets": {
+    "format": {
+      "command": "just _sh-format tests/support"
+    },
+    "format-check": {
+      "command": "just _sh-format-check tests/support"
+    },
+    "lint": {
+      "command": "just _sh-lint tests/support onejudge-shell-test-support"
+    }
+  }
+}

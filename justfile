@@ -15,6 +15,10 @@ set shell := ["bash", "-euo", "pipefail", "-c"]
 # `fail_under` in python/onejudge-sdk/pyproject.toml.
 coverage_min := "95"
 
+# The shell line-coverage floor, enforced on the merge of every shell project's
+# bashcov report (`workspace:coverage`). AGENTS.md, "Shell", records its measurement.
+shell_coverage_min := "82"
+
 # The `onejudge` feature set every Rust target that links it builds against: the
 # CLI and the schema export, so both public export surfaces stay gated, and one
 # feature set everywhere, so every suite links the same instrumented library and
@@ -27,9 +31,9 @@ gate_features := "onejudge/sdk-schema"
 # Dependencies keep Cargo's `--cap-lints allow`.
 export RUSTFLAGS := trim(env("RUSTFLAGS", "") + " -D warnings")
 
-# `uv` and `llmlint` install into ~/.local/bin, which a CI runner's PATH may not
-# carry; appended, so anything already on PATH still wins.
-export PATH := if os_family() == "windows" { env("PATH") } else { env("PATH") + ":" + home_directory() + "/.local/bin" }
+# `uv` and `llmlint` install into ~/.local/bin and pixi into ~/.pixi/bin, which a
+# CI runner's PATH may not carry; appended, so anything already on PATH still wins.
+export PATH := if os_family() == "windows" { env("PATH") } else { env("PATH") + ":" + home_directory() + "/.local/bin:" + home_directory() + "/.pixi/bin" }
 
 # What the coverage report measures: the published library's source, never its
 # thin `onejudge` entrypoint or the test doubles' crate.
@@ -42,14 +46,16 @@ py_sdk := "uv run --no-project --python 3.9 --with-requirements python/onejudge-
 default:
     @just --list
 
-# Set up from a clean clone: pinned toolchain, cargo tools, the Nx install, fetched deps.
+# Set up from a clean clone: pinned toolchain, cargo tools, the Nx install, the
+# shell toolchain, fetched deps.
 bootstrap:
     rustup show active-toolchain >/dev/null   # installs the rust-toolchain.toml channel + components
     for t in cargo-nextest cargo-llvm-cov cargo-deny cargo-machete; do \
         command -v "$t" >/dev/null 2>&1 || cargo install "$t" --locked; \
     done
-    ./scripts/node-modules.sh                 # bun (pinned in package.json) + the locked Nx install
+    ./scripts/node-modules.sh                 # bun (pinned in package.json) + the locked Nx and bats install
     command -v uv >/dev/null 2>&1 || { curl -LsSf https://astral.sh/uv/install.sh | sh; }
+    ./scripts/shell-toolchain.sh              # pixi, then shellcheck, shfmt, actionlint, Ruby (pixi.lock) and bashcov (Gemfile.lock)
     cargo fetch --locked
 
 # The quality gate. Default: the AFFECTED tier — every gate target of the projects
@@ -161,6 +167,8 @@ msrv:
 upgrade:
     cargo update
     bun update
+    pixi update
+    pixi run --locked env BUNDLE_FROZEN=false bundle update --quiet
     @just check --sweep
 
 # Install/refresh the llmlint toolchain (oneharness + llmlint). Idempotent.
@@ -279,6 +287,136 @@ _coverage-clean:
 _coverage:
     cargo llvm-cov report --ignore-filename-regex '{{coverage_ignore}}' \
         --failure-mode all --fail-under-lines {{coverage_min}} --summary-only
+
+# --- Shell: every project owning shell sources runs these (scripts/shell-files.sh
+# lists a project's), with the tools pinned in pixi.toml / Gemfile.lock / package.json.
+
+# Run a pinned tool over the shell sources the project at `root` owns.
+[positional-arguments]
+_sh-files root +command:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    root="$1"
+    shift
+    list="$(./scripts/shell-files.sh "$root")"
+    if [ -z "$list" ]; then
+        echo "shell: project '$root' owns no shell sources, so \`$*\` has nothing to check" >&2
+        echo "ACTION: drop the shell targets from $root/project.json, or add the scripts they are for" >&2
+        exit 1
+    fi
+    files=()
+    while IFS= read -r file; do files+=("$file"); done <<<"$list"
+    exec "$@" "${files[@]}"
+
+# Each takes the project's root (and name) as arguments, never as shell source;
+# scripts/shell-files.sh refuses a root that is not a project's.
+[positional-arguments]
+_sh-format root:
+    just _sh-files "$1" pixi run --locked shfmt -w
+
+# shfmt reads its style from .editorconfig, so no flag here may set one.
+[positional-arguments]
+_sh-format-check root:
+    just _sh-files "$1" pixi run --locked shfmt -d
+
+# A shell project's lint. `project` names it for the boundary and target-command
+# checks every other project's lint runs; the workspace runs those itself.
+[positional-arguments]
+_sh-lint root project="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ -n "$2" ]; then
+        if [[ ! $2 =~ ^[a-z0-9][a-z0-9-]*$ ]]; then
+            echo "shell lint: '$2' is not an Nx project name (a-z, 0-9, -)" >&2
+            echo "ACTION: call it as the project's lint target does (just _sh-lint <root> <name>)" >&2
+            exit 2
+        fi
+        node scripts/check-project-boundaries.mjs "$2"
+        node scripts/check-target-commands.mjs "$2"
+    fi
+    exec just _sh-files "$1" pixi run --locked shellcheck
+
+# The workflows' own lint, run by the project that owns them; actionlint checks
+# each `run:` block with the pinned shellcheck it finds on the pixi PATH.
+_actionlint:
+    pixi run --locked actionlint
+
+# A shell project's `test`: its bats suite (`<root>/tests`) under bashcov, which
+# writes its line coverage of the scripts the project at `covers` owns — tests
+# excluded — into target/shell-coverage/<project> (.simplecov) for `_sh-coverage`
+# to merge. `covers` is the project itself, or for a suite in a project of its own
+# (onejudge-scripts-e2e), the project whose scripts it drives. The previous report
+# goes first, so the merge never reads a stale one.
+[positional-arguments]
+_sh-test root project covers=root:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    root="$1" project="$2" covers="$3"
+    if [[ ! $project =~ ^[a-z0-9][a-z0-9-]*$ ]] || [ ! -f "$root/project.json" ] || [ ! -f "$covers/project.json" ]; then
+        echo "shell coverage: _sh-test needs a project root, an Nx project name (a-z, 0-9, -) and the root it covers; got '$root' '$project' '$covers'" >&2
+        echo "ACTION: call it as the project's test target does (just _sh-test <root> <name> [<covered root>])" >&2
+        exit 2
+    fi
+    if ! rm -rf "target/shell-coverage/$project"; then
+        echo "shell coverage: could not remove $project's previous report (above), so the merge could read a stale one" >&2
+        echo "ACTION: remove target/shell-coverage/$project by hand, then re-run the recipe" >&2
+        exit 1
+    fi
+    ./scripts/node-modules.sh
+    list="$(./scripts/shell-files.sh "$covers")"
+    export SHELL_COVERAGE_PROJECT="$project"
+    found=0
+    SHELL_COVERAGE_FILES="$(grep -vE '(^|/)tests/' <<<"$list")" || found=$?
+    if [ "$found" -ne 0 ]; then
+        echo "shell coverage: $project's suite measures no script of $covers (grep exit $found; $covers lists only tests, or the filter failed above)" >&2
+        echo "ACTION: run its suite against a project that owns scripts, or drop its test target" >&2
+        exit 1
+    fi
+    export SHELL_COVERAGE_FILES
+    exec pixi run --locked bundle exec bashcov --skip-uncovered --command-name "$project" \
+        -- node_modules/.bin/bats --print-output-on-failure "$root/tests"
+
+# The aggregate shell coverage gate: every shell project's bashcov report merged,
+# failing below `shell_coverage_min`. One summary line on stdout; below the floor,
+# each script short of full coverage and the next action on stderr. The HTML report is always written, fresh.
+_sh-coverage:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if ! rm -rf target/shell-coverage-merged; then
+        echo "shell coverage: could not remove the previous merged report (above)" >&2
+        echo "ACTION: remove target/shell-coverage-merged by hand, then re-run the recipe" >&2
+        exit 1
+    fi
+    exec pixi run --locked bundle exec ruby -e '
+    require "simplecov"
+    reports = Dir["target/shell-coverage/*/.resultset.json"].sort
+    if reports.empty?
+      abort "shell coverage: no shell project wrote a report under target/shell-coverage\n" \
+            "ACTION: run the test target of each shell project first (just check --targets test,coverage)"
+    end
+    class Summary
+      FLOOR = Float("{{shell_coverage_min}}")
+      REPORTS = Dir["target/shell-coverage/*/.resultset.json"].map { |report| File.basename(File.dirname(report)) }.sort
+      def format(result)
+        SimpleCov::Formatter::HTMLFormatter.new(silent: true).format(result)
+        printf("shell coverage: %.2f%% of %d lines, merged from %s (floor %g%%; target/shell-coverage-merged/index.html)\n",
+               result.covered_percent, result.covered_lines + result.missed_lines, REPORTS.join(", "), FLOOR)
+        return if result.covered_percent >= FLOOR
+        result.files.sort_by(&:covered_percent).each do |file|
+          next if file.covered_percent >= 100
+          $stderr.printf("  %6.2f%%  %s (%d/%d lines)\n", file.covered_percent, file.project_filename.delete_prefix("/"),
+                 file.covered_lines.size, file.covered_lines.size + file.missed_lines.size)
+        end
+        $stderr.puts "ACTION: add bats tests that run the uncovered lines of the scripts above (the HTML report marks them), " \
+             "then re-run just check --targets test,coverage"
+      end
+    end
+    SimpleCov.collate(reports) do
+      coverage_dir "target/shell-coverage-merged"
+      formatter Summary
+      minimum_coverage line: Summary::FLOOR
+    end
+    '
 
 _audit:
     cargo deny check # llmlint: ignore[diagnostics_error_or_absent] the audit's severities are deny.toml's, the repository's supply-chain policy, which this recipe runs unchanged from the `audit` recipe it was before the project graph.

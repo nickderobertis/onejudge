@@ -1,0 +1,26 @@
+# The shell toolchain, pinned once for the whole repository (AGENTS.md, "Shell").
+# conda-forge builds of shellcheck, shfmt and actionlint, and the Ruby that runs
+# bashcov (whose gems are pinned by the root Gemfile.lock); `pixi.lock` locks them
+# for every platform below. bats is pinned with the Nx toolchain in package.json.
+# `just bootstrap` installs pixi itself and this environment; every shell recipe
+# runs these through `pixi run --locked`.
+[workspace]
+name = "onejudge-shell-tools"
+channels = ["conda-forge"]
+platforms = ["linux-64", "linux-aarch64", "osx-64", "osx-arm64", "win-64"]
+# The pixi `just bootstrap` installs when none is on PATH (scripts/shell-toolchain.sh),
+# from the release archive whose digest pixi.sha256 pins per platform: raise both together.
+requires-pixi = ">=0.81.0"
+
+[dependencies]
+shellcheck = "==0.11.0"
+go-shfmt = "==3.14.1"
+actionlint = "==1.7.12"
+ruby = "==3.4.8"
+
+[activation.env]
+# bashcov and its gems, from the root Gemfile.lock, installed inside this
+# environment's directory rather than into the user's Ruby.
+BUNDLE_GEMFILE = "$PIXI_PROJECT_ROOT/Gemfile"
+BUNDLE_PATH = "$PIXI_PROJECT_ROOT/.pixi/bundle"
+BUNDLE_FROZEN = "true"

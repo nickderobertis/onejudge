@@ -21,14 +21,20 @@ git -C "$work" add .
 git -C "$work" commit -qm 'fix(sdk): repair packaging'
 head=$(git -C "$work" rev-parse HEAD)
 result=$(cd "$work" && "$repo_root/scripts/python-sdk-release-trigger.sh" "$base" "$head")
-[[ "$result" == fix ]] || { echo "python SDK fix produced '$result', expected fix" >&2; exit 1; }
+[[ "$result" == fix ]] || {
+    echo "python SDK fix produced '$result', expected fix" >&2
+    exit 1
+}
 
 printf 'crate\n' >"$work/crates/onejudge/change"
 git -C "$work" add .
 git -C "$work" commit -qm 'fix: change crate too'
 both=$(git -C "$work" rev-parse HEAD)
 result=$(cd "$work" && "$repo_root/scripts/python-sdk-release-trigger.sh" "$base" "$both")
-[[ -z "$result" ]] || { echo "crate change redundantly produced '$result'" >&2; exit 1; }
+[[ -z "$result" ]] || {
+    echo "crate change redundantly produced '$result'" >&2
+    exit 1
+}
 
 git -C "$work" reset -q --hard "$head"
 printf 'docs\n' >"$work/python/onejudge-sdk/docs"
@@ -36,7 +42,10 @@ git -C "$work" add .
 git -C "$work" commit -qm 'docs(sdk): clarify usage'
 docs=$(git -C "$work" rev-parse HEAD)
 result=$(cd "$work" && "$repo_root/scripts/python-sdk-release-trigger.sh" "$head" "$docs")
-[[ -z "$result" ]] || { echo "SDK docs produced release prefix '$result'" >&2; exit 1; }
+[[ -z "$result" ]] || {
+    echo "SDK docs produced release prefix '$result'" >&2
+    exit 1
+}
 
 git -C "$work" reset -q --hard "$head"
 printf 'second fix\n' >"$work/python/onejudge-sdk/fix"
@@ -47,13 +56,19 @@ git -C "$work" add .
 git -C "$work" commit -qm 'feat(sdk): add capability'
 feature=$(git -C "$work" rev-parse HEAD)
 result=$(cd "$work" && "$repo_root/scripts/python-sdk-release-trigger.sh" "$head" "$feature")
-[[ "$result" == feat ]] || { echo "SDK feature range produced '$result', expected feat" >&2; exit 1; }
+[[ "$result" == feat ]] || {
+    echo "SDK feature range produced '$result', expected feat" >&2
+    exit 1
+}
 
 printf 'breaking\n' >"$work/python/onejudge-sdk/breaking"
 git -C "$work" add .
 git -C "$work" commit -qm 'feat(sdk)!: replace interface'
 breaking=$(git -C "$work" rev-parse HEAD)
 result=$(cd "$work" && "$repo_root/scripts/python-sdk-release-trigger.sh" "$feature" "$breaking")
-[[ "$result" == 'feat!' ]] || { echo "breaking SDK change produced '$result', expected feat!" >&2; exit 1; }
+[[ "$result" == 'feat!' ]] || {
+    echo "breaking SDK change produced '$result', expected feat!" >&2
+    exit 1
+}
 
 echo "check-python-sdk-release-trigger: ok"

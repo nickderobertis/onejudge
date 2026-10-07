@@ -11,6 +11,6 @@ fi
 scratch=${ONEPIPELINE_NODE_SCRATCH_DIR:-target}
 mkdir -p "$scratch"
 base_bundle="$scratch/judge-seat-frames.base.json"
-git show "$base:schemas/judge-seat-frames.json" > "$base_bundle"
+git show "$base:schemas/judge-seat-frames.json" >"$base_bundle"
 cargo run -q -p onejudge --features sdk-schema --example check_judge_seat_frame_version -- \
     "$base_bundle" schemas/judge-seat-frames.json

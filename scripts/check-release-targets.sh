@@ -14,13 +14,32 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-# install.sh's literal `target="<triple>"` assignments.
-install_targets="$(grep -oE 'target="[a-z0-9_.-]+"' install.sh | sed -E 's/target="([^"]+)"/\1/' | sort -u)"
-# release-binaries.yml's matrix `target: <triple>` entries.
-matrix_targets="$(grep -oE '^[[:space:]]+target: [a-z0-9_.-]+' .github/workflows/release-binaries.yml | sed -E 's/^[[:space:]]+target: //' | sort -u)"
+# The matches of the ERE $1 in the file $2, one per line. No match is an empty
+# list, for the check below to name; a file grep cannot read fails the pipeline
+# it feeds, which ends the script with the reason.
+matches() {
+    local status=0
+    grep -oE "$1" "$2" || status=$?
+    if [ "$status" -gt 1 ]; then
+        echo "check-release-targets: reading $2 failed (above), so its targets are unknown" >&2
+        echo "  Restore $2 (git checkout -- $2), then re-run." >&2
+        return 1
+    fi
+}
 
-if [ -z "$install_targets" ] || [ -z "$matrix_targets" ]; then
-    echo "check-release-targets: could not extract target lists — did install.sh / release-binaries.yml change format?" >&2
+# install.sh's literal `target="<triple>"` assignments.
+install_targets="$(matches 'target="[a-z0-9_.-]+"' install.sh | sed -E 's/target="([^"]+)"/\1/' | sort -u)"
+# release-binaries.yml's matrix `target: <triple>` entries.
+matrix_targets="$(matches '^[[:space:]]+target: [a-z0-9_.-]+' .github/workflows/release-binaries.yml | sed -E 's/^[[:space:]]+target: //' | sort -u)"
+
+if [ -z "$install_targets" ]; then
+    echo "check-release-targets: install.sh has no literal target=\"<triple>\" assignment to check" >&2
+    echo "  Restore install.sh's os/arch map of target=\"<triple>\" lines, or update the pattern in this script to its new form." >&2
+    exit 1
+fi
+if [ -z "$matrix_targets" ]; then
+    echo "check-release-targets: .github/workflows/release-binaries.yml has no matrix \"target: <triple>\" entry to check against" >&2
+    echo "  Restore the workflow's matrix target entries, or update the pattern in this script to its new form." >&2
     exit 1
 fi
 
@@ -32,8 +51,8 @@ done
 if [ -n "$missing" ]; then
     {
         echo "check-release-targets: install.sh downloads target(s) the release matrix does not build:$missing"
-        echo "  install.sh:           " $install_targets
-        echo "  release-binaries.yml: " $matrix_targets
+        echo "  install.sh:            ${install_targets//$'\n'/ }"
+        echo "  release-binaries.yml:  ${matrix_targets//$'\n'/ }"
         echo "  Fix install.sh's os/arch map or the workflow matrix so they agree."
     } >&2
     exit 1

@@ -12,3 +12,5 @@
 # The Nx install (package.json + bun.lock) and its cache, logs and graph data
 /node_modules
 /.nx
+# The pinned shell toolchain's environment and bashcov's gems (pixi.toml, Gemfile)
+/.pixi

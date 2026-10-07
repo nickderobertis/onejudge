@@ -1,0 +1,31 @@
+{
+  "name": "onejudge-scripts-e2e",
+  "$schema": "../node_modules/nx/schemas/project-schema.json",
+  "//": "The workspace scripts' journeys through the real host tools they drive — this repository's own Nx install (scripts/nx, scripts/gate-plan.sh, scripts/node-modules.sh's fast path), cargo (scripts/cargo-target-dir.sh) and pixi with bundler (scripts/shell-toolchain.sh) — kept out of the workspace's offline suite so a change to an unrelated script does not pay for them. Its test runs them under bashcov against the workspace's scripts and writes target/shell-coverage/onejudge-scripts-e2e, which workspace:coverage merges. A script change is a workspace-root change, which sweeps, so this reruns with every script it drives.",
+  "projectType": "application",
+  "tags": [
+    "type:e2e",
+    "lang:shell"
+  ],
+  "// implicitDependencies": "llmlint: ignore[shell_test_tiers_stay_split] JSON has no comment to scope this to the line below. The scripts this suite drives are the workspace project's, and an edge to it cannot be drawn: the boundary rules (nx.json) let a type:e2e project depend on no type:workspace one, and workspace:coverage already depends on this suite's test, so the edge would be a cycle. Selection does not rely on it: a script is a workspace-root file, and a root change sweeps (scripts/gate-plan.sh), which runs this suite.",
+  "implicitDependencies": [
+    "onejudge-shell-test-support"
+  ],
+  "targets": {
+    "format": {
+      "command": "just _sh-format scripts-e2e"
+    },
+    "format-check": {
+      "command": "just _sh-format-check scripts-e2e"
+    },
+    "lint": {
+      "command": "just _sh-lint scripts-e2e onejudge-scripts-e2e"
+    },
+    "test": {
+      "command": "just _sh-test scripts-e2e onejudge-scripts-e2e .",
+      "outputs": [
+        "{workspaceRoot}/target/shell-coverage/onejudge-scripts-e2e"
+      ]
+    }
+  }
+}

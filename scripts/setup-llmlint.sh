@@ -39,6 +39,9 @@ set -uo pipefail
 # the composed llmlint.yml relies on (it omits `files.include`).
 readonly LLMLINT_MIN="0.4.3"
 readonly BIN_DIR="$HOME/.local/bin"
+# The PATH the session handed in, before BIN_DIR leads it below: what decides
+# whether the session needs BIN_DIR persisted.
+readonly SESSION_PATH="$PATH"
 
 log() { printf 'setup-llmlint: %s\n' "$*" >&2; }
 
@@ -46,31 +49,37 @@ log() { printf 'setup-llmlint: %s\n' "$*" >&2; }
 # clean-clone prerequisite; if it is somehow absent, log an actionable pointer and
 # leave any already-installed binary in place rather than aborting startup.
 ensure_toolchain() {
-  if ! command -v uv >/dev/null 2>&1; then
-    log "uv not found; cannot install llmlint (install uv: https://docs.astral.sh/uv/)"
-    return 0
-  fi
-  # Keep both executables in llmlint-cli's tool environment and link them into the
-  # tool bin directory; do not install a second, independently resolved tool.
-  log "installing llmlint-cli >= $LLMLINT_MIN with oneharness via uv tool"
-  uv tool install --upgrade --with-executables-from oneharness-cli \
-    "llmlint-cli>=$LLMLINT_MIN" >&2 \
-    || log "llmlint-cli install failed (continuing)"
+    if ! command -v uv >/dev/null 2>&1; then
+        log "uv not found; cannot install llmlint (install uv: https://docs.astral.sh/uv/)"
+        return 0
+    fi
+    # Keep both executables in llmlint-cli's tool environment and link them into the
+    # tool bin directory; do not install a second, independently resolved tool.
+    log "installing llmlint-cli >= $LLMLINT_MIN with oneharness via uv tool"
+    uv tool install --upgrade --with-executables-from oneharness-cli \
+        "llmlint-cli>=$LLMLINT_MIN" >&2 \
+        || log "llmlint-cli install failed (continuing)"
 }
 
 # Persist env for the rest of the session via CLAUDE_ENV_FILE (Claude Code sources
 # it into every later Bash call). PATH so the freshly installed binaries resolve.
 # No-op outside a session.
 persist_session_env() {
-  [ -n "${CLAUDE_ENV_FILE:-}" ] || { log "no CLAUDE_ENV_FILE (not a session); skipping env"; return 0; }
-  {
-    case ":${PATH}:" in *":${BIN_DIR}:"*) ;; *) printf 'export PATH=%q\n' "${BIN_DIR}:${PATH}";; esac
+    [ -n "${CLAUDE_ENV_FILE:-}" ] || {
+        log "no CLAUDE_ENV_FILE (not a session); skipping env"
+        return 0
+    }
+    local lines=""
+    case ":${SESSION_PATH}:" in *":${BIN_DIR}:"*) ;; *) lines+="$(printf 'export PATH=%q' "${BIN_DIR}:${SESSION_PATH}")"$'\n' ;; esac
     # TODO: if your session harness differs from the committed oneharness.toml
     # default, select it here, e.g.:
-    #   printf 'export ONEHARNESS_HARNESSES=%q\n' "claude-code"
-    #   printf 'export ONEHARNESS_MODEL=%q\n' "claude-opus-4-8"
-  } >> "$CLAUDE_ENV_FILE"
-  log "exported PATH"
+    #   lines+="$(printf 'export ONEHARNESS_HARNESSES=%q' "claude-code")"$'\n'
+    #   lines+="$(printf 'export ONEHARNESS_MODEL=%q' "claude-opus-4-8")"$'\n'
+    if ! printf '%s' "$lines" >>"$CLAUDE_ENV_FILE"; then
+        log "could not write CLAUDE_ENV_FILE ($CLAUDE_ENV_FILE; above), so later Bash calls find llmlint only once $BIN_DIR is on PATH (continuing)"
+        return 0
+    fi
+    log "exported PATH"
 }
 
 export PATH="${BIN_DIR}:${PATH}"
@@ -79,9 +88,9 @@ persist_session_env
 # Both executables are linked onto PATH; doctor additionally verifies llmlint's
 # complete runtime setup.
 if command -v llmlint >/dev/null 2>&1; then
-  log "ready (llmlint: $(llmlint --version 2>/dev/null || echo unknown))"
-  llmlint doctor >&2 2>&1 || log "llmlint doctor reported an issue (see above)"
+    log "ready (llmlint: $(llmlint --version 2>/dev/null || echo unknown))"
+    llmlint doctor >&2 2>&1 || log "llmlint doctor reported an issue (see above)"
 else
-  log "llmlint not installed"
+    log "llmlint not installed"
 fi
 exit 0

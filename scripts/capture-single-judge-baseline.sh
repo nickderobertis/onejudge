@@ -48,10 +48,12 @@ json_string() { python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$1
 # writes the normalized report and the judge-side log (at `<log-path>`, checked in
 # under its basename) back into the fixture.
 capture() {
-    local fixture="$1" log="$2"; shift 2
-    local run="$work/$(basename "$fixture")"
+    local fixture="$1" log="$2"
+    shift 2
+    local run
+    run="$work/$(basename "$fixture")"
     mkdir -p "$run"
-    sed "$@" "$fixture/config.yaml" > "$run/config.yaml"
+    sed "$@" "$fixture/config.yaml" >"$run/config.yaml"
     # Exit 1 is an incomplete run (the controlled fixture ends at its turn cap) and
     # still writes a report; only 2 — a config or provider failure — writes none.
     local status=0
@@ -98,7 +100,8 @@ capture "$fixture" "$record" \
 # dir is forty characters longer than a Linux one.
 fixture=crates/onejudge-cli-e2e/tests/golden/single-judge-control
 ctl="/tmp/oj-ctl-$(printf '%08d' "$$")"
-rm -rf "$ctl"; mkdir -p "$ctl/agent-store" "$ctl/judge-store"
+rm -rf "$ctl"
+mkdir -p "$ctl/agent-store" "$ctl/judge-store"
 trap 'rm -rf "$work" "$ctl"' EXIT
 record="$ctl/prompts.log"
 agent_store="$(realpath "$ctl/agent-store")"
