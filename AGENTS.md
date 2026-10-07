@@ -217,16 +217,9 @@ Use the `just` recipes; do not hand-roll equivalents. `just --list` is the index
 - **Target shell: bash**, not POSIX `sh` (`#!/usr/bin/env bash`, `set -euo
   pipefail`; `setup-llmlint.sh` and `lint-llm-diff.sh` omit `-e` and say why).
   `install.sh` and `check-release-targets.sh` stay bash 3.2-safe for macOS.
-- **Toolchain, pinned once at the root:** shellcheck, shfmt (style in
-  `.editorconfig`), actionlint and Ruby from `pixi.toml`/`pixi.lock`; bashcov from
-  `Gemfile.lock`; bats from `package.json`. `just bootstrap` installs them.
-- **Three shell projects** (`scripts/shell-files.sh` lists a project's sources and
-  refuses one in a project without shell targets): `workspace` owns the scripts and
-  their offline bats suite (`tests/`, doubles for curl/uv/llmlint/bun/cargo);
-  `onejudge-scripts-e2e` drives them through the real Nx and cargo; and
-  `onejudge-shell-test-support` is the `helpers.bash` both load. `format-check` /
-  `lint` / `test` run shfmt, shellcheck (+ actionlint on the workspace) and bats
-  under bashcov; `workspace:coverage` merges every `target/shell-coverage/*` report.
+[//]: # "llmlint: ignore[agents_md_durable_and_terse] create-repo's bash.md alignment requires this file to name the shell toolchain; the pins live in the manifests named, which do not say which tool does what."
+- **Toolchain:** shfmt (style in `.editorconfig`), shellcheck, actionlint, bats,
+  and bashcov for coverage — kcov has no conda-forge or arm64 release build to pin.
 - **Shell coverage floor: 82% of the merged report, every script counted** —
   below the 95% default for one reason: `scripts/capture-{judge-posture-baseline,
   pre-cutover-history,single-judge-baseline}.sh` (94 of 609 lines) capture goldens

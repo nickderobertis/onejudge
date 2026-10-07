@@ -346,7 +346,8 @@ _sh-test root project covers=root:
         -- node_modules/.bin/bats --print-output-on-failure "{{root}}/tests"
 
 # The aggregate shell coverage gate: every shell project's bashcov report merged,
-# failing below `shell_coverage_min`, with each script short of full coverage named.
+# failing below `shell_coverage_min`. One line when it passes; below the floor,
+# each script short of full coverage too. The HTML report is always written.
 _sh-coverage:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -357,8 +358,14 @@ _sh-coverage:
       abort "shell coverage: no shell project wrote a report under target/shell-coverage\n" \
             "ACTION: run the test target of each shell project first (just check --targets test,coverage)"
     end
-    class ShortFiles
+    class Summary
+      FLOOR = Float("{{shell_coverage_min}}")
+      REPORTS = Dir["target/shell-coverage/*/.resultset.json"].map { |report| File.basename(File.dirname(report)) }.sort
       def format(result)
+        SimpleCov::Formatter::HTMLFormatter.new(silent: true).format(result)
+        printf("shell coverage: %.2f%% of %d lines, merged from %s (floor %g%%; target/shell-coverage-merged/index.html)\n",
+               result.covered_percent, result.covered_lines + result.missed_lines, REPORTS.join(", "), FLOOR)
+        return if result.covered_percent >= FLOOR
         result.files.sort_by(&:covered_percent).each do |file|
           next if file.covered_percent >= 100
           printf("  %6.2f%%  %s (%d/%d lines)\n", file.covered_percent, file.project_filename.delete_prefix("/"),
@@ -366,11 +373,10 @@ _sh-coverage:
         end
       end
     end
-    puts "shell coverage: merging #{reports.join(", ")}"
     SimpleCov.collate(reports) do
       coverage_dir "target/shell-coverage-merged"
-      formatter SimpleCov::Formatter::MultiFormatter.new([SimpleCov::Formatter::HTMLFormatter, ShortFiles])
-      minimum_coverage line: Float("{{shell_coverage_min}}")
+      formatter Summary
+      minimum_coverage line: Summary::FLOOR
     end
     '
 
