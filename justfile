@@ -338,7 +338,13 @@ _sh-test root project covers=root:
     ./scripts/node-modules.sh
     list="$(./scripts/shell-files.sh {{covers}})"
     export SHELL_COVERAGE_PROJECT={{project}}
-    SHELL_COVERAGE_FILES="$(grep -vE '(^|/)tests/' <<<"$list" || true)"
+    found=0
+    SHELL_COVERAGE_FILES="$(grep -vE '(^|/)tests/' <<<"$list")" || found=$?
+    if [ "$found" -ne 0 ]; then
+        echo "shell coverage: {{project}}'s suite measures no script of {{covers}} (grep exit $found; {{covers}} lists only tests, or the filter failed above)" >&2
+        echo "ACTION: run its suite against a project that owns scripts, or drop its test target" >&2
+        exit 1
+    fi
     export SHELL_COVERAGE_FILES
     exec pixi run --locked bundle exec bashcov --skip-uncovered --command-name {{project}} \
         -- node_modules/.bin/bats --print-output-on-failure "{{root}}/tests"

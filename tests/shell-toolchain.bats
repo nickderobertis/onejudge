@@ -121,3 +121,20 @@ EOF
     [ "${lines[0]}" = "shell-toolchain: 'bundle install' of Gemfile.lock's gems failed (above)" ]
     [ "${lines[1]}" = "ACTION: if the Gemfile changed, run 'just upgrade' and commit Gemfile.lock; otherwise check network access to rubygems.org" ]
 }
+
+@test "a repository root it cannot enter, or a pixi.toml it cannot read, names what to restore" {
+    double dirname <<'EOF'
+echo /nonexistent/scripts
+EOF
+    run env PATH="$ONLY_PATH" "$TREE/scripts/shell-toolchain.sh"
+    [ "$status" -eq 1 ]
+    [ "${lines[1]}" = "shell-toolchain: cannot enter the repository root above $TREE/scripts/shell-toolchain.sh" ]
+    [ "${lines[2]}" = "ACTION: run the script from a complete checkout of the repository" ]
+    rm "$DOUBLES/dirname"
+
+    rm "$TREE/pixi.toml"
+    run env PATH="$ONLY_PATH" "$TREE/scripts/shell-toolchain.sh"
+    [ "$status" -eq 1 ]
+    [ "${lines[1]}" = "shell-toolchain: reading pixi.toml failed (above)" ]
+    [ "${lines[2]}" = "ACTION: restore pixi.toml (git checkout -- pixi.toml), then re-run 'just bootstrap'" ]
+}

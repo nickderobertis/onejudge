@@ -51,20 +51,29 @@ if (!isObject(project)) refuse("is not a JSON object");
 const targets = field(project, "targets", {});
 if (!isObject(targets)) refuse("`targets` is not an object");
 
+// Every command string each target runs, whichever form the executor takes it
+// in; a command field of any other type is refused rather than skipped.
+const runs = {};
 for (const [name, target] of Object.entries(targets)) {
     if (!isObject(target)) refuse(`target \`${name}\` is not an object`);
     const options = field(target, "options", {});
     if (!isObject(options)) refuse(`\`${name}.options\` is not an object`);
-    if (!Array.isArray(field(options, "commands", []))) refuse(`\`${name}.options.commands\` is not an array`);
-}
-
-// Every command string a target runs, whichever form the executor takes it in.
-function commands(name) {
-    const target = field(targets, name, {});
-    const options = field(target, "options", {});
-    return [target.command, options.command, ...field(options, "commands", [])]
-        .map((entry) => (isObject(entry) ? entry.command : entry))
-        .filter((command) => typeof command === "string");
+    const listed = field(options, "commands", []);
+    if (!Array.isArray(listed)) refuse(`\`${name}.options.commands\` is not an array`);
+    const given = [];
+    for (const [where, holder] of [[name, target], [`${name}.options`, options]]) {
+        if (!Object.hasOwn(holder, "command")) continue;
+        if (typeof holder.command !== "string") refuse(`\`${where}.command\` is not a string`);
+        given.push(holder.command);
+    }
+    listed.forEach((entry, index) => {
+        const command = isObject(entry) ? entry.command : entry;
+        if (typeof command !== "string") {
+            refuse(`\`${name}.options.commands[${index}]\` is neither a string nor an object with a string \`command\``);
+        }
+        given.push(command);
+    });
+    runs[name] = given;
 }
 
 // The command's first three words, which a shell runs before reading anything
@@ -75,6 +84,6 @@ const runsOverRoot = (command, recipe) => {
 };
 
 const declared = SHELL_TARGETS.every(([name, recipe]) =>
-    commands(name).some((command) => runsOverRoot(command, recipe)),
+    (runs[name] ?? []).some((command) => runsOverRoot(command, recipe)),
 );
 process.exit(declared ? 0 : 1);

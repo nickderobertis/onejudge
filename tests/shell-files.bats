@@ -12,6 +12,22 @@ shell_project() {
     printf '{"targets":{"format":{"command":"just _sh-format %s"},"format-check":{"command":"just _sh-format-check %s"},"lint":{"options":{"commands":["node check.mjs","just _sh-lint %s %s"]}}}}\n' "$1" "$1" "$1" "${1//\//-}"
 }
 
+# fails TOOL CODE [MARK] — TOOL first on PATH, exiting CODE when its arguments
+# contain MARK (any arguments, by default), and running the real TOOL otherwise.
+fails() {
+    local real
+    real="$(command -v "$1")"
+    use_doubles
+    double "$1" <<EOF
+case " \$* " in *"${3:-}"*)
+    echo "$1: induced failure" >&2
+    exit $2
+    ;;
+esac
+exec "$real" "\$@"
+EOF
+}
+
 setup() {
     REPO="$BATS_TEST_TMPDIR/repo"
     git_repo "$REPO"
@@ -188,6 +204,9 @@ setup() {
     printf 'echo x\n' >"$REPO/crate/x.sh"
     for shape in 'null' '{"targets":[]}' '{"targets":null}' '{"targets":{"lint":"just _sh-lint crate"}}' '{"targets":{"lint":null}}' \
         '{"targets":{"lint":{"options":null}}}' '{"targets":{"lint":{"options":{"commands":null}}}}' \
+        '{"targets":{"lint":{"command":7}}}' '{"targets":{"lint":{"options":{"command":null}}}}' \
+        '{"targets":{"lint":{"options":{"commands":["just _sh-lint crate",3]}}}}' \
+        '{"targets":{"lint":{"options":{"commands":[{"cmd":"just _sh-lint crate"}]}}}}' \
         '{"targets":{"lint":{"options":[]}}}' '{"targets":{"lint":{"options":{"commands":"just _sh-lint crate"}}}}'; do
         echo "$shape" >"$REPO/crate/project.json"
 
@@ -236,6 +255,50 @@ setup() {
         [ "${lines[0]}" = "shell-files: '$spelling' is not spelled as git lists a project root, so it would own no file" ]
         [ "${lines[1]}" = "ACTION: pass the repository-relative directory as git lists it (e.g. scripts-e2e, not ./scripts-e2e), or . for the workspace root" ]
     done
+}
+
+@test "a repository root it cannot enter fails, naming the script" {
+    use_doubles
+    double dirname <<'EOF'
+echo /nonexistent/scripts
+EOF
+
+    run --separate-stderr "$REPO/scripts/shell-files.sh" .
+
+    [ "$status" -eq 1 ]
+    [ "${stderr_lines[1]}" = "shell-files: cannot enter the repository root above $REPO/scripts/shell-files.sh" ]
+    [ "${stderr_lines[2]}" = "ACTION: run the script from a complete checkout of the repository" ]
+}
+
+@test "a tool failing while it lists, sorts or reads names the step that failed" {
+    fails grep 2 "-m 1"
+    run --separate-stderr "$REPO/scripts/shell-files.sh" .
+    [ "$status" -eq 1 ]
+    [ "${stderr_lines[0]}" = "grep: induced failure" ]
+    [ "${stderr_lines[1]}" = "shell-files: searching git's file list for quoted paths failed (above)" ]
+    [ "${stderr_lines[2]}" = "ACTION: check that grep works, then re-run the recipe" ]
+    rm "$DOUBLES/grep"
+
+    fails sort 2
+    run --separate-stderr "$REPO/scripts/shell-files.sh" .
+    [ "$status" -eq 1 ]
+    [ "${stderr_lines[1]}" = "shell-files: sorting the file list failed (above)" ]
+    [ "${stderr_lines[2]}" = "ACTION: check that sort works and \$TMPDIR is writable, then re-run the recipe" ]
+    rm "$DOUBLES/sort"
+
+    fails awk 2
+    run --separate-stderr "$REPO/scripts/shell-files.sh" .
+    [ "$status" -eq 1 ]
+    [ "${stderr_lines[1]}" = "shell-files: the project roots could not be listed from git's file list (above)" ]
+    [ "${stderr_lines[2]}" = "ACTION: check that the root project.json is tracked (git ls-files project.json), then re-run the recipe" ]
+    rm "$DOUBLES/awk"
+
+    fails head 1
+    run --separate-stderr "$REPO/scripts/shell-files.sh" .
+    [ "$status" -eq 1 ]
+    [ "${stderr_lines[0]}" = "head: induced failure" ]
+    [ "${stderr_lines[1]}" = "shell-files: reading the first line of project.json failed (above), so whether it is a shell source is unknown" ]
+    [ "${stderr_lines[2]}" = "ACTION: fix what the error names for project.json, then re-run the recipe" ]
 }
 
 @test "a checkout git cannot list fails, naming git and the next step" {
