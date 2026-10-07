@@ -13,9 +13,19 @@
 #
 # Fails, naming the file, when a shell source belongs to a project that declares
 # no shell targets (its project.json never runs `_sh-lint`): that file would be
-# formatted, linted and measured by nothing.
+# formatted, linted and measured by nothing. Fails, too, on a path git has to
+# quote (a tab, newline, double quote or backslash in its name): one path per line
+# cannot carry it, and dropping it would leave it unchecked.
 set -euo pipefail
-cd "$(dirname "${BASH_SOURCE[0]}")/.."
+
+# Every refusal: what went wrong, then the next action, on stderr.
+die() {
+    echo "shell-files: $1" >&2
+    echo "ACTION: $2" >&2
+    exit 1
+}
+
+cd "$(dirname "${BASH_SOURCE[0]}")/.." || die "cannot enter the repository root above ${BASH_SOURCE[0]}" "run the script from a complete checkout of the repository"
 
 if [ $# -ne 1 ]; then
     echo "usage: scripts/shell-files.sh <project-root>" >&2
@@ -27,15 +37,18 @@ if [ ! -f "$root/project.json" ]; then
     exit 2
 fi
 
-if ! files="$(git ls-files --cached --others --exclude-standard)"; then
-    echo "shell-files: \`git ls-files\` failed (above), so the shell sources cannot be listed" >&2
-    echo "ACTION: repair the checkout (\`git status\` names what is wrong), then re-run the recipe" >&2
-    exit 1
-fi
-files="$(LC_ALL=C sort <<<"$files")"
+files="$(git -c core.quotePath=false ls-files --cached --others --exclude-standard)" \
+    || die "\`git ls-files\` failed (above), so the shell sources cannot be listed" "repair the checkout (\`git status\` names what is wrong), then re-run the recipe"
+# With quotePath off, git quotes only a name one line cannot carry.
+found=0
+quoted="$(grep -m 1 '^"' <<<"$files")" || found=$?
+[ "$found" -le 1 ] || die "searching git's file list for quoted paths failed (above)" "check that grep works, then re-run the recipe"
+[ "$found" -eq 1 ] || die "git lists $quoted quoted, as its name holds a tab, newline, double quote or backslash" "rename it without those characters, so the shell targets can read it, then re-run the recipe"
+files="$(LC_ALL=C sort <<<"$files")" || die "sorting the file list failed (above)" "check that sort works and \$TMPDIR is writable, then re-run the recipe"
 
 # The project roots, deepest first, so the first match is a file's owner.
-roots="$(grep -E '(^|/)project\.json$' <<<"$files" | sed -e 's|/\{0,1\}project\.json$||' -e 's|^$|.|' | awk '{ print length, $0 }' | sort -rn | cut -d' ' -f2-)"
+roots="$(grep -E '(^|/)project\.json$' <<<"$files" | sed -e 's|/\{0,1\}project\.json$||' -e 's|^$|.|' | awk '{ print length, $0 }' | sort -rn | cut -d' ' -f2-)" \
+    || die "the project roots could not be listed from git's file list (above)" "check that the root project.json is tracked (git ls-files project.json), then re-run the recipe"
 
 owner() {
     local project
@@ -56,15 +69,11 @@ is_shell() {
     case "$1" in
         *.sh | *.bash | *.bats) return 0 ;;
     esac
-    if [ ! -r "$1" ]; then
-        echo "shell-files: $1 cannot be read, so whether it is a shell source is unknown" >&2
-        echo "ACTION: restore read permission on $1 (chmod u+r), then re-run the recipe" >&2
-        exit 1
-    fi
-    # read fails only at end of file here (an empty file, or one line and no
-    # newline), which leaves `first` holding whatever line there was.
-    local first=""
-    IFS= read -r first <"$1" || true
+    [ -r "$1" ] || die "$1 cannot be read, so whether it is a shell source is unknown" "restore read permission on $1 (chmod u+r), then re-run the recipe"
+    # head fails only on a read error; an empty file is an empty first line. NUL
+    # bytes (a binary file) are dropped so bash keeps the rest without a warning.
+    local first
+    first="$(head -n 1 -- "$1" | tr -d '\000')" || die "reading the first line of $1 failed (above), so whether it is a shell source is unknown" "fix what the error names for $1, then re-run the recipe"
     [[ $first =~ ^\#!.*[/[:space:]](ba)?sh([[:space:]]|$) || $first =~ ^\#!.*[/[:space:]]bats([[:space:]]|$) ]]
 }
 
@@ -76,7 +85,12 @@ while IFS= read -r file; do
     project="$(owner "$file")"
     if [ "$project" = "$root" ]; then
         printf '%s\n' "$file"
-    elif ! grep -q '_sh-lint' "$project/project.json"; then
+        continue
+    fi
+    found=0
+    grep -q '_sh-lint' "$project/project.json" || found=$?
+    [ "$found" -le 1 ] || die "reading $project/project.json failed (above), so whether it lints $file is unknown" "fix what the error names for $project/project.json, then re-run the recipe"
+    if [ "$found" -eq 1 ]; then
         echo "shell-files: $file is a shell source of '$project', whose project.json declares no shell targets" >&2
         echo "ACTION: give $project/project.json the shell format, format-check, lint and test targets the root project.json has, or move the script" >&2
         status=1

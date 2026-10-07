@@ -346,8 +346,8 @@ _sh-test root project covers=root:
         -- node_modules/.bin/bats --print-output-on-failure "{{root}}/tests"
 
 # The aggregate shell coverage gate: every shell project's bashcov report merged,
-# failing below `shell_coverage_min`. One line when it passes; below the floor,
-# each script short of full coverage too. The HTML report is always written, fresh.
+# failing below `shell_coverage_min`. One summary line on stdout; below the floor,
+# each script short of full coverage and the next action on stderr. The HTML report is always written, fresh.
 _sh-coverage:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -369,10 +369,10 @@ _sh-coverage:
         return if result.covered_percent >= FLOOR
         result.files.sort_by(&:covered_percent).each do |file|
           next if file.covered_percent >= 100
-          printf("  %6.2f%%  %s (%d/%d lines)\n", file.covered_percent, file.project_filename.delete_prefix("/"),
+          $stderr.printf("  %6.2f%%  %s (%d/%d lines)\n", file.covered_percent, file.project_filename.delete_prefix("/"),
                  file.covered_lines.size, file.covered_lines.size + file.missed_lines.size)
         end
-        puts "ACTION: add bats tests that run the uncovered lines of the scripts above (the HTML report marks them), " \
+        $stderr.puts "ACTION: add bats tests that run the uncovered lines of the scripts above (the HTML report marks them), " \
              "then re-run just check --targets test,coverage"
       end
     end

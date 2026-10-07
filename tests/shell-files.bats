@@ -91,6 +91,40 @@ setup() {
     [ "${stderr_lines[1]}" = "ACTION: restore read permission on hidden (chmod u+r), then re-run the recipe" ]
 }
 
+@test "a name git has to quote fails, naming it, rather than dropping out of the checks" {
+    printf 'echo tab\n' >"$REPO/$(printf 'odd\tname.sh')"
+
+    run --separate-stderr "$REPO/scripts/shell-files.sh" .
+
+    [ "$status" -eq 1 ]
+    [ "${stderr_lines[0]}" = 'shell-files: git lists "odd\tname.sh" quoted, as its name holds a tab, newline, double quote or backslash' ]
+    [ "${stderr_lines[1]}" = "ACTION: rename it without those characters, so the shell targets can read it, then re-run the recipe" ]
+}
+
+@test "a binary file is read for its shebang without a warning, and is not a shell source" {
+    printf '\000\001#!/bin/bash\000\n' >"$REPO/blob"
+    printf '#!/bin/bash\000\necho nul\n' >"$REPO/nul-shebang"
+
+    run --separate-stderr "$REPO/scripts/shell-files.sh" .
+
+    [ "$status" -eq 0 ]
+    [ "$stderr" = "" ]
+    [ "$output" = "$(printf '%s\n' nul-shebang scripts/shell-files.sh)" ]
+}
+
+@test "a project.json it cannot read fails, naming it, rather than reading as no shell targets" {
+    mkdir -p "$REPO/crate"
+    echo '{"targets":{"lint":{"command":"just _sh-lint crate"}}}' >"$REPO/crate/project.json"
+    printf 'echo x\n' >"$REPO/crate/x.sh"
+    chmod 000 "$REPO/crate/project.json"
+
+    run --separate-stderr "$REPO/scripts/shell-files.sh" .
+
+    [ "$status" -eq 1 ]
+    [ "${stderr_lines[0]}" = "shell-files: crate/project.json cannot be read, so whether it is a shell source is unknown" ]
+    [ "${stderr_lines[1]}" = "ACTION: restore read permission on crate/project.json (chmod u+r), then re-run the recipe" ]
+}
+
 @test "a root that is not a project, or no root at all, is a usage error" {
     run "$REPO/scripts/shell-files.sh" nowhere
     [ "$status" -eq 2 ]

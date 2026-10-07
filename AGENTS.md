@@ -222,11 +222,12 @@ Use the `just` recipes; do not hand-roll equivalents. `just --list` is the index
   and bashcov for coverage — kcov has no conda-forge or arm64 release build to pin.
 - **Shell coverage floor: 82% of the merged report, every script counted** —
   below the 95% default for one reason: `scripts/capture-{judge-posture-baseline,
-  pre-cutover-history,single-judge-baseline}.sh` (94 of 616 lines) capture goldens
+  pre-cutover-history,single-judge-baseline}.sh` (94 of 608 lines) capture goldens
   from released binaries and a real harness, so the gate never runs them. Measured
-  510/616 = 82.8%; every other script is at 510/522 = 97.7%, its misses lines
-  bashcov cannot attribute (`esac ;;`, `} >&2`, continuations) and gate-plan.sh's
-  unreachable SHA fallback. Never exclude a script to raise it.
+  501/608 = 82.4%; every other script is at 501/514 = 97.5%, its misses lines
+  bashcov cannot attribute (`esac ;;`, `} >&2`, `done <<<`, case patterns,
+  continuations) and gate-plan.sh's unreachable SHA fallback. Never exclude a
+  script to raise it.
 - bashcov exports `SHELLOPTS`, so under coverage a script inherits its caller's
   live `set` options; a bats `run` clears `-e` first, so call scripts through it.
 
