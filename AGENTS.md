@@ -121,11 +121,9 @@ Use the `just` recipes; do not hand-roll equivalents. `just --list` is the index
   tier is *not* required (credential-gated; fork PRs need maintainer approval).
 - **PRs follow `.github/pull_request_template.md`** — terse **What** and **Why**;
   it becomes the squash body.
-- **Where each gate tier runs (ci.md "Staged gates").** onejudge **batches**
-  releases: the release-plz PR accumulates every merge since the last release, so
-  the commit that ships is one no merge job swept. So the **broader tier** runs on
-  that PR and nowhere else, and every other run is the affected tier
-  (`scripts/ci-tier.mjs`).
+[//]: # "llmlint: ignore[agents_md_durable_and_terse] create-repo's ci.md requires the release model and the one place the broader tier runs to be recorded in this section, as the fact a reader needs to tell a legitimate sweep from a duplicate."
+- **Release model: batched**, so the **broader tier** runs on the release-plz PR
+  and every other CI run is the affected tier (`scripts/ci-tier.mjs`).
 - **Releases: fully automated, no manual deploy step.** `release-plz` opens a
   release PR from the merged Conventional-Commits history; merging it writes the
   version + `CHANGELOG.md`, tags `vX.Y.Z`, and publishes to crates.io. Nobody has

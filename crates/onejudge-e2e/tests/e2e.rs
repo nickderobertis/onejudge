@@ -45,8 +45,6 @@ fn skill_with(instructions: &str) -> Skill {
     Skill::new("demo", "/skills/demo", instructions)
 }
 
-// --- CommandProvider journeys ---------------------------------------------
-
 #[test]
 fn single_turn_echoes_and_reports_usage() {
     let provider = echo();
@@ -458,8 +456,6 @@ fn command_provider_rejects_a_wrong_protocol_reply() {
         .unwrap_err();
     assert_eq!(err.kind(), Some(ProviderErrorKind::Protocol));
 }
-
-// --- OneharnessProvider journeys (via the fake oneharness) -----------------
 
 #[test]
 fn oneharness_respond_parses_text_usage_and_events() {
@@ -972,7 +968,7 @@ fn judge_side_calls_record_under_names_derived_from_the_run_session() {
     let _ = std::fs::remove_file(&log);
 }
 
-// --- The streamed provider protocol (docs/streaming.md) --------------------
+// The streamed provider protocol these journeys hold to is docs/streaming.md.
 
 /// A streamed [`OneharnessProvider`]: the same double, driven with `--stream`, so
 /// its stdout is the NDJSON protocol rather than one buffered report document.
@@ -1309,8 +1305,6 @@ fn cancelling_a_turn_terminates_a_harness_that_produces_no_output() {
     let _ = std::fs::remove_file(&handle);
 }
 
-// --- SplitProvider journeys (two DIFFERENT real-subprocess backends) --------
-
 #[test]
 fn split_runs_the_skill_on_one_backend_and_judges_on_another() {
     // The skill runs on the fake oneharness; the judge and simulated user run on
@@ -1356,7 +1350,6 @@ fn split_drives_a_multi_turn_conversation_across_both_backends() {
         .any(|m| m.content.contains("what about the next step")));
 }
 
-// --- Judge panel journeys ---------------------------------------------------
 //
 // The judge side as a LIST: a `JudgePanel` of echo doubles composed as the judge
 // half of a `SplitProvider`, each judge steered through its own argv (the
@@ -1851,7 +1844,6 @@ fn a_panel_conjoins_boolean_verdicts_and_stacks_assessments_under_headers() {
     );
 }
 
-// --- llmlint judge journeys --------------------------------------------------
 //
 // `LlmlintProvider` meets llmlint at the process boundary only, so the double
 // here is a stand-in for the `llmlint` CLI itself (`onejudge-fake-llmlint`),
@@ -2471,8 +2463,6 @@ fn an_embedders_spawn_hook_reaches_a_running_llmlint() {
     assert_eq!(hook.groups.lock().unwrap().as_slice(), [lint.pid]);
 }
 
-// --- The versioned Report contract, assembled from a real run --------------
-
 #[test]
 fn outcome_bundles_into_a_versioned_report() {
     let provider = echo();
@@ -2487,7 +2477,6 @@ fn outcome_bundles_into_a_versioned_report() {
     assert_eq!(report.transcript.assistant_turns(), 1);
 }
 
-// --- Fallback chains, timeouts, and per-candidate attribution --------------
 //
 // These drive the shapes `run_mode = "fallback"` produces. They are the reason
 // onejudge reads oneharness's report through oneharness's own types: every one of
@@ -2792,7 +2781,6 @@ fn a_failed_invocation_is_still_attributed_to_the_identities_it_tried() {
     );
 }
 
-// --- The spawn seam: an embedder-owned group around what onejudge spawns ----
 //
 // Driving onejudge in-process removes the OS grouping the subprocess boundary used
 // to supply: the harness processes are created by the embedder's own process,
@@ -3030,7 +3018,7 @@ fn an_embedder_group_reaps_the_whole_two_party_harness_tree_on_a_kill_cancel() {
     }
 }
 
-// --- Out-of-band turn control (docs/control.md) ----------------------------
+// The turn-control contract these journeys hold to is docs/control.md.
 
 /// Be `oneharness interrupt`, using oneharness's **own** code rather than a
 /// re-implementation of it: resolve the store the address names, read the session
@@ -3548,8 +3536,6 @@ fn no_control_ask_reports_neither_an_address_nor_a_reason() {
     let json = serde_json::to_string(&report).unwrap();
     assert!(json.contains("\"control\":null"));
 }
-
-// --- The in-process seam ---------------------------------------------------
 
 /// A project whose oneharness config pins the harness to the built fake-harness
 /// double — ordinary `[harness.<id>] bin` config, so this is the seam a real
@@ -4072,8 +4058,6 @@ fn installing_a_spawn_hook_moves_a_default_provider_onto_the_seam_that_has_a_pro
     );
     assert_eq!(err.kind(), Some(ProviderErrorKind::Spawn));
 }
-
-// --- Observing journeys ----------------------------------------------------
 
 /// One observation copied out of the borrowed sink, so a journey can assert on
 /// the whole sequence once the run has finished.

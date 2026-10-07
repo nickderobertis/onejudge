@@ -99,14 +99,22 @@ fn workflows(root: &Path) -> Vec<(PathBuf, String)> {
 }
 
 /// Every Python distribution this repository *builds*: the `[project] name` of
-/// each `pyproject.toml` in the tree, mapped to the manifest that declares it.
+/// each `pyproject.toml` in the tree that is a package, mapped to the manifest
+/// that declares it. A manifest that says it is not one (`[tool.uv] package =
+/// false`, a project of the graph that is never built) is left out.
 fn python_distributions(root: &Path) -> BTreeMap<String, PathBuf> {
     let mut manifests = Vec::new();
     find(root, "pyproject.toml", &mut manifests);
     let mut distributions = BTreeMap::new();
     for path in manifests {
         let document = manifest(&path);
-        if let Some(name) = field(&document, "project", "name") {
+        let packaged = document
+            .get("tool")
+            .and_then(|tool| tool.get("uv"))
+            .and_then(|uv| uv.get("package"))
+            .and_then(toml::Value::as_bool)
+            != Some(false);
+        if let Some(name) = field(&document, "project", "name").filter(|_| packaged) {
             distributions.insert(name.to_owned(), path);
         }
     }

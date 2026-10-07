@@ -115,8 +115,6 @@ fn plan_from(body: &str) -> onejudge::cli::RunSummary {
     run_plan(plan, Format::Json, &mut sink).unwrap()
 }
 
-// --- In-process: the run driver over the real echo subprocess ---------------
-
 #[test]
 fn completed_run_with_passing_evals_exits_zero() {
     // The agent commits on turn 1; the echo judge sees the `git commit` event in
@@ -654,8 +652,6 @@ fn split_kind_json_covers_buffered_respond_and_judge() {
         EvalOutcome::Boolean(true)
     ));
 }
-
-// --- Subprocess: the real `onejudge` binary --------------------------------
 
 fn write_config(name: &str, body: &str) -> std::path::PathBuf {
     let dir = Path::new(env!("CARGO_TARGET_TMPDIR"));
@@ -1247,7 +1243,7 @@ fn binary_rejects_a_missing_skill_and_exits_two() {
         .contains("could not load skill"));
 }
 
-// --- The streamed protocol, in and out (docs/streaming.md) -----------------
+// The streamed protocol these journeys hold to, in and out, is docs/streaming.md.
 
 /// A config whose `oneharness` provider is the fake double **in streaming mode**,
 /// with `body` appended.
@@ -1500,8 +1496,6 @@ fn binary_schema_prints_the_annotated_config() {
     assert!(stdout.contains("done_when"));
 }
 
-// --- Structured harness attribution through the binary --------------------
-
 #[test]
 fn binary_run_json_reports_which_harness_identities_were_attempted() {
     // Everything the library learns about the candidates oneharness attempted has
@@ -1637,7 +1631,6 @@ fn binary_stream_reports_a_failure_as_json_on_stderr_leaving_the_protocol_intact
     );
 }
 
-// --- The spawn seam at the PLAN level --------------------------------------
 //
 // `SpawnHook` gives an in-process embedder back the OS grouping the subprocess
 // boundary used to supply — but an embedder that drives onejudge through a
@@ -2198,7 +2191,6 @@ fn an_observing_plan_run_that_fails_reports_the_failure_after_the_turn_it_opened
     );
 }
 
-// --- The judge side as a list: `judges:` through the plan and the binary ------
 //
 // Every journey here drives the same panel the engine e2e proves, through the
 // two entry points a CLI consumer has — a `Plan` in process and the built binary
@@ -2631,7 +2623,6 @@ fn an_observing_plan_run_delivers_each_judges_decision_inside_the_supervisor_tur
     assert!(failure.error.to_string().contains("supervise[reviewer]"));
 }
 
-// --- `kind: llmlint`: a judge met at the process boundary ---------------------
 //
 // The llmlint judge through the two entry points a CLI consumer has, over the
 // `onejudge-fake-llmlint` double (a stand-in for the `llmlint` CLI, scripted
@@ -3716,7 +3707,6 @@ fn every_judge_side_turn_is_recorded_under_the_run_session_and_its_label() {
     );
 }
 
-// --- History across the segment cutover ---------------------------------------
 //
 // `oneharness-core` 0.24.0 indexes history in dated segments under `.index.d/`
 // and never reads the legacy index or walks the store to record a run. These
@@ -4023,7 +4013,6 @@ fn recording_in_process_history_reads_no_legacy_index_and_changes_no_other_sessi
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-// --- Judge posture: what an evaluator judge runs under ------------------------
 //
 // These journeys drive the built `onejudge` binary on BOTH seams a oneharness
 // judge can run on, and hold the harness each one reaches to what it was spawned
@@ -5123,8 +5112,6 @@ fn a_bare_oneharness_providers_judge_publishes_its_events_under_its_own_label() 
         assert!(judged.iter().all(|a| a["posture"]["mode"] == "auto"));
     }
 }
-
-// --- The text view, the published stream, and `onejudge watch` ---------------
 
 /// The `onejudge watch` stream directory for one journey, with any earlier test
 /// run's streams cleared away.

@@ -152,7 +152,7 @@ const wellFormed =
     ([type, allowed]) =>
       typeTag.test(type) &&
       Array.isArray(allowed) &&
-      allowed.every((target) => typeof target === "string" && target in allow),
+      allowed.every((target) => typeof target === "string" && Object.hasOwn(allow, target)),
   );
 if (!wellFormed) {
   fail([
@@ -169,7 +169,7 @@ for (const [name, node] of Object.entries(projects)) {
   const types = (node.data.tags ?? []).filter((tag) => tag.startsWith("type:"));
   if (types.length !== 1) {
     problems.push(`${name} carries ${types.length} type: tags (${types.join(", ") || "none"}); give it exactly one`);
-  } else if (!(types[0] in allow)) {
+  } else if (!Object.hasOwn(allow, types[0])) {
     problems.push(`${name} is tagged ${types[0]}, which nx.json "boundaries.allow" does not declare`);
   } else {
     typeOf[name] = types[0];
@@ -178,7 +178,7 @@ for (const [name, node] of Object.entries(projects)) {
 
 const requested = process.argv.slice(2);
 for (const name of requested) {
-  if (!(name in projects)) {
+  if (!Object.hasOwn(projects, name)) {
     fail([
       `no project named ${name} in the Nx graph (projects: ${Object.keys(projects).sort().join(", ")})`,
       "ACTION: pass a listed project, or add a project.json naming it",
@@ -191,7 +191,7 @@ const byRoot = Object.fromEntries(Object.entries(projects).map(([name, node]) =>
 const edges = new Map();
 for (const [source, deps] of Object.entries(graph.dependencies)) {
   for (const dep of deps) {
-    if (dep.target in projects) edges.set(`${source} -> ${dep.target}`, [source, dep.target]);
+    if (Object.hasOwn(projects, dep.target)) edges.set(`${source} -> ${dep.target}`, [source, dep.target]);
   }
 }
 for (const [fromDir, toDir, fromCrate, toCrate] of cargoEdges()) {

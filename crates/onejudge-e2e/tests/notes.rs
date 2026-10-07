@@ -271,8 +271,6 @@ fn outcome_json(outcome: &onejudge::Outcome) -> serde_json::Value {
     })
 }
 
-// --- The note carries the role it addresses -------------------------------
-
 #[test]
 fn a_note_addressed_to_the_worker_is_shown_to_the_judge_as_an_update_to_the_workers_task() {
     let judge_log = scratch_path("notes-role-judge.log");
@@ -400,8 +398,6 @@ fn a_note_addressed_to_the_supervisor_is_not_handed_to_the_worker_as_its_own_tas
         }),
     );
 }
-
-// --- The four delivery cases ----------------------------------------------
 
 #[test]
 fn a_note_arriving_during_the_workers_turn_reaches_the_worker_and_the_judge_with_its_response() {
@@ -803,8 +799,6 @@ fn a_note_arriving_between_turns_is_delivered_to_the_next_turn() {
     );
 }
 
-// --- The riders: the amendment, and the criteria --------------------------
-
 #[test]
 fn the_judge_is_shown_the_workers_full_task_including_the_amendment_in_force() {
     let judge_log = scratch_path("notes-amendment-judge.log");
@@ -1131,8 +1125,6 @@ fn a_bound_criterion_reaches_the_authoritative_re_judge_a_plan_settles_on() {
     );
 }
 
-// --- Undelivered is an error ----------------------------------------------
-
 #[test]
 fn a_note_arriving_after_the_conversation_completed_raises_and_is_not_accepted() {
     let (notes, inbox) = Notes::channel();
@@ -1311,8 +1303,6 @@ fn a_bare_note_inbox_dropped_unread_answers_member_settled_against_the_released_
     assert!(refused.to_string().contains("was not delivered"));
 }
 
-// --- A note already handed over stays delivered ---------------------------
-
 #[test]
 fn a_note_handed_to_the_judges_live_turn_is_answered_as_delivered_when_the_run_then_fails() {
     let live = scratch_path("notes-judge-then-fails.marker");
@@ -1399,8 +1389,6 @@ fn a_note_arriving_after_a_run_that_panicked_raises_naming_the_dropped_channel()
     );
     assert_baseline("after-panic", &json!({ "refused": format!("{refused:?}") }));
 }
-
-// --- A binding note is held to being a criterion --------------------------
 
 #[test]
 fn a_criterion_that_perishes_or_names_a_procedure_is_refused_where_the_note_is_built() {
