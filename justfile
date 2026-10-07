@@ -15,6 +15,10 @@ set shell := ["bash", "-euo", "pipefail", "-c"]
 # `fail_under` in python/onejudge-sdk/pyproject.toml.
 coverage_min := "95"
 
+# The shell line-coverage floor, enforced on the merge of every shell project's
+# bashcov report (`workspace:coverage`). AGENTS.md, "Shell", records its measurement.
+shell_coverage_min := "82"
+
 # The `onejudge` feature set every Rust target that links it builds against: the
 # CLI and the schema export, so both public export surfaces stay gated, and one
 # feature set everywhere, so every suite links the same instrumented library and
@@ -285,6 +289,84 @@ _coverage-clean:
 _coverage:
     cargo llvm-cov report --ignore-filename-regex '{{coverage_ignore}}' \
         --failure-mode all --fail-under-lines {{coverage_min}} --summary-only
+
+# --- Shell: every project owning shell sources runs these (scripts/shell-files.sh
+# lists a project's), with the tools pinned in pixi.toml / Gemfile.lock / package.json.
+
+# Run a pinned tool over the shell sources the project at `root` owns.
+[positional-arguments]
+_sh-files root +command:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    list="$(./scripts/shell-files.sh "$1")"
+    shift
+    if [ -z "$list" ]; then
+        echo "shell: no shell sources under $1, so there is nothing to check" >&2
+        exit 1
+    fi
+    files=()
+    while IFS= read -r file; do files+=("$file"); done <<<"$list"
+    exec "$@" "${files[@]}"
+
+_sh-format root:
+    just _sh-files {{root}} pixi run --locked shfmt -w
+
+# shfmt reads its style from .editorconfig, so no flag here may set one.
+_sh-format-check root:
+    just _sh-files {{root}} pixi run --locked shfmt -d
+
+_sh-lint root:
+    just _sh-files {{root}} pixi run --locked shellcheck
+
+# The workflows' own lint, run by the project that owns them; actionlint checks
+# each `run:` block with the pinned shellcheck it finds on the pixi PATH.
+_actionlint:
+    pixi run --locked actionlint
+
+# A shell project's `test`: its bats suite (`<root>/tests`) under bashcov, which
+# writes the project's line coverage of the scripts it owns — its tests excluded
+# — into target/shell-coverage/<project> (.simplecov) for `_sh-coverage` to merge.
+# The previous report goes first, so the merge never reads a stale one.
+_sh-test root project:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    rm -rf "target/shell-coverage/{{project}}"
+    ./scripts/node-modules.sh
+    list="$(./scripts/shell-files.sh {{root}})"
+    export SHELL_COVERAGE_PROJECT={{project}}
+    SHELL_COVERAGE_FILES="$(grep -vE '(^|/)tests/' <<<"$list" || true)"
+    export SHELL_COVERAGE_FILES
+    exec pixi run --locked bundle exec bashcov --skip-uncovered --command-name {{project}} \
+        -- node_modules/.bin/bats --print-output-on-failure "{{root}}/tests"
+
+# The aggregate shell coverage gate: every shell project's bashcov report merged,
+# failing below `shell_coverage_min`, with each script short of full coverage named.
+_sh-coverage:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    exec pixi run --locked bundle exec ruby -e '
+    require "simplecov"
+    reports = Dir["target/shell-coverage/*/.resultset.json"].sort
+    if reports.empty?
+      abort "shell coverage: no shell project wrote a report under target/shell-coverage\n" \
+            "ACTION: run the test target of each shell project first (just check --targets test,coverage)"
+    end
+    class ShortFiles
+      def format(result)
+        result.files.sort_by(&:covered_percent).each do |file|
+          next if file.covered_percent >= 100
+          printf("  %6.2f%%  %s (%d/%d lines)\n", file.covered_percent, file.project_filename.delete_prefix("/"),
+                 file.covered_lines.size, file.covered_lines.size + file.missed_lines.size)
+        end
+      end
+    end
+    puts "shell coverage: merging #{reports.join(", ")}"
+    SimpleCov.collate(reports) do
+      coverage_dir "target/shell-coverage-merged"
+      formatter SimpleCov::Formatter::MultiFormatter.new([SimpleCov::Formatter::HTMLFormatter, ShortFiles])
+      minimum_coverage line: Float("{{shell_coverage_min}}")
+    end
+    '
 
 _audit:
     cargo deny check # llmlint: ignore[diagnostics_error_or_absent] the audit's severities are deny.toml's, the repository's supply-chain policy, which this recipe runs unchanged from the `audit` recipe it was before the project graph.

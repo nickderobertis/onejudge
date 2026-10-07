@@ -1,10 +1,11 @@
 {
   "name": "workspace",
   "$schema": "node_modules/nx/schemas/project-schema.json",
-  "//": "The workspace root: it owns every file no other project does (toolchain, lockfiles, justfile, docs, schemas, CI), so a change there runs the broader tier. Its targets are the repo-level ones: the aggregate Rust coverage over every suite's profiles, the supply-chain audit, the MSRV build, and the root-file drift checks. It depends on the crates whose suites the coverage aggregate merges, so a change to any of them reruns it.",
+  "//": "The workspace root: it owns every file no other project does (toolchain, lockfiles, justfile, docs, schemas, CI), so a change there runs the broader tier. It also owns the repository's shell sources (install.sh, scripts/, and their bats suite in tests/), so it carries the shell targets: shfmt (format, format-check), shellcheck and actionlint (lint), the bats suite under bashcov (test). Its other targets are the repo-level ones: the aggregate Rust and shell coverage, the supply-chain audit, the MSRV build, and the root-file drift checks. It depends on the crates whose suites the coverage aggregate merges, so a change to any of them reruns it.",
   "projectType": "application",
   "tags": [
-    "type:workspace"
+    "type:workspace",
+    "lang:shell"
   ],
   "implicitDependencies": [
     "onejudge",
@@ -13,13 +14,21 @@
     "onejudge-cli-e2e"
   ],
   "targets": {
+    "format": {
+      "command": "just _sh-format ."
+    },
+    "format-check": {
+      "command": "just _sh-format-check ."
+    },
     "lint": {
       "executor": "nx:run-commands",
       "options": {
         "commands": [
           "just check-release-targets",
           "node scripts/check-project-boundaries.mjs workspace",
-          "node scripts/check-target-commands.mjs workspace"
+          "node scripts/check-target-commands.mjs workspace",
+          "just _sh-lint .",
+          "just _actionlint"
         ],
         "parallel": false
       },
@@ -31,18 +40,38 @@
         "{workspaceRoot}/**/project.json",
         "{workspaceRoot}/**/Cargo.toml",
         "{workspaceRoot}/scripts/check-project-boundaries.mjs",
-        "{workspaceRoot}/scripts/check-target-commands.mjs"
+        "{workspaceRoot}/scripts/check-target-commands.mjs",
+        "{workspaceRoot}/scripts/**/*",
+        "{workspaceRoot}/tests/**/*",
+        "{workspaceRoot}/.github/workflows/*",
+        "{workspaceRoot}/pixi.lock",
+        "{workspaceRoot}/**/*.sh",
+        "{workspaceRoot}/**/*.bash",
+        "{workspaceRoot}/**/*.bats"
       ]
     },
     "test": {
-      "command": "just check-python-sdk-release-trigger"
+      "command": "just _sh-test . workspace",
+      "outputs": [
+        "{workspaceRoot}/target/shell-coverage/workspace"
+      ]
     },
     "coverage-clean": {
       "command": "just _coverage-clean",
       "cache": false
     },
     "coverage": {
-      "command": "just _coverage",
+      "executor": "nx:run-commands",
+      "options": {
+        "commands": [
+          "just _coverage",
+          "just _sh-coverage"
+        ],
+        "parallel": false
+      },
+      "outputs": [
+        "{workspaceRoot}/target/shell-coverage-merged"
+      ],
       "dependsOn": [
         {
           "projects": [
@@ -50,6 +79,9 @@
             "onejudge-e2e",
             "onejudge-cli-e2e"
           ],
+          "target": "test"
+        },
+        {
           "target": "test"
         }
       ]
