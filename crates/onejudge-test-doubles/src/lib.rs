@@ -57,6 +57,7 @@ fn double(name: &str) -> &'static str {
     resolve(&dir, name)
 }
 
+// llmlint: ignore-block[no_panics_on_recoverable_errors] test support linked only by the suites' test binaries of this `publish = false` crate: each panic is the failed assertion the calling test reports, naming what was missing, exactly as an `assert!` in the test would; a `Result` here would only move the same `unwrap` into every journey that calls it.
 /// `<target>/<profile>`: the running test binary lives in its `deps/`.
 fn profile_dir() -> PathBuf {
     let exe = std::env::current_exe().expect("the running test binary has a path");
@@ -92,3 +93,4 @@ fn resolve(dir: &Path, name: &str) -> &'static str {
     resolved.insert(path, found);
     found
 }
+// llmlint: ignore-end[no_panics_on_recoverable_errors]

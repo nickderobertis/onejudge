@@ -9,6 +9,7 @@
 //! points a consumer has, so the helpers live in the crate both suites already
 //! depend on rather than being copied into each.
 
+// llmlint: ignore-block[no_panics_on_recoverable_errors] test support linked only by the suites' test binaries of this `publish = false` crate: each panic is the failed assertion the calling test reports, naming what was missing, exactly as an `assert!` in the test would; a `Result` here would only move the same `unwrap` into every journey that calls it.
 /// `<target>/tmp`: the directory Cargo hands an integration test as
 /// `CARGO_TARGET_TMPDIR`, derived at run time because that variable is set only
 /// while compiling the test itself, never this library.
@@ -206,6 +207,8 @@ pub fn assert_profile_is_detached(artifact: &std::path::Path) {
     }
 }
 
+// llmlint: ignore-end[no_panics_on_recoverable_errors]
+
 /// An embedder-owned group per spawned process: onejudge's child becomes its own
 /// POSIX process-group leader, so its pid *is* the group id, and everything it
 /// goes on to spawn inherits the group. This is the POSIX half of what a Windows
@@ -234,7 +237,10 @@ impl onejudge::SpawnHook for OwnedProcessGroups {
         child: &std::process::Child,
         _context: &onejudge::SpawnContext<'_>,
     ) -> std::io::Result<Option<String>> {
-        self.groups.lock().unwrap().push(child.id());
+        self.groups
+            .lock()
+            .map_err(|_| std::io::Error::other("a journey panicked holding the group list"))?
+            .push(child.id());
         Ok(Some(format!("pgid:{}", child.id())))
     }
 }
@@ -243,6 +249,7 @@ impl onejudge::SpawnHook for OwnedProcessGroups {
 /// unconditionally, to every member, including descendants the group leader is no
 /// longer around to reap.
 #[cfg(unix)]
+// llmlint: ignore-block[no_panics_on_recoverable_errors] test support linked only by the suites' test binaries of this `publish = false` crate: each panic is the failed assertion the calling test reports, naming what was missing, exactly as an `assert!` in the test would; a `Result` here would only move the same `unwrap` into every journey that calls it.
 pub fn kill_group(pgid: u32) {
     let pid = i32::try_from(pgid)
         .ok()
@@ -250,6 +257,7 @@ pub fn kill_group(pgid: u32) {
         .expect("a real pid");
     let _ = rustix::process::kill_process_group(pid, rustix::process::Signal::KILL);
 }
+// llmlint: ignore-end[no_panics_on_recoverable_errors]
 
 /// Whether `pid` still names a live (or unreaped) process.
 #[cfg(unix)]
