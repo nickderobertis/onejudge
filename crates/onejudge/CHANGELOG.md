@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.18.1](https://github.com/nickderobertis/onejudge/compare/onejudge-v0.18.0...onejudge-v0.18.1) - 2026-10-07
+
+### Other
+
+- *(shell)* lint, format and measure the shell scripts in the gate ([#144](https://github.com/nickderobertis/onejudge/pull/144))
+
 ## [0.18.0](https://github.com/nickderobertis/onejudge/compare/onejudge-v0.17.2...onejudge-v0.18.0) - 2026-10-07
 
 ### Other
