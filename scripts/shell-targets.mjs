@@ -38,6 +38,8 @@ function refuse(reason) {
 }
 
 const isObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
+// An absent field is its default; a present one, `null` included, must be valid.
+const field = (container, key, fallback) => (Object.hasOwn(container, key) ? container[key] : fallback);
 
 let project;
 try {
@@ -46,20 +48,21 @@ try {
     refuse(error.message);
 }
 if (!isObject(project)) refuse("is not a JSON object");
-const targets = project.targets ?? {};
+const targets = field(project, "targets", {});
 if (!isObject(targets)) refuse("`targets` is not an object");
 
 for (const [name, target] of Object.entries(targets)) {
     if (!isObject(target)) refuse(`target \`${name}\` is not an object`);
-    if (!isObject(target.options ?? {})) refuse(`\`${name}.options\` is not an object`);
-    if (!Array.isArray(target.options?.commands ?? [])) refuse(`\`${name}.options.commands\` is not an array`);
+    const options = field(target, "options", {});
+    if (!isObject(options)) refuse(`\`${name}.options\` is not an object`);
+    if (!Array.isArray(field(options, "commands", []))) refuse(`\`${name}.options.commands\` is not an array`);
 }
 
 // Every command string a target runs, whichever form the executor takes it in.
 function commands(name) {
-    const target = targets[name] ?? {};
-    const options = target.options ?? {};
-    return [target.command, options.command, ...(options.commands ?? [])]
+    const target = field(targets, name, {});
+    const options = field(target, "options", {});
+    return [target.command, options.command, ...field(options, "commands", [])]
         .map((entry) => (isObject(entry) ? entry.command : entry))
         .filter((command) => typeof command === "string");
 }

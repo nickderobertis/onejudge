@@ -1,0 +1,55 @@
+#!/usr/bin/env bats
+# The shell coverage contract, reconciled over this tree: each project's `test`
+# target that runs `just _sh-test <root> <project>` names itself and its own root,
+# declares as its Nx output the directory .simplecov writes for that project, and
+# is one the repo-level `coverage` target depends on; the merge reads the reports
+# from exactly those directories. A rename on one side fails here, not as a
+# silently smaller merge.
+
+load support/helpers
+
+# shell_tests — `<dir> <name> <command project> <command root> <outputs>` for every
+# project whose test runs _sh-test, then `coverage <deps>` for workspace:coverage.
+shell_tests() {
+    git -C "$ROOT" ls-files '*project.json' | node -e '
+        const fs = require("fs");
+        const path = require("path");
+        let coverage = [];
+        for (const file of fs.readFileSync(0, "utf8").split("\n").filter(Boolean)) {
+            const project = JSON.parse(fs.readFileSync(path.join(process.argv[1], file), "utf8"));
+            const dir = path.dirname(file);
+            const test = (project.targets || {}).test || {};
+            const words = (test.command || "").split(/\s+/);
+            if (words[0] === "just" && words[1] === "_sh-test") {
+                console.log([dir, project.name, words[3], words[2], (test.outputs || []).join(",")].join(" "));
+            }
+            for (const dep of (((project.targets || {}).coverage || {}).dependsOn || [])) {
+                if (dep.target === "test") coverage = coverage.concat(dep.projects);
+            }
+        }
+        console.log("coverage " + coverage.join(","));
+    ' "$ROOT"
+}
+
+@test "every shell test writes its report where its outputs say, and the coverage target merges it" {
+    run shell_tests
+    [ "$status" -eq 0 ]
+    deps="$(sed -n 's/^coverage //p' <<<"$output")"
+    count=0
+    while read -r dir name project test_root outputs; do
+        [ "$dir" = coverage ] && continue
+        [ "$project" = "$name" ]
+        [ "$test_root" = "$dir" ]
+        [ "$outputs" = "{workspaceRoot}/target/shell-coverage/$name" ]
+        grep -qxF "$name" <<<"${deps//,/$'\n'}"
+        count=$((count + 1))
+    done <<<"$output"
+    [ "$count" -eq 2 ]
+
+    # .simplecov's report directory for SHELL_COVERAGE_PROJECT, and the merge's input.
+    grep -qF 'SimpleCov.coverage_dir File.join("target", "shell-coverage", project)' "$ROOT/.simplecov"
+    grep -qF 'project = ENV["SHELL_COVERAGE_PROJECT"]' "$ROOT/.simplecov"
+    grep -qF 'export SHELL_COVERAGE_PROJECT={{project}}' "$ROOT/justfile"
+    grep -qF 'rm -rf "target/shell-coverage/{{project}}"' "$ROOT/justfile"
+    grep -qF 'reports = Dir["target/shell-coverage/*/.resultset.json"].sort' "$ROOT/justfile"
+}

@@ -55,9 +55,7 @@ bootstrap:
     done
     ./scripts/node-modules.sh                 # bun (pinned in package.json) + the locked Nx and bats install
     command -v uv >/dev/null 2>&1 || { curl -LsSf https://astral.sh/uv/install.sh | sh; }
-    command -v pixi >/dev/null 2>&1 || { curl -fsSL https://pixi.sh/install.sh | PIXI_NO_PATH_UPDATE=1 PIXI_VERSION="v$(sed -n 's/^requires-pixi = ">=\(.*\)"$/\1/p' pixi.toml)" bash; }
-    pixi install --locked                     # shellcheck, shfmt, actionlint, Ruby (pixi.lock)
-    pixi run --locked bundle install --quiet  # bashcov and its gems (Gemfile.lock)
+    ./scripts/shell-toolchain.sh              # pixi, then shellcheck, shfmt, actionlint, Ruby (pixi.lock) and bashcov (Gemfile.lock)
     cargo fetch --locked
 
 # The quality gate. Default: the AFFECTED tier — every gate target of the projects

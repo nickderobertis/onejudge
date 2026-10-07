@@ -186,7 +186,8 @@ setup() {
 @test "a project.json Nx could not read as a project fails, naming what is wrong" {
     mkdir -p "$REPO/crate"
     printf 'echo x\n' >"$REPO/crate/x.sh"
-    for shape in 'null' '{"targets":[]}' '{"targets":{"lint":"just _sh-lint crate"}}' \
+    for shape in 'null' '{"targets":[]}' '{"targets":null}' '{"targets":{"lint":"just _sh-lint crate"}}' '{"targets":{"lint":null}}' \
+        '{"targets":{"lint":{"options":null}}}' '{"targets":{"lint":{"options":{"commands":null}}}}' \
         '{"targets":{"lint":{"options":[]}}}' '{"targets":{"lint":{"options":{"commands":"just _sh-lint crate"}}}}'; do
         echo "$shape" >"$REPO/crate/project.json"
 
