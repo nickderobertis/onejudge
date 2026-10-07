@@ -84,7 +84,7 @@
           "target": "test"
         },
         {
-          "//": "llmlint: ignore[expensive_tests_stay_behind_their_own_edge] JSON has no comment to scope this to the line below. The shell floor is enforced once, over the merge of every shell project's report, as AGENTS.md requires of the Rust floor (whose suites this aggregate reruns above on every change that selects it): merging without onejudge-scripts-e2e's report would fail the floor on lines only its journeys reach, so the aggregate's edge to that suite is the measurement's own. It costs about 24s beside the instrumented Rust suites; the suite stays out of the offline workspace:test.",
+          "//": "llmlint: ignore[expensive_tests_stay_behind_their_own_edge, shell_test_tiers_stay_split] JSON has no comment to scope this to the line below. bash.md (\"Splitting the suite\") prescribes this edge: the repo-level coverage target dependsOn every shell test, because the floor is enforced once, over the merge of every shell project's report, as AGENTS.md requires of the Rust floor (whose suites this aggregate reruns above on every change that selects it). Merging without onejudge-scripts-e2e's report would fail the floor on lines only its journeys reach. The journeys stay out of the offline workspace:test, and cost about 24s beside the instrumented Rust suites.",
           "projects": [
             "workspace",
             "onejudge-scripts-e2e"
