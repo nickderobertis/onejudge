@@ -10,10 +10,6 @@
   persona and transcript as every other judge, so a journey that needs two judges
   to differ steers each through its own **argv** — the echo double scans its
   arguments for markers too.
-- **`notes.rs` drives the note delivery seam through the library API**, never a
-  command line, and asserts each party's framing against the text the *double
-  received*. A live turn is held open with the dwell markers and the sender waits
-  for the turn to open first, so an arrival is during a turn, not between turns.
 - **Assert on the library's behavior, not the double's**: the doubles are outside
   the coverage report.
 - **A helper more than one suite needs goes in `onejudge_test_doubles::support`**
