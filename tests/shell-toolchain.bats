@@ -13,6 +13,8 @@ setup() {
     link "$TREE" scripts/shell-toolchain.sh
     cp "$ROOT/pixi.toml" "$TREE/"
     export HOME="$BATS_TEST_TMPDIR/home"
+    export TMPDIR="$BATS_TEST_TMPDIR/tmp"
+    mkdir -p "$TMPDIR"
     PIXI_LOG="$BATS_TEST_TMPDIR/pixi.log"
     export PIXI_LOG
     local digest_tool=sha256sum
@@ -156,6 +158,61 @@ EOF
         [ "$status" -eq 1 ]
         [ "${lines[0]}" = "shell-toolchain: pixi.sha256 pins no sha256 for v$VERSION/pixi-$triple.tar.gz" ]
     done
+}
+
+@test "each step of a download that fails on this host names the step and its fix" {
+    release
+    chmod 000 "$TREE/pixi.sha256"
+    run env PATH="$ONLY_PATH" "$TREE/scripts/shell-toolchain.sh"
+    [ "$status" -eq 1 ]
+    [ "${lines[0]}" = "shell-toolchain: pixi.sha256 cannot be read, so no archive can be verified" ]
+    [ "${lines[1]}" = "ACTION: restore pixi.sha256 (git checkout -- pixi.sha256), then re-run 'just bootstrap'" ]
+    chmod 644 "$TREE/pixi.sha256"
+
+    double mktemp <<'EOF'
+echo "mktemp: failed to create directory" >&2
+exit 1
+EOF
+    run env PATH="$ONLY_PATH" "$TREE/scripts/shell-toolchain.sh"
+    [ "$status" -eq 1 ]
+    [ "${lines[1]}" = "shell-toolchain: creating a temporary directory for the download failed (above)" ]
+    [ "${lines[2]}" = "ACTION: check that $TMPDIR exists and is writable (or point TMPDIR at one that is), then re-run 'just bootstrap'" ]
+    rm "$DOUBLES/mktemp"
+
+    double sha256sum <<'EOF'
+echo "sha256sum: read error" >&2
+exit 1
+EOF
+    run env PATH="$ONLY_PATH" "$TREE/scripts/shell-toolchain.sh"
+    [ "$status" -eq 1 ]
+    [ "${lines[1]}" = "shell-toolchain: computing the sha256 of $ARCHIVE with sha256sum failed (above)" ]
+    [ "${lines[2]}" = "ACTION: check that sha256sum works, then re-run 'just bootstrap'" ]
+    rm "$DOUBLES/sha256sum"
+
+    double mkdir <<'EOF'
+echo "mkdir: permission denied" >&2
+exit 1
+EOF
+    run env PATH="$ONLY_PATH" "$TREE/scripts/shell-toolchain.sh"
+    [ "$status" -eq 1 ]
+    [ "${lines[1]}" = "shell-toolchain: creating $HOME/.pixi/bin failed (above)" ]
+    [ "${lines[2]}" = "ACTION: check that $HOME is writable, then re-run 'just bootstrap'" ]
+    [ ! -e "$HOME/.pixi/bin/pixi" ]
+}
+
+@test "a download directory it cannot remove is reported, and the install still succeeds" {
+    release
+    double rm <<'EOF'
+echo "rm: cannot remove" >&2
+exit 1
+EOF
+
+    run env PATH="$ONLY_PATH" "$TREE/scripts/shell-toolchain.sh"
+
+    [ "$status" -eq 0 ]
+    [ -x "$HOME/.pixi/bin/pixi" ]
+    [[ "${lines[-2]}" == "shell-toolchain: could not remove the download directory $TMPDIR/"*" (above)" ]]
+    [[ "${lines[-1]}" == "ACTION: remove $TMPDIR/"*" by hand; the install itself is unaffected" ]]
 }
 
 @test "a pixi.toml without one requires-pixi version is refused before anything is fetched" {

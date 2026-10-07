@@ -334,7 +334,11 @@ _actionlint:
 _sh-test root project covers=root:
     #!/usr/bin/env bash
     set -euo pipefail
-    rm -rf "target/shell-coverage/{{project}}"
+    if ! rm -rf "target/shell-coverage/{{project}}"; then
+        echo "shell coverage: could not remove {{project}}'s previous report (above), so the merge could read a stale one" >&2
+        echo "ACTION: remove target/shell-coverage/{{project}} by hand, then re-run the recipe" >&2
+        exit 1
+    fi
     ./scripts/node-modules.sh
     list="$(./scripts/shell-files.sh {{covers}})"
     export SHELL_COVERAGE_PROJECT={{project}}
@@ -355,7 +359,11 @@ _sh-test root project covers=root:
 _sh-coverage:
     #!/usr/bin/env bash
     set -euo pipefail
-    rm -rf target/shell-coverage-merged
+    if ! rm -rf target/shell-coverage-merged; then
+        echo "shell coverage: could not remove the previous merged report (above)" >&2
+        echo "ACTION: remove target/shell-coverage-merged by hand, then re-run the recipe" >&2
+        exit 1
+    fi
     exec pixi run --locked bundle exec ruby -e '
     require "simplecov"
     reports = Dir["target/shell-coverage/*/.resultset.json"].sort
