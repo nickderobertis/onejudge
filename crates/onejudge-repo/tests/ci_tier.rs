@@ -14,11 +14,12 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+/// Not canonicalized: on Windows that yields the `\\?\` verbatim form, which
+/// `node` cannot resolve a main module from (`EISDIR ... lstat 'D:'`).
 fn script() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../scripts/ci-tier.mjs")
-        .canonicalize()
-        .expect("scripts/ci-tier.mjs exists")
+    let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/ci-tier.mjs");
+    assert!(script.is_file(), "{} exists", script.display());
+    script
 }
 
 fn git(dir: &Path, args: &[&str]) -> String {
