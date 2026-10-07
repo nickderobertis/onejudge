@@ -178,3 +178,21 @@ fn an_unknown_project_is_named() {
     let dir = workspace(serde_json::json!({ "build": { "command": "just _a" } }));
     refuses(&check(&dir, &["nope"]), &["no project named nope"]);
 }
+
+#[test]
+fn a_graph_nx_cannot_compute_is_refused_with_what_nx_said() {
+    let dir = workspace(serde_json::json!({ "build": { "command": "just _a" } }));
+    // Nx skips an unreadable project.json, so it is `nx.json` that is broken.
+    write(&dir.join("nx.json"), "{ \"namedInputs\": ");
+    let output = check(&dir, &[]);
+    refuses(
+        &output,
+        &["computing the Nx project graph (`nx graph`) failed: "],
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stderr.contains("failed: no output"), "{stderr}");
+    assert!(
+        stderr.contains("ValueExpected") && stderr.contains("nx.json at "),
+        "{stderr}"
+    );
+}

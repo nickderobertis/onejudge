@@ -45,7 +45,8 @@ function nxProjects() {
     execFileSync(process.execPath, [nx, "graph", `--file=${file}`], {
       cwd: root,
       env: { ...process.env, NX_DAEMON: "false", NX_NO_CLOUD: "true" },
-      stdio: ["ignore", "ignore", "pipe"],
+      stdio: ["ignore", "pipe", "pipe"],
+      maxBuffer: 64 * 1024 * 1024,
     });
     const nodes = JSON.parse(readFileSync(file, "utf8")).graph?.nodes;
     const shaped =
@@ -57,10 +58,14 @@ function nxProjects() {
     if (!shaped) throw new Error("its `nodes` are not the shape this check reads");
     return nodes;
   } catch (error) {
-    const stderr = String(error.stderr ?? error.message ?? error).trim();
+    // Nx reports some failures on stdout, so both streams are kept.
+    const output = [error.stdout, error.stderr ?? error.message ?? error]
+      .map((stream) => String(stream ?? "").trim())
+      .filter(Boolean)
+      .join("\n");
     return fail([
-      `computing the Nx project graph (\`nx graph\`) failed: ${stderr || "no output"}`,
-      "ACTION: run `bash scripts/node-modules.sh` to heal the Nx install, then fix the project.json the message names",
+      `computing the Nx project graph (\`nx graph\`) failed: ${output || "no output"}`,
+      "ACTION: run `bash scripts/node-modules.sh` to heal the Nx install, then fix the nx.json or project.json the message names",
     ]);
   } finally {
     rmSync(scratch, { recursive: true, force: true });

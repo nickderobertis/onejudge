@@ -36,8 +36,12 @@ function fail(lines) {
 
 /** `what`'s failure, with its own stderr and the next step, as a failed run. */
 function failedRun(what, error, action) {
-  const stderr = String(error.stderr ?? error.message ?? error).trim();
-  fail([`${what} failed: ${stderr || "no output"}`, `ACTION: ${action}`]);
+  // Nx reports some failures on stdout, so both streams are kept.
+  const output = [error.stdout, error.stderr ?? error.message ?? error]
+    .map((stream) => String(stream ?? "").trim())
+    .filter(Boolean)
+    .join("\n");
+  fail([`${what} failed: ${output || "no output"}`, `ACTION: ${action}`]);
 }
 
 /** The project graph exactly as Nx computes it for this checkout. */
@@ -50,7 +54,8 @@ function nxGraph() {
     execFileSync(process.execPath, [nx, "graph", `--file=${file}`], {
       cwd: root,
       env: { ...process.env, NX_DAEMON: "false", NX_NO_CLOUD: "true" },
-      stdio: ["ignore", "ignore", "pipe"],
+      stdio: ["ignore", "pipe", "pipe"],
+      maxBuffer: 64 * 1024 * 1024,
     });
     const graph = JSON.parse(readFileSync(file, "utf8")).graph;
     const nodes = Object.values(graph?.nodes ?? {});
