@@ -1,7 +1,9 @@
 #!/usr/bin/env bats
-# scripts/shell-toolchain.sh over the real pixi and bundler: after it runs, the
-# environment holds exactly the versions pixi.toml pins and bashcov is the one
-# the Gemfile pins, and a second run is a no-op that still succeeds.
+# The shell toolchain `just bootstrap` installed (scripts/shell-toolchain.sh),
+# read back through the real pixi and bundler: the environment holds exactly the
+# versions pixi.toml pins and bashcov is the one the Gemfile pins. It reads the
+# installed environment and contacts no package service; the installer's own
+# journeys are the workspace suite's, over doubles.
 
 load ../../tests/support/helpers
 
@@ -10,13 +12,8 @@ pin() {
     sed -n "s/^$1 = \"==\\(.*\\)\"\$/\\1/p" "$ROOT/pixi.toml"
 }
 
-@test "shell-toolchain installs the pinned tools and bashcov, and is idempotent" {
-    run "$ROOT/scripts/shell-toolchain.sh"
-    [ "$status" -eq 0 ]
-    run "$ROOT/scripts/shell-toolchain.sh"
-    [ "$status" -eq 0 ]
-
-    cd "$ROOT"
+@test "the installed shell toolchain is the pinned one" {
+    cd "$ROOT" || exit
     run pixi list --locked --json
     [ "$status" -eq 0 ]
     installed="$(node -e 'for (const p of JSON.parse(require("fs").readFileSync(0, "utf8"))) console.log(p.name + "=" + p.version)' <<<"$output")"
