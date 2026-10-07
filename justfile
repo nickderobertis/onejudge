@@ -217,6 +217,7 @@ _rust-format-check crate:
 # Boundaries first: a graph read that fails in a second, before a cold clippy build.
 _rust-lint crate features=gate_features:
     node scripts/check-project-boundaries.mjs {{crate}}
+    node scripts/check-target-commands.mjs {{crate}}
     cargo clippy --locked -p {{crate}} --all-targets {{ if features == "" { "" } else { "--features " + features } }} -- -D warnings
 
 _rust-build crate features=gate_features:
@@ -245,6 +246,13 @@ _rust-test crate features=gate_features binaries="" ignored="default":
     binaries="{{binaries}}"
     [ -z "$binaries" ] || args+=(-p "$binaries" -E 'package({{crate}})')
     exec cargo llvm-cov nextest --no-report "${args[@]}"
+
+# The real-llmlint tier's `test`, with ~/.local/bin — where `just setup-llmlint`
+# installs the floor — ahead of PATH, so that install wins over any other llmlint.
+# A recipe rather than the Nx target's own command, because cmd.exe cannot expand
+# `$PATH` the way a target's command would need it to.
+_llmlint-real-test:
+    PATH="$HOME/.local/bin:$PATH" just _rust-test onejudge-llmlint-real onejudge/sdk-schema "" all
 
 # Empty the shared profile directory before any instrumented suite writes to it,
 # so the aggregate never merges a profile an earlier run left behind — nor a
@@ -296,6 +304,7 @@ _py-format-check dir:
 
 _py-lint dir project:
     node scripts/check-project-boundaries.mjs {{project}}
+    node scripts/check-target-commands.mjs {{project}}
     {{py_sdk}} ruff check --no-cache {{dir}}
 
 [positional-arguments]

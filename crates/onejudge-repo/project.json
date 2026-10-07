@@ -17,16 +17,22 @@
       "command": "just _rust-format-check onejudge-repo"
     },
     "lint": {
-      "command": "just _rust-lint onejudge-repo ''",
+      "command": "just _rust-lint onejudge-repo \"\"",
       "inputs": [
         "default",
         "^default",
         "{workspaceRoot}/nx.json",
-        "{workspaceRoot}/scripts/check-project-boundaries.mjs"
+        "{workspaceRoot}/scripts/check-project-boundaries.mjs",
+        "{workspaceRoot}/scripts/check-target-commands.mjs"
       ]
     },
     "test": {
-      "command": "ONEJUDGE_COVERAGE=0 just _rust-test onejudge-repo ''",
+      "command": "just _rust-test onejudge-repo \"\"",
+      "options": {
+        "env": {
+          "ONEJUDGE_COVERAGE": "0"
+        }
+      },
       "inputs": [
         "default",
         "{workspaceRoot}/.github/**/*",

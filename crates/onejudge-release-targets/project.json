@@ -19,16 +19,22 @@
       "command": "just _rust-format-check onejudge-release-targets"
     },
     "lint": {
-      "command": "just _rust-lint onejudge-release-targets ''",
+      "command": "just _rust-lint onejudge-release-targets \"\"",
       "inputs": [
         "default",
         "^default",
         "{workspaceRoot}/nx.json",
-        "{workspaceRoot}/scripts/check-project-boundaries.mjs"
+        "{workspaceRoot}/scripts/check-project-boundaries.mjs",
+        "{workspaceRoot}/scripts/check-target-commands.mjs"
       ]
     },
     "test": {
-      "command": "ONEJUDGE_COVERAGE=0 just _rust-test onejudge-release-targets '' '' only",
+      "command": "just _rust-test onejudge-release-targets \"\" \"\" only",
+      "options": {
+        "env": {
+          "ONEJUDGE_COVERAGE": "0"
+        }
+      },
       "parallelism": false
     }
   }

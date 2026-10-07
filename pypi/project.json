@@ -27,12 +27,20 @@
       ]
     },
     "lint": {
-      "command": "node scripts/check-project-boundaries.mjs onejudge-pypi",
+      "executor": "nx:run-commands",
+      "options": {
+        "commands": [
+          "node scripts/check-project-boundaries.mjs onejudge-pypi",
+          "node scripts/check-target-commands.mjs onejudge-pypi"
+        ],
+        "parallel": false
+      },
       "inputs": [
         "default",
         "^default",
         "{workspaceRoot}/nx.json",
-        "{workspaceRoot}/scripts/check-project-boundaries.mjs"
+        "{workspaceRoot}/scripts/check-project-boundaries.mjs",
+        "{workspaceRoot}/scripts/check-target-commands.mjs"
       ]
     }
   }

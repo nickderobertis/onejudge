@@ -31,6 +31,7 @@
         "^default",
         "{workspaceRoot}/nx.json",
         "{workspaceRoot}/scripts/check-project-boundaries.mjs",
+        "{workspaceRoot}/scripts/check-target-commands.mjs",
         "{workspaceRoot}/schemas/*",
         "{workspaceRoot}/scripts/check-judge-seat-frames.sh"
       ]

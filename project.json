@@ -18,7 +18,8 @@
       "options": {
         "commands": [
           "just check-release-targets",
-          "node scripts/check-project-boundaries.mjs workspace"
+          "node scripts/check-project-boundaries.mjs workspace",
+          "node scripts/check-target-commands.mjs workspace"
         ],
         "parallel": false
       },
@@ -29,7 +30,8 @@
         "{workspaceRoot}/nx.json",
         "{workspaceRoot}/**/project.json",
         "{workspaceRoot}/**/Cargo.toml",
-        "{workspaceRoot}/scripts/check-project-boundaries.mjs"
+        "{workspaceRoot}/scripts/check-project-boundaries.mjs",
+        "{workspaceRoot}/scripts/check-target-commands.mjs"
       ]
     },
     "test": {

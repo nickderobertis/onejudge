@@ -25,11 +25,17 @@
         "default",
         "^default",
         "{workspaceRoot}/nx.json",
-        "{workspaceRoot}/scripts/check-project-boundaries.mjs"
+        "{workspaceRoot}/scripts/check-project-boundaries.mjs",
+        "{workspaceRoot}/scripts/check-target-commands.mjs"
       ]
     },
     "test": {
-      "command": "PATH=\"$HOME/.local/bin:$PATH\" ONEJUDGE_COVERAGE=0 just _rust-test onejudge-llmlint-real onejudge/sdk-schema '' all",
+      "command": "just _llmlint-real-test",
+      "options": {
+        "env": {
+          "ONEJUDGE_COVERAGE": "0"
+        }
+      },
       "dependsOn": [
         {
           "projects": [
