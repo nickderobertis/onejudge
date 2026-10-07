@@ -1458,7 +1458,10 @@ mod control {
     use oneharness_core::errors::OneharnessError;
     use oneharness_core::io::session as session_io;
 
-    use super::{detached_profile, emit_error, marker, publish_profile, wait_for_path, HARNESS};
+    use super::{detached_profile, emit_error, marker, wait_for_path, HARNESS};
+    // Only the Unix-only control server and lingering harness publish a profile.
+    #[cfg(unix)]
+    use super::publish_profile;
 
     /// Refuse a control ask the way `oneharness run` refuses one — a usage error
     /// on stderr before anything spawns, in oneharness's own words, so onejudge's

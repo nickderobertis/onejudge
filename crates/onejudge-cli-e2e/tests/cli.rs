@@ -68,9 +68,12 @@ const _: fn(&RunFailure) -> &Option<Telemetry> = |failure| &failure.telemetry;
 
 use onejudge_test_doubles::{self as doubles, support};
 
-use support::{await_path, descendant_handle, descendant_is_running, scratch_path};
+use support::scratch_path;
 #[cfg(unix)]
-use support::{kill_group, process_exists, OwnedProcessGroups};
+use support::{
+    await_path, descendant_handle, descendant_is_running, kill_group, process_exists,
+    OwnedProcessGroups,
+};
 
 fn echo_bin() -> String {
     doubles::echo_provider().to_string()

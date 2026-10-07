@@ -78,7 +78,10 @@ jobs:
           bun-version-file: package.json
       - uses: taiki-e/install-action@v2
         with:
-          tool: cargo-nextest
+          # cargo-llvm-cov although nothing is measured here: onejudge-repo's
+          # coverage_clean suite drives the real `_coverage-clean` recipe, which
+          # runs `cargo llvm-cov clean` (Unix only, so macOS needs it).
+          tool: cargo-nextest,cargo-llvm-cov
       - name: Select the gate tier
         id: tier
         shell: bash
