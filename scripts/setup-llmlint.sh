@@ -39,6 +39,9 @@ set -uo pipefail
 # the composed llmlint.yml relies on (it omits `files.include`).
 readonly LLMLINT_MIN="0.4.3"
 readonly BIN_DIR="$HOME/.local/bin"
+# The PATH the session handed in, before BIN_DIR leads it below: what decides
+# whether the session needs BIN_DIR persisted.
+readonly SESSION_PATH="$PATH"
 
 log() { printf 'setup-llmlint: %s\n' "$*" >&2; }
 
@@ -67,7 +70,7 @@ persist_session_env() {
         return 0
     }
     {
-        case ":${PATH}:" in *":${BIN_DIR}:"*) ;; *) printf 'export PATH=%q\n' "${BIN_DIR}:${PATH}" ;; esac
+        case ":${SESSION_PATH}:" in *":${BIN_DIR}:"*) ;; *) printf 'export PATH=%q\n' "${BIN_DIR}:${SESSION_PATH}" ;; esac
         # TODO: if your session harness differs from the committed oneharness.toml
         # default, select it here, e.g.:
         #   printf 'export ONEHARNESS_HARNESSES=%q\n' "claude-code"

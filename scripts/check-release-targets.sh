@@ -14,10 +14,11 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-# install.sh's literal `target="<triple>"` assignments.
-install_targets="$(grep -oE 'target="[a-z0-9_.-]+"' install.sh | sed -E 's/target="([^"]+)"/\1/' | sort -u)"
+# install.sh's literal `target="<triple>"` assignments. A file with none leaves
+# the list empty for the check below to name, rather than ending the script here.
+install_targets="$(grep -oE 'target="[a-z0-9_.-]+"' install.sh | sed -E 's/target="([^"]+)"/\1/' | sort -u || true)"
 # release-binaries.yml's matrix `target: <triple>` entries.
-matrix_targets="$(grep -oE '^[[:space:]]+target: [a-z0-9_.-]+' .github/workflows/release-binaries.yml | sed -E 's/^[[:space:]]+target: //' | sort -u)"
+matrix_targets="$(grep -oE '^[[:space:]]+target: [a-z0-9_.-]+' .github/workflows/release-binaries.yml | sed -E 's/^[[:space:]]+target: //' | sort -u || true)"
 
 if [ -z "$install_targets" ] || [ -z "$matrix_targets" ]; then
     echo "check-release-targets: could not extract target lists — did install.sh / release-binaries.yml change format?" >&2
