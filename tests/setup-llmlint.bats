@@ -70,6 +70,18 @@ EOF
     [ ! -s "$CLAUDE_ENV_FILE" ]
 }
 
+@test "a session env file it cannot write is logged, never claimed as exported, and startup still succeeds" {
+    uv_installs
+    export CLAUDE_ENV_FILE="$BATS_TEST_TMPDIR/missing/session.env"
+
+    run env PATH="$ONLY_PATH" "$ROOT/scripts/setup-llmlint.sh"
+
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"setup-llmlint: could not write CLAUDE_ENV_FILE ($CLAUDE_ENV_FILE; above), so later Bash calls find llmlint only once $BIN_DIR is on PATH (continuing)"* ]]
+    [[ "$output" != *"exported PATH"* ]]
+    [[ "$output" == *"setup-llmlint: ready (llmlint: llmlint 0.4.3)"* ]]
+}
+
 @test "a failed install and a failing doctor are logged, and startup still succeeds" {
     uv_installs
     "$DOUBLES/uv" tool install # leaves an llmlint, as an earlier session's install would

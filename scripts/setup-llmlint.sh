@@ -69,13 +69,16 @@ persist_session_env() {
         log "no CLAUDE_ENV_FILE (not a session); skipping env"
         return 0
     }
-    {
-        case ":${SESSION_PATH}:" in *":${BIN_DIR}:"*) ;; *) printf 'export PATH=%q\n' "${BIN_DIR}:${SESSION_PATH}" ;; esac
-        # TODO: if your session harness differs from the committed oneharness.toml
-        # default, select it here, e.g.:
-        #   printf 'export ONEHARNESS_HARNESSES=%q\n' "claude-code"
-        #   printf 'export ONEHARNESS_MODEL=%q\n' "claude-opus-4-8"
-    } >>"$CLAUDE_ENV_FILE"
+    local lines=""
+    case ":${SESSION_PATH}:" in *":${BIN_DIR}:"*) ;; *) lines+="$(printf 'export PATH=%q' "${BIN_DIR}:${SESSION_PATH}")"$'\n' ;; esac
+    # TODO: if your session harness differs from the committed oneharness.toml
+    # default, select it here, e.g.:
+    #   lines+="$(printf 'export ONEHARNESS_HARNESSES=%q' "claude-code")"$'\n'
+    #   lines+="$(printf 'export ONEHARNESS_MODEL=%q' "claude-opus-4-8")"$'\n'
+    if ! printf '%s' "$lines" >>"$CLAUDE_ENV_FILE"; then
+        log "could not write CLAUDE_ENV_FILE ($CLAUDE_ENV_FILE; above), so later Bash calls find llmlint only once $BIN_DIR is on PATH (continuing)"
+        return 0
+    fi
     log "exported PATH"
 }
 
