@@ -80,6 +80,17 @@ setup() {
     [ "${stderr_lines[1]}" = "ACTION: give crate/project.json the shell format, format-check, lint and test targets the root project.json has, or move the script" ]
 }
 
+@test "a file it cannot read fails rather than dropping out of the checks" {
+    printf '#!/usr/bin/env bash\necho hidden\n' >"$REPO/hidden"
+    chmod 000 "$REPO/hidden"
+
+    run --separate-stderr "$REPO/scripts/shell-files.sh" .
+
+    [ "$status" -eq 1 ]
+    [ "${stderr_lines[0]}" = "shell-files: hidden cannot be read, so whether it is a shell source is unknown" ]
+    [ "${stderr_lines[1]}" = "ACTION: restore read permission on hidden (chmod u+r), then re-run the recipe" ]
+}
+
 @test "a root that is not a project, or no root at all, is a usage error" {
     run "$REPO/scripts/shell-files.sh" nowhere
     [ "$status" -eq 2 ]

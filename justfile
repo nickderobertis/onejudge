@@ -371,6 +371,8 @@ _sh-coverage:
           printf("  %6.2f%%  %s (%d/%d lines)\n", file.covered_percent, file.project_filename.delete_prefix("/"),
                  file.covered_lines.size, file.covered_lines.size + file.missed_lines.size)
         end
+        puts "ACTION: add bats tests that run the uncovered lines of the scripts above (the HTML report marks them), " \
+             "then re-run just check --targets test,coverage"
       end
     end
     SimpleCov.collate(reports) do

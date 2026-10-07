@@ -56,6 +56,13 @@ is_shell() {
     case "$1" in
         *.sh | *.bash | *.bats) return 0 ;;
     esac
+    if [ ! -r "$1" ]; then
+        echo "shell-files: $1 cannot be read, so whether it is a shell source is unknown" >&2
+        echo "ACTION: restore read permission on $1 (chmod u+r), then re-run the recipe" >&2
+        exit 1
+    fi
+    # read fails only at end of file here (an empty file, or one line and no
+    # newline), which leaves `first` holding whatever line there was.
     local first=""
     IFS= read -r first <"$1" || true
     [[ $first =~ ^\#!.*[/[:space:]](ba)?sh([[:space:]]|$) || $first =~ ^\#!.*[/[:space:]]bats([[:space:]]|$) ]]
