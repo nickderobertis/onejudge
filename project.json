@@ -64,8 +64,8 @@
       "executor": "nx:run-commands",
       "options": {
         "commands": [
-          "just _coverage",
-          "just _sh-coverage"
+          "just _sh-coverage",
+          "just _coverage"
         ],
         "parallel": false
       },
