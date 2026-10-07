@@ -49,6 +49,15 @@ files="$(LC_ALL=C sort <<<"$files")" || die "sorting the file list failed (above
 # The project roots, deepest first, so the first match is a file's owner.
 roots="$(grep -E '(^|/)project\.json$' <<<"$files" | sed -e 's|/\{0,1\}project\.json$||' -e 's|^$|.|' | awk '{ print length, $0 }' | sort -rn | cut -d' ' -f2-)" \
     || die "the project roots could not be listed from git's file list (above)" "check that the root project.json is tracked (git ls-files project.json), then re-run the recipe"
+# The argument must be spelled as git lists the root, or no file would match it.
+case $'\n'"$roots"$'\n' in
+    *$'\n'"$root"$'\n'*) ;;
+    *)
+        echo "shell-files: '$root' is not spelled as git lists a project root, so it would own no file" >&2
+        echo "ACTION: pass the repository-relative directory as git lists it (e.g. scripts-e2e, not ./scripts-e2e), or . for the workspace root" >&2
+        exit 2
+        ;;
+esac
 
 owner() {
     local project

@@ -224,6 +224,19 @@ setup() {
     [ "$output" = "usage: scripts/shell-files.sh <project-root>" ]
 }
 
+@test "a project root spelled otherwise than git lists it is a usage error, not an empty list" {
+    mkdir -p "$REPO/tools"
+    shell_project tools >"$REPO/tools/project.json"
+    printf 'echo t\n' >"$REPO/tools/t.sh"
+
+    for spelling in ./tools tools/../tools; do
+        run "$REPO/scripts/shell-files.sh" "$spelling"
+        [ "$status" -eq 2 ]
+        [ "${lines[0]}" = "shell-files: '$spelling' is not spelled as git lists a project root, so it would own no file" ]
+        [ "${lines[1]}" = "ACTION: pass the repository-relative directory as git lists it (e.g. scripts-e2e, not ./scripts-e2e), or . for the workspace root" ]
+    done
+}
+
 @test "a checkout git cannot list fails, naming git and the next step" {
     rm -rf "$REPO/.git"
     cd "$BATS_TEST_TMPDIR"
