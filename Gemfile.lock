@@ -14,7 +14,6 @@ PLATFORMS
 
 DEPENDENCIES
   bashcov (= 4.0.0)
-  simplecov (= 1.1.1)
 
 BUNDLED WITH
    2.6.9
