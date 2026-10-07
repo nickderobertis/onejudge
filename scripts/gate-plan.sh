@@ -61,15 +61,28 @@ while [ $# -gt 0 ]; do
         --sweep) tier=sweep ;;
         --no-escalate) escalate=false ;;
         --targets)
-            [ $# -ge 2 ] || { echo "gate: --targets needs a list, e.g. --targets test,coverage" >&2; exit 2; }
-            targets="$2"; shift ;;
+            [ $# -ge 2 ] || {
+                echo "gate: --targets needs a list, e.g. --targets test,coverage" >&2
+                exit 2
+            }
+            targets="$2"
+            shift
+            ;;
         --targets=*) targets="${1#*=}" ;;
         --projects)
-            [ $# -ge 2 ] || { echo "gate: --projects needs a selector, e.g. --projects 'tag:lang:rust'" >&2; exit 2; }
-            projects="$2"; shift ;;
+            [ $# -ge 2 ] || {
+                echo "gate: --projects needs a selector, e.g. --projects 'tag:lang:rust'" >&2
+                exit 2
+            }
+            projects="$2"
+            shift
+            ;;
         --projects=*) projects="${1#*=}" ;;
         --print-plan) print_plan=true ;;
-        *) echo "gate: unknown argument '$1'" >&2; usage ;;
+        *)
+            echo "gate: unknown argument '$1'" >&2
+            usage
+            ;;
     esac
     shift
 done
@@ -81,14 +94,17 @@ plain_revision() {
     case "$1" in
         *[!A-Za-z0-9._/-]* | -* | .* | */ | *..* | *.lock | '') return 1 ;;
     esac
-    git check-ref-format --allow-onelevel "$1" >/dev/null 2>&1 ||
-        printf '%s' "$1" | grep -Eq '^[0-9a-f]{7,64}$'
+    git check-ref-format --allow-onelevel "$1" >/dev/null 2>&1 \
+        || printf '%s' "$1" | grep -Eq '^[0-9a-f]{7,64}$'
 }
 
 for target in $(tr ',' ' ' <<<"$targets"); do
     case " $KNOWN_TARGETS " in
         *" $target "*) ;;
-        *) echo "gate: unknown target '$target' (the gate's targets: $KNOWN_TARGETS)" >&2; exit 2 ;;
+        *)
+            echo "gate: unknown target '$target' (the gate's targets: $KNOWN_TARGETS)" >&2
+            exit 2
+            ;;
     esac
 done
 
@@ -138,7 +154,11 @@ if [ "$tier" = affected ] && [ "$escalate" = true ]; then
         [ -n "$path" ] || continue
         owned=false
         while IFS= read -r project_root; do
-            case "$path" in "$project_root"/*) owned=true; break ;; esac
+            case "$path" in "$project_root"/*)
+                owned=true
+                break
+                ;;
+            esac
         done <<<"$roots"
         if [ "$owned" = false ]; then
             echo "gate: $path belongs to the workspace root, which every project builds or is checked against, so the broader tier runs" >&2

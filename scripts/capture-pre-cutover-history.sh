@@ -28,7 +28,10 @@ oneharness_bin="${1:?$usage}"
 harness_bin="${2:?$usage}"
 case "$("$oneharness_bin" --version)" in
     "oneharness 0.20.0") ;;
-    *) echo "capture-pre-cutover-history: $oneharness_bin is not oneharness 0.20.0" >&2; exit 1 ;;
+    *)
+        echo "capture-pre-cutover-history: $oneharness_bin is not oneharness 0.20.0" >&2
+        exit 1
+        ;;
 esac
 
 project=/tmp/onejudge-pre-cutover-project
@@ -37,14 +40,14 @@ trap 'rm -rf "$work" "$project"' EXIT
 rm -rf "$project"
 mkdir -p "$project" "$work/xdg"
 printf 'harnesses = ["claude-code"]\n\n[harness.claude-code]\nbin = "%s"\n' "$harness_bin" \
-    > "$project/oneharness.toml"
+    >"$project/oneharness.toml"
 
 # Hermetic: no host config, labels or pointer file reach the record.
 if ! (cd "$project" && env -u ONEHARNESS_CONFIG -u ONEHARNESS_HISTORY_LABELS \
-        -u ONEHARNESS_HISTORY_POINTER_FILE XDG_CONFIG_HOME="$work/xdg" \
-        ONEHARNESS_HISTORY_DIR="$work/store" \
-        "$oneharness_bin" run --history --format json --prompt 'recorded before the cutover' \
-        > "$work/report.json" 2> "$work/stderr"); then
+    -u ONEHARNESS_HISTORY_POINTER_FILE XDG_CONFIG_HOME="$work/xdg" \
+    ONEHARNESS_HISTORY_DIR="$work/store" \
+    "$oneharness_bin" run --history --format json --prompt 'recorded before the cutover' \
+    >"$work/report.json" 2>"$work/stderr"); then
     echo "capture-pre-cutover-history: the oneharness run failed:" >&2
     cat "$work/stderr" >&2
     exit 1

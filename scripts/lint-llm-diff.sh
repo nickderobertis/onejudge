@@ -27,26 +27,33 @@ set -uo pipefail
 base_ref="origin/main"
 extra=()
 while [ $# -gt 0 ]; do
-  case "$1" in
-    --) shift; extra=("$@"); break ;;
-    *) base_ref="$1"; shift ;;
-  esac
+    case "$1" in
+        --)
+            shift
+            extra=("$@")
+            break
+            ;;
+        *)
+            base_ref="$1"
+            shift
+            ;;
+    esac
 done
 
 # Resolve a usable base: prefer the given ref, fall back to local `main`.
 if ! git rev-parse --verify --quiet "$base_ref" >/dev/null; then
-  if git rev-parse --verify --quiet main >/dev/null; then
-    echo "lint-llm-diff: '$base_ref' not found; falling back to 'main'" >&2
-    base_ref="main"
-  else
-    echo "lint-llm-diff: cannot resolve base ref '$base_ref' (and no 'main')" >&2
-    exit 2
-  fi
+    if git rev-parse --verify --quiet main >/dev/null; then
+        echo "lint-llm-diff: '$base_ref' not found; falling back to 'main'" >&2
+        base_ref="main"
+    else
+        echo "lint-llm-diff: cannot resolve base ref '$base_ref' (and no 'main')" >&2
+        exit 2
+    fi
 fi
 
 merge_base="$(git merge-base "$base_ref" HEAD)" || {
-  echo "lint-llm-diff: no merge-base between '$base_ref' and HEAD" >&2
-  exit 2
+    echo "lint-llm-diff: no merge-base between '$base_ref' and HEAD" >&2
+    exit 2
 }
 
 # Changed, still-present files (drop deletions: linting a deleted path errors).
@@ -55,8 +62,8 @@ present=()
 for f in "${files[@]}"; do [ -f "$f" ] && present+=("$f"); done
 
 if [ "${#present[@]}" -eq 0 ]; then
-  echo "lint-llm-diff: no changed files to lint (base ${base_ref} @ ${merge_base:0:9})" >&2
-  exit 0
+    echo "lint-llm-diff: no changed files to lint (base ${base_ref} @ ${merge_base:0:9})" >&2
+    exit 0
 fi
 
 echo "lint-llm-diff: linting ${#present[@]} changed file(s) vs ${base_ref} @ ${merge_base:0:9}" >&2

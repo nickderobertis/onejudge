@@ -33,8 +33,8 @@ while IFS= read -r commit; do
     fi
     subject=${message%%$'\n'*}
     case "$subject" in
-        feat:*|feat\(*\):*) prefix=feat ;;
-        fix:*|fix\(*\):*|perf:*|perf\(*\):*|refactor:*|refactor\(*\):*|build:*|build\(*\):*)
+        feat:* | feat\(*\):*) prefix=feat ;;
+        fix:* | fix\(*\):* | perf:* | perf\(*\):* | refactor:* | refactor\(*\):* | build:* | build\(*\):*)
             [[ -n "$prefix" ]] || prefix=fix
             ;;
     esac
