@@ -286,9 +286,9 @@ fn llmlint_job_violations(doc: &Value) -> Vec<String> {
 
 /// Why a gate job would not run the tier `scripts/ci-tier.mjs` selects, if it would
 /// not: it must check out full history (the merge base the affected tier is keyed
-/// off), record the script's output under a step id, and then — unless that tier is
-/// `skip` — run its recipe with that step's `base` as `NX_BASE` and its `flags` as
-/// the recipe's arguments.
+/// off), record the script's output under a step id, and then run its recipe —
+/// unconditionally — with that step's `base` as `NX_BASE` and its `flags` as the
+/// recipe's arguments.
 fn tier_routing_violations(doc: &Value) -> Vec<String> {
     let mut violations = Vec::new();
     for (id, recipe) in GATE_JOBS {
@@ -338,9 +338,10 @@ fn tier_routing_violations(doc: &Value) -> Vec<String> {
                 .and_then(Value::as_str)
                 .map(str::to_owned)
         };
-        let skip = format!("steps.{step_id}.outputs.tier != 'skip'");
-        if text(steps[run].get("if")) != Some(skip.as_str()) {
-            violations.push(format!("`{id}` must run `{recipe}` exactly when `{skip}`"));
+        if steps[run].get("if").is_some() {
+            violations.push(format!(
+                "`{id}` must run `{recipe}` on every run, at the selected tier"
+            ));
         }
         for (key, output) in [("NX_BASE", "base"), ("FLAGS", "flags")] {
             let expected = format!("${{{{ steps.{step_id}.outputs.{output} }}}}");
@@ -628,13 +629,17 @@ fn the_tier_routing_check_refuses_each_broken_property() {
         "{late:#?}"
     );
 
-    let ungated = rewrite("check", &|list| {
+    let skipped = rewrite("check", &|list| {
         let at = find(list, "just check");
-        list[at].as_mapping_mut().unwrap().remove("if");
+        set(
+            &mut list[at],
+            &["if"],
+            Value::from("github.event_name == 'pull_request'"),
+        );
     });
     assert!(
-        ungated.iter().any(|v| v.contains("exactly when")),
-        "{ungated:#?}"
+        skipped.iter().any(|v| v.contains("on every run")),
+        "{skipped:#?}"
     );
 
     let flagless = rewrite("test-os", &|list| {

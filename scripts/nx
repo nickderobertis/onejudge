@@ -19,7 +19,11 @@ export NX_NO_CLOUD=true
 bash scripts/node-modules.sh
 
 # The bin entry Nx's own package.json declares, since Nx has moved it between releases.
-nx_js="$(node -p "const p=require('path'),m=require.resolve('nx/package.json');p.join(p.dirname(m),require(m).bin.nx)")"
+if ! nx_js="$(node -p "const p=require('path'),m=require.resolve('nx/package.json');p.join(p.dirname(m),require(m).bin.nx)" 2>&1)"; then
+    echo "nx: cannot find the installed Nx: $nx_js" >&2
+    echo "ACTION: rm -rf node_modules && bash scripts/node-modules.sh, then re-run the recipe" >&2
+    exit 1
+fi
 nx=(node "$nx_js")
 
 if [ "${NX_SHOW_OUTPUT:-}" = 1 ]; then

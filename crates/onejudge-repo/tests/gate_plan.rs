@@ -87,9 +87,18 @@ fn workspace() -> (PathBuf, String) {
         r#"{"namedInputs":{"default":["{projectRoot}/**/*"]}}"#,
     );
     write(&dir.join("README.md"), "root\n");
+    // `lib` carries two targets of its own, for the wrapper's journeys.
     write(
         &dir.join("lib/project.json"),
-        &project("lib", "type:contract", &[]),
+        &serde_json::json!({
+            "name": "lib",
+            "tags": ["type:contract"],
+            "targets": {
+                "pass": { "command": "echo the pass target ran" },
+                "fail": { "command": "echo the fail target ran && exit 3" },
+            },
+        })
+        .to_string(),
     );
     write(&dir.join("lib/src.txt"), "lib\n");
     write(
@@ -337,4 +346,73 @@ fn an_unknown_target_or_a_missing_value_is_refused() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(stderr.contains(expected), "{flags:?}: {stderr}");
     }
+}
+
+#[test]
+fn an_uncommitted_root_file_escalates_unless_the_run_says_not_to() {
+    let (dir, base) = workspace();
+    // Untracked, never committed: still part of the change the gate is asked about.
+    write(&dir.join("NOTES.md"), "draft\n");
+    let (tier, ..) = read(&plan(&dir, Some(&base), &[]));
+    assert!(tier.contains("NOTES.md is a workspace-root file"), "{tier}");
+    // A push to main keeps the affected tier: its pull request already swept.
+    let (tier, projects, _) = read(&plan(&dir, Some(&base), &["--no-escalate"]));
+    assert_eq!(tier, format!("affected (base {base}, from NX_BASE={base})"));
+    assert_eq!(projects, "");
+}
+
+#[test]
+fn a_selector_naming_no_project_is_refused() {
+    let (dir, base) = workspace();
+    let output = plan(&dir, Some(&base), &["--projects", "tag:type:nothing"]);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&output.stderr)
+        .contains("--projects 'tag:type:nothing' names no project"));
+}
+
+#[test]
+fn the_nx_wrapper_is_one_line_on_success_and_the_whole_log_on_failure() {
+    let (dir, _) = workspace();
+    let nx = |target: &str| {
+        Command::new("bash")
+            .current_dir(&dir)
+            .args(["scripts/nx", "run", target])
+            .env_remove("NX_SHOW_OUTPUT")
+            .output()
+            .expect("bash runs")
+    };
+    let passed = nx("lib:pass");
+    let stdout = String::from_utf8_lossy(&passed.stdout);
+    assert!(
+        passed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&passed.stderr)
+    );
+    assert_eq!(stdout.lines().count(), 1, "{stdout}");
+    assert!(
+        stdout.starts_with("nx run lib:pass: ") && stdout.contains("(log: .nx/logs/nx."),
+        "{stdout}"
+    );
+    let log = stdout
+        .trim_end()
+        .rsplit("(log: ")
+        .next()
+        .unwrap()
+        .trim_end_matches(')');
+    assert!(std::fs::read_to_string(dir.join(log))
+        .unwrap()
+        .contains("the pass target ran"));
+
+    let failed = nx("lib:fail");
+    let stderr = String::from_utf8_lossy(&failed.stderr);
+    assert_eq!(failed.status.code(), Some(1), "{stderr}");
+    assert!(failed.stdout.is_empty());
+    assert!(
+        stderr.contains("the fail target ran"),
+        "the log was not printed: {stderr}"
+    );
+    assert!(
+        stderr.contains("FAILED — fix the findings above"),
+        "{stderr}"
+    );
 }

@@ -6,8 +6,7 @@
 # Tiers (scripts/ci-tier.mjs decides, from the event): pull requests and pushes to
 # main run the AFFECTED tier against an explicitly derived merge base; release-plz's
 # release pull request runs the BROADER tier, because releases are batched there
-# (AGENTS.md, "Commits, releases, and merging"), and the push that lands it is not
-# gated again.
+# (AGENTS.md, "Commits, releases, and merging").
 
 name: ci
 
@@ -51,7 +50,6 @@ jobs:
         id: tier
         run: node scripts/ci-tier.mjs >> "$GITHUB_OUTPUT"
       - name: Check
-        if: steps.tier.outputs.tier != 'skip'
         env:
           NX_BASE: ${{ steps.tier.outputs.base }}
           FLAGS: ${{ steps.tier.outputs.flags }}
@@ -88,7 +86,6 @@ jobs:
       - name: Test
         # test-fast (plain nextest, no coverage): coverage is enforced once, on
         # the Linux `check` job; these prove the engine + e2e are cross-platform.
-        if: steps.tier.outputs.tier != 'skip'
         shell: bash
         env:
           NX_BASE: ${{ steps.tier.outputs.base }}

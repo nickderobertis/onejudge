@@ -54,6 +54,15 @@ def main() -> None:
             raise AssertionError("SDK wheel CLI dependency differs from Cargo")
         if "Typing :: Typed" not in metadata.get_all("Classifier", []):
             raise AssertionError("SDK wheel METADATA lacks Classifier: Typing :: Typed")
+        # The wheel's own runtime requirements, minus the CLI the journey supplies
+        # as the freshly built binary: what a consumer's install resolves.
+        runtime = [
+            requirement
+            for requirement in metadata.get_all("Requires-Dist", [])
+            if not requirement.startswith("onejudge-cli")
+        ]
+        if not runtime:
+            raise AssertionError("SDK wheel METADATA declares no runtime requirement")
 
     environment = wheel_dir / "venv"
     subprocess.run(
@@ -66,7 +75,7 @@ def main() -> None:
         check=True,
     )
     subprocess.run(
-        ["uv", "pip", "install", "--offline", "--python", str(python), "jsonschema>=4.18,<5"],
+        ["uv", "pip", "install", "--offline", "--python", str(python), *runtime],
         check=True,
     )
     consumer = """

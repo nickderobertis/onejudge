@@ -5,9 +5,10 @@
 //! (`tests/workflows.rs` holds that wiring), so what it selects here is what CI
 //! runs: the broader tier on release-plz's release pull request — where onejudge's
 //! batched releases are swept — and the affected tier, against a base it derived
-//! with `git merge-base`, on every other pull request and every push to main but
-//! the one that lands the release commit, which that pull request already swept. A
-//! base it cannot derive falls back to the broader tier rather than to nothing.
+//! with `git merge-base`, on every other pull request and every push to main — a
+//! push never escalated to the sweep by a root file, because the pull request that
+//! landed the change already gated it at that tier. A base it cannot derive falls
+//! back to the broader tier rather than to nothing.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -142,43 +143,8 @@ fn a_push_to_main_runs_the_affected_tier_against_the_tip_it_replaced() {
     let event = serde_json::json!({ "ref": "refs/heads/main", "before": repo.base });
     assert_eq!(
         route(&repo, "push", &event),
-        ("affected".into(), repo.base.clone(), String::new())
+        ("affected".into(), repo.base.clone(), "--no-escalate".into())
     );
-}
-
-#[test]
-fn the_push_that_lands_release_plzs_release_commit_is_not_gated_again() {
-    let repo = repo();
-    git(&repo.dir, &["checkout", "-q", "main"]);
-    git(
-        &repo.dir,
-        &["merge", "-q", "--ff-only", "--no-edit", &repo.moved],
-    );
-    let push = |subject: &str, commits: usize| {
-        serde_json::json!({
-            "ref": "refs/heads/main",
-            "before": repo.base,
-            "head_commit": { "message": format!("{subject}\n\nbody") },
-            "commits": vec![serde_json::json!({}); commits],
-        })
-    };
-    assert_eq!(
-        route(&repo, "push", &push("chore: release v0.18.0 (#141)", 1)),
-        ("skip".into(), String::new(), String::new())
-    );
-    // Anything else on main is gated: a release commit pushed with another, or an
-    // ordinary commit that merely mentions a release.
-    for (subject, commits) in [
-        ("chore: release v0.18.0 (#141)", 2),
-        ("fix: release the lock on cancel (#142)", 1),
-        ("chore: release v0.18.0", 1),
-    ] {
-        assert_eq!(
-            route(&repo, "push", &push(subject, commits)),
-            ("affected".into(), repo.base.clone(), String::new()),
-            "{subject} x{commits}"
-        );
-    }
 }
 
 #[test]
@@ -264,4 +230,47 @@ fn the_release_branch_is_the_one_release_plzs_workflow_merges() {
     let repo = repo();
     let ordinary = pull_request("release-please--branches--main", &repo.moved);
     assert_eq!(route(&repo, "pull_request", &ordinary).0, "affected");
+}
+
+#[test]
+fn with_no_release_branch_to_read_every_pull_request_is_swept() {
+    // The script reads release-plz's branch prefix from the release-plz.yml beside
+    // it; a copy beside a workflow that names none cannot scope any pull request.
+    let repo = repo();
+    let copy = repo.dir.join("scripts/ci-tier.mjs");
+    std::fs::create_dir_all(copy.parent().unwrap()).unwrap();
+    std::fs::copy(script(), &copy).unwrap();
+    let workflows = repo.dir.join(".github/workflows");
+    std::fs::create_dir_all(&workflows).unwrap();
+    for workflow in [None, Some("name: release-plz\non: push\n")] {
+        let path = workflows.join("release-plz.yml");
+        match workflow {
+            Some(text) => std::fs::write(&path, text).unwrap(),
+            None => {
+                let _ = std::fs::remove_file(&path);
+            }
+        }
+        let payload = repo.dir.join("event.json");
+        std::fs::write(
+            &payload,
+            pull_request("nick/a-feature", &repo.moved).to_string(),
+        )
+        .unwrap();
+        let output = Command::new("node")
+            .arg(&copy)
+            .current_dir(&repo.dir)
+            .env("GITHUB_EVENT_NAME", "pull_request")
+            .env("GITHUB_EVENT_PATH", &payload)
+            .output()
+            .expect("node runs");
+        assert!(output.status.success());
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains("tier=sweep"),
+            "{workflow:?}"
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("names no release branch prefix"),
+            "{workflow:?}"
+        );
+    }
 }

@@ -23,7 +23,8 @@
 # no project owns — a root file is owned by the `workspace` project, which every
 # project builds or is checked against (the toolchain, the lockfiles, the
 # justfile, the docs and schemas the contract suites read, the CI), so a change
-# there is a change to every project.
+# there is a change to every project. `--no-escalate` keeps the affected tier for
+# a root-file change: a push to main, whose pull request already gated it.
 #
 # BROADER tier (`--sweep`): every gate-eligible project, plus the targets promoted
 # out of the affected tier (`audit`, which contacts the advisory database).
@@ -40,7 +41,7 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 STATIC_TARGETS="format-check lint"
 
 usage() {
-    echo "usage: scripts/gate-plan.sh [--sweep] [--targets a,b] [--projects SELECTOR] [--print-plan]" >&2
+    echo "usage: scripts/gate-plan.sh [--sweep] [--no-escalate] [--targets a,b] [--projects SELECTOR] [--print-plan]" >&2
     exit 2
 }
 
@@ -49,12 +50,14 @@ usage() {
 KNOWN_TARGETS="format-check lint typecheck generate-check doc build test coverage audit"
 
 tier=affected
+escalate=true
 targets=""
 projects=""
 print_plan=false
 while [ $# -gt 0 ]; do
     case "$1" in
         --sweep) tier=sweep ;;
+        --no-escalate) escalate=false ;;
         --targets)
             [ $# -ge 2 ] || { echo "gate: --targets needs a list, e.g. --targets test,coverage" >&2; exit 2; }
             targets="$2"; shift ;;
@@ -110,9 +113,9 @@ if [ "$tier" = affected ]; then
     fi
 fi
 
-if [ "$tier" = affected ]; then
+if [ "$tier" = affected ] && [ "$escalate" = true ]; then
     # Every project's root but the workspace's own (`.`), to find a changed file
-    # that only the root project owns.
+    # — committed, staged, unstaged or untracked — that only the root project owns.
     roots="$(git ls-files --cached --others --exclude-standard -- '*project.json' |
         sed -n 's|/project\.json$||p')"
     while IFS= read -r path; do
@@ -141,7 +144,13 @@ else
     selected="$everything"
 fi
 if [ -n "$projects" ]; then
-    selected="$(comm -12 <(printf '%s\n' "$selected") <(listed --projects="$projects" --json))"
+    # Captured first, so a selector Nx cannot resolve fails here rather than inside
+    # a process substitution, where its status would be lost to an empty plan.
+    if ! matching="$(listed --projects="$projects" --json)" || [ -z "$matching" ]; then
+        echo "gate: --projects '$projects' names no project (see \`just graph\` for the projects and their tags)" >&2
+        exit 2
+    fi
+    selected="$(comm -12 <(printf '%s\n' "$selected") <(printf '%s\n' "$matching"))"
 fi
 # The external tiers are the projects tagged `type:external`: the tag is the one
 # declaration, so a new external tier is out of the gate the moment it is tagged.

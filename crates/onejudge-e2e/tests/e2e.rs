@@ -442,11 +442,15 @@ fn command_provider_rejects_a_wrong_typed_verdict() {
 
 #[test]
 fn command_provider_rejects_a_wrong_protocol_reply() {
-    // Point the JSON-lines CommandProvider at the fake-oneharness binary, which
+    // Point the JSON-lines CommandProvider at `oneharness run` (the fake), which
     // speaks a different protocol: its report has no `message` field, so the
     // response fails to parse and surfaces as a classified protocol error rather
     // than a silent empty turn.
-    let provider = CommandProvider::new(vec![doubles::fake_oneharness().to_string()]).unwrap();
+    let provider = CommandProvider::new(vec![
+        doubles::fake_oneharness().to_string(),
+        "run".to_string(),
+    ])
+    .unwrap();
     let engine = Engine::new(&provider, settings());
     let err = engine
         .run(&Conversation::single_turn(skill_with("x"), "hi"))

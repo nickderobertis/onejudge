@@ -4138,7 +4138,6 @@ struct PostureRun {
     env: Vec<(String, String)>,
 }
 
-/// What one posture run produced.
 struct PostureOutcome {
     code: Option<i32>,
     stdout: String,

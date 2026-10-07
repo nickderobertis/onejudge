@@ -52,7 +52,19 @@ function nxGraph() {
       env: { ...process.env, NX_DAEMON: "false", NX_NO_CLOUD: "true" },
       stdio: ["ignore", "ignore", "pipe"],
     });
-    return JSON.parse(readFileSync(file, "utf8")).graph;
+    const graph = JSON.parse(readFileSync(file, "utf8")).graph;
+    const nodes = Object.values(graph?.nodes ?? {});
+    const shaped =
+      graph?.nodes &&
+      typeof graph.nodes === "object" &&
+      graph.dependencies &&
+      typeof graph.dependencies === "object" &&
+      nodes.every((node) => typeof node?.data?.root === "string") &&
+      Object.values(graph.dependencies).every(
+        (deps) => Array.isArray(deps) && deps.every((dep) => typeof dep?.target === "string"),
+      );
+    if (!shaped) throw new Error("its `nodes` / `dependencies` are not the shape this check reads");
+    return graph;
   } catch (error) {
     return failedRun(
       "computing the Nx project graph (`nx graph`)",
@@ -82,6 +94,24 @@ function cargoEdges() {
     );
   }
   const metadata = JSON.parse(output);
+  const shaped =
+    Array.isArray(metadata?.packages) &&
+    metadata.packages.every(
+      (pkg) =>
+        typeof pkg?.name === "string" &&
+        typeof pkg.manifest_path === "string" &&
+        Array.isArray(pkg.dependencies) &&
+        pkg.dependencies.every(
+          (dep) => typeof dep?.name === "string" && (dep.path === undefined || typeof dep.path === "string"),
+        ),
+    );
+  if (!shaped) {
+    failedRun(
+      "reading the Cargo workspace (`cargo metadata`)",
+      "its packages are not the shape this check reads",
+      "check `cargo metadata --format-version 1 --no-deps` with this toolchain (rust-toolchain.toml)",
+    );
+  }
   const edges = [];
   for (const pkg of metadata.packages) {
     const from = relative(root, dirname(pkg.manifest_path));

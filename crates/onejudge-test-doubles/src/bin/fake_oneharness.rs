@@ -653,17 +653,12 @@ fn failure_kind(token: &str) -> FailureKind {
     })
 }
 
-/// oneharness's terminal status for a `[[status:TOKEN]]` marker.
+/// oneharness's terminal status for a `[[status:TOKEN]]` marker, read through
+/// oneharness's own serde spelling like [`failure_kind`], so the double accepts
+/// exactly the statuses the report declares.
 fn status(token: &str) -> Status {
-    match token {
-        "ok" => Status::Ok,
-        "nonzero" => Status::Nonzero,
-        "timeout" => Status::Timeout,
-        "spawn-error" => Status::SpawnError,
-        "skipped" => Status::Skipped,
-        "planned" => Status::Planned,
-        other => emit_error(&format!("`{other}` is not a oneharness run status")),
-    }
+    serde_json::from_value(serde_json::Value::String(token.to_string()))
+        .unwrap_or_else(|_| emit_error(&format!("`{token}` is not a oneharness run status")))
 }
 
 /// Write one JSON document as a line on stdout, flushed immediately.

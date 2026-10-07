@@ -81,6 +81,8 @@
 
 use std::io::Write as _;
 use std::path::Path;
+
+use oneharness_core::domain::report::OutputFormat;
 use std::time::{Duration, Instant};
 
 /// Shared with the other doubles, because the detached children that must stay
@@ -118,17 +120,9 @@ fn main() {
         record_invocation(&path, &args, &stdin);
     }
     let evaluator = prompt.contains("EVIDENCE CONTRACT (");
-    let stream = args
-        .windows(2)
-        .any(|w| w[0] == "--output-format" && w[1] == "stream-json");
-    // OpenCode is the one harness here whose argv carries no `-p`/`--output-format`
-    // at all: oneharness builds `run --format json <message>`. Reading the shape
-    // rather than being told which harness to be keeps the double honest — it plays
-    // whichever one the registry entry under test actually invoked.
-    let opencode = args.first().map(String::as_str) == Some("run")
-        && args
-            .windows(2)
-            .any(|w| w[0] == "--format" && w[1] == "json");
+    let invoked = invocation(&args);
+    let stream = matches!(invoked, Invocation::ClaudeCode { stream: true });
+    let opencode = matches!(invoked, Invocation::OpenCode);
 
     let mut reply = restrictive_evaluator_reply(&prompt, &args)
         .or_else(|| artifact_evaluator_reply(&prompt, &args))
@@ -408,19 +402,64 @@ fn steering(args: &[String]) -> (String, String) {
         if let Err(e) = read {
             fail(&format!("could not read the prompt from stdin: {e}"));
         }
-        // A control stream's prompt frame is one JSON object on one line.
-        if format[1] == "stream-json"
-            && !serde_json::from_str::<serde_json::Value>(&buffer)
-                .is_ok_and(|frame| frame.is_object())
-        {
-            fail(&format!(
-                "the stream-json prompt frame is not a JSON object: {buffer:?}"
-            ));
+        if format[1] == "stream-json" {
+            check_control_frame(&buffer);
         }
         text.push('\u{1f}');
         text.push_str(&buffer);
     }
     (text, buffer)
+}
+
+/// Which harness oneharness spawned this binary as, read from the argv shape its
+/// registry entry makes it build — never from a flag of this double's own.
+enum Invocation {
+    /// `-p … --output-format <format>`, `stream` when the format is `stream-json`.
+    ClaudeCode { stream: bool },
+    /// `run --format json <message>`: the one harness here whose argv carries no
+    /// `-p` / `--output-format` at all.
+    OpenCode,
+}
+
+/// The harness `args` invoke, or a refusal naming why they are neither: an
+/// invocation oneharness would never build is one this stand-in will not answer.
+fn invocation(args: &[String]) -> Invocation {
+    use oneharness_core::domain::harness::by_id;
+    let value = |flag: &str| {
+        args.windows(2)
+            .find(|pair| pair[0] == flag)
+            .map(|pair| pair[1].as_str())
+    };
+    if args.first().map(String::as_str) == Some("run") {
+        if value("--format") != Some("json") {
+            fail(&format!(
+                "opencode is invoked `run --format json …`, not {args:?}"
+            ));
+        }
+        return Invocation::OpenCode;
+    }
+    if !args.iter().any(|arg| arg == "-p") {
+        fail(&format!(
+            "neither claude-code's `-p …` nor opencode's `run …`, as oneharness builds them: {args:?}"
+        ));
+    }
+    let Some(spec) = by_id("claude-code") else {
+        fail("oneharness's registry no longer declares claude-code");
+    };
+    let declared: Vec<OutputFormat> = std::iter::once(spec.output_format)
+        .chain(spec.events_format)
+        .chain(spec.session_formats.iter().copied())
+        .collect();
+    let format = value("--output-format")
+        .unwrap_or_else(|| fail("claude-code is always given --output-format by oneharness"));
+    let Some(format) = declared.iter().find(|declared| declared.as_str() == format) else {
+        fail(&format!(
+            "`--output-format {format}` is not one claude-code's registry entry declares"
+        ));
+    };
+    Invocation::ClaudeCode {
+        stream: *format == OutputFormat::StreamJson,
+    }
 }
 
 /// The native session token this run was told to continue, or `None` when it
@@ -507,6 +546,30 @@ fn emit(line: &str) {
     writeln!(out, "{line}")
         .and_then(|()| out.flush())
         .unwrap_or_else(|e| fail(&format!("could not write to stdout: {e}")));
+}
+
+/// Refuse a control stream whose first line is not exactly the frame
+/// oneharness's own `prompt_frame` renders for the prompt it carries.
+fn check_control_frame(line: &str) {
+    use oneharness_core::domain::control::{prompt_frame, ControlShape};
+    let prompt = serde_json::from_str::<serde_json::Value>(line)
+        .ok()
+        .and_then(|frame| {
+            frame
+                .pointer("/message/content/0/text")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string)
+        })
+        .unwrap_or_else(|| {
+            fail(&format!(
+                "the control stream's first line carries no prompt: {line:?}"
+            ))
+        });
+    if prompt_frame(ControlShape::ClaudeControlRequest, &prompt).as_deref() != Some(line) {
+        fail(&format!(
+            "the control stream's first line is not oneharness's prompt frame: {line:?}"
+        ));
+    }
 }
 
 /// `value` as a JSON string literal, every character escaped as JSON requires.

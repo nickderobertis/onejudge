@@ -6,7 +6,6 @@
 // Prints `tier=…`, `base=…` and `flags=…` lines; the workflow passes `base` to the
 // recipe as NX_BASE and `flags` as its arguments (`just check $flags`), so the
 // tier is a flag on the one recipe and never a second implementation of the gate.
-// `tier=skip` means the commit was already gated and the gate step does not run.
 //
 // onejudge batches releases: release-plz's release pull request accumulates every
 // merge since the last release and auto-merges once green, so the commit that
@@ -17,10 +16,11 @@
 //   * any other pull request                       -> the affected tier, against
 //     the merge base of the pull request's base commit and the checked-out head;
 //   * a push to main                               -> the affected tier, against
-//     the merge base of the commit the push replaced and the pushed head —
-//     except a push of exactly release-plz's release commit, which is skipped:
-//     its tree is the one its release pull request just swept, and its version
-//     and changelog edits are root files, which would sweep it a second time;
+//     the merge base of the commit the push replaced and the pushed head, and
+//     never escalated to the sweep by a root file (`--no-escalate`): the pull
+//     request that landed the change already ran it at that tier, and the release
+//     pull request — whose version and changelog edits are root files — was
+//     already swept, so a second sweep would gate the same change twice;
 //   * anything else (a dispatch, a schedule, a tag) -> the broader tier.
 //
 // A base that cannot be derived — a first push, a force-push whose old tip is not
@@ -34,11 +34,6 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
-
-// The subject release-plz's release pull request squash-merges as: release-plz's
-// default title, which nothing in this repository configures. If release-plz ever
-// titles it differently, the push that lands it is gated again — the safe side.
-const RELEASE_COMMIT = /^chore: release v\d+\.\d+\.\d+\S* \(#\d+\)$/;
 
 /**
  * The branch release-plz opens its release pull request from, read from the
@@ -60,11 +55,11 @@ function note(message) {
   console.error(`ci-tier: ${message}`);
 }
 
-function emit(tier, base, why) {
+function emit(tier, base, why, flags = tier === "sweep" ? "--sweep" : "") {
   note(`${tier} tier: ${why}`);
   console.log(`tier=${tier}`);
   console.log(`base=${base ?? ""}`);
-  console.log(`flags=${tier === "sweep" ? "--sweep" : ""}`);
+  console.log(`flags=${flags}`);
   process.exit(0);
 }
 
@@ -109,13 +104,9 @@ if (name === "pull_request") {
 if (name === "push") {
   const ref = event.ref ?? "";
   if (ref === "refs/heads/main") {
-    const subject = String(event.head_commit?.message ?? "").split("\n")[0];
-    if (RELEASE_COMMIT.test(subject) && Array.isArray(event.commits) && event.commits.length === 1) {
-      emit("skip", null, `release-plz's release commit (${subject}) was swept on its release pull request`);
-    }
     const base = mergeBase(event.before);
     if (!base) emit("sweep", null, "the commit this push replaced is not in this checkout");
-    emit("affected", base, `push to main, merge base ${base} with the replaced tip`);
+    emit("affected", base, `push to main, merge base ${base} with the replaced tip`, "--no-escalate");
   }
 }
 

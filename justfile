@@ -21,6 +21,12 @@ coverage_min := "95"
 # the aggregate coverage report merges one build of each function.
 gate_features := "onejudge/sdk-schema"
 
+# Every rustc warning is an error in every gate step — builds, tests, coverage,
+# the schema checks and the wheel — not only under clippy: one flag set
+# everywhere, so no step's artifacts are rebuilt under different flags.
+# Dependencies keep Cargo's `--cap-lints allow`.
+export RUSTFLAGS := trim(env("RUSTFLAGS", "") + " -D warnings")
+
 # `uv` and `llmlint` install into ~/.local/bin, which a CI runner's PATH may not
 # carry; appended, so anything already on PATH still wins.
 export PATH := if os_family() == "windows" { env("PATH") } else { env("PATH") + ":" + home_directory() + "/.local/bin" }
@@ -256,7 +262,7 @@ _audit:
 # The MSRV build of every target the crate's own check covered before its suites
 # moved out — the library, its tests, the doubles, and the engine's e2e suites.
 _msrv:
-    RUSTFLAGS="-D warnings" cargo +1.89.0 check --locked -p onejudge -p onejudge-test-doubles -p onejudge-e2e --all-targets
+    cargo +1.89.0 check --locked -p onejudge -p onejudge-test-doubles -p onejudge-e2e --all-targets
 
 _doc:
     RUSTDOCFLAGS="-D warnings" cargo doc --locked --no-deps -p onejudge --features sdk-schema
