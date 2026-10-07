@@ -69,12 +69,13 @@ fn repo() -> Repo {
     Repo { dir, base, moved }
 }
 
-/// The script's `key=value` lines for `event` as `name`, from `repo`'s checkout.
+/// `(tier, base, flags)`: the three `key=value` lines the workflows hand to the
+/// gate recipe.
 fn route(repo: &Repo, name: &str, event: &serde_json::Value) -> (String, String, String) {
     route_payload(repo, name, &event.to_string())
 }
 
-/// The same, for a payload file holding exactly `payload`.
+/// Takes the payload as raw text, so a journey can hand over one that is not JSON.
 fn route_payload(repo: &Repo, name: &str, payload_text: &str) -> (String, String, String) {
     let payload = repo.dir.join(format!("{name}-event.json"));
     std::fs::write(&payload, payload_text).unwrap();

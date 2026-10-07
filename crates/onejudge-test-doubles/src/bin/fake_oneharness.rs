@@ -545,7 +545,6 @@ fn inline_telemetry(is_agent: bool, prompt: &str) -> Vec<(&'static str, Value)> 
     )]
 }
 
-/// A successful result carrying `text`.
 fn ok_result(text: String, prompt: &str) -> RunResult {
     let mut result = base_result(HARNESS);
     result.text = Some(text);
@@ -553,7 +552,6 @@ fn ok_result(text: String, prompt: &str) -> RunResult {
     result
 }
 
-/// The envelope every result shares.
 fn base_result(harness_id: &str) -> RunResult {
     let (harness, variant) = match harness_id.split_once(':') {
         Some((base, variant)) => (base.to_string(), Some(variant.to_string())),
@@ -661,7 +659,6 @@ fn status(token: &str) -> Status {
         .unwrap_or_else(|_| emit_error(&format!("`{token}` is not a oneharness run status")))
 }
 
-/// Write one JSON document as a line on stdout, flushed immediately.
 fn write_line(value: &Value) {
     write_raw(&format!("{value}\n"));
 }
@@ -1003,9 +1000,9 @@ fn write_line_checked(value: &Value) -> std::io::Result<()> {
     stdout.flush()
 }
 
-/// A real oneharness never exits non-zero on a *harness* failure without also
-/// reporting it in the JSON. So a stdin read failure (a harness-runner bug) is the
-/// path that exits 2, matching oneharness's own usage/spawn-error exit code.
+/// A failure of this process itself exits 2, oneharness's own usage/spawn-error
+/// code; a *harness* failure is reported in the JSON instead, as real oneharness
+/// reports it.
 fn emit_error(message: &str) -> ! {
     eprintln!("fake-oneharness: {message}");
     std::process::exit(2);
@@ -1112,7 +1109,6 @@ impl RunArgs {
             .map(String::as_str)
     }
 
-    /// Every value a repeatable `flag` was given, in order.
     fn values(&self, flag: &str) -> &[String] {
         self.values.get(flag).map_or(&[], Vec::as_slice)
     }
@@ -1191,7 +1187,8 @@ fn tool_event(index: usize, command: &str) -> ActionEvent {
     }
 }
 
-/// Extract a `[[marker:ARG]]` directive's argument from `text`.
+/// Only the first occurrence counts; the repeatable markers are read by
+/// [`activity`] instead.
 fn marker<'a>(text: &'a str, name: &str) -> Option<&'a str> {
     let open = format!("[[{name}:");
     let start = text.find(&open)? + open.len();
@@ -1320,19 +1317,19 @@ fn judge_text(prompt: &str) -> String {
     let criterion = prompt
         .lines()
         .find_map(|l| l.strip_prefix("Criterion: "))
-        .unwrap_or("")
+        .unwrap_or_else(|| emit_error("a judge prompt with no `Criterion:` line"))
         .trim()
         .to_lowercase();
     let transcript = prompt
         .split("lines):\n")
         .nth(1)
         .and_then(|after| after.split("\n\n").next())
-        .unwrap_or("")
+        .unwrap_or_else(|| emit_error("a judge prompt with no `Transcript (… lines):` section"))
         .to_lowercase();
     let matched = !criterion.is_empty() && transcript.contains(&criterion);
 
     if prompt.contains("Score how well") {
-        let (min, max) = parse_scale(prompt);
+        let Scale { min, max } = parse_scale(prompt);
         let value = if matched { max } else { min };
         format!("{{\"value\": {value}, \"reason\": \"fake numeric\"}}")
     } else {
@@ -1402,10 +1399,16 @@ fn supervisor_text(prompt: &str) -> String {
     }
 }
 
-/// Parse `(min, max)` out of the numeric judge prompt's `scale from X to Y`
-/// phrase. A numeric prompt that does not state its scale is a broken producer,
-/// so it is refused rather than scored on a scale this double made up.
-fn parse_scale(prompt: &str) -> (f64, f64) {
+/// A numeric judge's scale: finite bounds, `min` no greater than `max`.
+struct Scale {
+    min: f64,
+    max: f64,
+}
+
+/// Parse the scale out of the numeric judge prompt's `scale from X to Y` phrase.
+/// A numeric prompt that does not state a usable scale is a broken producer, so
+/// it is refused rather than scored on a scale this double made up.
+fn parse_scale(prompt: &str) -> Scale {
     let Some(tail) = prompt.split("scale from ").nth(1) else {
         emit_error("a numeric judge prompt with no `scale from X to Y`");
     };
@@ -1422,7 +1425,11 @@ fn parse_scale(prompt: &str) -> (f64, f64) {
     if tokens.get(1) != Some(&"to") {
         emit_error(&format!("the numeric scale `{tail:.40}` is not `X to Y`"));
     }
-    (bound(0), bound(2))
+    let (min, max) = (bound(0), bound(2));
+    if !(min.is_finite() && max.is_finite() && min <= max) {
+        emit_error(&format!("the numeric scale {min} to {max} is not a range"));
+    }
+    Scale { min, max }
 }
 
 /// Out-of-band turn control, modelled with **oneharness's own** control values:
@@ -1784,7 +1791,8 @@ mod engine {
     /// engine sees it.
     pub(super) const ARGV_LOG_ENV: &str = "ONEJUDGE_FAKE_ONEHARNESS_ARGV_LOG";
 
-    /// Run `argv` through the real engine and exit with what it decided.
+    /// Serve `run` or `config` through the linked engine, and exit with what it
+    /// decided.
     pub(super) fn run(argv: &[String]) -> ! {
         if let Some(log) = std::env::var_os(ARGV_LOG_ENV) {
             use std::io::Write as _;

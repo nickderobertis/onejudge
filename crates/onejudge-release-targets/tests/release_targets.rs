@@ -19,9 +19,7 @@ use onejudge_repo::schema;
 /// a required key, this gate keeps passing, and the defect is met by a consumer
 /// whose reader refuses a document this repository published. There is no offline
 /// way to close that — the definition is in another repository — so it is
-/// reconciled the way every other answer needing a network is reached here: an
-/// `#[ignore]`-d tier, out of the deterministic gate, run by
-/// `just test-release-targets`.
+/// reconciled here, in the network tier.
 ///
 /// It reconciles against the *implementation* that defines the schema rather than
 /// against `docs/contract.md`'s prose beside it, because the implementation is what
@@ -36,7 +34,7 @@ use onejudge_repo::schema;
 #[test]
 #[ignore = "network: reads nickderobertis/onevcs; run via `just test-release-targets`"]
 fn the_restated_schema_matches_the_canonical_definition() {
-    /// Where the one implementation of the canonical schema lives.
+    /// Read at `HEAD`, not a pinned commit: the point is to hear upstream move.
     const CANONICAL: &str = "https://raw.githubusercontent.com/nickderobertis/onevcs/HEAD";
 
     /// One upstream file, fetched with the tool the probe uses for the same reason:
@@ -83,7 +81,6 @@ fn the_restated_schema_matches_the_canonical_definition() {
             })
     }
 
-    /// Every quoted string of a Rust array literal.
     fn strings(literal: &str) -> Vec<String> {
         let mut items = Vec::new();
         let mut rest = literal;
@@ -210,12 +207,10 @@ mod probe {
     use onejudge_repo::declared_targets;
     use onejudge_repo::probe::{assert_no_release_yet, probe, BOUND};
 
-    /// Network tier: what crates.io and PyPI serve for every declared target right
-    /// now. `#[ignore]`-d like the rest of this repository's network-touching
-    /// verification — the gate is offline. Run with `just test-release-targets`.
+    /// What crates.io and PyPI serve for every declared target right now.
     #[test]
     #[ignore = "network: reads the public registries; run via `just test-release-targets`"]
-    fn every_declared_target_reports_the_version_its_registry_serves() {
+    fn the_probe_answers_a_version_for_every_declared_target() {
         for target in declared_targets() {
             let (output, elapsed) = probe(&[&target]);
             let stderr = String::from_utf8_lossy(&output.stderr);

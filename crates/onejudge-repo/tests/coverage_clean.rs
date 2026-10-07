@@ -15,7 +15,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-/// A scratch target directory holding one stale profile and one other file.
+/// A scratch target directory holding one stale profile, and one other file that
+/// proves the recipe clears profiles only.
 fn seeded() -> PathBuf {
     static NEXT: AtomicUsize = AtomicUsize::new(0);
     let target = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!(
@@ -31,7 +32,8 @@ fn seeded() -> PathBuf {
     target
 }
 
-/// `just _coverage-clean` from the workspace root, building into `target`.
+/// `coverage` of `None` unsets `ONEJUDGE_COVERAGE` rather than inheriting it, so
+/// the caller's own environment cannot pick the branch under test.
 fn clean(target: &Path, coverage: Option<&str>) {
     let mut command = Command::new("just");
     command

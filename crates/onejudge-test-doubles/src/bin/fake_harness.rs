@@ -149,7 +149,7 @@ fn main() {
         // OpenCode's `run --format json` answers with one JSON event per line; the
         // visible answer is the `text` parts, and `sessionID` is the handle
         // oneharness stores for `--session`. Tool parts are not modelled: the
-        // journeys that need events drive the claude-code shape above.
+        // journeys that need events drive the claude-code shape below.
         emit(&format!(
             r#"{{"type":"text","sessionID":"fake-opencode-session","part":{{"type":"text","text":{}}}}}"#,
             json_string(&reply)
@@ -474,7 +474,6 @@ fn resumed_on(args: &[String]) -> Option<String> {
         .map(|w| w[1].clone())
 }
 
-/// The first `[[name:value]]` in `text`, if any.
 fn marker(text: &str, name: &str) -> Option<String> {
     markers(text, name).into_iter().next()
 }
@@ -525,7 +524,6 @@ fn activity(text: &str) -> Vec<(Activity, String)> {
         .collect()
 }
 
-/// Every `[[name:value]]` in `text`, in order.
 fn markers(text: &str, name: &str) -> Vec<String> {
     let open = format!("[[{name}:");
     let mut out = Vec::new();
@@ -572,7 +570,6 @@ fn check_control_frame(line: &str) {
     }
 }
 
-/// `value` as a JSON string literal, every character escaped as JSON requires.
 fn json_string(value: &str) -> String {
     serde_json::Value::from(value).to_string()
 }

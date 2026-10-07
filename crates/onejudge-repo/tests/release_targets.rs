@@ -35,12 +35,10 @@ use std::path::{Path, PathBuf};
 
 use onejudge_repo::{declaration, declaration_path, declared_targets, read, repo_root, schema};
 
-/// A TOML manifest, parsed.
 fn manifest(path: &Path) -> toml::Value {
     toml::from_str(&read(path)).unwrap_or_else(|err| panic!("parsing {}: {err}", path.display()))
 }
 
-/// A string at `table.key` of a parsed manifest.
 fn field<'a>(document: &'a toml::Value, table: &str, key: &str) -> Option<&'a str> {
     document.get(table)?.get(key)?.as_str()
 }
@@ -71,7 +69,6 @@ fn find(dir: &Path, file_name: &str, found: &mut Vec<PathBuf>) {
     }
 }
 
-/// The `.github/workflows/*.yml` files, read.
 fn workflows(root: &Path) -> Vec<(PathBuf, String)> {
     let dir = root.join(".github/workflows");
     let mut entries: Vec<PathBuf> = fs::read_dir(&dir)
@@ -309,7 +306,8 @@ fn drift(declared: &BTreeSet<String>, published: &BTreeSet<String>) -> Vec<Strin
     disagreements
 }
 
-/// The identifiers one declaration document declares, read by the real reader.
+/// Read through `schema::parse`, the reader the real document is held to, so an
+/// edited fixture is read exactly as the real one is.
 fn declared_in(document: &str, origin: &str) -> BTreeSet<String> {
     schema::parse(document, origin)
         .unwrap_or_else(|failure| panic!("{failure}"))
@@ -342,8 +340,6 @@ fn without_target(document: &str, id: &str) -> String {
     kept
 }
 
-/// The whole point: this repository's declaration and its release configuration
-/// agree.
 #[test]
 fn the_declaration_matches_the_real_release_configuration() {
     let declared: BTreeSet<String> = declared_targets().into_iter().collect();
@@ -674,9 +670,7 @@ mod probe {
         assert_not_answered(&path, &["onejudge"]);
         // A registry this repository publishes nothing to.
         assert_not_answered(&path, &["npm:onejudge"]);
-        // Qualified, but no artifact name at all.
         assert_not_answered(&path, &["crate:"]);
-        // A name no registry could serve.
         assert_not_answered(&path, &["pypi:not a name"]);
     }
 
@@ -739,7 +733,7 @@ mod probe {
 
     /// The two remaining answers, against a registry stand-in: a version it serves,
     /// and nothing for an artifact it has never served. The same two are proven
-    /// against the true registries in the network tier below.
+    /// against the true registries in the `onejudge-release-targets` network tier.
     #[test]
     fn a_stand_in_registry_answers_the_version_it_serves() {
         let pypi = registry_on_path("pypi-served", "200", r#"{"info": {"version": "1.2.3"}}"#, 0);

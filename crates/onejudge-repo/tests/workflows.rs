@@ -62,7 +62,6 @@ fn workflow(name: &str) -> Value {
     serde_yaml_ng::from_str(&text).unwrap_or_else(|err| panic!("parsing {}: {err}", path.display()))
 }
 
-/// Every committed workflow, by file name.
 fn workflows() -> Vec<(String, Value)> {
     let mut names: Vec<String> = fs::read_dir(workflow_dir())
         .expect("reading .github/workflows")

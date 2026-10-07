@@ -54,7 +54,6 @@ fn requests(path: &std::path::Path) -> Vec<serde_json::Value> {
         .collect()
 }
 
-/// Just the `op` requests, in order.
 fn of_op(all: &[serde_json::Value], op: &str) -> Vec<serde_json::Value> {
     all.iter()
         .filter(|request| request.get("op").and_then(serde_json::Value::as_str) == Some(op))
@@ -304,7 +303,6 @@ fn a_note_addressed_to_the_worker_is_shown_to_the_judge_as_an_update_to_the_work
         .expect("nothing has completed, so the note is accepted");
     assert_eq!(accepted, Accepted::Queued);
 
-    // The judge is told whose task this updates, and told not to take it on.
     let judge = prompts(&judge_log);
     assert!(
         judge.contains("## Notes delivered to the worker during this run"),
@@ -323,7 +321,6 @@ fn a_note_addressed_to_the_worker_is_shown_to_the_judge_as_an_update_to_the_work
         "the note was handed to the judge without being framed as context: {judge}"
     );
 
-    // …and the worker is told it is for the worker, and to act on it.
     let agent = prompts(&agent_log);
     assert!(
         agent.contains("## Notes delivered to you during this run"),
@@ -452,9 +449,6 @@ fn a_note_arriving_during_the_workers_turn_reaches_the_worker_and_the_judge_with
         "the worker was never handed the note"
     );
 
-    // …and the judge received it *with* the worker's response to it: the very first
-    // supervisor call already carries the note, and the transcript it is given
-    // already holds the worker's answer to it.
     let supervisors = of_op(&all, "supervisor");
     let first = supervisors
         .first()
@@ -542,7 +536,6 @@ fn a_note_arriving_during_the_judges_turn_reaches_the_judge_and_the_worker_with_
         "the decision was never re-taken with the note in hand"
     );
 
-    // The worker receives it with the judge's response: one user turn carrying both.
     let handed = of_op(&all, "respond")
         .iter()
         .map(handed_to_worker)
@@ -616,14 +609,12 @@ fn a_note_arriving_during_a_panels_turn_reaches_every_judge_and_re_takes_every_d
         }
     );
 
-    // Both judges were shown the note on the re-taken round.
     for log in [&a_log, &b_log] {
         let supervisors = of_op(&requests(log), "supervisor");
         assert_eq!(supervisors.len(), 2, "{}", log.display());
         assert!(notes_shown(&supervisors[0]).is_empty());
         assert_eq!(notes_shown(&supervisors[1]), vec![NOTE.to_string()]);
     }
-    // One record for turn 1 carrying both rounds, each round in list order.
     assert_eq!(outcome.judge_decisions.len(), 1);
     assert_eq!(outcome.judge_decisions[0].turn, 1);
     let judged: Vec<(&str, Decision)> = outcome.judge_decisions[0]
@@ -640,7 +631,6 @@ fn a_note_arriving_during_a_panels_turn_reaches_every_judge_and_re_takes_every_d
             ("b", Decision::Continue),
         ]
     );
-    // …and the worker was handed the note with the panel's combined response.
     let handed = &outcome.transcript.messages[2].content;
     assert!(handed.contains(NOTE), "{handed}");
     assert!(handed.contains("## Judge `a` (command)"), "{handed}");
@@ -702,7 +692,6 @@ fn a_note_the_judge_completes_on_is_delivered_to_the_judge_and_never_to_the_work
         "the completion decision is the one taken with the note in hand"
     );
 
-    // Nothing was delivered to the worker: the judge passed the work.
     assert!(
         !outcome
             .transcript
@@ -914,7 +903,6 @@ fn a_delivered_note_enters_the_acceptance_criteria_rather_than_only_the_narratio
         .expect("nothing has completed");
     assert_eq!(accepted, Accepted::Queued);
 
-    // The criterion the per-turn judge was actually given.
     let judge = prompts(&judge_log);
     let criterion = judge
         .split("Completion criterion:\n")
@@ -1168,7 +1156,6 @@ fn a_note_arriving_after_the_conversation_completed_raises_and_is_not_accepted()
         "the refusal leaves the caller no choice to make: {message}"
     );
 
-    // …and nothing was silently accepted: it reached no party and moved no bar.
     assert!(engine.delivered_notes().is_empty());
     assert_eq!(engine.criteria(Some("the job is done")).bound().len(), 0);
     assert_eq!(
@@ -1408,7 +1395,6 @@ fn a_criterion_that_perishes_or_names_a_procedure_is_refused_where_the_note_is_b
     assert!(refusal("the pull request is merged").contains("work the dispatch cannot do"));
     assert!(refusal("   ").contains("blank"));
 
-    // …and a property the finished work can actually have is accepted.
     let bound = Note::to(Addressee::Worker, "the bar moved")
         .binding("the migration path is covered by a test that fails without the migration")
         .expect("a property is a criterion");

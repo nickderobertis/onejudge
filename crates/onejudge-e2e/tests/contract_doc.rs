@@ -40,7 +40,6 @@ fn the_contract_doc_builds_a_report_the_way_the_api_does() {
     ] {
         assert!(example.contains(call), "the example no longer makes `{call}`");
     }
-    // The same calls, over the echo double.
     let provider = CommandProvider::new(vec![doubles::echo_provider().into()]).unwrap();
     let engine = Engine::new(&provider, Settings::new());
     let conversation = Conversation::single_turn(

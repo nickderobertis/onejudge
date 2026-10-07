@@ -133,10 +133,39 @@ enum Judgement {
     },
     Numeric {
         criterion: String,
-        min: f64,
-        max: f64,
+        #[serde(flatten)]
+        scale: Scale,
         messages: Vec<Message>,
     },
+}
+
+/// A numeric judgement's bounds: finite, `min` no greater than `max`.
+#[derive(Clone, Copy, Deserialize)]
+#[serde(try_from = "Bounds")]
+struct Scale {
+    min: f64,
+    max: f64,
+}
+
+/// The bounds as a request spells them, before they are held to being a range.
+#[derive(Deserialize)]
+struct Bounds {
+    min: f64,
+    max: f64,
+}
+
+impl TryFrom<Bounds> for Scale {
+    type Error = String;
+
+    fn try_from(Bounds { min, max }: Bounds) -> Result<Self, String> {
+        if min.is_finite() && max.is_finite() && min <= max {
+            Ok(Self { min, max })
+        } else {
+            Err(format!(
+                "a numeric scale runs from a lower bound to a higher one, not {min} to {max}"
+            ))
+        }
+    }
 }
 
 fn main() {
@@ -232,7 +261,7 @@ fn latest_user(messages: &[Message]) -> &str {
         .map_or("", |m| m.content.as_str())
 }
 
-/// Extract the argument of a `[[marker:ARG]]` directive, if present in `text`.
+/// Only the first occurrence counts, and an argument cannot itself contain `]]`.
 fn marker<'a>(text: &'a str, name: &str) -> Option<&'a str> {
     let open = format!("[[{name}:");
     let start = text.find(&open)? + open.len();
@@ -333,7 +362,6 @@ fn supervisor(request: &Decision<'_>, argv: &str) -> Value {
     if let Some(reason) = marker(argv, "supervisor-complete") {
         return json!({"completion": true, "reason": reason, "usage": {"input_tokens": 1, "output_tokens": 1}});
     }
-    // The judge failing on the decision re-taken carrying the note.
     if persona.contains("[[supervisor-exit-on-note]]") && request.noted {
         fail("deliberate non-zero exit on the supervisor op shown a note");
     }
@@ -419,17 +447,9 @@ fn judge(judgement: &Judgement) -> Value {
         } => (criterion, messages, None),
         Judgement::Numeric {
             criterion,
-            min,
-            max,
+            scale,
             messages,
-        } => {
-            if min > max {
-                fail(&format!(
-                    "a numeric judge request's scale runs backwards: {min} to {max}"
-                ));
-            }
-            (criterion, messages, Some((*min, *max)))
-        }
+        } => (criterion, messages, Some(*scale)),
     };
     let transcript = render(messages).to_lowercase();
     let matched = !criterion.is_empty() && transcript.contains(&criterion.to_lowercase());
@@ -439,7 +459,10 @@ fn judge(judgement: &Judgement) -> Value {
     let wrong_type = criterion.contains("[[wrong-type]]");
     let numeric = scale.is_some() != wrong_type;
     let value = if numeric {
-        let (min, max) = scale.unwrap_or((0.0, 10.0));
+        let Scale { min, max } = scale.unwrap_or(Scale {
+            min: 0.0,
+            max: 10.0,
+        });
         json!(if matched { max } else { min })
     } else {
         json!(matched)

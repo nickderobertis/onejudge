@@ -122,7 +122,6 @@ fn check(dir: &Path, projects: &[&str]) -> Output {
         .expect("node runs")
 }
 
-/// The check's refusal, which must fail and name `expected`, with a next step.
 fn refuses(output: &Output, expected: &str) {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert_eq!(
@@ -152,13 +151,11 @@ fn an_allowed_graph_passes() {
 #[test]
 fn an_edge_a_tag_forbids_is_refused_naming_it() {
     let dir = workspace();
-    // An unrelated project reaching an e2e suite.
     project(&dir, "sdk", &["type:sdk"], &["lib", "lib-e2e"]);
     refuses(
         &check(&dir, &["sdk"]),
         "sdk (type:sdk) -> lib-e2e (type:e2e) is not allowed: type:sdk may depend only on [type:contract]",
     );
-    // The contract reaching one of its consumers.
     project(&dir, "sdk", &["type:sdk"], &["lib"]);
     project(&dir, "lib", &["type:contract"], &["sdk"]);
     refuses(

@@ -482,7 +482,8 @@ pub mod probe {
 
     use super::repo_root;
 
-    /// The contract's bound: an answer well inside sixty seconds.
+    /// The longest the contract lets one probe answer take; every assertion here
+    /// holds the probe to it.
     pub const BOUND: Duration = Duration::from_secs(60);
 
     /// Spawn the probe exactly as a consumer does: directly, from the repository

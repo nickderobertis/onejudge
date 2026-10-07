@@ -70,7 +70,6 @@ fn multi_turn_runs_to_max_turns() {
         ))
         .unwrap();
     assert_eq!(outcome.transcript.assistant_turns(), 3);
-    // A simulated-user turn sits between assistant turns.
     let user_turns = outcome
         .transcript
         .messages
@@ -105,11 +104,12 @@ fn unified_supervisor_is_one_subprocess_invocation_per_nonterminal_turn() {
 
 #[test]
 fn a_no_op_supervisor_loop_settles_the_run_on_the_work_it_has() {
-    // The other half of the same defect, and the one that cost whole turn budgets:
-    // the supervisor's answer is a perfectly valid `continue` every time, so
-    // nothing here is malformed — but it asks for nothing, the agent does nothing,
-    // and the pair repeats. One measured dispatch was re-prompted 137 times to its
-    // cap this way, delivering nothing after the work was already done.
+    // The no-op half of the supervisor-loop defect, and the one that cost whole
+    // turn budgets: the supervisor's answer is a perfectly valid `continue` every
+    // time, so nothing here is malformed — but it asks for nothing, the agent does
+    // nothing, and the pair repeats. One measured dispatch was re-prompted 137
+    // times to its cap this way, delivering nothing after the work was already
+    // done.
     let count = std::env::temp_dir().join(format!(
         "onejudge-noop-supervisor-count-{}",
         std::process::id()
@@ -131,7 +131,6 @@ fn a_no_op_supervisor_loop_settles_the_run_on_the_work_it_has() {
         1 + onejudge::NOOP_SETTLE_LIMIT as usize,
         "the work turn, then exactly the no-ops it takes to decide — not the cap"
     );
-    // The completed work, and the command that did it, are still in the transcript.
     assert_eq!(
         outcome.transcript.messages[1].content,
         "echo: release the dispatch [[event:git push]]"
@@ -143,7 +142,7 @@ fn a_no_op_supervisor_loop_settles_the_run_on_the_work_it_has() {
     );
     let settled = outcome.settled_reason.clone().expect("a settle reason");
     assert!(settled.contains("no-op exchanges"), "{settled}");
-    // Every attempt is a real subprocess, and the settling turn pays for no more.
+    // The settling turn spends no further supervisor call.
     let asked = std::fs::read_to_string(&count).unwrap();
     assert_eq!(asked.lines().count() as u32, onejudge::NOOP_SETTLE_LIMIT);
     std::fs::remove_file(&count).unwrap();
@@ -159,8 +158,6 @@ fn a_conversation_that_declares_quiet_its_contract_is_driven_to_its_cap_instead(
     const CAP: u32 = 5;
     let persona = "[[supervisor-noop]]".to_string();
 
-    // Declared nothing: unchanged. Two quiet exchanges settle it, with the reason
-    // it has always carried.
     let settling = Engine::new(&echo(), settings())
         .run(&Conversation::multi_turn(
             skill_with("Be helpful."),
@@ -176,8 +173,6 @@ fn a_conversation_that_declares_quiet_its_contract_is_driven_to_its_cap_instead(
     let settled = settling.settled_reason.clone().expect("a settle reason");
     assert!(settled.contains("no-op exchanges"), "{settled}");
 
-    // Declared quiet its contract: the streak never ends the run, so every turn of
-    // the budget is driven and the run ends at the cap carrying no settle reason.
     let watching = Engine::new(&echo(), settings().with_settle_on_noop(false))
         .run(&Conversation::multi_turn(
             skill_with("Be helpful."),
@@ -230,7 +225,6 @@ fn a_supervisor_with_no_next_instruction_settles_the_run_instead_of_killing_it()
     );
     let settled = outcome.settled_reason.clone().expect("a settle reason");
     assert!(settled.contains("no next instruction"), "{settled}");
-    // Bounded, and every attempt is a real subprocess: one ask plus the re-asks.
     let attempts = std::fs::read_to_string(&count).unwrap();
     assert_eq!(
         attempts.lines().count() as u32,
@@ -394,8 +388,7 @@ fn command_provider_empty_output_is_a_protocol_error() {
 #[test]
 fn command_provider_empty_assessment_is_a_protocol_error() {
     // A parsed-but-empty assessment reply is rejected as a classified protocol
-    // error, exercised across the real subprocess — the empty-output counterpart
-    // for the new `assess` op.
+    // error — the `assess` op's counterpart to empty output.
     let provider = echo();
     let engine = Engine::new(&provider, settings());
     let outcome = engine
@@ -595,8 +588,9 @@ fn a_mock_harness_selection_reaches_the_spawned_oneharness_argv() {
 
 #[test]
 fn a_supervisor_that_stays_silent_settles_the_run_on_the_prompt_seam() {
-    // Same defect, same policy, the other seam: a judge that never names a next
-    // instruction ends the run on the work it has instead of destroying it.
+    // The no-next-instruction settle policy on the prompt seam: a judge that
+    // never names a next instruction ends the run on the work it has instead of
+    // destroying it.
     let provider = fake_oneharness();
     let outcome = Engine::new(&provider, settings().with_session_name("settle"))
         .run(&Conversation::multi_turn(
@@ -660,8 +654,6 @@ fn a_supervisor_that_argues_in_prose_is_re_asked_and_then_decides() {
         .messages
         .iter()
         .any(|m| m.content == "Fix the stale anchor in docs/cli.md."));
-    // The re-ask told the supervisor its answer was unusable and what shape is
-    // required — the exact note, on the prompt the real subprocess was handed.
     let prompts = std::fs::read_to_string(&judge_log).unwrap();
     assert_eq!(
         prompts
@@ -715,7 +707,6 @@ fn a_supervisor_that_never_parses_settles_the_run_bounded() {
         !settled.contains("no next instruction"),
         "distinguishable from a silent supervisor: {settled}"
     );
-    // Bounded, and every attempt is a real subprocess that was paid for.
     let telemetry = outcome
         .telemetry
         .as_ref()
@@ -729,8 +720,8 @@ fn a_supervisor_that_never_parses_settles_the_run_bounded() {
 
 #[test]
 fn a_supervisor_process_failure_is_still_fatal_on_its_first_occurrence() {
-    // The contrast the widening must keep: a judge side whose *process* fails is
-    // a broken provider, and asking it again would only hide that. One
+    // The contrast the re-ask policy must keep: a judge side whose *process*
+    // fails is a broken provider, and asking it again would only hide that. One
     // invocation, then the run fails, classified.
     let judge_log = support::scratch_path("supervisor-exit-judge-prompts");
     let provider = fake_oneharness();
@@ -1341,7 +1332,6 @@ fn split_drives_a_multi_turn_conversation_across_both_backends() {
             user,
         ))
         .unwrap();
-    // Two skill turns (fake oneharness) with an echo simulated-user turn between.
     assert_eq!(outcome.transcript.assistant_turns(), 2);
     assert!(outcome
         .transcript
@@ -1350,12 +1340,9 @@ fn split_drives_a_multi_turn_conversation_across_both_backends() {
         .any(|m| m.content.contains("what about the next step")));
 }
 
-//
 // The judge side as a LIST: a `JudgePanel` of echo doubles composed as the judge
 // half of a `SplitProvider`, each judge steered through its own argv (the
-// persona, task and transcript are the same for every judge, by contract). Every
-// journey below runs the real engine over real subprocesses; only the model is
-// faked.
+// persona, task and transcript are the same for every judge, by contract).
 
 /// The echo double with extra argv markers (see its module docs).
 fn echo_with(markers: &[&str]) -> CommandProvider {
@@ -1431,8 +1418,6 @@ fn a_panel_whose_judges_all_complete_completes_the_run_with_each_reason_attribut
         ))
         .unwrap();
 
-    // One assistant turn; the panel completed the run on its first decision, with
-    // every judge's reason attributed in list order.
     assert_eq!(outcome.transcript.assistant_turns(), 1);
     assert_eq!(
         outcome.completion_reason.as_deref(),
@@ -1448,14 +1433,11 @@ fn a_panel_whose_judges_all_complete_completes_the_run_with_each_reason_attribut
             ],
         }]
     );
-    // Each judge kept its own harness session: the user session, suffixed.
     assert_eq!(
         recorded_sessions(&reviewer_log),
         ["panel-run-user-reviewer"]
     );
     assert_eq!(recorded_sessions(&lint_log), ["panel-run-user-lint"]);
-    // …and the judge-side processes carry the label of the judge that spawned
-    // them, while the agent side's carries none.
     let labels: Vec<(onejudge::TelemetryRole, &str, Option<&str>)> = outcome
         .processes
         .iter()
@@ -1507,7 +1489,6 @@ fn one_continuing_judge_hands_the_worker_its_block_under_the_judges_header() {
     let expected = "## Judge `lint` (command)\n\nFix the two lint findings.";
     assert_eq!(outcome.transcript.messages[2].role, Role::User);
     assert_eq!(outcome.transcript.messages[2].content, expected);
-    // …and the worker really was handed it: the echo double replies with it.
     assert_eq!(
         outcome.transcript.messages[3].content,
         format!("echo: {expected}")
@@ -1598,7 +1579,6 @@ fn a_judge_that_fails_while_another_is_still_running_fails_the_run_after_both_re
         ))
         .unwrap_err();
 
-    // The failure came back only once `lint` had returned too.
     assert!(
         started.elapsed() >= std::time::Duration::from_millis(800),
         "the panel returned before the slow judge did"
@@ -1808,7 +1788,6 @@ fn a_panel_of_oneharness_judges_labels_each_judges_attribution_and_session_link(
         "{:#?}",
         telemetry.sessions
     );
-    // The same labels ride the processes each judge spawned.
     assert!(outcome
         .processes
         .iter()
@@ -1844,15 +1823,12 @@ fn a_panel_conjoins_boolean_verdicts_and_stacks_assessments_under_headers() {
     );
 }
 
-//
 // `LlmlintProvider` meets llmlint at the process boundary only, so the double
 // here is a stand-in for the `llmlint` CLI itself (`onejudge-fake-llmlint`),
 // scripted through the environment this test process hands it: the exit code
-// per run, what it writes, and where to record the argv it was given. Every
-// journey runs the real engine over that real subprocess; the only thing faked
-// is llmlint's own verdict.
+// per run, what it writes, and where to record the argv it was given. The only
+// thing faked is llmlint's own verdict.
 
-/// The built fake-llmlint double's path.
 fn fake_llmlint_bin() -> &'static str {
     doubles::fake_llmlint()
 }
@@ -1985,7 +1961,6 @@ fn an_llmlint_judge_with_failing_rules_hands_the_worker_its_report_verbatim() {
     );
     assert_eq!(outcome.transcript.messages[2].role, Role::User);
     assert_eq!(outcome.transcript.messages[2].content, expected);
-    // …and the worker really was handed it.
     assert_eq!(
         outcome.transcript.messages[3].content,
         format!("echo: {expected}")
@@ -2058,8 +2033,6 @@ fn an_llmlint_judge_with_failing_rules_hands_the_worker_its_report_verbatim() {
     expected_argv.sort();
     assert_eq!(recorded, expected_argv);
 
-    // One judge-side process record per run, under the judge that spawned it,
-    // and one judge-side telemetry record per run carrying its wall time.
     let judge_processes: Vec<(&str, &str, Option<&str>)> = outcome
         .processes
         .iter()
@@ -2281,7 +2254,6 @@ fn an_llmlint_judge_refuses_every_operation_a_lint_run_cannot_answer() {
             )
             .unwrap_err(),
     );
-    // A boolean judgement with no worktree to lint is refused too.
     let err = provider
         .judge(
             &JudgeQuery {
@@ -2294,7 +2266,6 @@ fn an_llmlint_judge_refuses_every_operation_a_lint_run_cannot_answer() {
         .unwrap_err();
     assert!(matches!(err, onejudge::Error::Invalid(_)), "{err}");
     assert!(err.to_string().contains("worktree"), "{err}");
-    // None of the refusals ran llmlint.
     assert!(provider.spawned_processes().is_empty());
     assert!(provider.invocation_telemetry().is_empty());
 }
@@ -2424,7 +2395,6 @@ fn an_llmlint_older_than_the_label_floor_is_refused_where_the_provider_is_built(
     assert!(text.contains(fake_llmlint_bin()), "{text}");
     assert!(text.contains("`bin`"), "{text}");
 
-    // At the floor, and past it, the provider is built.
     for version in [onejudge::LLMLINT_MIN_VERSION, "0.5.0", "1.0.0-rc.1"] {
         std::env::set_var("ONEJUDGE_FAKE_LLMLINT_VERSION", version);
         LlmlintProvider::new(fake_llmlint_bin())
@@ -2477,7 +2447,6 @@ fn outcome_bundles_into_a_versioned_report() {
     assert_eq!(report.transcript.assistant_turns(), 1);
 }
 
-//
 // These drive the shapes `run_mode = "fallback"` produces. They are the reason
 // onejudge reads oneharness's report through oneharness's own types: every one of
 // them is a report whose *first* result is not the turn.
@@ -2515,7 +2484,6 @@ fn a_fallback_chain_advances_past_a_quota_refusal_and_runs_the_next_candidate() 
     assert_eq!(attribution.fell_through.len(), 1);
     assert_eq!(attribution.fell_through[0].harness, "codex");
     assert_eq!(attribution.fell_through[0].reason, "quota");
-    // Both attempts are attributable to their identity, with the refusal typed.
     assert_eq!(attribution.candidates.len(), 2);
     assert_eq!(attribution.candidates[0].harness_id, "codex");
     assert_eq!(
@@ -2781,7 +2749,6 @@ fn a_failed_invocation_is_still_attributed_to_the_identities_it_tried() {
     );
 }
 
-//
 // Driving onejudge in-process removes the OS grouping the subprocess boundary used
 // to supply: the harness processes are created by the embedder's own process,
 // inside whatever group it happens to be in, so a cancel can no longer name a tree
@@ -2907,7 +2874,6 @@ fn a_hook_that_cannot_group_a_process_fails_the_turn_instead_of_running_it() {
         .unwrap_err();
     assert_eq!(err.kind(), Some(ProviderErrorKind::Spawn));
     assert!(err.to_string().contains("spawn hook"), "{err}");
-    // The child it refused is never reported as a process of the run.
     assert!(onejudge::Provider::spawned_processes(&provider).is_empty());
     assert_eq!(hook.seen.lock().unwrap().len(), 1);
 }
@@ -2973,7 +2939,6 @@ fn an_embedder_group_reaps_the_whole_two_party_harness_tree_on_a_kill_cancel() {
     assert_profile_is_detached(&agent_handle);
     assert_profile_is_detached(&judge_handle);
 
-    // Cancel with kill semantics: terminate every group the embedder was handed.
     // Nothing else is signalled — the harness stand-ins are reached only because
     // they inherited a group the hook created.
     let groups = hook.groups.lock().unwrap().clone();
@@ -3123,7 +3088,6 @@ fn the_reported_control_address_is_one_oneharness_interrupt_can_redirect_the_tur
         "the store directory comes from the socket the run really opened"
     );
 
-    // Now be the supervisor: stop the turn and say what to do instead.
     let (record, response) = interrupt_at(&address, "stop — fix the failing test first");
     assert_eq!(record.harness.to_string(), "claude-code");
     assert!(
@@ -3307,7 +3271,6 @@ fn the_reported_supervisor_address_redirects_the_judges_live_turn() {
          holding another run's lever"
     );
 
-    // Now be the supervisor's supervisor: redirect the judge's live turn.
     let (record, response) = interrupt_at(&address, "stop judging — the bar has moved");
     assert_eq!(record.harness.to_string(), "claude-code");
     assert!(
@@ -3390,7 +3353,6 @@ fn a_redirected_supervisor_answer_that_does_not_parse_is_asked_once_more() {
     )
     .expect("a redirected supervisor turn that did not parse is re-asked, not fatal");
 
-    // The run survived and the supervisor's decision drove the next turn.
     assert_eq!(report.transcript.assistant_turns(), 2);
     assert!(report.supervisor_control.is_some());
 
@@ -3448,8 +3410,6 @@ fn a_redirected_supervisor_that_never_answers_the_contract_settles_the_run_bound
         "the last answer is carried: {settled}"
     );
 
-    // Bounded — and telemetry is how the bound is provable rather than asserted:
-    // exactly one ask plus the re-asks were paid for before the run settled.
     let telemetry = outcome
         .telemetry
         .as_ref()
@@ -3621,8 +3581,6 @@ fn the_linked_core_writes_a_history_pointer_for_every_run_and_reads_it_back_type
         .unwrap();
     assert_eq!(outcome.transcript.messages[1].content, "pointed reply");
 
-    // One harness run, one pointer line, read back as the typed record and
-    // naming the very history record the run's own attribution carries.
     let read = read_pointers(&pointer_file).expect("the pointer file is readable");
     assert_eq!(read.skipped, 0, "every line is one complete pointer");
     let pointers: &[HistoryPointer] = &read.pointers;
@@ -3886,11 +3844,9 @@ fn cancelling_an_in_process_turn_terminates_the_harness_tree_oneharness_owns() {
         ),
     );
     let outcome = engine
-        .run_streaming(
-            &Conversation::single_turn(skill, "start it"),
-            // Break on the first event: the turn is abandoned from here.
-            &mut |_| ControlFlow::Break(()),
-        )
+        .run_streaming(&Conversation::single_turn(skill, "start it"), &mut |_| {
+            ControlFlow::Break(())
+        })
         .unwrap();
     assert!(outcome.stopped_early, "the sink short-circuited the run");
 
@@ -3962,7 +3918,6 @@ fn a_controlled_turn_resumes_the_named_session_on_a_mechanism_that_carries_it() 
         "the controlled turn must continue the stored conversation, not start a new one"
     );
 
-    // And the run really was controllable: an address, no reason beside it.
     let address = report
         .control
         .as_ref()
@@ -3979,7 +3934,7 @@ fn a_controlled_turn_resumes_the_named_session_on_a_mechanism_that_carries_it() 
 #[cfg(unix)]
 #[test]
 fn a_controlled_turn_on_a_mechanism_that_cannot_resume_degrades_instead_of_starting_over() {
-    // The refusal half, and the defect the whole upgrade exists for. OpenCode's
+    // The refusal half, and the defect that rule exists for. OpenCode's
     // control mechanism drives the turn over its own HTTP protocol and implements
     // no resume request, so a `--control` continuation of a named handle would
     // open a NEW conversation while the store, the flag and the report all looked
@@ -4040,13 +3995,11 @@ fn installing_a_spawn_hook_moves_a_default_provider_onto_the_seam_that_has_a_pro
     let dir = harness_project("hook-selects-the-spawning-seam");
     let skill = Skill::new("demo", dir.to_str().unwrap(), "[[reply:never runs]]");
 
-    // Without a hook the same provider runs the turn in process, and succeeds.
     let bare = OneharnessProvider::new();
     Engine::new(&bare, settings())
         .run(&Conversation::single_turn(skill.clone(), "do it"))
         .expect("a default provider runs in process");
 
-    // With one, the hook is consulted — which it can only be for a process.
     let hooked = OneharnessProvider::new().with_spawn_hook(std::sync::Arc::new(Refuses));
     let err = Engine::new(&hooked, settings())
         .run(&Conversation::single_turn(skill, "do it"))
@@ -4104,7 +4057,6 @@ enum Seen {
     },
 }
 
-/// Copy one borrowed [`Observation`] into an owned record.
 fn observed(observation: &Observation<'_>) -> Seen {
     match observation {
         Observation::TurnOpened(opened) => Seen::Opened {
@@ -4294,8 +4246,6 @@ fn an_observing_multi_turn_run_reports_both_parties_without_disturbing_the_strea
         })
         .unwrap();
 
-    // Two assistant turns with a supervisor turn between them, each opened, spoken
-    // and closed in order.
     let shape: Vec<(&str, usize, Option<Role>)> = seen
         .iter()
         .map(|s| match s {
@@ -4364,7 +4314,6 @@ fn an_observing_multi_turn_run_reports_both_parties_without_disturbing_the_strea
         "the turn's own usage: {usage:?}"
     );
 
-    // This harness exposed no identity, and that is what the observation says.
     assert_eq!(
         tools(&seen),
         vec![
@@ -4423,8 +4372,6 @@ fn breaking_an_observation_stops_the_run_and_delivers_nothing_after_it() {
     assert!(matches!(seen[0], Seen::Opened { .. }));
     assert_eq!(outcome.transcript.assistant_turns(), 0);
 
-    // Breaking mid-conversation stops it there, and nothing is delivered after the
-    // observation that asked to stop.
     let mut seen = Vec::new();
     let outcome = engine
         .run_observing(&conversation(), &mut |observation| {
@@ -4468,7 +4415,6 @@ fn breaking_a_supervisor_observation_keeps_its_instruction_out_of_the_transcript
                 .max_turns(5),
         )
     };
-    // Stop at `stop_at`, recording everything delivered up to and including it.
     let run_until = |stop_at: fn(&Seen) -> bool, count: &std::path::Path| {
         let mut seen = Vec::new();
         let outcome = engine

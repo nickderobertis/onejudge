@@ -123,7 +123,6 @@ fn workspace() -> (PathBuf, String) {
     (dir, base)
 }
 
-/// Commit a change to `file` on top of whatever is checked out.
 fn change(dir: &Path, file: &str) {
     let path = dir.join(file);
     let mut text = std::fs::read_to_string(&path).unwrap_or_default();
@@ -133,7 +132,8 @@ fn change(dir: &Path, file: &str) {
     git(dir, &["commit", "-q", "-m", &format!("change {file}")]);
 }
 
-/// `gate-plan.sh --print-plan [flags]` with `NX_BASE` set to `base` (or unset).
+/// `NX_BASE` is removed, not inherited, when `base` is `None`, so the runner's own
+/// value cannot pick the base under test.
 fn plan(dir: &Path, base: Option<&str>, flags: &[&str]) -> Output {
     let mut command = Command::new("bash");
     command
@@ -220,7 +220,6 @@ fn without_nx_base_the_merge_base_with_origin_main_is_the_base() {
         format!("affected (base {base}, from the merge base with origin/main)")
     );
     assert_eq!(projects, "sdk");
-    // A plain ref name is accepted as NX_BASE, and resolved to its commit.
     let (tier, ..) = read(&plan(&dir, Some("origin/main"), &[]));
     assert_eq!(
         tier,
@@ -263,7 +262,6 @@ fn an_nx_base_that_is_not_a_plain_ref_or_sha_fails_closed_naming_it() {
         assert!(output.stdout.is_empty(), "{refused} printed a plan");
     }
     assert!(!dir.join("pwned").exists(), "NX_BASE reached a shell");
-    // A well-formed name that names nothing is refused too, and says so.
     let output = plan(&dir, Some("no-such-branch"), &[]);
     assert_eq!(output.status.code(), Some(2));
     assert!(String::from_utf8_lossy(&output.stderr).contains("names no commit"));
@@ -308,7 +306,6 @@ fn the_recipe_reads_the_plan_as_shell_assignments() {
     // No narrowing: the recipe's own default target list applies.
     assert_eq!(plan["GATE_TARGETS"], "");
     assert_eq!(plan["GATE_PROJECTS"], "lib,lib-e2e,sdk");
-    // Everything not selected is excluded, the external tier included.
     assert_eq!(plan["GATE_EXCLUDE"], "live");
     assert_eq!(plan["GATE_EXTERNALS"], "live");
     assert_eq!(plan["GATE_STATIC"], "format-check lint");

@@ -22,13 +22,13 @@ use std::process::Command;
 
 use onejudge_test_doubles as doubles;
 
-/// The executable the journey drives: `llmlint` on `PATH`.
 const LLMLINT: &str = "llmlint";
 
 /// The base session the run is named after, and every llmlint run labelled with.
 const SESSION: &str = "real-llmlint-journey";
 
-/// An empty directory under the target's scratch space, created afresh.
+/// Emptied first, so a record or config an earlier run left can never answer for
+/// this one.
 fn fresh_dir(name: &str) -> PathBuf {
     let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(name);
     let _ = std::fs::remove_dir_all(&dir);
@@ -36,7 +36,8 @@ fn fresh_dir(name: &str) -> PathBuf {
     dir
 }
 
-/// One run record from `llmlint history --format json`: its id and labels.
+/// Only the fields this tier checks; the rest of llmlint's record is ignored, so a
+/// field a later llmlint adds does not break the journey.
 #[derive(Debug, serde::Deserialize)]
 struct HistoryRun {
     id: String,
@@ -44,7 +45,6 @@ struct HistoryRun {
     labels: BTreeMap<String, String>,
 }
 
-/// `llmlint history --label session=<SESSION> --format json` over `history`.
 fn history(history: &Path, extra: &[&str]) -> Vec<HistoryRun> {
     let output = Command::new(LLMLINT)
         .args(["history", "--format", "json", "--label"])
@@ -118,7 +118,6 @@ fn a_panels_llmlint_judge_runs_are_labelled_and_each_decision_names_its_history_
     );
     let report: onejudge::Report = serde_json::from_slice(&output.stdout).unwrap();
 
-    // Each supervisor turn's llmlint decision, by the turn it was recorded under.
     let decided: Vec<(usize, &onejudge::JudgeDecision)> = report
         .judge_decisions
         .iter()
