@@ -32,8 +32,8 @@ done
 if [ -n "$missing" ]; then
     {
         echo "check-release-targets: install.sh downloads target(s) the release matrix does not build:$missing"
-        echo "  install.sh:           " $install_targets
-        echo "  release-binaries.yml: " $matrix_targets
+        echo "  install.sh:            ${install_targets//$'\n'/ }"
+        echo "  release-binaries.yml:  ${matrix_targets//$'\n'/ }"
         echo "  Fix install.sh's os/arch map or the workflow matrix so they agree."
     } >&2
     exit 1

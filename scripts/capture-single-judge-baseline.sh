@@ -50,7 +50,8 @@ json_string() { python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$1
 capture() {
     local fixture="$1" log="$2"
     shift 2
-    local run="$work/$(basename "$fixture")"
+    local run
+    run="$work/$(basename "$fixture")"
     mkdir -p "$run"
     sed "$@" "$fixture/config.yaml" >"$run/config.yaml"
     # Exit 1 is an incomplete run (the controlled fixture ends at its turn cap) and

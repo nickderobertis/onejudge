@@ -172,6 +172,7 @@ fi
 # The projects Nx lists, one per line: its JSON is parsed and held to being an
 # array of project names, so a malformed answer fails here instead of planning.
 listed() {
+    # shellcheck disable=SC2016 # JavaScript, single-quoted so the shell expands none of its `${...}`.
     NX_SHOW_OUTPUT=1 ./scripts/nx show projects "$@" | node -e '
 let names;
 try {
@@ -188,7 +189,7 @@ if (!Array.isArray(names) || !names.every((n) => typeof n === "string" && /^[A-Z
 process.stdout.write(names.map((n) => n + "\n").join(""));
 ' | sort
 }
-lines() { tr ', ' '\n\n' | sed '/^$/d' | sort -u; }
+lines() { tr ',' ' ' | tr ' ' '\n' | sed '/^$/d' | sort -u; }
 joined() { paste -sd"$1" -; }
 
 everything="$(listed --json)"

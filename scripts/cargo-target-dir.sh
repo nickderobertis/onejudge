@@ -8,6 +8,7 @@ if ! metadata="$(cargo metadata --format-version 1 --no-deps)"; then
     echo "ACTION: fix the Cargo.toml it names, then re-run the recipe" >&2
     exit 1
 fi
+# shellcheck disable=SC2016 # JavaScript, single-quoted so the shell expands none of its `${...}`.
 node -e '
 let dir;
 try {
