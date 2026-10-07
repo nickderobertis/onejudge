@@ -7,11 +7,17 @@
 load support/helpers
 bats_require_minimum_version 1.5.0
 
+# A project.json declaring the shell targets over the project at $1.
+shell_project() {
+    printf '{"targets":{"format":{"command":"just _sh-format %s"},"format-check":{"command":"just _sh-format-check %s"},"lint":{"options":{"commands":["node check.mjs","just _sh-lint %s %s"]}}}}\n' "$1" "$1" "$1" "${1//\//-}"
+}
+
 setup() {
     REPO="$BATS_TEST_TMPDIR/repo"
     git_repo "$REPO"
     link "$REPO" scripts/shell-files.sh
-    echo '{"targets":{"lint":{"command":"just _sh-lint ."}}}' >"$REPO/project.json"
+    link "$REPO" scripts/shell-targets.mjs
+    shell_project . >"$REPO/project.json"
 }
 
 @test "this tree's three shell projects own the scripts, the helpers and the e2e suite" {
@@ -54,7 +60,7 @@ setup() {
 
 @test "a nested project owns its scripts, and the root does not list them" {
     mkdir -p "$REPO/tools/sub"
-    echo '{"targets":{"lint":{"command":"just _sh-lint tools"}}}' >"$REPO/tools/project.json"
+    shell_project tools >"$REPO/tools/project.json"
     printf 'echo t\n' >"$REPO/tools/sub/t.sh"
     printf 'echo r\n' >"$REPO/r.sh"
 
@@ -112,6 +118,33 @@ setup() {
     [ "$output" = "$(printf '%s\n' nul-shebang scripts/shell-files.sh)" ]
 }
 
+@test "a project that only mentions the shell recipes, or runs them over another root, has no shell targets" {
+    mkdir -p "$REPO/crate" "$REPO/other"
+    echo '{"//":"no just _sh-lint crate here","targets":{"lint":{"command":"just _rust-lint crate"}}}' >"$REPO/crate/project.json"
+    printf 'echo x\n' >"$REPO/crate/x.sh"
+    shell_project crate >"$REPO/other/project.json"
+    printf 'echo y\n' >"$REPO/other/y.sh"
+
+    run --separate-stderr "$REPO/scripts/shell-files.sh" .
+
+    [ "$status" -eq 1 ]
+    [ "${stderr_lines[0]}" = "shell-files: crate/x.sh is a shell source of 'crate', whose project.json declares no shell targets" ]
+    [ "${stderr_lines[2]}" = "shell-files: other/y.sh is a shell source of 'other', whose project.json declares no shell targets" ]
+}
+
+@test "a project.json that is not JSON fails, naming it, rather than reading as no shell targets" {
+    mkdir -p "$REPO/crate"
+    echo '{"targets": just _sh-lint crate' >"$REPO/crate/project.json"
+    printf 'echo x\n' >"$REPO/crate/x.sh"
+
+    run --separate-stderr "$REPO/scripts/shell-files.sh" .
+
+    [ "$status" -eq 1 ]
+    [[ "${stderr_lines[0]}" == "crate/project.json: "* ]]
+    [ "${stderr_lines[1]}" = "shell-files: reading crate/project.json failed (above), so whether it lints crate/x.sh is unknown" ]
+    [ "${stderr_lines[2]}" = "ACTION: fix what the error names for crate/project.json, then re-run the recipe" ]
+}
+
 @test "a project.json it cannot read fails, naming it, rather than reading as no shell targets" {
     mkdir -p "$REPO/crate"
     echo '{"targets":{"lint":{"command":"just _sh-lint crate"}}}' >"$REPO/crate/project.json"
@@ -128,7 +161,8 @@ setup() {
 @test "a root that is not a project, or no root at all, is a usage error" {
     run "$REPO/scripts/shell-files.sh" nowhere
     [ "$status" -eq 2 ]
-    [ "$output" = "shell-files: 'nowhere' is not a project root (no nowhere/project.json)" ]
+    [ "${lines[0]}" = "shell-files: 'nowhere' is not a project root (no nowhere/project.json)" ]
+    [ "${lines[1]}" = "ACTION: pass . for the workspace root, or the repository-relative directory of the project's project.json (e.g. tests/support)" ]
 
     run "$REPO/scripts/shell-files.sh"
     [ "$status" -eq 2 ]

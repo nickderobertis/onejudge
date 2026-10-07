@@ -13,7 +13,6 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 # Only tests read it, and bats loads this file before any test exists too.
 DOUBLES="${BATS_TEST_TMPDIR-}/bin"
 
-# Put the doubles directory first on PATH.
 use_doubles() {
     mkdir -p "$DOUBLES"
     PATH="$DOUBLES:$PATH"

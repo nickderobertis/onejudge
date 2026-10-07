@@ -12,13 +12,12 @@
 # does.
 #
 # Fails, naming the file, when a shell source belongs to a project that declares
-# no shell targets (its project.json never runs `_sh-lint`): that file would be
-# formatted, linted and measured by nothing. Fails, too, on a path git has to
+# no shell targets over its own root, as scripts/shell-targets.mjs reads its
+# project.json: that file would be formatted, linted and measured by nothing. Fails, too, on a path git has to
 # quote (a tab, newline, double quote or backslash in its name): one path per line
 # cannot carry it, and dropping it would leave it unchecked.
 set -euo pipefail
 
-# Every refusal: what went wrong, then the next action, on stderr.
 die() {
     echo "shell-files: $1" >&2
     echo "ACTION: $2" >&2
@@ -34,6 +33,7 @@ fi
 root="${1%/}"
 if [ ! -f "$root/project.json" ]; then
     echo "shell-files: '$root' is not a project root (no $root/project.json)" >&2
+    echo "ACTION: pass . for the workspace root, or the repository-relative directory of the project's project.json (e.g. tests/support)" >&2
     exit 2
 fi
 
@@ -88,7 +88,7 @@ while IFS= read -r file; do
         continue
     fi
     found=0
-    grep -q '_sh-lint' "$project/project.json" || found=$?
+    node scripts/shell-targets.mjs "$project" || found=$?
     [ "$found" -le 1 ] || die "reading $project/project.json failed (above), so whether it lints $file is unknown" "fix what the error names for $project/project.json, then re-run the recipe"
     if [ "$found" -eq 1 ]; then
         echo "shell-files: $file is a shell source of '$project', whose project.json declares no shell targets" >&2
