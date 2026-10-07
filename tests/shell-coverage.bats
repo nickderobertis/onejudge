@@ -66,3 +66,19 @@ shell_tests() {
         [ "${lines[1]}" = "ACTION: call it as the project's test target does (just _sh-test <root> <name> [<covered root>])" ]
     done
 }
+
+@test "the shell recipes take a root or project name as an argument, never as shell source" {
+    marker="$BATS_TEST_TMPDIR/injected"
+    for recipe in _sh-format _sh-format-check _sh-lint; do
+        run env -u SHELLOPTS just --justfile "$ROOT/justfile" --working-directory "$ROOT" "$recipe" "nowhere; touch $marker"
+
+        [ "$status" -ne 0 ]
+        [[ "$output" == *"shell-files: 'nowhere; touch $marker' is not a project root (no nowhere; touch $marker/project.json)"* ]]
+        [ ! -e "$marker" ]
+    done
+
+    run env -u SHELLOPTS just --justfile "$ROOT/justfile" --working-directory "$ROOT" _sh-lint tests/support "x; touch $marker"
+    [ "$status" -ne 0 ]
+    [ "${lines[0]}" = "shell lint: 'x; touch $marker' is not an Nx project name (a-z, 0-9, -)" ]
+    [ ! -e "$marker" ]
+}

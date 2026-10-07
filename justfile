@@ -308,17 +308,33 @@ _sh-files root +command:
     while IFS= read -r file; do files+=("$file"); done <<<"$list"
     exec "$@" "${files[@]}"
 
+# Each takes the project's root (and name) as arguments, never as shell source;
+# scripts/shell-files.sh refuses a root that is not a project's.
+[positional-arguments]
 _sh-format root:
-    just _sh-files {{root}} pixi run --locked shfmt -w
+    just _sh-files "$1" pixi run --locked shfmt -w
 
 # shfmt reads its style from .editorconfig, so no flag here may set one.
+[positional-arguments]
 _sh-format-check root:
-    just _sh-files {{root}} pixi run --locked shfmt -d
+    just _sh-files "$1" pixi run --locked shfmt -d
 
 # A shell project's lint. `project` names it for the boundary and target-command
 # checks every other project's lint runs; the workspace runs those itself.
+[positional-arguments]
 _sh-lint root project="":
-    {{ if project == "" { "" } else { "node scripts/check-project-boundaries.mjs " + project + " && node scripts/check-target-commands.mjs " + project + " && " } }}just _sh-files {{root}} pixi run --locked shellcheck
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ -n "$2" ]; then
+        if [[ ! $2 =~ ^[a-z0-9][a-z0-9-]*$ ]]; then
+            echo "shell lint: '$2' is not an Nx project name (a-z, 0-9, -)" >&2
+            echo "ACTION: call it as the project's lint target does (just _sh-lint <root> <name>)" >&2
+            exit 2
+        fi
+        node scripts/check-project-boundaries.mjs "$2"
+        node scripts/check-target-commands.mjs "$2"
+    fi
+    exec just _sh-files "$1" pixi run --locked shellcheck
 
 # The workflows' own lint, run by the project that owns them; actionlint checks
 # each `run:` block with the pinned shellcheck it finds on the pixi PATH.
