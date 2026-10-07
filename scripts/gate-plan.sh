@@ -133,7 +133,24 @@ if [ "$tier" = affected ] && [ "$escalate" = true ]; then
     done < <({ git diff --name-only "$base"; git ls-files --others --exclude-standard; } | sort -u)
 fi
 
-listed() { NX_SHOW_OUTPUT=1 ./scripts/nx show projects "$@" | tr -d '[]"' | tr ',' '\n' | sed '/^$/d' | sort; }
+# The projects Nx lists, one per line: its JSON is parsed and held to being an
+# array of project names, so a malformed answer fails here instead of planning.
+listed() {
+    NX_SHOW_OUTPUT=1 ./scripts/nx show projects "$@" | node -e '
+let names;
+try {
+  names = JSON.parse(require("fs").readFileSync(0, "utf8"));
+} catch (error) {
+  names = error;
+}
+if (!Array.isArray(names) || !names.every((n) => typeof n === "string" && /^[A-Za-z0-9._@/-]+$/.test(n))) {
+  console.error("gate: `nx show projects` did not answer with a list of project names");
+  console.error("ACTION: run `NX_SHOW_OUTPUT=1 ./scripts/nx show projects --json` and fix the project.json it names");
+  process.exit(1);
+}
+process.stdout.write(names.map((n) => n + "\n").join(""));
+' | sort
+}
 lines() { tr ', ' '\n\n' | sed '/^$/d' | sort -u; }
 joined() { paste -sd"$1" -; }
 

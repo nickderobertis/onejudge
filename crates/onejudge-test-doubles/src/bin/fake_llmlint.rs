@@ -4,9 +4,10 @@
 //! and without a model. The gate needs no llmlint: this double is what it runs
 //! against.
 //!
-//! It answers `--version` with a version line and exit 0 — the probe the provider
-//! runs when it is built — and treats every other invocation as a `lint` run,
-//! accepting any argument (`--label` included). Like llmlint, a run that finished
+//! It answers `--version` alone with a version line and exit 0 — the probe the
+//! provider runs when it is built — and a `lint …` invocation as a run, passing
+//! the caller's own arguments through but refusing a `--label` llmlint would
+//! refuse. Any other invocation is refused, as the provider never makes one. Like llmlint, a run that finished
 //! ends its stderr with the results pointer (contract C3): ``See full results with
 //! `llmlint history <id>` ``, suffixed ` (labels: k=v, …)` — sorted by key —
 //! when the run was passed a `--label`.

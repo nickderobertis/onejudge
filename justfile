@@ -58,10 +58,11 @@ bootstrap:
 # gate-eligible project plus the targets promoted out of the affected tier.
 # `--targets a,b` / `--projects p` narrow it; `--print-plan` only prints what
 # would run. scripts/gate-plan.sh decides the tier, base and projects.
+[positional-arguments]
 check *flags:
     #!/usr/bin/env bash
     set -euo pipefail
-    plan="$(./scripts/gate-plan.sh {{flags}})"
+    plan="$(./scripts/gate-plan.sh "$@")"
     eval "$plan"
     if [ -n "${GATE_PRINT_ONLY:-}" ]; then printf '%s\n' "$plan" | sed -n 's/^# //p'; exit 0; fi
     if [ -n "$GATE_PROJECTS" ] && [ "$GATE_TIER" = affected ]; then
@@ -79,13 +80,15 @@ alias gate := check
 
 # The coverage-enforced suites: every `test` target (Rust instrumented) and the
 # `coverage` aggregates, at the tier `check` would pick.
+[positional-arguments]
 test *flags:
-    just check --targets test,coverage {{flags}}
+    just check --targets test,coverage "$@"
 
 # Quick inner loop: the Rust suites with no coverage instrumentation, at the tier
 # `check` would pick. Also what the macOS and Windows CI jobs run.
+[positional-arguments]
 test-fast *flags:
-    ONEJUDGE_COVERAGE=0 just check --targets test --projects 'tag:lang:rust' {{flags}}
+    ONEJUDGE_COVERAGE=0 just check --targets test --projects 'tag:lang:rust' "$@"
 
 # The end-to-end suites alone (real subprocess boundary, test-double binaries).
 test-e2e:
@@ -117,16 +120,18 @@ build-cli target="":
 
 # Lint every affected project: clippy (warnings denied), ruff, the project
 # boundaries, and the generated-schema drift checks.
+[positional-arguments]
 lint *flags:
-    just check --targets lint {{flags}}
+    just check --targets lint "$@"
 
 # Format the codebase in place.
 format:
     ./scripts/nx run-many -t format
 
 # Fail if anything affected is unformatted.
+[positional-arguments]
 format-check *flags:
-    just check --targets format-check {{flags}}
+    just check --targets format-check "$@"
 
 # Build the docs as a gate: broken intra-doc links and doc warnings fail.
 doc:
@@ -161,17 +166,19 @@ setup-llmlint:
     ./scripts/setup-llmlint.sh
 
 # LLM-judge lint (llmlint) on demand — non-deterministic, harness-backed, out of `check`.
+[positional-arguments]
 lint-llm *paths:
     @command -v llmlint >/dev/null 2>&1 || { echo "llmlint not installed — run 'just setup-llmlint'"; exit 1; }
-    llmlint {{paths}}
+    llmlint "$@"
 
 # llmlint scoped to the merge-base diff with main — the blocking `llmlint` PR check.
 lint-llm-diff base="origin/main":
     ./scripts/lint-llm-diff.sh {{base}}
 
 # Deterministic llmlint config/ignore/version-bump validation.
+[positional-arguments]
 lint-llm-validate *args:
-    PATH="$HOME/.local/bin:$PATH" llmlint validate {{args}}
+    PATH="$HOME/.local/bin:$PATH" llmlint validate "$@"
 
 # Regenerate Python declarations and runtime schemas from Rust wire types.
 python-sdk-generate:
@@ -191,8 +198,9 @@ python-sdk-check:
     ./scripts/nx run-many -t generate-check format-check lint typecheck test coverage -p onejudge-python-sdk,onejudge-python-sdk-e2e
 
 # Show the project graph (`--file=graph.html` writes it out).
+[positional-arguments]
 graph *args:
-    NX_SHOW_OUTPUT=1 ./scripts/nx graph {{args}}
+    NX_SHOW_OUTPUT=1 ./scripts/nx graph "$@"
 
 # --- Project targets: what each project.json's targets run. ------------------
 # `features` is the `--features` list a crate builds with: the gate's feature set
@@ -281,8 +289,9 @@ _py-lint dir project:
     node scripts/check-project-boundaries.mjs {{project}}
     {{py_sdk}} ruff check --no-cache {{dir}}
 
+[positional-arguments]
 _py-typecheck +paths:
-    {{py_sdk}} mypy --config-file python/onejudge-sdk/pyproject.toml {{paths}}
+    {{py_sdk}} mypy --config-file python/onejudge-sdk/pyproject.toml "$@"
 
 _py-test:
     rm -f target/python-sdk.coverage

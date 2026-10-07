@@ -915,7 +915,7 @@ fn binary_run_missing_config_path_errors() {
 fn binary_run_applies_session_and_persona_overrides() {
     // Exercises the session / persona / max-turns override path through the real
     // binary. The command provider ignores session, so the assertion is on the run
-    // completing under the overridden turn cap.
+    // ending at the overridden turn cap: incomplete, exit 1.
     let config = write_config(
         "overrides.yaml",
         "\
@@ -1631,13 +1631,7 @@ fn binary_stream_reports_a_failure_as_json_on_stderr_leaving_the_protocol_intact
     );
 }
 
-//
-// `SpawnHook` gives an in-process embedder back the OS grouping the subprocess
-// boundary used to supply — but an embedder that drives onejudge through a
-// `Plan` never builds a provider itself, so before `Plan::with_spawn_hook` it
-// had no way to install one. The processes a plan spawned therefore sat in
-// onejudge's own group, and a `cancel --kill` had no tree to name. See
-// `docs/spawn-hook.md`.
+// A plan's spawn hook has to reach both children of a `split` (`docs/spawn-hook.md`).
 
 /// A two-party plan: the agent's turns and the judge's each run on their own
 /// `oneharness` backend (the fake double), which is the shape that leaks — one
@@ -3057,7 +3051,7 @@ fn binary_run_stacks_an_llm_judge_on_an_llmlint_judge_and_hands_the_worker_only_
 }
 
 #[test]
-fn an_absent_llmlint_is_a_config_error_at_plan_build_before_any_turn() {
+fn an_absent_llmlint_is_a_config_error_when_the_run_builds_its_provider() {
     // The probe runs where the provider is built, so a missing executable is
     // refused naming the binary and the `bin` field — with nothing spawned, no
     // telemetry and no turn — through the plan driver and the binary alike.

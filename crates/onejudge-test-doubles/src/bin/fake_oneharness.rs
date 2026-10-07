@@ -1679,7 +1679,7 @@ mod control {
                 Ok((stream, _)) => break stream,
                 Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                     if Instant::now() >= deadline {
-                        // Nobody came. Leave the turn as it was.
+                        // Nobody came to redirect it: end the turn and its socket.
                         let _ = turn.kill();
                         let _ = std::fs::remove_file(socket);
                         std::process::exit(0);
