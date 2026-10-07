@@ -7,10 +7,11 @@
 // finds, so a script in a project nothing formats, lints or measures fails
 // there. Declared means the parsed project.json has `format`, `format-check` and
 // `lint` targets each running `just _sh-format`, `just _sh-format-check` and
-// `just _sh-lint` with the project's own root as the first argument — in its
-// `command`, `options.command` or one of `options.commands`, alone or as one
-// `&&` step — as the root project.json does. A mention anywhere else, or a
-// recipe run over another root, is not.
+// `just _sh-lint` with the project's own root as the first argument — as the
+// command itself, in its `command`, `options.command` or one of
+// `options.commands`, as the root project.json does. A mention anywhere else
+// (an argument, a later step of a chain, a string another command prints), or
+// a recipe run over another root, is not.
 //
 // Exit 0: declared. 1: not declared (silent; the caller names the file).
 // 2: a project.json that cannot be read, is not JSON, or is not shaped as Nx
@@ -63,11 +64,12 @@ function commands(name) {
         .filter((command) => typeof command === "string");
 }
 
-const runsOverRoot = (command, recipe) =>
-    command.split("&&").some((step) => {
-        const [program, called, root] = step.trim().split(/\s+/);
-        return program === "just" && called === recipe && root === dir;
-    });
+// The command's first three words, which a shell runs before reading anything
+// after them, are the program, the recipe and its root.
+const runsOverRoot = (command, recipe) => {
+    const [program, called, root] = command.trim().split(/\s+/);
+    return program === "just" && called === recipe && root === dir;
+};
 
 const declared = SHELL_TARGETS.every(([name, recipe]) =>
     commands(name).some((command) => runsOverRoot(command, recipe)),

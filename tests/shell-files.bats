@@ -89,15 +89,26 @@ setup() {
     [ "$output" = tools/inner/bin/i.sh ]
 }
 
-@test "a shell target may run its recipe as a command, an option, a listed object, or one && step" {
+@test "a shell target may run its recipe as a command, an option, or a listed object" {
     mkdir -p "$REPO/tools"
-    echo '{"targets":{"format":{"options":{"command":"just _sh-format tools"}},"format-check":{"options":{"commands":[{"command":"just _sh-format-check tools"}]}},"lint":{"command":"node check.mjs tools && just _sh-lint tools tools"}}}' >"$REPO/tools/project.json"
+    echo '{"targets":{"format":{"options":{"command":"just _sh-format tools"}},"format-check":{"options":{"commands":[{"command":"just _sh-format-check tools"}]}},"lint":{"command":"just _sh-lint tools tools"}}}' >"$REPO/tools/project.json"
     printf 'echo t\n' >"$REPO/tools/t.sh"
 
     run "$REPO/scripts/shell-files.sh" .
 
     [ "$status" -eq 0 ]
     [ "$output" = scripts/shell-files.sh ]
+}
+
+@test "a recipe a target only prints, or runs after another step, is not a shell target" {
+    mkdir -p "$REPO/tools"
+    echo '{"targets":{"format":{"command":"echo \"&& just _sh-format tools &&\""},"format-check":{"command":"echo && just _sh-format-check tools"},"lint":{"command":"just _sh-lint tools"}}}' >"$REPO/tools/project.json"
+    printf 'echo t\n' >"$REPO/tools/t.sh"
+
+    run --separate-stderr "$REPO/scripts/shell-files.sh" .
+
+    [ "$status" -eq 1 ]
+    [ "${stderr_lines[0]}" = "shell-files: tools/t.sh is a shell source of 'tools', whose project.json declares no shell targets" ]
 }
 
 @test "a script in a project with no shell targets fails, naming the file and the fix" {
