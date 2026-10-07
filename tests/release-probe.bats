@@ -5,7 +5,7 @@
 # and a status; python3 and mktemp are the real ones. The live registries are
 # onejudge-release-targets' tier.
 
-load helpers
+load support/helpers
 bats_require_minimum_version 1.5.0
 
 setup() {

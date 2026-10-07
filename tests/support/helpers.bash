@@ -1,5 +1,7 @@
-# Shared helpers for the workspace's bats suite (`just _sh-test . workspace`),
-# loaded by every test file with `load helpers`.
+# Shared helpers for the shell suites — the workspace's offline suite (tests/,
+# `load support/helpers`) and onejudge-scripts-e2e's (scripts-e2e/tests/,
+# `load ../../tests/support/helpers`). Its own project (tests/support/project.json),
+# which both name in implicitDependencies.
 #
 # Each script is run the way its callers run it — as an executable, by path —
 # and only the tools it reaches past this repository for (the network, a package
@@ -7,7 +9,7 @@
 # that resolves the repository from its own path is run through a symlink in a
 # scratch tree, so it acts on that tree while bashcov still credits the real file.
 
-ROOT="$(cd "$BATS_TEST_DIRNAME/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 # Only tests read it, and bats loads this file before any test exists too.
 DOUBLES="${BATS_TEST_TMPDIR-}/bin"
 

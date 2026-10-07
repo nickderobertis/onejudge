@@ -4,7 +4,7 @@
 # and a refusal for one owned by a project with no shell targets. Over this tree
 # and over scratch repositories.
 
-load helpers
+load support/helpers
 bats_require_minimum_version 1.5.0
 
 setup() {
@@ -14,14 +14,21 @@ setup() {
     echo '{"targets":{"lint":{"command":"just _sh-lint ."}}}' >"$REPO/project.json"
 }
 
-@test "this tree's root project owns install.sh, the scripts and the bats suite" {
+@test "this tree's three shell projects own the scripts, the helpers and the e2e suite" {
     run "$ROOT/scripts/shell-files.sh" .
-
     [ "$status" -eq 0 ]
-    for file in install.sh scripts/nx scripts/gate-plan.sh tests/helpers.bash tests/shell-files.bats; do
+    for file in install.sh scripts/nx scripts/gate-plan.sh tests/shell-files.bats; do
         grep -qxF "$file" <<<"$output"
     done
-    [[ "$output" != *.mjs* ]]
+    [[ "$output" != *tests/support/* && "$output" != *scripts-e2e/* && "$output" != *.mjs* ]]
+
+    run "$ROOT/scripts/shell-files.sh" tests/support
+    [ "$status" -eq 0 ]
+    [ "$output" = tests/support/helpers.bash ]
+
+    run "$ROOT/scripts/shell-files.sh" scripts-e2e
+    [ "$status" -eq 0 ]
+    grep -qxF scripts-e2e/tests/nx.bats <<<"$output"
 }
 
 @test "shell sources are found by name or shebang, tracked or untracked, never ignored" {

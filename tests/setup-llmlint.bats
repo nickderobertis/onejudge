@@ -4,7 +4,7 @@
 # session's env file, and always exits 0. HOME is a scratch directory and `uv` and
 # `llmlint` are doubles, so nothing is installed for the user running the suite.
 
-load helpers
+load support/helpers
 
 setup() {
     only_tools cat chmod

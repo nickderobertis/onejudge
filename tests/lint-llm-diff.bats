@@ -4,7 +4,7 @@
 # The history is a real scratch repository; llmlint is a double that prints the
 # arguments it was given and answers with LLMLINT_EXIT.
 
-load helpers
+load support/helpers
 
 setup() {
     use_doubles

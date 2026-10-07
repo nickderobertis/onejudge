@@ -1,14 +1,13 @@
 #!/usr/bin/env bats
-# The gate's entry points: scripts/node-modules.sh (the locked Nx install, healed
-# when missing), scripts/nx (Nx, quiet on success) and scripts/gate-plan.sh (which
-# tier, base and projects `just check` runs). They run with this repository's own
-# Nx over a scratch workspace shaped like this one — a contract (`lib`), its e2e
+# The gate's entry points over the real Nx install: scripts/node-modules.sh's fast
+# path, scripts/nx (Nx, quiet on success) and scripts/gate-plan.sh (which tier,
+# base and projects `just check` runs). They run with this repository's own Nx
+# over a scratch workspace shaped like this one — a contract (`lib`), its e2e
 # suite (`lib-e2e`), an SDK (`sdk`) and an external tier (`live`) — whose history
 # each test writes. onejudge-repo's gate_plan.rs holds the same selection rules;
-# this suite is what measures the scripts' lines. bun and npm are doubles only
-# where the install itself is under test.
+# this suite is what measures the scripts' lines.
 
-load helpers
+load ../../tests/support/helpers
 bats_require_minimum_version 1.5.0
 
 # workspace — the scratch Nx workspace in TREE, committed once; BASE is its SHA.
@@ -57,101 +56,6 @@ plan() {
 
     [ "$status" -eq 0 ]
     [ -z "$output" ]
-}
-
-# install_tree — a tree with the locked manifest and no install.
-install_tree() {
-    TREE="$BATS_TEST_TMPDIR/tree"
-    link "$TREE" scripts/node-modules.sh
-    cp "$ROOT/package.json" "$ROOT/bun.lock" "$TREE/"
-    BUN_LOG="$BATS_TEST_TMPDIR/bun.log"
-    export BUN_LOG
-}
-
-bun_installs() {
-    double bun <<'EOF'
-printf 'bun %s\n' "$*" >>"$BUN_LOG"
-mkdir -p node_modules/.bin
-: >node_modules/.bin/nx
-EOF
-}
-
-@test "node-modules: a missing install is made with the frozen lockfile and stamped" {
-    install_tree
-    only_tools cmp sed cp mkdir chmod dirname cat
-    bun_installs
-
-    run env PATH="$ONLY_PATH" "$TREE/scripts/node-modules.sh"
-
-    [ "$status" -eq 0 ]
-    [ -z "$output" ]
-    [ "$(cat "$BUN_LOG")" = "bun install --frozen-lockfile --silent" ]
-    cmp -s "$TREE/bun.lock" "$TREE/node_modules/.bun-lock-installed"
-
-    run env PATH="$ONLY_PATH" "$TREE/scripts/node-modules.sh"
-    [ "$status" -eq 0 ]
-    [ "$(wc -l <"$BUN_LOG" | tr -d ' ')" = 1 ]
-}
-
-@test "node-modules: a failed install says what to check and leaves no stamp" {
-    install_tree
-    only_tools cmp sed cp mkdir chmod dirname cat
-    double bun <<'EOF'
-exit 1
-EOF
-
-    run env PATH="$ONLY_PATH" "$TREE/scripts/node-modules.sh"
-
-    [ "$status" -eq 1 ]
-    [ "${lines[0]}" = "node-modules: 'bun install --frozen-lockfile' failed" ]
-    [[ "${lines[1]}" == "ACTION: if package.json changed, run 'bun install' and commit bun.lock;"* ]]
-    [ ! -e "$TREE/node_modules/.bun-lock-installed" ]
-}
-
-@test "node-modules: without bun, the pinned bun is installed through npm" {
-    install_tree
-    only_tools cmp sed cp mkdir chmod dirname cat
-    NPM_LOG="$BATS_TEST_TMPDIR/npm.log"
-    export NPM_LOG
-    double npm <<'EOF'
-printf 'npm %s\n' "$*" >"$NPM_LOG"
-printf '#!/usr/bin/env bash\nprintf "bun %%s\\n" "$*" >>"$BUN_LOG"\nmkdir -p node_modules/.bin\n: >node_modules/.bin/nx\n' >"$(dirname "$0")/bun"
-chmod +x "$(dirname "$0")/bun"
-EOF
-    version="$(sed -n 's/.*"packageManager": *"bun@\([0-9][0-9.]*\)".*/\1/p' "$ROOT/package.json")"
-
-    run env PATH="$ONLY_PATH" "$TREE/scripts/node-modules.sh"
-
-    [ "$status" -eq 0 ]
-    [ "$(cat "$NPM_LOG")" = "npm install --global --silent bun@$version" ]
-    [ "$(cat "$BUN_LOG")" = "bun install --frozen-lockfile --silent" ]
-}
-
-@test "node-modules: without bun, a failed npm install names the version to install" {
-    install_tree
-    only_tools cmp sed cp mkdir chmod dirname cat
-    double npm <<'EOF'
-exit 1
-EOF
-    version="$(sed -n 's/.*"packageManager": *"bun@\([0-9][0-9.]*\)".*/\1/p' "$ROOT/package.json")"
-
-    run env PATH="$ONLY_PATH" "$TREE/scripts/node-modules.sh"
-
-    [ "$status" -eq 1 ]
-    [ "${lines[0]}" = "node-modules: 'npm install --global bun@$version' failed" ]
-    [ "${lines[1]}" = "ACTION: install bun $version yourself (https://bun.sh), then re-run 'just bootstrap'" ]
-}
-
-@test "node-modules: without bun or npm, it says to install bun at the pinned version" {
-    install_tree
-    only_tools cmp sed cp mkdir chmod dirname cat
-    version="$(sed -n 's/.*"packageManager": *"bun@\([0-9][0-9.]*\)".*/\1/p' "$ROOT/package.json")"
-
-    run env PATH="$ONLY_PATH" "$TREE/scripts/node-modules.sh"
-
-    [ "$status" -eq 1 ]
-    [ "${lines[0]}" = "node-modules: bun is not installed and cannot be installed here (needs npm and package.json's packageManager)" ]
-    [ "${lines[1]}" = "ACTION: install bun $version — https://bun.sh — then re-run 'just bootstrap'" ]
 }
 
 @test "nx: a passing run prints one summary line naming its log" {

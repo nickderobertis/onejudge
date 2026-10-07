@@ -3,7 +3,7 @@
 # downloads that target's archive and installs the binary. `uname` and `curl` are
 # doubles; the archive is a real tarball shaped like release-binaries.yml's.
 
-load helpers
+load support/helpers
 
 setup() {
     use_doubles

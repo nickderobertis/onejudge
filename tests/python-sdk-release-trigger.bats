@@ -4,7 +4,7 @@
 # scripts/check-python-sdk-release-trigger.sh — the check the gate ran before this
 # suite, run here unchanged — plus the refusals that check does not reach.
 
-load helpers
+load support/helpers
 
 @test "SDK fixes, features and breaking changes become the crate prefix; crate and docs changes do not" {
     run "$ROOT/scripts/check-python-sdk-release-trigger.sh"

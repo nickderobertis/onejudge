@@ -1,7 +1,7 @@
 {
   "name": "workspace",
   "$schema": "node_modules/nx/schemas/project-schema.json",
-  "//": "The workspace root: it owns every file no other project does (toolchain, lockfiles, justfile, docs, schemas, CI), so a change there runs the broader tier. It also owns the repository's shell sources (install.sh, scripts/, and their bats suite in tests/), so it carries the shell targets: shfmt (format, format-check), shellcheck and actionlint (lint), the bats suite under bashcov (test). Its other targets are the repo-level ones: the aggregate Rust and shell coverage, the supply-chain audit, the MSRV build, and the root-file drift checks. It depends on the crates whose suites the coverage aggregate merges, so a change to any of them reruns it.",
+  "//": "The workspace root: it owns every file no other project does (toolchain, lockfiles, justfile, docs, schemas, CI), so a change there runs the broader tier. It also owns the repository's scripts (install.sh, scripts/) and their offline bats suite (tests/), so it carries the shell targets: shfmt (format, format-check), shellcheck and actionlint (lint), the offline suite under bashcov (test). Its other targets are the repo-level ones: the aggregate Rust and shell coverage, the supply-chain audit, the MSRV build, and the root-file drift checks. It depends on the crates and the shell suites whose reports the coverage aggregate merges, and on the shell helpers its suite loads, so a change to any of them reruns it.",
   "projectType": "application",
   "tags": [
     "type:workspace",
@@ -11,7 +11,9 @@
     "onejudge",
     "onejudge-test-doubles",
     "onejudge-e2e",
-    "onejudge-cli-e2e"
+    "onejudge-cli-e2e",
+    "onejudge-scripts-e2e",
+    "onejudge-shell-test-support"
   ],
   "targets": {
     "format": {
@@ -82,6 +84,10 @@
           "target": "test"
         },
         {
+          "projects": [
+            "workspace",
+            "onejudge-scripts-e2e"
+          ],
           "target": "test"
         }
       ]

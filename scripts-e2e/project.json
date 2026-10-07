@@ -1,0 +1,30 @@
+{
+  "name": "onejudge-scripts-e2e",
+  "$schema": "../node_modules/nx/schemas/project-schema.json",
+  "//": "The workspace scripts' journeys through the real host tools they drive — this repository's own Nx install (scripts/nx, scripts/gate-plan.sh, scripts/node-modules.sh's fast path) and cargo (scripts/cargo-target-dir.sh) — kept out of the workspace's offline suite so a change to an unrelated script does not pay for them. Its test runs them under bashcov against the workspace's scripts and writes target/shell-coverage/onejudge-scripts-e2e, which workspace:coverage merges. A script change is a workspace-root change, which sweeps, so this reruns with every script it drives.",
+  "projectType": "application",
+  "tags": [
+    "type:e2e",
+    "lang:shell"
+  ],
+  "implicitDependencies": [
+    "onejudge-shell-test-support"
+  ],
+  "targets": {
+    "format": {
+      "command": "just _sh-format scripts-e2e"
+    },
+    "format-check": {
+      "command": "just _sh-format-check scripts-e2e"
+    },
+    "lint": {
+      "command": "just _sh-lint scripts-e2e onejudge-scripts-e2e"
+    },
+    "test": {
+      "command": "just _sh-test scripts-e2e onejudge-scripts-e2e .",
+      "outputs": [
+        "{workspaceRoot}/target/shell-coverage/onejudge-scripts-e2e"
+      ]
+    }
+  }
+}

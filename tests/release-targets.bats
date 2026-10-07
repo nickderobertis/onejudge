@@ -3,7 +3,7 @@
 # release-binaries.yml's matrix: over this tree, and over a scratch tree whose
 # install.sh or workflow has drifted.
 
-load helpers
+load support/helpers
 
 setup() {
     TREE="$BATS_TEST_TMPDIR/tree"

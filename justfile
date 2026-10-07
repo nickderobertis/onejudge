@@ -298,10 +298,12 @@ _coverage:
 _sh-files root +command:
     #!/usr/bin/env bash
     set -euo pipefail
-    list="$(./scripts/shell-files.sh "$1")"
+    root="$1"
     shift
+    list="$(./scripts/shell-files.sh "$root")"
     if [ -z "$list" ]; then
-        echo "shell: no shell sources under $1, so there is nothing to check" >&2
+        echo "shell: project '$root' owns no shell sources, so \`$*\` has nothing to check" >&2
+        echo "ACTION: drop the shell targets from $root/project.json, or add the scripts they are for" >&2
         exit 1
     fi
     files=()
@@ -315,8 +317,10 @@ _sh-format root:
 _sh-format-check root:
     just _sh-files {{root}} pixi run --locked shfmt -d
 
-_sh-lint root:
-    just _sh-files {{root}} pixi run --locked shellcheck
+# A shell project's lint. `project` names it for the boundary and target-command
+# checks every other project's lint runs; the workspace runs those itself.
+_sh-lint root project="":
+    {{ if project == "" { "" } else { "node scripts/check-project-boundaries.mjs " + project + " && node scripts/check-target-commands.mjs " + project + " && " } }}just _sh-files {{root}} pixi run --locked shellcheck
 
 # The workflows' own lint, run by the project that owns them; actionlint checks
 # each `run:` block with the pinned shellcheck it finds on the pixi PATH.
@@ -324,15 +328,17 @@ _actionlint:
     pixi run --locked actionlint
 
 # A shell project's `test`: its bats suite (`<root>/tests`) under bashcov, which
-# writes the project's line coverage of the scripts it owns — its tests excluded
-# — into target/shell-coverage/<project> (.simplecov) for `_sh-coverage` to merge.
-# The previous report goes first, so the merge never reads a stale one.
-_sh-test root project:
+# writes its line coverage of the scripts the project at `covers` owns — tests
+# excluded — into target/shell-coverage/<project> (.simplecov) for `_sh-coverage`
+# to merge. `covers` is the project itself, or for a suite in a project of its own
+# (onejudge-scripts-e2e), the project whose scripts it drives. The previous report
+# goes first, so the merge never reads a stale one.
+_sh-test root project covers=root:
     #!/usr/bin/env bash
     set -euo pipefail
     rm -rf "target/shell-coverage/{{project}}"
     ./scripts/node-modules.sh
-    list="$(./scripts/shell-files.sh {{root}})"
+    list="$(./scripts/shell-files.sh {{covers}})"
     export SHELL_COVERAGE_PROJECT={{project}}
     SHELL_COVERAGE_FILES="$(grep -vE '(^|/)tests/' <<<"$list" || true)"
     export SHELL_COVERAGE_FILES

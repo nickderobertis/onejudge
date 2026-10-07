@@ -1,19 +1,11 @@
 #!/usr/bin/env bats
-# The scripts that drive cargo for the gate: scripts/cargo-target-dir.sh (where
-# the instrumented suites' doubles are) and scripts/check-judge-seat-frames.sh
-# (the judge-seat frame bundle's drift and version checks). The target directory
-# is asked of the real cargo; the frame checks' cargo is a double recording what
-# it was asked to run, because the real one builds the crate, which
-# `onejudge:lint` already does in the gate.
+# The scripts that drive cargo for the gate, with cargo a double:
+# scripts/cargo-target-dir.sh's refusals (its answer from the real cargo is
+# onejudge-scripts-e2e's) and scripts/check-judge-seat-frames.sh (the judge-seat
+# frame bundle's drift and version checks), whose real cargo builds the crate,
+# which `onejudge:lint` already does in the gate.
 
-load helpers
-
-@test "cargo-target-dir prints the target directory cargo resolves" {
-    run "$ROOT/scripts/cargo-target-dir.sh"
-
-    [ "$status" -eq 0 ]
-    [ "$output" = "$(cd "$ROOT" && cargo metadata --format-version 1 --no-deps | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])')" ]
-}
+load support/helpers
 
 @test "cargo-target-dir names a failed cargo metadata and what to do" {
     use_doubles
