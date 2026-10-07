@@ -13,3 +13,18 @@ indent_size = 4
 [*.{yml,yaml,toml,md,json}]
 indent_style = space
 indent_size = 2
+
+# The shell style shfmt enforces (`format-check` runs `shfmt -d`, `format` runs
+# `shfmt -w`): shfmt reads these keys, so the style is recorded here once.
+# `scripts/nx` has no extension, so it has a section of its own.
+[*.{sh,bash,bats}]
+indent_style = space
+indent_size = 4
+switch_case_indent = true
+binary_next_line = true
+
+[scripts/nx]
+indent_style = space
+indent_size = 4
+switch_case_indent = true
+binary_next_line = true

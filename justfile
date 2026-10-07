@@ -27,9 +27,9 @@ gate_features := "onejudge/sdk-schema"
 # Dependencies keep Cargo's `--cap-lints allow`.
 export RUSTFLAGS := trim(env("RUSTFLAGS", "") + " -D warnings")
 
-# `uv` and `llmlint` install into ~/.local/bin, which a CI runner's PATH may not
-# carry; appended, so anything already on PATH still wins.
-export PATH := if os_family() == "windows" { env("PATH") } else { env("PATH") + ":" + home_directory() + "/.local/bin" }
+# `uv` and `llmlint` install into ~/.local/bin and pixi into ~/.pixi/bin, which a
+# CI runner's PATH may not carry; appended, so anything already on PATH still wins.
+export PATH := if os_family() == "windows" { env("PATH") } else { env("PATH") + ":" + home_directory() + "/.local/bin:" + home_directory() + "/.pixi/bin" }
 
 # What the coverage report measures: the published library's source, never its
 # thin `onejudge` entrypoint or the test doubles' crate.
@@ -42,14 +42,18 @@ py_sdk := "uv run --no-project --python 3.9 --with-requirements python/onejudge-
 default:
     @just --list
 
-# Set up from a clean clone: pinned toolchain, cargo tools, the Nx install, fetched deps.
+# Set up from a clean clone: pinned toolchain, cargo tools, the Nx install, the
+# shell toolchain, fetched deps.
 bootstrap:
     rustup show active-toolchain >/dev/null   # installs the rust-toolchain.toml channel + components
     for t in cargo-nextest cargo-llvm-cov cargo-deny cargo-machete; do \
         command -v "$t" >/dev/null 2>&1 || cargo install "$t" --locked; \
     done
-    ./scripts/node-modules.sh                 # bun (pinned in package.json) + the locked Nx install
+    ./scripts/node-modules.sh                 # bun (pinned in package.json) + the locked Nx and bats install
     command -v uv >/dev/null 2>&1 || { curl -LsSf https://astral.sh/uv/install.sh | sh; }
+    command -v pixi >/dev/null 2>&1 || { curl -fsSL https://pixi.sh/install.sh | PIXI_NO_PATH_UPDATE=1 PIXI_VERSION="v$(sed -n 's/^requires-pixi = ">=\(.*\)"$/\1/p' pixi.toml)" bash; }
+    pixi install --locked                     # shellcheck, shfmt, actionlint, Ruby (pixi.lock)
+    pixi run --locked bundle install --quiet  # bashcov and its gems (Gemfile.lock)
     cargo fetch --locked
 
 # The quality gate. Default: the AFFECTED tier — every gate target of the projects
@@ -161,6 +165,8 @@ msrv:
 upgrade:
     cargo update
     bun update
+    pixi update
+    pixi run --locked env BUNDLE_FROZEN=false bundle update --quiet
     @just check --sweep
 
 # Install/refresh the llmlint toolchain (oneharness + llmlint). Idempotent.
