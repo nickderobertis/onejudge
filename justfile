@@ -347,10 +347,11 @@ _sh-test root project covers=root:
 
 # The aggregate shell coverage gate: every shell project's bashcov report merged,
 # failing below `shell_coverage_min`. One line when it passes; below the floor,
-# each script short of full coverage too. The HTML report is always written.
+# each script short of full coverage too. The HTML report is always written, fresh.
 _sh-coverage:
     #!/usr/bin/env bash
     set -euo pipefail
+    rm -rf target/shell-coverage-merged
     exec pixi run --locked bundle exec ruby -e '
     require "simplecov"
     reports = Dir["target/shell-coverage/*/.resultset.json"].sort
