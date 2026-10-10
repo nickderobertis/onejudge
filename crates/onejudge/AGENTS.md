@@ -15,3 +15,6 @@
 - **`src/bin/onejudge.rs` stays thin**: it is outside the coverage report, so the
   CLI's logic belongs in the covered `src/cli/` modules.
 - **Never regenerate `tests/golden/` from the tree.**
+- **No evaluator prompt states a permission.** Every judge gets the one
+  `evidence_prompt` whatever its mode; the mode is oneharness's to enforce, and a
+  prompt restating it can only contradict it (`docs/judges.md`).
