@@ -4462,10 +4462,12 @@ fn posture_baseline(seam: Seam) -> serde_json::Value {
 /// The baseline a posture journey is held to today: the same config's harness
 /// invocations once every judge is handed the one evidence contract, captured by
 /// `scripts/capture-judge-posture-baseline.sh`.
+#[cfg(unix)]
 fn one_contract_baseline(seam: Seam) -> serde_json::Value {
     golden(ONE_CONTRACT_GOLDEN, seam)
 }
 
+#[cfg(unix)]
 const ONE_CONTRACT_GOLDEN: &str = "judge-posture-one-contract";
 
 fn golden(dir: &str, seam: Seam) -> serde_json::Value {
