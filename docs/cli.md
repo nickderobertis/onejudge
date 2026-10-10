@@ -255,8 +255,7 @@ Top-level keys:
 Each entry is a file or directory; an absolute path is used as written and a
 relative one resolves against the skill's working directory. Every judge-side
 prompt (supervisor, eval judge, assessment) then lists each resolved path, says
-the artifacts may be untracked or gitignored and are read with the file-reading
-tools, names an entry that does not exist as not existing (the run continues),
+the artifacts may be untracked or gitignored and are read directly, names an entry that does not exist as not existing (the run continues),
 and lists a directory's files newest-modified first — at most 50, with a line
 counting the rest. The listing is re-read on every judge-side turn. Empty (the
 default) leaves every prompt unchanged; the read-only tool allowlist and the

@@ -71,8 +71,8 @@
 //!   `{"argv": [...], "stdin": "..."}`, exactly what oneharness spawned this
 //!   harness with. It is how a journey holds the *harness* argv and the prompt a
 //!   judge was handed to a recorded baseline, on either seam.
-//! * `[[evaluate]]` — on a judge-side turn (one whose prompt carries an evidence
-//!   contract, in any posture), answer in that turn's shape — a completed
+//! * `[[evaluate]]` — on a judge-side turn (one whose prompt carries the evidence
+//!   contract, the same in every posture), answer in that turn's shape — a completed
 //!   supervisor decision, a passing boolean or top numeric verdict, or assessment
 //!   prose — whatever tools the turn was granted. A worker turn is left alone.
 //! * `[[judge-event:CMD]]` — on a judge-side turn that asked for events, emit one
@@ -119,7 +119,7 @@ fn main() {
     if let Some(path) = marker(&prompt, "record-harness") {
         record_invocation(&path, &args, &stdin);
     }
-    let evaluator = prompt.contains("EVIDENCE CONTRACT (");
+    let evaluator = prompt.contains(onejudge::EVIDENCE_PROMPT_MARKER);
     let invoked = invocation(&args);
     let stream = matches!(invoked, Invocation::ClaudeCode { stream: true });
     let opencode = matches!(invoked, Invocation::OpenCode);
@@ -232,7 +232,7 @@ fn restrictive_evaluator_reply(prompt: &str, args: &[String]) -> Option<String> 
         return Some("read-only tool allowlist drifted".into());
     }
     let refused = prompt.matches("Evidence tool request refused:").count();
-    if !prompt.contains("Evidence tool result (read-only):") {
+    if !prompt.contains("Evidence tool result:") {
         return Some(r#"{"tool":"git_status"}"#.into());
     }
     if !prompt.contains("unstaged:\n") {
@@ -316,7 +316,7 @@ fn evaluated_reply(prompt: &str, evaluator: bool) -> Option<String> {
 /// `[[artifact-evaluator:PATH]]` marker.
 fn artifact_evaluator_reply(prompt: &str, args: &[String]) -> Option<String> {
     let log = marker(prompt, "artifact-evaluator")?;
-    if !prompt.contains("EVIDENCE CONTRACT (READ-ONLY, ENFORCED)") {
+    if !prompt.contains(onejudge::EVIDENCE_PROMPT_MARKER) {
         return None;
     }
     if !exact_read_only_tools(args) {

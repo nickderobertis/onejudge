@@ -3435,9 +3435,22 @@ fn a_single_judge_controlled_config_runs_as_0_8_1_did_except_the_supervisor_addr
     ))
     .expect("the judge's session record is where the address says");
 
+    // 0.8.1 handed the judge the read-only evidence contract; every judge is now
+    // handed the one contract instead, and that swap is the only other change.
+    // The fake oneharness bills a prompt's length as its input tokens, so the
+    // usage moves by exactly the difference, once per contract the judge saw.
+    let released_prompts = std::fs::read_to_string(fixture.join("prompts.log")).unwrap();
+    let contracts = released_prompts.matches(READ_ONLY_CONTRACT).count();
+    assert!(
+        contracts > 0,
+        "the released prompts carry the read-only contract"
+    );
+    let growth = (ONE_CONTRACT.len() as i64 - READ_ONLY_CONTRACT.len() as i64) * contracts as i64;
     let mut expected: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(fixture.join("report.json")).unwrap())
             .unwrap();
+    let billed = expected["usage"]["input_tokens"].as_i64().unwrap() + growth;
+    expected["usage"]["input_tokens"] = billed.into();
     let baseline = expected.as_object_mut().unwrap();
     assert_eq!(
         baseline.remove("supervisor_control"),
@@ -3449,12 +3462,16 @@ fn a_single_judge_controlled_config_runs_as_0_8_1_did_except_the_supervisor_addr
         "the report differs from what onejudge 0.8.1 wrote for this config"
     );
 
-    // The judge was handed byte for byte the prompts 0.8.1 handed it. The capture
-    // script writes them as `prompts.log`; `supervisor-prompts.log` holds the same
-    // capture under the name an earlier replay read, so both are held to the run.
+    // The judge was handed byte for byte the prompts 0.8.1 handed it, but for the
+    // evidence contract. The capture script writes them as `prompts.log`;
+    // `supervisor-prompts.log` holds the same capture under the name an earlier
+    // replay read, so both are held to the run.
     let prompts = normalize(&std::fs::read_to_string(&record).unwrap());
+    assert_one_contract(&prompts);
     for name in ["prompts.log", "supervisor-prompts.log"] {
-        let baseline = std::fs::read_to_string(fixture.join(name)).unwrap();
+        let baseline = std::fs::read_to_string(fixture.join(name))
+            .unwrap()
+            .replace(READ_ONLY_CONTRACT, ONE_CONTRACT);
         assert_eq!(prompts, baseline, "the judge's prompts differ from {name}");
     }
     let _ = std::fs::remove_dir_all(&ctl);
@@ -4128,7 +4145,7 @@ impl PostureOutcome {
     fn judge_side(&self) -> Vec<&serde_json::Value> {
         self.harness
             .iter()
-            .filter(|call| call.to_string().contains("EVIDENCE CONTRACT ("))
+            .filter(|call| call.to_string().contains(onejudge::EVIDENCE_PROMPT_MARKER))
             .collect()
     }
 
@@ -4434,14 +4451,66 @@ impl PostureRun {
     }
 }
 
-/// The baseline a posture journey is held to: what the released onejudge 0.15.0
-/// handed each harness for the same config, captured by
-/// `scripts/capture-judge-posture-baseline.sh`.
+/// The superseded baseline: what the released onejudge 0.15.0 handed each harness
+/// for the same config. Its harness argv is still the bar — a judge's mode is
+/// enforced there — and its prompts differ from today's by the evidence contract
+/// alone.
 fn posture_baseline(seam: Seam) -> serde_json::Value {
+    golden("judge-posture-0.15.0", seam)
+}
+
+/// The baseline a posture journey is held to today: the same config's harness
+/// invocations once every judge is handed the one evidence contract, captured by
+/// `scripts/capture-judge-posture-baseline.sh`.
+fn one_contract_baseline(seam: Seam) -> serde_json::Value {
+    golden(ONE_CONTRACT_GOLDEN, seam)
+}
+
+const ONE_CONTRACT_GOLDEN: &str = "judge-posture-one-contract";
+
+fn golden(dir: &str, seam: Seam) -> serde_json::Value {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/golden/judge-posture-0.15.0")
+        .join("tests/golden")
+        .join(dir)
         .join(format!("{}.json", seam.name()));
     serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+}
+
+/// The read-only evidence contract 0.8.1 through 0.18 handed a judge, which the
+/// one contract replaces in every mode.
+#[cfg(unix)]
+const READ_ONLY_CONTRACT: &str = "EVIDENCE CONTRACT (READ-ONLY, ENFORCED)\n\
+    `[tool]` lines are abbreviated summaries; absence there is not evidence of absence. Only \
+    read-only tools may inspect files, git state, and full history; no change is permitted, and \
+    this restriction is enforced. Restrictive evaluators must use file-reading or glob tools \
+    directly, never a shell command. Before the final answer you may request exactly \
+    `{\"tool\":\"git_status\"}` or `{\"tool\":\"git_diff\"}`; no other member is allowed.";
+
+/// The one evidence contract every judge is handed, whatever its mode.
+const ONE_CONTRACT: &str = "EVIDENCE CONTRACT\n\
+    `[tool]` lines are abbreviated summaries; absence there is not evidence of absence. Inspect \
+    files, git state, and full history, and verify the work yourself — for example by reading \
+    the commit log or running the tests. Before the final answer you may request exactly \
+    `{\"tool\":\"git_status\"}` or `{\"tool\":\"git_diff\"}`; no other member is allowed.";
+
+/// `prompt` carries the one evidence contract and states no permission: what a
+/// judge may do to the tree is its oneharness mode's to enforce.
+fn assert_one_contract(prompt: &str) {
+    assert!(prompt.contains(ONE_CONTRACT), "{prompt}");
+    for forbidden in [
+        "read-only tools",
+        "no change is permitted",
+        "restriction is enforced",
+        "file-reading or glob tools",
+        "never a shell command",
+        "permission mode",
+        "leave it as you found it",
+        "with the file-reading tools",
+        "(read-only)",
+        "(MODE:",
+    ] {
+        assert!(!prompt.contains(forbidden), "`{forbidden}` in {prompt}");
+    }
 }
 
 /// The default-posture journey: a judge whose config names no mode, anywhere.
@@ -4542,8 +4611,9 @@ fn every_history_record_a_run_writes_carries_its_session_turn_role_and_judge_lab
 /// the placeholders reconcile on a POSIX path and nowhere else.
 #[cfg(unix)]
 #[test]
-fn with_no_mode_configured_the_harness_argv_and_judge_prompts_are_the_0_15_0_ones() {
-    // `ONEJUDGE_CAPTURE_POSTURE_BASELINE=<onejudge 0.15.0>` re-records the
+fn with_no_mode_configured_the_harness_argv_is_0_15_0s_and_the_judge_prompts_carry_the_one_contract(
+) {
+    // `ONEJUDGE_CAPTURE_POSTURE_BASELINE=<onejudge>` re-records the one-contract
     // baseline from that binary instead of comparing (the capture script's path).
     let capture = std::env::var("ONEJUDGE_CAPTURE_POSTURE_BASELINE").ok();
     for seam in Seam::BOTH {
@@ -4555,7 +4625,8 @@ fn with_no_mode_configured_the_harness_argv_and_judge_prompts_are_the_0_15_0_one
         });
         if capture.is_some() {
             let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("tests/golden/judge-posture-0.15.0")
+                .join("tests/golden")
+                .join(ONE_CONTRACT_GOLDEN)
                 .join(format!("{}.json", seam.name()));
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();
             std::fs::write(
@@ -4565,13 +4636,134 @@ fn with_no_mode_configured_the_harness_argv_and_judge_prompts_are_the_0_15_0_one
             .unwrap();
             continue;
         }
-        let baseline = posture_baseline(seam);
         // Four evaluator invocations — the supervisor's decision, the `done_when`
         // re-judge, the eval and the assessment — every one read-only.
-        assert_eq!(outcome.judge_side().len(), 4, "{seam:?}");
+        let judged = outcome.judge_side();
+        assert_eq!(judged.len(), 4, "{seam:?}");
+        for call in judged {
+            assert_one_contract(&prompt_of(call));
+        }
         assert_eq!(
-            recorded["harness"], baseline["harness"],
-            "{seam:?}: the harness argv or a judge prompt differs from onejudge 0.15.0's"
+            recorded["harness"],
+            one_contract_baseline(seam)["harness"],
+            "{seam:?}: the harness argv or a judge prompt differs from the recorded baseline"
+        );
+        // Against the release the contract replaced: every harness argv is
+        // 0.15.0's — so each mode is enforced exactly as it was — and every judge
+        // prompt is 0.15.0's with its read-only contract swapped for the one
+        // contract, and nothing else changed.
+        let released: Vec<serde_json::Value> = posture_baseline(seam)["harness"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|call| {
+                serde_json::from_str(
+                    &call
+                        .to_string()
+                        .replace(&json_inner(READ_ONLY_CONTRACT), &json_inner(ONE_CONTRACT)),
+                )
+                .unwrap()
+            })
+            .collect();
+        assert_eq!(
+            outcome.harness, released,
+            "{seam:?}: more than the evidence contract differs from onejudge 0.15.0"
+        );
+    }
+}
+
+/// `text` as it appears inside a JSON string literal.
+#[cfg(unix)]
+fn json_inner(text: &str) -> String {
+    let quoted = serde_json::to_string(text).unwrap();
+    quoted[1..quoted.len() - 1].to_string()
+}
+
+#[test]
+fn a_read_only_judge_and_a_default_judge_are_handed_the_same_evidence_contract() {
+    // One judge resolved to `read-only`, one to `default`, in one panel the
+    // split allows a writable judge into. The mode reaches each judge's harness
+    // argv and its recorded posture — and nowhere in its prompts, which are the
+    // same bytes for both.
+    for seam in Seam::BOTH {
+        let run = PostureRun::new("read-only-and-default", seam);
+        let read_only = run.judge_config("read-only.toml", "mode = \"read-only\"\n");
+        let default = run.judge_config("default.toml", "mode = \"default\"\n");
+        let provider = run.split(
+            &["allow_writable_judges: true"],
+            &[
+                &[&judge_config_line(&read_only), "label: reader"],
+                &[&judge_config_line(&default), "label: writer"],
+            ],
+        );
+        let outcome = run.run(&provider, "", &[]);
+        assert_eq!(outcome.code, Some(0), "{seam:?}: {}", outcome.stderr);
+
+        // claude-code renders `read-only` as the read-only tool allowlist and
+        // `default` as its unattended approval flow.
+        let (reader, writer): (Vec<&serde_json::Value>, Vec<&serde_json::Value>) = outcome
+            .judge_side()
+            .into_iter()
+            .partition(|call| argv_of(call).iter().any(|arg| arg == "--tools"));
+        assert_eq!(reader.len(), 4, "{seam:?}");
+        assert_eq!(writer.len(), 4, "{seam:?}");
+        for call in &reader {
+            let argv = argv_of(call);
+            assert!(
+                argv.windows(6)
+                    .any(|w| w == ["--tools", "Read", "Grep", "Glob", "WebFetch", "WebSearch"]),
+                "{seam:?}: {argv:?}"
+            );
+        }
+        for call in &writer {
+            let argv = argv_of(call);
+            assert!(
+                argv.windows(2)
+                    .any(|w| w == ["--permission-mode", "dontAsk"]),
+                "{seam:?}: {argv:?}"
+            );
+        }
+        let prompts = |calls: &[&serde_json::Value]| {
+            let mut prompts: Vec<String> = calls.iter().map(|call| prompt_of(call)).collect();
+            prompts.sort();
+            prompts
+        };
+        let (reader, writer) = (prompts(&reader), prompts(&writer));
+        for prompt in &reader {
+            assert_one_contract(prompt);
+        }
+        assert_eq!(
+            reader, writer,
+            "{seam:?}: the two modes were prompted differently"
+        );
+
+        // The report records each judge's resolved posture in its telemetry.
+        assert_eq!(outcome.decision("reader")["posture"]["mode"], "read-only");
+        assert_eq!(outcome.decision("writer")["posture"]["mode"], "default");
+        let judged: Vec<(String, String)> = outcome.report()["telemetry"]["attribution"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|a| a["role"] == "judge")
+            .map(|a| {
+                (
+                    a["judge"].as_str().unwrap().to_string(),
+                    a["posture"]["mode"].as_str().unwrap().to_string(),
+                )
+            })
+            .collect();
+        assert!(!judged.is_empty(), "{seam:?}");
+        for (judge, mode) in &judged {
+            let expected = if judge == "reader" {
+                "read-only"
+            } else {
+                "default"
+            };
+            assert_eq!(mode, expected, "{seam:?}: {judged:?}");
+        }
+        assert!(
+            judged.iter().any(|(judge, _)| judge == "writer"),
+            "{judged:?}"
         );
     }
 }
@@ -4698,7 +4890,7 @@ fn an_auto_judge_config_grants_the_judge_a_shell_and_records_what_it_did() {
         assert_eq!(outcome.code, Some(0), "{seam:?}: {}", outcome.stderr);
 
         // The harness ran every evaluator call in claude-code's `auto` mode —
-        // shell included — and the prompt says so instead of forbidding one.
+        // shell included — and the prompt forbids nothing.
         let judged = outcome.judge_side();
         assert_eq!(judged.len(), 4, "{seam:?}");
         for call in &judged {
@@ -4711,15 +4903,9 @@ fn an_auto_judge_config_grants_the_judge_a_shell_and_records_what_it_did() {
                 !argv.iter().any(|arg| arg == "--tools"),
                 "{seam:?}: {argv:?}"
             );
-            let prompt = prompt_of(call);
-            assert!(
-                prompt.contains("EVIDENCE CONTRACT (MODE: auto)"),
-                "{prompt}"
-            );
-            assert!(!prompt.contains("never a shell command"), "{prompt}");
-            assert!(prompt.contains("running the tests"), "{prompt}");
-            // The closed requests stay offered.
-            assert!(prompt.contains(r#"{"tool":"git_diff"}"#), "{prompt}");
+            // The mode is the harness's to enforce; the prompt is the one
+            // contract, closed requests included, and states no posture.
+            assert_one_contract(&prompt_of(call));
         }
 
         // The decision records the posture, the file that set it, and what the
@@ -4805,7 +4991,7 @@ fn an_oneharness_mode_override_in_the_environment_beats_the_judges_config() {
                     .any(|w| w == ["--permission-mode", "acceptEdits"]),
                 "{seam:?}: {argv:?}"
             );
-            assert!(prompt_of(call).contains("EVIDENCE CONTRACT (MODE: edit)"));
+            assert_one_contract(&prompt_of(call));
         }
     }
 }
@@ -4864,15 +5050,15 @@ fn with_no_judge_config_the_discovered_files_follow_the_defaults() {
 
 #[test]
 fn a_judges_instructions_are_appended_to_its_prompts_and_no_other_judges() {
-    // Two read-only judges, one with `instructions`: its prompts are the 0.15.0
-    // prompts with the instructions appended, and its neighbour's are exactly
-    // the 0.15.0 prompts.
+    // Two read-only judges, one with `instructions`: its prompts are the
+    // baseline prompts with the instructions appended, and its neighbour's are
+    // exactly the baseline prompts.
     #[cfg(unix)]
-    let baseline: Vec<String> = posture_baseline(Seam::InProcess)["harness"]
+    let baseline: Vec<String> = one_contract_baseline(Seam::InProcess)["harness"]
         .as_array()
         .unwrap()
         .iter()
-        .filter(|call| call.to_string().contains("EVIDENCE CONTRACT ("))
+        .filter(|call| call.to_string().contains(onejudge::EVIDENCE_PROMPT_MARKER))
         .map(prompt_of)
         .collect();
     let instructions = "Run `cargo test` yourself and read the commit log.";
@@ -4917,7 +5103,10 @@ fn a_judges_instructions_are_appended_to_its_prompts_and_no_other_judges() {
         {
             let mut expected = baseline.clone();
             expected.sort();
-            assert_eq!(sorted_plain, expected, "{seam:?}: not 0.15.0's prompts");
+            assert_eq!(
+                sorted_plain, expected,
+                "{seam:?}: not the baseline's prompts"
+            );
         }
     }
 }

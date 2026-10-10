@@ -134,11 +134,51 @@ fn assert_baseline(name: &str, produced: &serde_json::Value) {
     // Compared as JSON values rather than as text: object key order is a property
     // of how `serde_json` was built, not of what the journey produced.
     let produced: serde_json::Value = serde_json::from_str(&text).unwrap();
-    let expected: serde_json::Value = serde_json::from_str(&expected).unwrap();
+    let mut expected: serde_json::Value = serde_json::from_str(&expected).unwrap();
+    with_the_one_evidence_contract(&mut expected);
     assert_eq!(
         produced, expected,
         "the `{name}` journey no longer produces what the tree before the move produced"
     );
+}
+
+/// The read-only evidence contract the captures' judges were handed.
+const READ_ONLY_CONTRACT: &str = "EVIDENCE CONTRACT (READ-ONLY, ENFORCED)\n\
+    `[tool]` lines are abbreviated summaries; absence there is not evidence of absence. Only \
+    read-only tools may inspect files, git state, and full history; no change is permitted, and \
+    this restriction is enforced. Restrictive evaluators must use file-reading or glob tools \
+    directly, never a shell command. Before the final answer you may request exactly \
+    `{\"tool\":\"git_status\"}` or `{\"tool\":\"git_diff\"}`; no other member is allowed.";
+
+/// The one evidence contract every judge is handed now, whatever its mode.
+const ONE_CONTRACT: &str = "EVIDENCE CONTRACT\n\
+    `[tool]` lines are abbreviated summaries; absence there is not evidence of absence. Inspect \
+    files, git state, and full history, and verify the work yourself — for example by reading \
+    the commit log or running the tests. Before the final answer you may request exactly \
+    `{\"tool\":\"git_status\"}` or `{\"tool\":\"git_diff\"}`; no other member is allowed.";
+
+/// A capture taken before every judge was handed the one evidence contract, as
+/// this tree produces it: the contract swapped in the judge's prompts, and the
+/// double's input-token bill — a prompt's length — moved by the difference, once
+/// per contract. Nothing else about a journey changed with the contract.
+fn with_the_one_evidence_contract(capture: &mut serde_json::Value) {
+    let Some(prompts) = capture
+        .get("judge_prompts")
+        .and_then(serde_json::Value::as_str)
+    else {
+        return;
+    };
+    let contracts = prompts.matches(READ_ONLY_CONTRACT).count();
+    if contracts == 0 {
+        return;
+    }
+    let swapped = prompts.replace(READ_ONLY_CONTRACT, ONE_CONTRACT);
+    capture["judge_prompts"] = json!(swapped);
+    let growth = contracts as i64 * (ONE_CONTRACT.len() as i64 - READ_ONLY_CONTRACT.len() as i64);
+    let tokens = capture
+        .pointer_mut("/outcome/usage/input_tokens")
+        .expect("a journey that records prompts reports the usage they cost");
+    *tokens = json!(tokens.as_i64().expect("input tokens are a count") + growth);
 }
 
 /// Replace this host's scratch dir and double path in a journey's serialized output
