@@ -230,8 +230,8 @@ In process it is the same list on `RunRequest.config`, with no `mode`. oneharnes
 folds each later file over the ones before it and its `ONEHARNESS_*` overrides
 over every file, so the judge's config, the environment or harness `args` decide
 the judge's posture; with no mode configured anywhere it is still read-only —
-the defaults file's — and the harness argv and prompt are byte-identical to
-0.15.0's. A judge-side call with no worktree (the legacy simulated-user turn)
+the defaults file's — and the harness argv is byte-identical to 0.15.0's. A
+judge-side call with no worktree (the legacy simulated-user turn)
 passes the judge config alone, as it always has. A `bypass = true` in a judge's
 config does not beat the defaults: oneharness takes a `mode` from any layer
 before a legacy `bypass` from any layer, so say `mode = "bypass"` instead.
@@ -251,15 +251,18 @@ mode (onejudge's defaults file, the judge's config, a discovered file,
 `environment`, or `default`), and it is the file `oneharness config` over the
 same list attributes the mode to. A list the linked core cannot read is not
 refused by onejudge: the call still passes it, oneharness refuses it with its
-own words as it always has, and onejudge warns, records no posture and frames
-the prompt read-only.
+own words as it always has, and onejudge warns and records no posture.
 
-**The prompt follows the posture.** A read-only judge gets today's evidence
-contract byte for byte. Any other mode gets `EVIDENCE CONTRACT (MODE: <mode>)`,
-stating what the mode grants and inviting the judge to verify the work itself
-(read the commit log, run the tests) while leaving the tree as it found it; the
-closed `{"tool":"git_status"}` / `{"tool":"git_diff"}` requests stay offered and
-the JSON answer format is unchanged. A judge's **`instructions`** are appended
+**The prompt states no posture.** Every judge, in every mode, is handed the same
+evidence contract, headed `EVIDENCE CONTRACT` (`EVIDENCE_PROMPT_MARKER`): `[tool]`
+lines are abbreviated summaries, so their silence is not evidence; inspect files,
+git state and full history; verify the work yourself — read the commit log, run
+the tests; and before the final answer request exactly `{"tool":"git_status"}` or
+`{"tool":"git_diff"}`, no other member. What a judge may do to the tree is its
+oneharness mode's to **enforce**, never the prompt's to assert: a prompt that
+restated it could only disagree with the mode — a read-only Codex judge, which
+reads through its shell, was told never to use one. The JSON answer format is
+unchanged. A judge's **`instructions`** are appended
 to every evaluator prompt it is handed, as `Instructions for this judge:` — what
 to verify and how — and to no other judge's.
 
@@ -424,9 +427,11 @@ The posture journeys in `tests/cli.rs` drive the built binary on both seams —
 the linked engine, and a spawned `onejudge-fake-oneharness` in its engine mode,
 which runs the same core on the argv onejudge spawned it with — down to
 `onejudge-fake-harness`, which records every harness invocation. A judge left at
-its default is held to what the released 0.15.0 produced
-(`tests/golden/judge-posture-0.15.0/`, captured by
-`scripts/capture-judge-posture-baseline.sh`); an `auto` judge's argv, prompt,
+its default is held to `tests/golden/judge-posture-one-contract/` (captured by
+`scripts/capture-judge-posture-baseline.sh`), and to the released 0.15.0's
+harness argv (`tests/golden/judge-posture-0.15.0/`) with only the evidence
+contract swapped in its prompts; a `read-only` and a `default` judge in one
+panel are handed the same contract; an `auto` judge's argv, prompt,
 recorded events and `judge_tool` lines, an `ONEHARNESS_MODE` override, the
 discovery fallback, `instructions`, `events` both ways, the writable-panel
 refusal and the order of `JudgeTool` observations are each proven there, with

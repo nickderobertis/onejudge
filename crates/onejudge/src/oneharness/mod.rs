@@ -648,7 +648,7 @@ impl OneharnessProvider {
     /// passes it, and oneharness refuses it with its own words, exactly as it
     /// always has — onejudge is never stricter about a judge's config than the
     /// oneharness that runs it. Its posture is then unknown, so it is recorded as
-    /// none, framed as the read-only default, and said so on stderr.
+    /// none and said so on stderr; its prompt is the same in every mode.
     fn evaluator(&self, worktree: &str) -> Result<Evaluator> {
         let worktree = Path::new(worktree);
         let configs = posture::evaluator_configs(self.judge_config.as_deref(), worktree)?;
@@ -656,8 +656,8 @@ impl OneharnessProvider {
             Ok(posture) => Some(posture),
             Err(e) => {
                 eprintln!(
-                    "onejudge: warning — {e}; the judge's posture is unknown, so its prompt \
-                     states the read-only default"
+                    "onejudge: warning — {e}; the judge's posture is unknown, so none is \
+                     recorded"
                 );
                 None
             }
@@ -672,11 +672,10 @@ impl OneharnessProvider {
         })
     }
 
-    /// How `evaluator`'s prompts are framed: its posture, and this judge's
-    /// instructions.
-    fn framing<'a>(&'a self, evaluator: &'a Evaluator) -> JudgeFraming<'a> {
+    /// How an evaluator's prompts are framed: this judge's instructions. Its
+    /// posture frames nothing — oneharness enforces it, the prompt never states it.
+    fn framing(&self) -> JudgeFraming<'_> {
         JudgeFraming {
-            mode: evaluator.posture.as_ref().map(|p| p.mode.as_str()),
             instructions: self.judge_instructions.as_deref(),
         }
     }
@@ -1708,7 +1707,7 @@ impl Provider for OneharnessProvider {
                 history_files: &[],
                 artifacts: &[],
             },
-            self.framing(&evaluator),
+            self.framing(),
         );
         supervise_with_reask(|ask| {
             // The re-ask says what was unusable about the last answer; asking the
@@ -1745,7 +1744,7 @@ impl Provider for OneharnessProvider {
             .transpose()?;
         let framing = evaluator
             .as_ref()
-            .map_or_else(JudgeFraming::default, |e| self.framing(e));
+            .map_or_else(JudgeFraming::default, |_| self.framing());
         let base = supervisor_prompt(query, messages, evidence, framing);
         supervise_with_reask(|ask| {
             let mut prompt = format!("{base}{}", self.supervisor_reask_note(ask));
@@ -1785,7 +1784,7 @@ impl Provider for OneharnessProvider {
                                 crate::ProviderErrorKind::Protocol,
                             ));
                         }
-                        prompt.push_str(&format!("\n\nEvidence tool result (read-only):\n{tool_result}\nNow return a decision or one exact allowed request."));
+                        prompt.push_str(&evidence_result_follow_up(&tool_result, "a decision"));
                         continue;
                     }
                     Ok(None) => {}
@@ -1831,7 +1830,7 @@ impl Provider for OneharnessProvider {
             .transpose()?;
         let framing = evaluator
             .as_ref()
-            .map_or_else(JudgeFraming::default, |e| self.framing(e));
+            .map_or_else(JudgeFraming::default, |_| self.framing());
         let mut prompt = judge_prompt(query, messages, evidence, framing);
         let mut usage = Usage::default();
         for attempt in 0..=crate::provider::EVIDENCE_TOOL_RETRY_LIMIT {
@@ -1869,7 +1868,7 @@ impl Provider for OneharnessProvider {
                             crate::ProviderErrorKind::Protocol,
                         ));
                     }
-                    prompt.push_str(&format!("\n\nEvidence tool result (read-only):\n{tool_result}\nNow return a verdict or one exact allowed request."));
+                    prompt.push_str(&evidence_result_follow_up(&tool_result, "a verdict"));
                     continue;
                 }
                 Ok(None) => {}
@@ -1919,7 +1918,7 @@ impl Provider for OneharnessProvider {
             .transpose()?;
         let framing = evaluator
             .as_ref()
-            .map_or_else(JudgeFraming::default, |e| self.framing(e));
+            .map_or_else(JudgeFraming::default, |_| self.framing());
         let mut prompt = assessment_prompt(prompt, messages, evidence, framing);
         let mut usage = Usage::default();
         for attempt in 0..=crate::provider::EVIDENCE_TOOL_RETRY_LIMIT {
@@ -1957,7 +1956,7 @@ impl Provider for OneharnessProvider {
                             crate::ProviderErrorKind::Protocol,
                         ));
                     }
-                    prompt.push_str(&format!("\n\nEvidence tool result (read-only):\n{tool_result}\nNow return the assessment or one exact allowed request."));
+                    prompt.push_str(&evidence_result_follow_up(&tool_result, "the assessment"));
                     continue;
                 }
                 Ok(None) => {}
@@ -1975,6 +1974,12 @@ impl Provider for OneharnessProvider {
         }
         unreachable!()
     }
+}
+
+/// The follow-up that hands an evaluator the result of its evidence request and
+/// asks for `answer` — the same in every mode, like the contract it answers to.
+fn evidence_result_follow_up(tool_result: &str, answer: &str) -> String {
+    format!("\n\nEvidence tool result:\n{tool_result}\nNow return {answer} or one exact allowed request.")
 }
 
 #[cfg(test)]
@@ -2655,5 +2660,109 @@ mod tests {
             )
             .unwrap_err();
         assert_eq!(err.kind(), Some(ProviderErrorKind::Spawn));
+    }
+
+    /// What a judge may do to the tree is its oneharness mode's to enforce, so
+    /// no evaluator prompt and no evidence follow-up states one: every mode a
+    /// judge's config can resolve to — and a posture that cannot be resolved —
+    /// is handed the same bytes.
+    #[test]
+    fn every_mode_is_handed_the_byte_identical_evidence_contract() {
+        use crate::provider::{JudgeKind, TurnOutcome, EVIDENCE_PROMPT_MARKER};
+        let dir = std::env::temp_dir().join(format!("oj-one-contract-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let worktree = dir.to_str().unwrap();
+        let transcript = [Message::user("do it"), Message::assistant("done")];
+        let evidence = EvidenceContext {
+            worktree: Some(worktree),
+            history_files: &[],
+            artifacts: &[],
+        };
+        let supervisor = SupervisorQuery {
+            task: "do it",
+            persona: "reviewer",
+            done_when: None,
+            worktree,
+            history_name: "h",
+            notes: &[],
+            turn: TurnOutcome::Taken,
+            turn_index: 1,
+        };
+        let boolean = JudgeQuery {
+            kind: JudgeKind::Boolean,
+            criterion: "it is done",
+            scale: None,
+        };
+        let numeric = JudgeQuery {
+            kind: JudgeKind::Numeric,
+            criterion: "quality",
+            scale: Some((1.0, 5.0)),
+        };
+        let mut seen: Option<Vec<String>> = None;
+        for mode in [
+            "read-only",
+            "plan",
+            "default",
+            "edit",
+            "auto",
+            "bypass",
+            "not-a-mode",
+        ] {
+            let config = dir.join(format!("{mode}.toml"));
+            std::fs::write(&config, format!("mode = \"{mode}\"\n")).unwrap();
+            let provider = OneharnessProvider::new()
+                .with_judge_config(&config)
+                .with_judge_instructions("Run the tests.");
+            let evaluator = provider.evaluator(worktree).unwrap();
+            // The mode is still resolved and recorded; only the prompt ignores it.
+            match evaluator.posture.as_ref() {
+                Some(posture) => assert_eq!(posture.mode, mode),
+                None => assert_eq!(mode, "not-a-mode"),
+            }
+            let framing = provider.framing();
+            let prompts = vec![
+                supervisor_prompt(&supervisor, &transcript, evidence, framing),
+                judge_prompt(&boolean, &transcript, evidence, framing),
+                judge_prompt(&numeric, &transcript, evidence, framing),
+                assessment_prompt("left?", &transcript, evidence, framing),
+                evidence_result_follow_up("clean", "a verdict"),
+            ];
+            for prompt in &prompts[..4] {
+                assert!(
+                    prompt.contains(&format!("{EVIDENCE_PROMPT_MARKER}\n")),
+                    "{prompt}"
+                );
+            }
+            for prompt in &prompts {
+                for forbidden in [
+                    "read-only tools",
+                    "no change is permitted",
+                    "restriction is enforced",
+                    "file-reading or glob tools",
+                    "never a shell command",
+                    "permission mode",
+                    "leave it as you found it",
+                    "with the file-reading tools",
+                    "(read-only)",
+                    "(MODE:",
+                    // What `posture_of` used to say of each mode.
+                    "change nothing",
+                    "approval flow",
+                    "are approved",
+                    "gated",
+                    "the tools your harness grants",
+                ] {
+                    assert!(
+                        !prompt.contains(forbidden),
+                        "{mode}: `{forbidden}` in {prompt}"
+                    );
+                }
+            }
+            match &seen {
+                None => seen = Some(prompts),
+                Some(first) => assert_eq!(first, &prompts, "{mode} changed the prompts"),
+            }
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

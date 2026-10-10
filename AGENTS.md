@@ -277,10 +277,8 @@ onejudge's defaults file (`mode = "read-only"`) *first* in its config list and n
 mode on the request, so the judge's config, `ONEHARNESS_*` or a discovered file
 decides; the mode and its source are resolved with the linked core's loader and
 recorded (`oneharness/posture.rs`). Setting `mode` on a judge-side request
-reintroduces the silently-ignored-config defect. The default posture is held to
-0.15.0's harness argv and prompts (`onejudge-cli-e2e`'s `tests/golden/judge-posture-0.15.0/`), and a
-writable judge in a multi-judge panel needs `allow_writable_judges`
-(`docs/judges.md`).
+reintroduces the silently-ignored-config defect. A writable judge in a multi-judge
+panel needs `allow_writable_judges` (`docs/judges.md`).
 
 An `oneharness` provider can also **stream** (`provider.stream: true`): tool events
 reach the caller's sink as oneharness observes them, then the finished report, so a

@@ -4714,7 +4714,7 @@ fn named_artifacts_reach_every_judge_side_prompt_and_are_reread_each_turn() {
         assert!(
             prompt.contains(
                 "They may be untracked or gitignored, so `git_status` and `git_diff` do not \
-                 show them: read them with the file-reading tools."
+                 show them: read them directly."
             ),
             "{prompt}"
         );
