@@ -15,4 +15,3 @@
 - **`src/bin/onejudge.rs` stays thin**: it is outside the coverage report, so the
   CLI's logic belongs in the covered `src/cli/` modules.
 - **Never regenerate `tests/golden/` from the tree.**
-- **No evaluator prompt states a permission**; the mode enforces it (`docs/judges.md`).
