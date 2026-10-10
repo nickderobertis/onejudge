@@ -4737,7 +4737,6 @@ fn a_read_only_judge_and_a_default_judge_are_handed_the_same_evidence_contract()
             "{seam:?}: the two modes were prompted differently"
         );
 
-        // The report records each judge's resolved posture in its telemetry.
         assert_eq!(outcome.decision("reader")["posture"]["mode"], "read-only");
         assert_eq!(outcome.decision("writer")["posture"]["mode"], "default");
         let judged: Vec<(String, String)> = outcome.report()["telemetry"]["attribution"]
