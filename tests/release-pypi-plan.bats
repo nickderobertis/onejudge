@@ -102,6 +102,14 @@ https://pypi.org/pypi/onejudge/0.19.0/json" ]
     [ "$(planned upload-sdk)" = false ]
 }
 
+@test "a hand-run for a tag with nothing on the index selects both" {
+    dispatch onejudge-v0.19.0
+
+    [ "$status" -eq 0 ]
+    [ "$(planned upload-cli)" = true ]
+    [ "$(planned upload-sdk)" = true ]
+}
+
 @test "a hand-run for a tag whose distributions are all on the index uploads nothing and succeeds" {
     serves onejudge-cli 0.18.1
     serves onejudge 0.18.1
@@ -185,6 +193,17 @@ ACTION: pass an existing release tag (git ls-remote --tags origin), e.g. onejudg
     [ "$status" -eq 1 ]
     [ "$stderr" = "release-pypi-plan: https://pypi.org/pypi/onejudge-cli/0.19.0/json answered HTTP 503
 ACTION: re-run the workflow once PyPI answers 200 or 404" ]
+    [ ! -s "$GITHUB_OUTPUT" ]
+}
+
+@test "an index failing on the SDK after answering for the CLI writes no partial plan" {
+    serves onejudge-cli 0.19.0
+    serves onejudge 0.19.0 500
+
+    dispatch onejudge-v0.19.0
+
+    [ "$status" -eq 1 ]
+    [ "${stderr%%$'\n'*}" = "release-pypi-plan: https://pypi.org/pypi/onejudge/0.19.0/json answered HTTP 500" ]
     [ ! -s "$GITHUB_OUTPUT" ]
 }
 
@@ -306,11 +325,13 @@ steps() {
     [ "$(grep -cF "|\${{ needs.plan.outputs.sha }}" <<<"$later")" -eq 3 ]
 }
 
-@test "release-pypi.yml uploads each distribution only when the plan selected it" {
+@test "release-pypi.yml downloads and uploads each distribution only when the plan selected it" {
     run steps
 
     [ "$status" -eq 0 ]
-    [ "$(grep '|pypa/gh-action-pypi-publish@' <<<"$output")" = "publish-cli|pypa/gh-action-pypi-publish@release/v1|needs.plan.outputs.upload-cli == 'true'|
+    [ "$(grep -E '^publish-(cli|sdk)\|' <<<"$output")" = "publish-cli|actions/download-artifact@v4|needs.plan.outputs.upload-cli == 'true'|
+publish-cli|pypa/gh-action-pypi-publish@release/v1|needs.plan.outputs.upload-cli == 'true'|
+publish-sdk|actions/download-artifact@v4|needs.plan.outputs.upload-sdk == 'true'|
 publish-sdk|pypa/gh-action-pypi-publish@release/v1|needs.plan.outputs.upload-sdk == 'true'|" ]
 }
 
