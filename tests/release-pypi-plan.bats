@@ -205,7 +205,17 @@ EOF
     dispatch "onejudge-v0.19 .0"
 
     [ "$status" -eq 1 ]
-    [ "${stderr%%$'\n'*}" = "release-pypi-plan: the workflow_dispatch payload names 'onejudge-v0.19 .0', which is not a tag name" ]
+    [ "${stderr%%$'\n'*}" = "'onejudge-v0.19 .0' is not a tag name" ]
+    [ ! -s "$GITHUB_OUTPUT" ]
+}
+
+@test "a hand-run naming a tag with a trailing newline fails rather than trimming it" {
+    serves onejudge-cli 0.19.0
+
+    dispatch 'onejudge-v0.19.0\n'
+
+    [ "$status" -eq 1 ]
+    [ "${stderr%%$'\n'*}" = "'onejudge-v0.19.0\\n' is not a tag name" ]
     [ ! -s "$GITHUB_OUTPUT" ]
 }
 
@@ -231,7 +241,7 @@ EOF
     GITHUB_EVENT_NAME=workflow_dispatch run --separate-stderr "$ROOT/scripts/release-pypi-plan.sh"
 
     [ "$status" -eq 1 ]
-    [ "${stderr##*$'\n'}" = "ACTION: pass the release tag, e.g. onejudge-v0.19.0" ]
+    [ "${stderr##*$'\n'}" = "ACTION: pass the release tag exactly, e.g. onejudge-v0.19.0" ]
 }
 
 @test "any other event fails" {

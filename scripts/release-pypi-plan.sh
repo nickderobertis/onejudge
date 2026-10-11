@@ -26,7 +26,7 @@
 # would either skip an upload or retry one blindly.
 set -euo pipefail
 
-readonly API="${PYPI_JSON_API:-https://pypi.org/pypi}"
+readonly API=https://pypi.org/pypi
 
 fail() {
     printf 'release-pypi-plan: %s\n' "$1" >&2
@@ -44,14 +44,16 @@ case "$GITHUB_EVENT_NAME" in
     *) fail "event '$GITHUB_EVENT_NAME' does not start a PyPI release" "start the workflow from a published Release or by hand with a tag" ;;
 esac
 
+# Validated before the shell sees it, so nothing is trimmed or repaired first:
+# `onejudge-v0.19 .0` or a trailing newline must not quietly become a tag.
 tag=$(python3 -c "
-import json, sys
+import json, re, sys
 with open(sys.argv[1], encoding='utf-8') as handle:
-    print(json.load(handle)$field)
-" "$GITHUB_EVENT_PATH") || fail "the $GITHUB_EVENT_NAME payload at $GITHUB_EVENT_PATH names no tag (see above)" "pass the release tag, e.g. onejudge-v0.19.0"
-# Refused rather than repaired: `onejudge-v0.19 .0` must not quietly become a tag.
-[[ $tag =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] \
-    || fail "the $GITHUB_EVENT_NAME payload names '$tag', which is not a tag name" "pass the release tag exactly, e.g. onejudge-v0.19.0"
+    tag = json.load(handle)$field
+if not isinstance(tag, str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]*', tag):
+    sys.exit(f'{tag!r} is not a tag name')
+print(tag)
+" "$GITHUB_EVENT_PATH") || fail "the $GITHUB_EVENT_NAME payload at $GITHUB_EVENT_PATH names no tag (see above)" "pass the release tag exactly, e.g. onejudge-v0.19.0"
 
 sha=$(git rev-parse --verify --quiet "refs/tags/$tag^{commit}") \
     || fail "'$tag' is not a tag of this repository" "pass an existing release tag (git ls-remote --tags origin), e.g. onejudge-v0.19.0"

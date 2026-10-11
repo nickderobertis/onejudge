@@ -56,10 +56,11 @@ jobs:
     needs: plan
     runs-on: ubuntu-latest
     steps:
-      # llmlint: ignore[no_second_broader_sweep_over_an_already_gated_commit, release_does_not_regate_an_already_swept_commit] A Release published by hand, or a hand-run naming its tag, was never swept by a release PR.
+      # llmlint: ignore-block[no_second_broader_sweep_over_an_already_gated_commit, release_does_not_regate_an_already_swept_commit] A Release published by hand, or a hand-run naming its tag, was never swept by a release PR.
       - uses: actions/checkout@v4
         with:
           ref: ${{ needs.plan.outputs.sha }}
+      # llmlint: ignore-end[no_second_broader_sweep_over_an_already_gated_commit, release_does_not_regate_an_already_swept_commit]
       - name: Install pinned toolchain (from rust-toolchain.toml)
         run: rustup show
       - uses: extractions/setup-just@v3
