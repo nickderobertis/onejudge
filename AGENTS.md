@@ -223,10 +223,10 @@ Use the `just` recipes; do not hand-roll equivalents. `just --list` is the index
 [//]: # "llmlint: ignore-block[agents_md_durable_and_terse] create-repo's bash.md allows a shell floor below 95% only with its reason recorded here, and this repository's alignment task requires the floor recorded with the measurement it rests on; the figures are that measurement, re-recorded when the scripts change."
 - **Shell coverage floor: 82% of the merged report, every script counted** —
   below the 95% default for one reason: `scripts/capture-{judge-posture-baseline,
-  pre-cutover-history,single-judge-baseline}.sh` (94 of 731 lines) capture goldens
+  pre-cutover-history,single-judge-baseline}.sh` (94 of 777 lines) capture goldens
   from released binaries and a real harness, so the gate never runs them. Measured
-  623/731 = 85.2%; every other script is at 623/637 = 97.8%, its misses lines
-  bashcov cannot attribute (`esac ;;`, `} >&2`, `done <<<`, case patterns,
+  667/777 = 85.8%; every other script is at 667/683 = 97.7%, its misses lines
+  bashcov cannot attribute (`esac ;;`, `} >&2`, `} >>file`, `done <<<`, case patterns,
   continuations) and gate-plan.sh's unreachable SHA fallback. Never exclude a
   script to raise it.
 [//]: # "llmlint: ignore-end[agents_md_durable_and_terse]"
