@@ -11,10 +11,11 @@
 # the wiring instead — the job outputs carry exactly the keys the script writes,
 # and each checkout, upload and verification reads the plan's answer.
 
+# llmlint: ignore-file[shell_test_tiers_stay_split] git in a scratch repository is this offline suite's own fixture, as in cargo.bats, lint-llm-diff.bats, python-sdk-release-trigger.bats and shell-files.bats; the e2e project is for the costly host tools (Nx, cargo, pixi), and this whole suite runs in about 8s.
+
 load support/helpers
 bats_require_minimum_version 1.5.0
 
-# llmlint: ignore-block[shell_test_tiers_stay_split] git in a scratch repository is this offline suite's own fixture, as in cargo.bats, lint-llm-diff.bats, python-sdk-release-trigger.bats and shell-files.bats; the e2e project is for the costly host tools (Nx, cargo, pixi), and this whole suite runs in about 8s.
 setup() {
     use_doubles
     REPO="$BATS_TEST_TMPDIR/repo"
@@ -32,7 +33,6 @@ setup() {
     export REQUESTS="$BATS_TEST_TMPDIR/requests" INDEX="$BATS_TEST_TMPDIR/index"
     : >"$GITHUB_OUTPUT"
     : >"$INDEX"
-    # llmlint: ignore-end[shell_test_tiers_stay_split]
     # The index: `<status> <url>` lines in $INDEX; a URL it does not list is 404.
     double curl <<'EOF'
 url="${*: -1}"
