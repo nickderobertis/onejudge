@@ -14,6 +14,7 @@
 load support/helpers
 bats_require_minimum_version 1.5.0
 
+# llmlint: ignore-block[shell_test_tiers_stay_split] git in a scratch repository is this offline suite's own fixture, as in cargo.bats, lint-llm-diff.bats, python-sdk-release-trigger.bats and shell-files.bats; the e2e project is for the costly host tools (Nx, cargo, pixi), and this whole suite runs in about 8s.
 setup() {
     use_doubles
     REPO="$BATS_TEST_TMPDIR/repo"
@@ -31,6 +32,7 @@ setup() {
     export REQUESTS="$BATS_TEST_TMPDIR/requests" INDEX="$BATS_TEST_TMPDIR/index"
     : >"$GITHUB_OUTPUT"
     : >"$INDEX"
+    # llmlint: ignore-end[shell_test_tiers_stay_split]
     # The index: `<status> <url>` lines in $INDEX; a URL it does not list is 404.
     double curl <<'EOF'
 url="${*: -1}"
@@ -312,6 +314,12 @@ steps() {
     grep -qxF "          VERSION: \${{ needs.plan.outputs.version }}" <<<"$verify"
     grep -qxF "          ver=\"\$VERSION\"" <<<"$verify"
     [ "$(grep -c GITHUB_REF <<<"$verify")" -eq 0 ]
+}
+
+@test "release-pypi.yml serializes runs per tag, whichever event names it" {
+    # A Release's payload carries no inputs and a hand-run's carries no release,
+    # so each event's half of the `||` is empty in the other's run.
+    grep -qxF "  group: release-pypi-\${{ github.event.release.tag_name || inputs.tag }}" "$ROOT/.github/workflows/release-pypi.yml"
 }
 
 @test "release-pypi.yml checks out the planned tree in every job after the plan" {
