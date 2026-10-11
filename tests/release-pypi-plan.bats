@@ -3,8 +3,13 @@
 # run builds and which distributions it uploads, decided from the event payload
 # GitHub hands the job. The repository is a scratch one whose default branch has
 # moved past its release tag; the package index is a `curl` double answering a
-# status per URL and recording every request. Nothing is uploaded. The last
-# tests hold release-pypi.yml to reading the plan's answer.
+# status per URL and recording every request. Nothing is uploaded.
+#
+# The last tests read release-pypi.yml itself, because the jobs that consume the
+# plan run only on GitHub's runners: nothing this repository runs can execute a
+# workflow, and an upload cannot be exercised without publishing. So they hold
+# the wiring instead — the job outputs carry exactly the keys the script writes,
+# and each checkout, upload and verification reads the plan's answer.
 
 load support/helpers
 bats_require_minimum_version 1.5.0
@@ -85,6 +90,16 @@ planned() {
     [ "$output" = "release-pypi-plan: onejudge-v0.19.0 ($TAG_SHA) version 0.19.0: upload onejudge-cli=false onejudge=true" ]
     [ "$(cat "$REQUESTS")" = "https://pypi.org/pypi/onejudge-cli/0.19.0/json
 https://pypi.org/pypi/onejudge/0.19.0/json" ]
+}
+
+@test "a hand-run for a tag whose SDK is on the index but whose CLI is not selects only the CLI" {
+    serves onejudge 0.19.0
+
+    dispatch onejudge-v0.19.0
+
+    [ "$status" -eq 0 ]
+    [ "$(planned upload-cli)" = true ]
+    [ "$(planned upload-sdk)" = false ]
 }
 
 @test "a hand-run for a tag whose distributions are all on the index uploads nothing and succeeds" {
@@ -186,11 +201,28 @@ EOF
     [ ! -s "$GITHUB_OUTPUT" ]
 }
 
-@test "a hand-run with an empty tag fails" {
-    dispatch "  "
+@test "a hand-run naming a malformed tag fails rather than repairing it" {
+    dispatch "onejudge-v0.19 .0"
 
     [ "$status" -eq 1 ]
-    [ "${stderr%%$'\n'*}" = "release-pypi-plan: the workflow_dispatch payload names an empty tag" ]
+    [ "${stderr%%$'\n'*}" = "release-pypi-plan: the workflow_dispatch payload names 'onejudge-v0.19 .0', which is not a tag name" ]
+    [ ! -s "$GITHUB_OUTPUT" ]
+}
+
+@test "a hand-run with an empty tag fails" {
+    dispatch ""
+
+    [ "$status" -eq 1 ]
+    [ "${stderr##*$'\n'}" = "ACTION: pass the release tag exactly, e.g. onejudge-v0.19.0" ]
+}
+
+@test "an output file it cannot write fails the plan" {
+    echo '{"release": {"tag_name": "onejudge-v0.19.0"}}' >"$GITHUB_EVENT_PATH"
+
+    GITHUB_OUTPUT="$BATS_TEST_TMPDIR" GITHUB_EVENT_NAME=release run --separate-stderr "$ROOT/scripts/release-pypi-plan.sh"
+
+    [ "$status" -eq 1 ]
+    [ "${stderr##*$'\n'}" = "ACTION: point GITHUB_OUTPUT at a writable file" ]
 }
 
 @test "a payload without a tag fails" {
@@ -230,6 +262,27 @@ steps() {
         step && /^          ref: / { ref = $0; sub(/^          ref: /, "", ref) }
         END { flush() }
     ' "$ROOT/.github/workflows/release-pypi.yml"
+}
+
+@test "release-pypi.yml's plan job publishes exactly the keys the script writes" {
+    published onejudge-v0.19.0
+    [ "$status" -eq 0 ]
+    written="$(cut -d= -f1 "$GITHUB_OUTPUT")"
+    # The plan job's `outputs:` block, as `key: expression` lines.
+    mapped="$(sed -n '/^  plan:$/,/^    steps:$/p' "$ROOT/.github/workflows/release-pypi.yml" | sed -n 's/^      \([a-z-]*\): \(.*\)$/\1 \2/p')"
+
+    [ "$(cut -d' ' -f1 <<<"$mapped")" = "$written" ]
+    while read -r key expression; do
+        [ "$expression" = "\${{ steps.plan.outputs.$key }}" ]
+    done <<<"$mapped"
+}
+
+@test "release-pypi.yml verifies the planned version, not the ref it runs from" {
+    verify="$(sed -n '/^  verify-pypi:$/,$p' "$ROOT/.github/workflows/release-pypi.yml")"
+
+    grep -qxF "          VERSION: \${{ needs.plan.outputs.version }}" <<<"$verify"
+    grep -qxF "          ver=\"\$VERSION\"" <<<"$verify"
+    [ "$(grep -c GITHUB_REF <<<"$verify")" -eq 0 ]
 }
 
 @test "release-pypi.yml checks out the planned tree in every job after the plan" {

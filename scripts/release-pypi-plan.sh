@@ -49,8 +49,9 @@ import json, sys
 with open(sys.argv[1], encoding='utf-8') as handle:
     print(json.load(handle)$field)
 " "$GITHUB_EVENT_PATH") || fail "the $GITHUB_EVENT_NAME payload at $GITHUB_EVENT_PATH names no tag (see above)" "pass the release tag, e.g. onejudge-v0.19.0"
-tag=${tag//[[:space:]]/}
-[ -n "$tag" ] || fail "the $GITHUB_EVENT_NAME payload names an empty tag" "pass the release tag, e.g. onejudge-v0.19.0"
+# Refused rather than repaired: `onejudge-v0.19 .0` must not quietly become a tag.
+[[ $tag =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] \
+    || fail "the $GITHUB_EVENT_NAME payload names '$tag', which is not a tag name" "pass the release tag exactly, e.g. onejudge-v0.19.0"
 
 sha=$(git rev-parse --verify --quiet "refs/tags/$tag^{commit}") \
     || fail "'$tag' is not a tag of this repository" "pass an existing release tag (git ls-remote --tags origin), e.g. onejudge-v0.19.0"
@@ -91,5 +92,5 @@ fi
     echo "version=$version"
     echo "upload-cli=$upload_cli"
     echo "upload-sdk=$upload_sdk"
-} >>"$GITHUB_OUTPUT"
+} >>"$GITHUB_OUTPUT" || fail "could not write the plan to $GITHUB_OUTPUT (see above)" "point GITHUB_OUTPUT at a writable file"
 echo "release-pypi-plan: $tag ($sha) version $version: upload onejudge-cli=$upload_cli onejudge=$upload_sdk"

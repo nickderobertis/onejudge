@@ -56,6 +56,7 @@ jobs:
     needs: plan
     runs-on: ubuntu-latest
     steps:
+      # llmlint: ignore[no_second_broader_sweep_over_an_already_gated_commit, release_does_not_regate_an_already_swept_commit] This gate is the job's purpose, stated above: a Release published by hand reaches this workflow without a release PR having swept it, and a hand-run may name such a Release's tag. The checkout only names which tree it gates, the tag's, which is what the job checked out before a hand-run existed.
       - uses: actions/checkout@v4
         with:
           ref: ${{ needs.plan.outputs.sha }}
@@ -108,6 +109,7 @@ jobs:
     outputs:
       exists: ${{ steps.sdk.outputs.exists }}
     steps:
+      # llmlint: ignore-block[no_second_broader_sweep_over_an_already_gated_commit, release_does_not_regate_an_already_swept_commit, work_goes_through_command_surface] The SDK check is what this job runs before it builds the SDK, and keeping it is the task this toolchain step was added for; it is no wider than before. `rustup show` is the toolchain step every workflow here runs under this same name, ahead of `just`, so a recipe for this one site would split that convention.
       - uses: actions/checkout@v4
         with:
           ref: ${{ needs.plan.outputs.sha }}
@@ -119,6 +121,7 @@ jobs:
       - uses: extractions/setup-just@v3
       - uses: astral-sh/setup-uv@v6
       - run: just python-sdk-check
+      # llmlint: ignore-end[no_second_broader_sweep_over_an_already_gated_commit, release_does_not_regate_an_already_swept_commit, work_goes_through_command_surface]
       - name: Build version-synchronized onejudge
         id: sdk
         shell: bash
