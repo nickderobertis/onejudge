@@ -1,0 +1,47 @@
+schema_version: 1
+budgets:
+  # Separate bounds protect against one run occupying several shared slots and automatic fan-out consuming repeated Mac runs.
+  - id: onejudge-macos-jobs-per-run
+    description: |
+      Maximum macOS job instances in one resolved workflow run, including matrices
+      and reusable workflows. inner_measure_reason: one run can occupy several
+      shared Mac slots even when its lifecycle run count stays within its bound.
+      Workload: 12 event classes, source/version/dependency diffs, same-repository
+      and fork ownership, every CLI/SDK publish selection, and manual diagnostics.
+      Design bound; telemetry records workflow/event/architecture details. Analysis
+      reads an existing recording (approximately 2 seconds), with no paid probes.
+    measure: reported
+    command:
+      [
+        node,
+        macos-budget.mjs,
+        --metric,
+        jobs-per-run,
+        --telemetry,
+        .telemetry/macos-policy.json,
+      ]
+    unit: jobs
+    direction: max
+    threshold: 1
+  # The lifecycle bound accounts for automatic fan-out after the PR proof, independently of simultaneous job occupancy.
+  - id: onejudge-macos-runs-per-change
+    description: |
+      Mac-spending workflow runs across one push's automatic lifecycle: ordinary
+      PR, base merge, semantic release-only PR and merge, release-tag build,
+      published Release and downstream smoke. Explicit diagnostics are excluded.
+      The telemetry also explores 12 event classes, three diff classes, both PR
+      ownerships and all CLI/SDK publish combinations, retaining target details.
+      Design bound; analysis reads an existing recording (approximately 2 seconds).
+    measure: reported
+    command:
+      [
+        node,
+        macos-budget.mjs,
+        --metric,
+        runs-per-change,
+        --telemetry,
+        .telemetry/macos-policy.json,
+      ]
+    unit: runs
+    direction: max
+    threshold: 2

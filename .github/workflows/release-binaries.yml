@@ -9,25 +9,30 @@ name: release-binaries
 
 on:
   push:
-    tags: ["v*.*.*"]
+    tags: ["v*.*.*", "onejudge-v*.*.*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag
+        required: true
+        type: string
+      diagnostic_rebuild:
+        description: Explicitly rebuild missing Darwin artifacts outside the automatic lifecycle
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 jobs:
   archives:
-    permissions:
-      contents: write # upload release assets
+    if: github.event_name == 'push'
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-          - os: macos-latest
-            target: aarch64-apple-darwin
-          - os: macos-latest
-            target: x86_64-apple-darwin
           - os: windows-latest
             target: x86_64-pc-windows-msvc
     runs-on: ${{ matrix.os }}
@@ -65,10 +70,116 @@ jobs:
           cp README.md LICENSE "$staging/"
           7z a "$staging.zip" "$staging"
           echo "ASSET=$staging.zip" >> "$GITHUB_ENV"
-      - name: Attach to the release
-        uses: softprops/action-gh-release@v2
+      - uses: actions/upload-artifact@v4
         with:
-          files: ${{ env.ASSET }}
-          # Attach to the tag's release (release-plz created it); do not overwrite
-          # its notes.
-          tag_name: ${{ github.ref_name }}
+          name: archive-${{ matrix.target }}
+          path: ${{ env.ASSET }}
+          if-no-files-found: error
+
+  publish-archives:
+    needs: archives
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: archive-*
+          path: archives
+          merge-multiple: true
+      - name: Publish staged archives
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          SHA: ${{ github.sha }}
+          TARGETS: x86_64-unknown-linux-gnu x86_64-pc-windows-msvc
+        run: |
+          version=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"])')
+          python3 pypi/publish_release.py --archive-only --repo "$GITHUB_REPOSITORY" --tag "$TAG" --sha "$SHA" --version "$version" --root archives --targets "$TARGETS"
+
+  darwin-plan:
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.diagnostic_rebuild)
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.plan.outputs.tag }}
+      sha: ${{ steps.plan.outputs.sha }}
+      version: ${{ steps.plan.outputs.version }}
+      name: ${{ steps.plan.outputs.name }}
+      build: ${{ steps.plan.outputs.build }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: plan
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: python3 pypi/producer_plan.py >> "$GITHUB_OUTPUT"
+
+  darwin:
+    needs: darwin-plan
+    if: needs.darwin-plan.outputs.build == 'true'
+    runs-on: macos-15
+    # These target declarations are also read by the release-platform drift gate.
+    env:
+      TARGETS: x86_64-apple-darwin aarch64-apple-darwin
+      MACOSX_DEPLOYMENT_TARGET: '11.0'
+      VERSION: ${{ needs.darwin-plan.outputs.version }}
+      TAG: ${{ needs.darwin-plan.outputs.tag }}
+      SHA: ${{ needs.darwin-plan.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.darwin-plan.outputs.sha }}
+      - name: Check out this workflow's release tooling
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ github.workflow_sha }}
+          path: .release-tools
+          persist-credentials: false
+      - uses: extractions/setup-just@v3
+      - name: Install pinned toolchain (from rust-toolchain.toml)
+        run: just --justfile .release-tools/justfile --working-directory "$PWD" _rust-toolchain
+      - uses: astral-sh/setup-uv@v6
+      - name: Add both Darwin targets
+        run: rustup target add x86_64-apple-darwin aarch64-apple-darwin
+      - name: Enable Rosetta for the Intel install journey
+        run: sudo softwareupdate --install-rosetta --agree-to-license
+      - name: Build, package, install and run each architecture sequentially
+        run: |
+          test "$(uname -m)" = arm64
+          for target in $TARGETS; do
+            just --justfile .release-tools/justfile --working-directory "$PWD" pypi-release "$target" dist .release-tools/
+            python3 .release-tools/pypi/smoke_release.py --target "$target" --root dist --version "$VERSION"
+          done
+          python3 .release-tools/pypi/release_artifacts.py stage --root dist --tag "$TAG" --sha "$SHA" --version "$VERSION"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ needs.darwin-plan.outputs.name }}
+          path: dist/*
+          if-no-files-found: error
+
+  publish-darwin:
+    needs: [darwin-plan, darwin]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.darwin-plan.outputs.name }}
+          path: dist
+      - name: Verify and persist the exact producer output
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.darwin-plan.outputs.tag }}
+          SHA: ${{ needs.darwin-plan.outputs.sha }}
+          VERSION: ${{ needs.darwin-plan.outputs.version }}
+        run: |
+          python3 pypi/publish_release.py --repo "$GITHUB_REPOSITORY" --tag "$TAG" --sha "$SHA" --version "$VERSION" --root dist

@@ -1,0 +1,884 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { execFileSync, spawnSync } from "node:child_process";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { join, resolve } from "node:path";
+import {
+  workflows,
+  resolveRun,
+  triggered,
+  sourceDigest,
+  expand,
+  render,
+} from "../workflow-graph.mjs";
+
+import { recordingMeasures, TELEMETRY_SCHEMA_VERSION } from "../telemetry.mjs";
+
+const root = resolve(".");
+const scratchRoot =
+  process.env.ONEPIPELINE_NODE_SCRATCH_DIR || process.env.RUNNER_TEMP;
+if (!scratchRoot)
+  throw new Error("ONEPIPELINE_NODE_SCRATCH_DIR or RUNNER_TEMP is required");
+function history() {
+  const dir = mkdtempSync(join(scratchRoot, "macos-policy-"));
+  const git = (...args) =>
+    execFileSync("git", args, { cwd: dir, encoding: "utf8" }).trim();
+  git("init", "-q");
+  writeFileSync(
+    join(dir, ".git/info/exclude"),
+    "event.json\nwithout-env.json\n",
+  );
+  git("config", "user.email", "test@example.com");
+  git("config", "user.name", "Policy fixture");
+  writeFileSync(
+    join(dir, "Cargo.toml"),
+    '[workspace]\nmembers = ["crates/onejudge", "crates/onejudge-repo"]\n[workspace.package]\nversion = "0.19.0"\n[workspace.dependencies]\nserde = "1.0"\n',
+  );
+  writeFileSync(join(dir, "CHANGELOG.md"), "# Changes\n");
+  mkdirSync(join(dir, "crates/onejudge"), { recursive: true });
+  writeFileSync(
+    join(dir, "crates/onejudge/Cargo.toml"),
+    '[package]\nname = "onejudge"\nversion.workspace = true\n',
+  );
+  mkdirSync(join(dir, "crates/onejudge-repo"), { recursive: true });
+  writeFileSync(
+    join(dir, "crates/onejudge-repo/Cargo.toml"),
+    '[package]\nname = "onejudge-repo"\nversion.workspace = true\n',
+  );
+  mkdirSync(join(dir, "python/onejudge-sdk"), { recursive: true });
+  writeFileSync(
+    join(dir, "python/onejudge-sdk/pyproject.toml"),
+    '[project]\nname = "onejudge"\nversion = "0.19.0"\nrequires-python = ">=3.9"\n',
+  );
+
+  writeFileSync(
+    join(dir, "Cargo.lock"),
+    'version = 4\n[[package]]\nname = "onejudge"\nversion = "0.19.0"\n[[package]]\nname = "onejudge-repo"\nversion = "0.19.0"\n[[package]]\nname = "serde"\nversion = "1.0.0"\n',
+  );
+  mkdirSync(join(dir, "python/onejudge-sdk/src/onejudge_sdk"), {
+    recursive: true,
+  });
+  writeFileSync(
+    join(dir, "python/onejudge-sdk/src/onejudge_sdk/_version.py"),
+    '__version__ = "0.19.0"\n',
+  );
+  git("add", ".");
+  git("commit", "-qm", "ci: fixture");
+  const base = git("rev-parse", "HEAD");
+  const heads = {};
+  for (const kind of ["version", "source", "dependency"]) {
+    git("checkout", "-q", "-B", kind, base);
+    if (kind === "version")
+      writeFileSync(
+        join(dir, "Cargo.toml"),
+        '[workspace]\nmembers = ["crates/onejudge", "crates/onejudge-repo"]\n[workspace.package]\nversion = "0.20.0"\n[workspace.dependencies]\nserde = "1.0"\n',
+      );
+    else if (kind === "dependency")
+      writeFileSync(
+        join(dir, "Cargo.toml"),
+        '[workspace]\nmembers = ["crates/onejudge", "crates/onejudge-repo"]\n[workspace.package]\nversion = "0.20.0"\n[workspace.dependencies]\nserde = "2.0"\n',
+      );
+    else writeFileSync(join(dir, "source.rs"), "fn new_behavior() {}\n");
+    if (kind === "version") {
+      writeFileSync(
+        join(dir, "python/onejudge-sdk/pyproject.toml"),
+        '[project]\nname = "onejudge"\nversion = "0.20.0"\nrequires-python = ">=3.9"\n',
+      );
+
+      writeFileSync(
+        join(dir, "Cargo.lock"),
+        'version = 4\n[[package]]\nname = "onejudge"\nversion = "0.20.0"\n[[package]]\nname = "onejudge-repo"\nversion = "0.20.0"\n[[package]]\nname = "serde"\nversion = "1.0.0"\n',
+      );
+      writeFileSync(
+        join(dir, "python/onejudge-sdk/src/onejudge_sdk/_version.py"),
+        '__version__ = "0.20.0"\n',
+      );
+    }
+    git("add", ".");
+    git("commit", "-qm", "ci: change");
+    heads[kind] = git("rev-parse", "HEAD");
+  }
+  git("tag", "v0.19.0", base);
+  git("tag", "onejudge-v0.19.0", base);
+  return { dir, base, heads };
+}
+export function pr(fork = false, release = false) {
+  const repository = { full_name: "nickderobertis/onejudge" };
+  return {
+    action: "synchronize",
+    repository,
+    pull_request: {
+      title: "chore: release",
+      user: { login: release ? "nickderobertis" : "contributor" },
+      head: {
+        ref: release ? "release-plz-2026" : "feature",
+        repo: fork ? { full_name: "fork/onejudge" } : repository,
+      },
+      base: { repo: repository },
+    },
+  };
+}
+function classify(h, event, payload, head) {
+  const path = join(h.dir, "event.json");
+  writeFileSync(path, JSON.stringify(payload));
+  return JSON.parse(
+    execFileSync(
+      "node",
+      [
+        join(root, ".github/macos-policy.mjs"),
+        "classify",
+        "--event",
+        path,
+        "--base",
+        h.base,
+        "--head",
+        head,
+      ],
+      {
+        cwd: h.dir,
+        env: { ...process.env, GITHUB_EVENT_NAME: event },
+        encoding: "utf8",
+      },
+    ),
+  );
+}
+test("real classifier authenticates identity AND parses content, failing closed", () => {
+  const h = history();
+  try {
+    assert.equal(
+      classify(h, "pull_request", pr(false, true), h.heads.version)
+        .isReleaseOnly,
+      true,
+    );
+    for (const event of [
+      pr(true, true),
+      pr(false, false),
+      {
+        ...pr(false, true),
+        pull_request: {
+          ...pr(false, true).pull_request,
+          user: { login: "attacker" },
+        },
+      },
+    ]) {
+      assert.equal(
+        classify(h, "pull_request", event, h.heads.version).macosRequired,
+        true,
+      );
+    }
+    for (const ref of [
+      ["release-plz-2026"],
+      null,
+      123,
+      { toString: "release-plz-2026" },
+    ]) {
+      const malformed = pr(false, true);
+      malformed.pull_request.head.ref = ref;
+      assert.equal(
+        classify(h, "pull_request", malformed, h.heads.version).macosRequired,
+        true,
+      );
+    }
+    const botOnly = pr(false, true);
+    botOnly.pull_request.head.ref = "feature";
+    assert.equal(
+      classify(h, "pull_request", botOnly, h.heads.version).macosRequired,
+      true,
+    );
+    for (const kind of ["source", "dependency"])
+      assert.equal(
+        classify(h, "pull_request", pr(false, true), h.heads[kind])
+          .macosRequired,
+        true,
+      );
+    assert.equal(
+      classify(h, "pull_request", null, h.heads.version).macosRequired,
+      true,
+    );
+    assert.equal(
+      classify(h, "pull_request", pr(false, true), "missing-ref").macosRequired,
+      true,
+    );
+    assert.equal(classify(h, "push", null, "missing-ref").macosRequired, false);
+    writeFileSync(join(h.dir, "event.json"), "{");
+    const malformed = execFileSync(
+      "node",
+      [
+        join(root, ".github/macos-policy.mjs"),
+        "classify",
+        "--event",
+        join(h.dir, "event.json"),
+        "--base",
+        h.base,
+        "--head",
+        h.heads.version,
+      ],
+      {
+        env: { ...process.env, GITHUB_EVENT_NAME: "pull_request" },
+        encoding: "utf8",
+      },
+    );
+    assert.equal(JSON.parse(malformed).macosRequired, true);
+  } finally {
+    rmSync(h.dir, { recursive: true, force: true });
+  }
+});
+test("actual workflow graph covers event fan-out, ownership, diffs and publish selection; records telemetry", () => {
+  const h = history(),
+    docs = workflows(),
+    scenarios = [],
+    policies = new Map();
+  const events = [
+    ["pull_request", "opened"],
+    ["pull_request", "synchronize"],
+    ["pull_request", "reopened"],
+    ["push", "base"],
+    ["push", "release-merge"],
+    ["push", "tag"],
+    ["release", "published"],
+    ["workflow_run", "completed"],
+    ["repository_dispatch", "smoke"],
+    ["schedule", "scheduled"],
+    ["workflow_dispatch", "default"],
+    ["workflow_dispatch", "diagnostic"],
+  ];
+  try {
+    for (const [event, action] of events)
+      for (const diff of ["source", "version", "dependency"])
+        for (const fork of [false, true])
+          for (const cli of [false, true])
+            for (const sdk of [false, true]) {
+              const payload = pr(fork, diff === "version");
+              payload.action = action;
+              payload.release = { tag_name: "v0.19.0" };
+              payload.workflow_run = {
+                name: "release-binaries",
+                head_sha: "a".repeat(40),
+              };
+              const inputs = {
+                tag: "v0.19.0",
+                ...(action === "diagnostic"
+                  ? { diagnostic_rebuild: true }
+                  : {}),
+              };
+              const key = `${event}/${diff}/${fork}`;
+              if (!policies.has(key))
+                policies.set(key, classify(h, event, payload, h.heads[diff]));
+              const paths = diff === "source" ? ["source.rs"] : ["Cargo.toml"];
+              const producerKey = `${event}/${action}`;
+              if (!policies.has(producerKey)) {
+                const output = execFileSync(
+                  "python3",
+                  [join(root, "pypi/producer_plan.py")],
+                  {
+                    cwd: h.dir,
+                    env: {
+                      ...process.env,
+                      TAG: "v0.19.0",
+                      GITHUB_EVENT_NAME: event,
+                    },
+                    encoding: "utf8",
+                  },
+                );
+                policies.set(
+                  producerKey,
+                  Object.fromEntries(
+                    output
+                      .trim()
+                      .split("\n")
+                      .map((line) => {
+                        const at = line.indexOf("=");
+                        return [line.slice(0, at), line.slice(at + 1)];
+                      }),
+                  ),
+                );
+              }
+              const scenario = {
+                paths,
+                outputs: { "darwin-plan": policies.get(producerKey) },
+                id: `${event}/${action}/${diff}/${fork}/${cli}/${sdk}`,
+                event,
+                payload,
+                inputs,
+                cli,
+                sdk,
+                publish: true,
+                ref: action === "tag" ? "refs/tags/v0.19.0" : "refs/heads/main",
+                policy: policies.get(key),
+                diagnostic: action === "diagnostic",
+              };
+              scenario.rows = Object.entries(docs)
+                .filter(([, doc]) => triggered(doc, scenario))
+                .flatMap(([file]) =>
+                  resolveRun(file, scenario, docs).map((row) => ({
+                    ...row,
+                    runWorkflow: file,
+                  })),
+                );
+              if (event === "pull_request") {
+                const names = scenario.rows
+                  .filter((r) => r.workflow === "ci.yml" && r.enabled)
+                  .map((r) => r.name);
+                for (const name of [
+                  "check",
+                  "commitlint",
+                  "llmlint",
+                  "msrv",
+                  "package",
+                  "test-os (macos-latest)",
+                  "test-os (windows-latest)",
+                ])
+                  assert.ok(names.includes(name), `${scenario.id}: ${name}`);
+                assert.deepEqual(
+                  scenario.rows.filter((r) => r.macos).map((r) => r.job),
+                  scenario.policy.macosRequired ? ["macos-tests"] : [],
+                );
+              } else if (action === "tag" || action === "diagnostic")
+                assert.ok(
+                  scenario.rows.some((r) => r.job === "darwin" && r.macos),
+                );
+              else
+                assert.deepEqual(
+                  scenario.rows.filter((r) => r.macos),
+                  [],
+                  scenario.id,
+                );
+              for (const row of scenario.rows.filter(
+                (row) => row.job === "darwin" && row.macos,
+              ))
+                assert.deepEqual(
+                  row.targets,
+                  docs["release-binaries.yml"].jobs.darwin.env.TARGETS.split(
+                    /\s+/,
+                  ),
+                );
+              scenarios.push(scenario);
+            }
+    const lifecycle = [
+      "pull_request/synchronize/source/false/true/true",
+      "push/base/source/false/true/true",
+      "pull_request/opened/version/false/true/true",
+      "push/release-merge/version/false/true/true",
+      "push/tag/version/false/true/true",
+      "release/published/version/false/true/true",
+      "workflow_run/completed/version/false/true/true",
+    ];
+    const workflowNames = Object.keys(docs);
+    const measures = recordingMeasures(scenarios, workflowNames, lifecycle);
+    execFileSync("mkdir", ["-p", ".github/.telemetry"]);
+    writeFileSync(
+      ".github/.telemetry/macos-policy.json",
+      JSON.stringify(
+        {
+          schema_version: TELEMETRY_SCHEMA_VERSION,
+          digest: sourceDigest(),
+          scenarios,
+          workflowNames,
+          lifecycleScenarios: lifecycle,
+          ...measures,
+        },
+        null,
+        2,
+      ) + "\n",
+    );
+  } finally {
+    rmSync(h.dir, { recursive: true, force: true });
+  }
+});
+test("unresolved runners/calls and malformed matrices fail explicitly", () => {
+  const scenario = {
+    event: "pull_request",
+    payload: pr(),
+    policy: { macosRequired: true },
+    ref: "refs/heads/main",
+  };
+  for (const job of [
+    { "runs-on": "${{ mystery.runner }}" },
+    { uses: "outside/repo/.github/workflows/test.yml@main" },
+    { "runs-on": "${{ matrix.os }}", strategy: { matrix: "${{ unknown }}" } },
+  ]) {
+    assert.throws(
+      () =>
+        resolveRun("broken.yml", scenario, {
+          "broken.yml": { jobs: { broken: job } },
+        }),
+      /Unrecognized|unresolved/,
+    );
+  }
+  assert.deepEqual(
+    expand({
+      os: ["macos-latest", "windows-latest"],
+      include: [{ os: "macos-latest", target: "arm64" }],
+      exclude: [{ os: "windows-latest" }],
+    }),
+    [{ os: "macos-latest", target: "arm64" }],
+  );
+});
+test("Linux required carrier reports real success and authorized omission; all other outcomes fail", () => {
+  const cmd = resolve(".github/macos-result.mjs");
+  for (const [policy, mac, required, ok] of [
+    ["success", "success", "true", true],
+    ["success", "skipped", "false", true],
+    ["success", "failure", "true", false],
+    ["success", "cancelled", "true", false],
+    ["success", "skipped", "true", false],
+    ["failure", "skipped", "false", false],
+    ["cancelled", "success", "true", false],
+    ["", "success", "true", false],
+    ["success", "", "true", false],
+    ["success", "success", "false", false],
+  ]) {
+    const result = spawnSync("node", [cmd, policy, mac, required], {
+      encoding: "utf8",
+    });
+    assert.equal(result.status === 0, ok, `${policy}/${mac}/${required}`);
+    if (ok && required === "false")
+      assert.match(result.stdout, /intentionally omitted/);
+  }
+});
+
+test("local reusable calls expand their actual matrices and refuse automatic diagnostic opt-in", () => {
+  const scenario = {
+    event: "pull_request",
+    payload: pr(),
+    policy: { macosRequired: true },
+    ref: "refs/heads/main",
+  };
+  const docs = {
+    "outer.yml": { jobs: { call: { uses: "./.github/workflows/inner.yml" } } },
+    "inner.yml": {
+      jobs: {
+        proof: {
+          "runs-on": "${{ matrix.os }}",
+          strategy: {
+            matrix: {
+              include: [
+                { os: "macos-15", target: "aarch64-apple-darwin" },
+                { os: "macos-15", target: "x86_64-apple-darwin" },
+              ],
+            },
+          },
+        },
+      },
+    },
+  };
+  const rows = resolveRun("outer.yml", scenario, docs);
+  assert.deepEqual(
+    rows.map((r) => r.matrix.target),
+    ["aarch64-apple-darwin", "x86_64-apple-darwin"],
+  );
+  assert.ok(rows.every((r) => r.macos));
+  docs["outer.yml"].jobs.call.with = { diagnostic_rebuild: true };
+  assert.throws(
+    () => resolveRun("outer.yml", scenario, docs),
+    /automatic reusable caller/,
+  );
+});
+
+test("classifier CLI recognizes non-PR automatic payloads without an event-name environment", () => {
+  const h = history();
+  try {
+    const env = { ...process.env };
+    delete env.GITHUB_EVENT_NAME;
+    for (const payload of [
+      { ref: "refs/heads/main", before: h.base },
+      { release: { tag_name: "v0.19.0" } },
+      { workflow_run: { name: "release-binaries" } },
+      { inputs: {} },
+      { schedule: "0 0 * * *" },
+      { client_payload: {} },
+    ]) {
+      const path = join(h.dir, "without-env.json");
+      writeFileSync(path, JSON.stringify(payload));
+      const policy = JSON.parse(
+        execFileSync(
+          "node",
+          [
+            join(root, ".github/macos-policy.mjs"),
+            "classify",
+            "--event",
+            path,
+            "--base",
+            h.base,
+            "--head",
+            h.heads.source,
+          ],
+          { cwd: h.dir, env, encoding: "utf8" },
+        ),
+      );
+      assert.equal(policy.macosRequired, false, JSON.stringify(payload));
+    }
+    const foreign = pr(false, true);
+    foreign.repository.full_name = "other/repo";
+    assert.equal(
+      classify(h, "pull_request", foreign, h.heads.version).macosRequired,
+      true,
+    );
+  } finally {
+    rmSync(h.dir, { recursive: true, force: true });
+  }
+});
+
+test("unsupported string/array event declarations fail instead of appearing untriggered", () => {
+  for (const on of ["push", ["push"], { push: "unsupported" }])
+    assert.throws(
+      () =>
+        triggered(
+          { on },
+          { event: "push", payload: {}, ref: "refs/heads/main" },
+        ),
+      /unsupported/,
+    );
+});
+
+test("real semantic diff parser admits changelog-only releases and refuses malformed or destructive edits", () => {
+  const h = history();
+  const git = (...args) =>
+    execFileSync("git", args, { cwd: h.dir, encoding: "utf8" }).trim();
+  try {
+    assert.equal(
+      classify(h, "pull_request", pr(false, true), h.base).macosRequired,
+      true,
+    );
+    const cases = [
+      [
+        "changelog",
+        () => writeFileSync(join(h.dir, "CHANGELOG.md"), "# New release\n"),
+        true,
+      ],
+      [
+        "malformed-toml",
+        () => writeFileSync(join(h.dir, "Cargo.toml"), "[broken"),
+        false,
+      ],
+      [
+        "malformed-version",
+        () =>
+          writeFileSync(
+            join(h.dir, "Cargo.toml"),
+            '[workspace]\nmembers = ["crates/onejudge", "crates/onejudge-repo"]\n[workspace.package]\nversion = false\n[workspace.dependencies]\nserde = "1.0"\n',
+          ),
+        false,
+      ],
+      [
+        "crate-dependency",
+        () =>
+          writeFileSync(
+            join(h.dir, "crates/onejudge/Cargo.toml"),
+            '[package]\nname = "other-name"\nversion = "0.20.0"\n',
+          ),
+        false,
+      ],
+      [
+        "sdk-content",
+        () =>
+          writeFileSync(
+            join(h.dir, "python/onejudge-sdk/pyproject.toml"),
+            '[project]\nname = "onejudge"\nversion = "0.20.0"\nrequires-python = ">=3.10"\n',
+          ),
+        false,
+      ],
+      [
+        "lock-dependency",
+        () =>
+          writeFileSync(
+            join(h.dir, "Cargo.lock"),
+            'version = 4\n[[package]]\nname = "onejudge"\nversion = "0.20.0"\n[[package]]\nname = "onejudge-repo"\nversion = "0.20.0"\n[[package]]\nname = "serde"\nversion = "2.0.0"\n',
+          ),
+        false,
+      ],
+      [
+        "wrong-member-version",
+        () =>
+          writeFileSync(
+            join(h.dir, "Cargo.lock"),
+            git("show", `${h.base}:Cargo.lock`).replace(
+              'name = "onejudge-repo"\nversion = "0.19.0"',
+              'name = "onejudge-repo"\nversion = "0.20.0"',
+            ),
+          ),
+        false,
+      ],
+      [
+        "local-non-version-field",
+        () =>
+          writeFileSync(
+            join(h.dir, "Cargo.lock"),
+            git("show", `${h.base}:Cargo.lock`).replace(
+              'name = "onejudge-repo"',
+              'dependencies = ["serde"]\nname = "onejudge-repo"',
+            ),
+          ),
+        false,
+      ],
+      [
+        "unproven-member",
+        () => {
+          writeFileSync(
+            join(h.dir, "crates/onejudge-repo/Cargo.toml"),
+            '[package]\nname = "onejudge-repo"\nversion = "0.20.0"\n',
+          );
+          writeFileSync(
+            join(h.dir, "Cargo.lock"),
+            git("show", `${h.base}:Cargo.lock`).replace(
+              'name = "onejudge-repo"\nversion = "0.19.0"',
+              'name = "onejudge-repo"\nversion = "0.20.0"',
+            ),
+          );
+        },
+        false,
+      ],
+      [
+        "malformed-member",
+        () => {
+          writeFileSync(
+            join(h.dir, "crates/onejudge-repo/Cargo.toml"),
+            "[broken",
+          );
+          writeFileSync(
+            join(h.dir, "Cargo.lock"),
+            git("show", `${h.base}:Cargo.lock`).replace(
+              'name = "onejudge-repo"\nversion = "0.19.0"',
+              'name = "onejudge-repo"\nversion = "0.20.0"',
+            ),
+          );
+        },
+        false,
+      ],
+      [
+        "sourced-member-name",
+        () =>
+          writeFileSync(
+            join(h.dir, "Cargo.lock"),
+            git("show", `${h.base}:Cargo.lock`).replace(
+              'name = "onejudge-repo"\nversion = "0.19.0"',
+              'name = "onejudge-repo"\nversion = "0.20.0"\nsource = "registry+https://example.invalid"\nchecksum = "abc"',
+            ),
+          ),
+        false,
+      ],
+      ["remove", () => git("rm", "CHANGELOG.md"), false],
+      ["rename", () => git("mv", "CHANGELOG.md", "OTHER.md"), false],
+    ];
+    for (const [name, edit, releaseOnly] of cases) {
+      git("checkout", "-q", "-B", name, h.base);
+      edit();
+      git("add", ".");
+      git("commit", "-qm", "ci: semantic fixture");
+      const result = classify(
+        h,
+        "pull_request",
+        pr(false, true),
+        git("rev-parse", "HEAD"),
+      );
+      assert.equal(result.isReleaseOnly, releaseOnly, name);
+      assert.equal(result.macosRequired, !releaseOnly, name);
+    }
+  } finally {
+    rmSync(h.dir, { recursive: true, force: true });
+  }
+});
+
+test("unsupported trigger filter keys fail instead of silently widening routing", () => {
+  for (const [event, filter] of [
+    ["push", "branches-ignore"],
+    ["push", "tags-ignore"],
+    ["pull_request", "branches"],
+  ])
+    assert.throws(
+      () =>
+        triggered(
+          { on: { [event]: { [filter]: ["main"] } } },
+          { event, payload: {}, ref: "refs/heads/main" },
+        ),
+      /unsupported .*trigger key/,
+    );
+});
+
+test("CLI syntax is distinct from unreadable event data, and malformed matrix/filter inputs fail", () => {
+  for (const [command, valid] of [
+    [
+      resolve(".github/macos-policy.mjs"),
+      [
+        "classify",
+        "--event",
+        "unreadable.json",
+        "--base",
+        "HEAD",
+        "--head",
+        "HEAD",
+      ],
+    ],
+    [
+      resolve(".github/macos-budget.mjs"),
+      [
+        "--metric",
+        "jobs-per-run",
+        "--telemetry",
+        ".github/.telemetry/macos-policy.json",
+      ],
+    ],
+  ]) {
+    for (const suffix of [
+      ["--unknown", "value"],
+      [valid.at(-2), "duplicate"],
+      ["--incomplete"],
+    ]) {
+      const result = spawnSync("node", [command, ...valid, ...suffix], {
+        encoding: "utf8",
+      });
+      assert.equal(result.status, 1);
+      assert.equal(result.stdout, "");
+      assert.match(
+        result.stderr,
+        /unknown option|duplicate option|complete option/,
+      );
+    }
+    const missing = spawnSync("node", [command, ...valid.slice(0, -2)], {
+      encoding: "utf8",
+    });
+    assert.equal(missing.status, 1);
+    assert.match(missing.stderr, /missing required option/);
+  }
+  for (const matrix of [
+    { include: ["invalid"] },
+    { include: {} },
+    { exclude: [1] },
+    { exclude: [null] },
+    { exclude: [["os"]] },
+  ])
+    assert.throws(() => expand(matrix), /unresolved matrix/);
+  for (const config of [false, 0, ""])
+    assert.throws(
+      () => triggered({ on: { push: config } }, { event: "push" }),
+      /unsupported event/,
+    );
+  for (const pattern of ["!main", "m?in", "v+", "[ab]", "{main}"])
+    assert.throws(
+      () =>
+        triggered(
+          { on: { push: { branches: [pattern] } } },
+          { event: "push", ref: "refs/heads/main" },
+        ),
+      /unsupported trigger pattern/,
+    );
+  assert.equal(
+    triggered(
+      { on: { push: { paths: ["src/*.rs"] } } },
+      { event: "push", ref: "refs/heads/main", paths: ["src/deep/lib.rs"] },
+    ),
+    false,
+  );
+  assert.equal(
+    triggered(
+      { on: { push: { paths: ["**/lib.rs"] } } },
+      { event: "push", ref: "refs/heads/main", paths: ["lib.rs"] },
+    ),
+    true,
+  );
+});
+
+test("production classifier command has nonempty fallback refs for base pushes and unknown PR metadata", () => {
+  const h = history();
+  try {
+    const env = workflows()["ci.yml"].jobs["macos-policy"].steps.find(
+      (s) => s.id === "classify",
+    ).env;
+    for (const event of ["push", "pull_request"]) {
+      const payload =
+        event === "push"
+          ? { ref: "refs/heads/main", before: h.base }
+          : pr(false, true);
+      const context = { github: { event: payload } };
+      const base = render(env.BASE, context),
+        head = render(env.HEAD, context);
+      assert.ok(base.length && head.length);
+      const path = join(h.dir, "event.json");
+      writeFileSync(path, JSON.stringify(payload));
+      const result = spawnSync(
+        "node",
+        [
+          resolve(".github/macos-policy.mjs"),
+          "classify",
+          "--event",
+          path,
+          "--base",
+          base,
+          "--head",
+          head,
+        ],
+        {
+          cwd: h.dir,
+          env: { ...process.env, GITHUB_EVENT_NAME: event },
+          encoding: "utf8",
+        },
+      );
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(
+        JSON.parse(result.stdout).macosRequired,
+        event === "pull_request",
+      );
+    }
+  } finally {
+    rmSync(h.dir, { recursive: true, force: true });
+  }
+});
+
+test("removing a required version never authorizes a release-only PR", () => {
+  const h = history();
+  const git = (...args) =>
+    execFileSync("git", args, { cwd: h.dir, encoding: "utf8" }).trim();
+  try {
+    for (const [i, path] of [
+      "Cargo.toml",
+      "python/onejudge-sdk/pyproject.toml",
+      "crates/onejudge/Cargo.toml",
+    ].entries()) {
+      git("checkout", "-q", "-B", `deleted-version-${i}`, h.base);
+      let base = h.base;
+      if (path === "crates/onejudge/Cargo.toml") {
+        writeFileSync(
+          join(h.dir, path),
+          '[package]\nname = "onejudge"\nversion = "0.19.0"\n',
+        );
+        git("add", ".");
+        git("commit", "-qm", "ci: explicit package version");
+        base = git("rev-parse", "HEAD");
+        writeFileSync(
+          join(h.dir, path),
+          '[package]\nname = "onejudge"\nversion = "0.20.0"\n',
+        );
+        git("add", ".");
+        git("commit", "-qm", "ci: plain version bump");
+        assert.equal(
+          classify(
+            { ...h, base },
+            "pull_request",
+            pr(false, true),
+            git("rev-parse", "HEAD"),
+          ).isReleaseOnly,
+          true,
+        );
+      }
+      const text = execFileSync("git", ["show", `${base}:${path}`], {
+        cwd: h.dir,
+        encoding: "utf8",
+      });
+      writeFileSync(join(h.dir, path), text.replace(/^version = .*\n/m, ""));
+      git("add", ".");
+      git("commit", "-qm", "ci: remove required version");
+      assert.equal(
+        classify(
+          { ...h, base },
+          "pull_request",
+          pr(false, true),
+          git("rev-parse", "HEAD"),
+        ).macosRequired,
+        true,
+        path,
+      );
+    }
+  } finally {
+    rmSync(h.dir, { recursive: true, force: true });
+  }
+});

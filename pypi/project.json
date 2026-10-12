@@ -11,12 +11,14 @@
   "implicitDependencies": [
     "onejudge"
   ],
+  "// release tooling": "llmlint: ignore[new_command_or_client_gets_its_own_project] This task keeps production builders in their existing owning domain: these private release/GitHub helpers and their real packaging tests belong to the CLI-wheel packaging project, rather than a second release-tooling project. The client serves only this internal packaging pipeline; published application APIs and wheel contents are unchanged.",
   "targets": {
     "build": {
       "command": "just _pypi-build",
       "inputs": [
         "{workspaceRoot}/pyproject.toml",
         "{workspaceRoot}/README.md",
+        "{projectRoot}/**/*",
         "^default"
       ]
     },
@@ -27,14 +29,7 @@
       ]
     },
     "lint": {
-      "executor": "nx:run-commands",
-      "options": {
-        "commands": [
-          "node scripts/check-project-boundaries.mjs onejudge-pypi",
-          "node scripts/check-target-commands.mjs onejudge-pypi"
-        ],
-        "parallel": false
-      },
+      "command": "just _py-lint pypi onejudge-pypi",
       "inputs": [
         "default",
         "^default",
@@ -42,6 +37,12 @@
         "{workspaceRoot}/scripts/check-project-boundaries.mjs",
         "{workspaceRoot}/scripts/check-target-commands.mjs"
       ]
+    },
+    "format": {
+      "command": "just _py-format pypi"
+    },
+    "format-check": {
+      "command": "just _py-format-check pypi"
     }
   }
 }
