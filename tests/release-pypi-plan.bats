@@ -327,10 +327,11 @@ steps() {
 
     [ "$status" -eq 0 ]
     checkouts="$(grep '|actions/checkout@' <<<"$output")"
-    [ "$(grep -c . <<<"$checkouts")" -eq 4 ]
+    [ "$(grep -c . <<<"$checkouts")" -eq 6 ]
     [ "$(grep -c '^plan|' <<<"$checkouts")" -eq 1 ]
     later="$(grep -v '^plan|' <<<"$checkouts")"
-    [ "$(grep -cF "|\${{ needs.plan.outputs.sha }}" <<<"$later")" -eq 3 ]
+    [ "$(grep -cF "|\${{ needs.plan.outputs.sha }}" <<<"$later")" -eq 4 ]
+    [ "$(grep -cF "|\${{ github.workflow_sha }}" <<<"$later")" -eq 1 ]
 }
 
 @test "release-pypi.yml downloads and uploads each distribution only when the plan selected it" {

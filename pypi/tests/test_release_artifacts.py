@@ -1,0 +1,319 @@
+"""Real command journeys; only the GitHub transport is doubled on PATH."""
+
+import copy
+import hashlib
+import io
+import json
+import os
+import subprocess
+import sys
+import tarfile
+import tempfile
+import unittest
+import zipfile
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+SCRIPTS = ROOT / "pypi"
+
+
+class ReleaseArtifacts(unittest.TestCase):
+    def setUp(self):
+        scratch = os.environ.get("ONEPIPELINE_NODE_SCRATCH_DIR") or os.environ.get(
+            "RUNNER_TEMP"
+        )
+        self.temp = tempfile.TemporaryDirectory(dir=scratch)
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.dist = self.root / "dist"
+        self.dist.mkdir()
+        self.repo = self.root / "repo"
+        self.repo.mkdir()
+        subprocess.run(["git", "init", "-q", str(self.repo)], check=True)
+        subprocess.run(
+            ["git", "-C", str(self.repo), "config", "user.email", "test@example.com"],
+            check=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(self.repo), "config", "user.name", "Release fixture"],
+            check=True,
+        )
+        (self.repo / "Cargo.toml").write_text(
+            '[workspace.package]\nversion = "0.19.0"\n'
+        )
+        subprocess.run(["git", "-C", str(self.repo), "add", "."], check=True)
+        subprocess.run(
+            ["git", "-C", str(self.repo), "commit", "-qm", "ci: fixture"], check=True
+        )
+        subprocess.run(["git", "-C", str(self.repo), "tag", "v0.19.0"], check=True)
+        self.sha = subprocess.check_output(
+            ["git", "-C", str(self.repo), "rev-parse", "HEAD"], text=True
+        ).strip()
+        self.version = "0.19.0"
+        self.tag = "v0.19.0"
+        self.identity = f"onejudge-darwin-{self.tag}-{self.sha}"
+        self.targets = ("x86_64-apple-darwin", "aarch64-apple-darwin")
+        # Mach-O contract specimens are never executed as native binaries.
+        for target, arch, cpu in (
+            (self.targets[0], "x86_64", 0x01000007),
+            (self.targets[1], "arm64", 0x0100000C),
+        ):
+            binary = (
+                b"\xcf\xfa\xed\xfe" + cpu.to_bytes(4, "little") + b"contract specimen"
+            )
+            with tarfile.open(
+                self.dist / f"onejudge-{target}.tar.gz", "w:gz"
+            ) as package:
+                for name, data in (
+                    ("onejudge", binary),
+                    ("README.md", b"README"),
+                    ("LICENSE", b"MIT"),
+                ):
+                    member = tarfile.TarInfo(f"onejudge-{target}/{name}")
+                    member.size = len(data)
+                    package.addfile(member, io.BytesIO(data))
+            with zipfile.ZipFile(
+                self.dist
+                / f"onejudge_cli-{self.version}-py3-none-macosx_11_0_{arch}.whl",
+                "w",
+            ) as package:
+                package.writestr(
+                    f"onejudge_cli-{self.version}.data/scripts/onejudge", binary
+                )
+                package.writestr(
+                    f"onejudge_cli-{self.version}.dist-info/METADATA",
+                    f"Name: onejudge-cli\nVersion: {self.version}\n",
+                )
+        self.command("stage")
+        self.original = json.loads((self.dist / "release-artifacts.json").read_text())
+
+    def command(self, command, **identity):
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPTS / "release_artifacts.py"),
+                command,
+                "--root",
+                str(self.dist),
+                "--tag",
+                identity.get("tag", self.tag),
+                "--sha",
+                identity.get("sha", self.sha),
+                "--version",
+                identity.get("version", self.version),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if command == "stage":
+            self.assertEqual(result.returncode, 0, result.stderr)
+        return result
+
+    def test_stage_verify_name_and_manifest_bytes(self):
+        self.assertEqual(self.command("verify").returncode, 0)
+        self.assertEqual(self.command("name").stdout.strip(), self.identity)
+        self.assertEqual(self.original["schema_version"], 1)
+        self.assertEqual(
+            {(f["target"], f["kind"]) for f in self.original["files"]},
+            {
+                (target, kind)
+                for target in self.targets
+                for kind in ("archive", "cli-wheel")
+            },
+        )
+        for row in self.original["files"]:
+            self.assertEqual(
+                row["sha256"],
+                hashlib.sha256((self.dist / row["path"]).read_bytes()).hexdigest(),
+            )
+
+    def test_rejects_tag_sha_version_and_tampered_payload(self):
+        for key, value in (
+            ("tag", "onejudge-v0.19.0"),
+            ("sha", "b" * 40),
+            ("version", "0.20.0"),
+        ):
+            result = self.command("verify", **{key: value})
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(
+                "mismatch" if key != "version" else "does not name", result.stderr
+            )
+        path = self.dist / self.original["files"][0]["path"]
+        path.write_bytes(path.read_bytes() + b"altered")
+        result = self.command("verify")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("hash mismatch", result.stderr)
+
+    def test_rejects_missing_platform_traversal_duplicate_and_versioned_shape(self):
+        for edit, message in (
+            (lambda m: m["files"].pop(), "missing Darwin"),
+            (lambda m: m["files"][0].update(path="../outside"), "unsafe manifest path"),
+            (lambda m: m["files"].append(m["files"][0]), "duplicate"),
+            (lambda m: m.update(schema_version=True), "schema"),
+        ):
+            manifest = copy.deepcopy(self.original)
+            edit(manifest)
+            (self.dist / "release-artifacts.json").write_text(json.dumps(manifest))
+            result = self.command("verify")
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(message, result.stderr)
+
+    def test_rejects_binary_reuse_or_architecture_even_with_valid_payload_hash(self):
+        row = next(r for r in self.original["files"] if r["kind"] == "cli-wheel")
+        file = self.dist / row["path"]
+        with zipfile.ZipFile(file) as wheel:
+            contents = {n: wheel.read(n) for n in wheel.namelist()}
+        binary = next(n for n in contents if n.endswith("/onejudge"))
+        for cpu, message in ((0x0100000C, "architecture"), (0x01000007, "reuse")):
+            contents[binary] = (
+                b"\xcf\xfa\xed\xfe" + cpu.to_bytes(4, "little") + b"different binary"
+            )
+            with zipfile.ZipFile(file, "w") as wheel:
+                for name, data in contents.items():
+                    wheel.writestr(name, data)
+            row["sha256"] = hashlib.sha256(file.read_bytes()).hexdigest()
+            (self.dist / "release-artifacts.json").write_text(json.dumps(self.original))
+            result = self.command("verify")
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(message, result.stderr)
+
+    def transport(self, mode):
+        bin_dir = self.root / "bin"
+        bin_dir.mkdir(exist_ok=True)
+        executable = bin_dir / "gh"
+        executable.write_text(
+            "#!/usr/bin/env python3\n"
+            + """
+import json, os, pathlib, shutil, sys
+args = sys.argv[1:]
+root = pathlib.Path(os.environ['FIXTURE'])
+mode = os.environ['MODE']
+with (root/'calls').open('a') as log: log.write(json.dumps(args)+'\\n')
+name = os.environ['ARTIFACT']
+sha = os.environ['SHA']
+if args[0]=='api':
+    path=args[1]
+    if '/releases/tags/' in path:
+        if mode=='no-release' or (mode=='alias' and path.endswith('/v0.19.0')):
+            print('gh: Not Found (HTTP 404)',file=sys.stderr)
+            sys.exit(1)
+        print(json.dumps({'tag_name':path.split('/')[-1], 'assets':[{'name':name+'.zip'}] if mode in ('durable','alias') else []}))
+    elif '/workflows/' in path:
+        calls = (root/'calls').read_text().count('/workflows/')
+        runs = [] if mode=='absent' else [{'id':42,'event':'push','head_branch':'v0.19.0','head_sha':sha,'status':'in_progress' if mode=='ordering' and calls==1 else 'completed','conclusion':'failure' if mode=='failed' else 'success'}]
+        print(json.dumps({'workflow_runs':runs}))
+    else:
+        assert '/runs/42/artifacts' in path, path
+        print(json.dumps({'artifacts':[{'name':name,'expired':False}]}))
+else:
+    dest=pathlib.Path(args[args.index('--dir')+1])
+    dest.mkdir(parents=True,exist_ok=True)
+    if args[0]=='release': shutil.copy2(root/(name+'.zip'),dest/(name+'.zip'))
+    else:
+        assert args[0:3]==['run','download','42'], args
+        assert args[args.index('--name')+1]==name, args
+        for file in (root/'dist').iterdir(): shutil.copy2(file,dest/file.name)
+"""
+        )
+        executable.chmod(0o755)
+        return {
+            **os.environ,
+            "PATH": str(bin_dir) + os.pathsep + os.environ["PATH"],
+            "FIXTURE": str(self.root),
+            "MODE": mode,
+            "ARTIFACT": self.identity,
+            "SHA": self.sha,
+        }
+
+    def fetch(self, mode):
+        return subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPTS / "fetch_release_artifacts.py"),
+                "--repo",
+                "nickderobertis/onejudge",
+                "--tag",
+                self.tag,
+                "--sha",
+                self.sha,
+                "--version",
+                self.version,
+                "--root",
+                str(self.root / "consumed"),
+                "--attempts",
+                "2" if mode == "ordering" else "1",
+            ],
+            cwd=self.repo,
+            env=self.transport(mode),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    def test_exact_producer_and_durable_recovery_execute_real_verifier(self):
+        result = self.fetch("success")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('"42"', (self.root / "calls").read_text())
+        with zipfile.ZipFile(self.root / f"{self.identity}.zip", "w") as bundle:
+            for file in self.dist.iterdir():
+                bundle.write(file, file.name)
+        (self.root / "calls").unlink()
+        result = self.fetch("durable")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("/workflows/", (self.root / "calls").read_text())
+
+    def test_alias_recovery_uses_existing_release_and_rejects_conflicting_refs(self):
+        subprocess.run(
+            ["git", "-C", str(self.repo), "tag", "onejudge-v0.19.0"], check=True
+        )
+        with zipfile.ZipFile(self.root / f"{self.identity}.zip", "w") as bundle:
+            for file in self.dist.iterdir():
+                bundle.write(file, file.name)
+        self.tag = "onejudge-v0.19.0"
+        result = self.fetch("alias")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(
+            '"download", "onejudge-v0.19.0"', (self.root / "calls").read_text()
+        )
+        result = self.fetch("no-release")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("no existing Release", result.stderr)
+        (self.repo / "changed").write_text("different head")
+        subprocess.run(["git", "-C", str(self.repo), "add", "."], check=True)
+        subprocess.run(
+            ["git", "-C", str(self.repo), "commit", "-qm", "ci: different head"],
+            check=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(self.repo), "tag", "-f", "onejudge-v0.19.0"],
+            check=True,
+            stdout=subprocess.DEVNULL,
+        )
+        result = self.fetch("alias")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("do not agree with exact SHA", result.stderr)
+
+    def test_waits_for_exact_producer_completion(self):
+        result = self.fetch("ordering")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((self.root / "calls").read_text().count("/workflows/"), 2)
+
+    def test_absent_failed_and_wrong_run_payload_are_visible_failures(self):
+        for mode, expected in (
+            ("failed", "producer 42 failed"),
+            ("absent", "producer absent"),
+        ):
+            result = self.fetch(mode)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(expected, result.stderr)
+        manifest = self.original
+        manifest["sha"] = "b" * 40
+        (self.dist / "release-artifacts.json").write_text(json.dumps(manifest))
+        result = self.fetch("success")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("sha mismatch", result.stderr)
+
+
+if __name__ == "__main__":
+    unittest.main()

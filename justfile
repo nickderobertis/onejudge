@@ -54,6 +54,7 @@ bootstrap:
         command -v "$t" >/dev/null 2>&1 || cargo install "$t" --locked; \
     done
     ./scripts/node-modules.sh                 # bun (pinned in package.json) + the locked Nx and bats install
+    bun install --cwd .github --frozen-lockfile
     command -v uv >/dev/null 2>&1 || { curl -LsSf https://astral.sh/uv/install.sh | sh; }
     ./scripts/shell-toolchain.sh              # pixi, then shellcheck, shfmt, actionlint, Ruby (pixi.lock) and bashcov (Gemfile.lock)
     cargo fetch --locked
@@ -77,6 +78,9 @@ check *flags:
         ./scripts/nx affected -t ${GATE_TARGETS:-format-check lint typecheck generate-check doc build test coverage} --base="$GATE_BASE" --exclude="$GATE_EXCLUDE" --outputStyle=static
     elif [ -n "$GATE_PROJECTS" ]; then
         ./scripts/nx run-many -t ${GATE_TARGETS:-format-check lint typecheck generate-check doc build test coverage audit} --projects="$GATE_PROJECTS" --outputStyle=static
+    fi
+    if [ -z "$GATE_TARGETS" ] && [[ ",$GATE_PROJECTS," == *,github-workflows,* ]]; then
+        ./scripts/nx run github-workflows:budgets --outputStyle=static
     fi
     if [ -n "$GATE_EXTERNALS" ] && [ -n "$GATE_STATIC" ]; then
         ./scripts/nx run-many --projects="$GATE_EXTERNALS" --outputStyle=static -t $GATE_STATIC
@@ -463,10 +467,12 @@ _py-package-e2e:
 # into a fresh venv and run the packaged console command.
 _pypi-build:
     rm -rf target/pypi-wheel
-    uvx maturin build --release --locked --out target/pypi-wheel
+    python3 pypi/build_release.py --target host --out target/pypi-wheel
 
 _pypi-test:
-    rm -rf target/pypi-wheel/smoke
-    uv venv --quiet target/pypi-wheel/smoke
-    uv pip install --quiet --python target/pypi-wheel/smoke/bin/python target/pypi-wheel/*.whl
-    target/pypi-wheel/smoke/bin/onejudge --help >/dev/null
+    python3 -m unittest discover -s pypi/tests -v
+    python3 pypi/native_journey.py --root target/pypi-wheel
+
+# One compiled executable supplies the wheel and archive for a release target.
+pypi-release target out tooling="":
+    python3 {{tooling}}pypi/build_release.py --target {{target}} --out {{out}}

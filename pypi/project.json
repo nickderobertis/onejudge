@@ -17,6 +17,7 @@
       "inputs": [
         "{workspaceRoot}/pyproject.toml",
         "{workspaceRoot}/README.md",
+        "{projectRoot}/**/*",
         "^default"
       ]
     },

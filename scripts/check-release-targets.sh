@@ -30,7 +30,7 @@ matches() {
 # install.sh's literal `target="<triple>"` assignments.
 install_targets="$(matches 'target="[a-z0-9_.-]+"' install.sh | sed -E 's/target="([^"]+)"/\1/' | sort -u)"
 # release-binaries.yml's matrix `target: <triple>` entries.
-matrix_targets="$(matches '^[[:space:]]+target: [a-z0-9_.-]+' .github/workflows/release-binaries.yml | sed -E 's/^[[:space:]]+target: //' | sort -u)"
+matrix_targets="$(matches '[a-z0-9_]+-(apple-darwin|unknown-linux-gnu|pc-windows-msvc)' .github/workflows/release-binaries.yml | sort -u)"
 
 if [ -z "$install_targets" ]; then
     echo "check-release-targets: install.sh has no literal target=\"<triple>\" assignment to check" >&2

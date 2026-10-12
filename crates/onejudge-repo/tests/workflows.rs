@@ -42,7 +42,11 @@ const PULL_REQUEST_CONDITIONS: &[&str] = &[
 
 const NOTIGNORED_JOB: &str = "suppressions";
 /// The gate jobs, and the recipe each hands the selected tier to.
-const GATE_JOBS: &[(&str, &str)] = &[("check", "just check"), ("test-os", "just test-fast")];
+const GATE_JOBS: &[(&str, &str)] = &[
+    ("check", "just check"),
+    ("test-os", "just test-fast"),
+    ("macos-tests", "just test-fast"),
+];
 const TIER_SCRIPT: &str = "node scripts/ci-tier.mjs >> \"$GITHUB_OUTPUT\"";
 const LLMLINT_VALIDATE: &str = "just lint-llm-validate --diff-base origin/main";
 const LLMLINT_CREDENTIAL: &str = "CLAUDE_CODE_OAUTH_TOKEN";
@@ -167,6 +171,19 @@ fn required_context_violations(doc: &Value, required: &[&str]) -> Vec<String> {
                 violations.push(format!("`{context}` needs `{id}`, which is not a job"));
                 continue;
             };
+            // The Linux carrier is unconditional even when its Mac prerequisite
+            // is intentionally omitted. The real command's outcome journeys live
+            // in github-workflows:test; never walk through its conditional lane.
+            if id == "macos-context" && text(job.get("if")) == Some("always()") {
+                let rendered = serde_yaml_ng::to_string(job).expect("carrier serializes");
+                if needs(job) != ["macos-policy", "macos-tests"]
+                    || !rendered.contains("node .github/macos-result.mjs")
+                {
+                    violations
+                        .push("Mac carrier must validate both policy and test results".into());
+                }
+                continue;
+            }
             match job.get("if") {
                 None => {}
                 Some(Value::String(condition))

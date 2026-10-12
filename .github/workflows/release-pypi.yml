@@ -71,6 +71,7 @@ jobs:
       - run: just check
 
   build-cli-wheels:
+    if: needs.plan.outputs.upload-cli == 'true'
     name: build-cli-wheel (${{ matrix.target }})
     needs: [plan, test]
     strategy:
@@ -81,10 +82,6 @@ jobs:
             os: ubuntu-latest
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-24.04-arm
-          - target: x86_64-apple-darwin
-            os: macos-latest
-          - target: aarch64-apple-darwin
-            os: macos-latest
           - target: x86_64-pc-windows-msvc
             os: windows-latest
     runs-on: ${{ matrix.os }}
@@ -102,6 +99,38 @@ jobs:
         with:
           name: pypi-cli-${{ matrix.target }}
           path: dist/*
+
+  darwin-wheels:
+    needs: [plan, test]
+    if: needs.plan.outputs.upload-cli == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.plan.outputs.sha }}
+          fetch-depth: 0
+      - name: Check out this workflow's release tooling
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ github.workflow_sha }}
+          path: .release-tools
+          persist-credentials: false
+      - name: Consume verified output from the exact tag producer
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.plan.outputs.tag }}
+          SHA: ${{ needs.plan.outputs.sha }}
+          VERSION: ${{ needs.plan.outputs.version }}
+        run: python3 .release-tools/pypi/fetch_release_artifacts.py --repo "$GITHUB_REPOSITORY" --tag "$TAG" --sha "$SHA" --version "$VERSION" --root darwin
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pypi-cli-darwin
+          path: darwin/*.whl
+          if-no-files-found: error
 
   # Build the generated SDK at the Cargo release version with an exact CLI pin.
   build-sdk:
@@ -146,8 +175,8 @@ jobs:
   # A distribution the plan did not select is already on PyPI: its step is
   # skipped and the job still succeeds, so the jobs after it run.
   publish-cli:
-    needs: [plan, build-cli-wheels]
-    if: ${{ vars.PYPI_PUBLISH == 'true' }}
+    needs: [plan, build-cli-wheels, darwin-wheels]
+    if: ${{ always() && vars.PYPI_PUBLISH == 'true' && needs.plan.result == 'success' && (needs.plan.outputs.upload-cli == 'false' || (needs.build-cli-wheels.result == 'success' && needs.darwin-wheels.result == 'success')) }}
     runs-on: ubuntu-latest
     permissions:
       id-token: write
