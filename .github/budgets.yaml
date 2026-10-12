@@ -1,6 +1,6 @@
 schema_version: 1
 budgets:
-  # llmlint: ignore[budgets_track_product_owner_outcomes] The brief requests both jobs/run and Mac-spending runs/change; the manager approved these separate scheduling constraints.
+  # The brief requests both jobs/run and Mac-spending runs/change; the manager approved these separate scheduling constraints.
   - id: onejudge-macos-jobs-per-run
     description: |
       Maximum macOS job instances in one resolved workflow run, including matrices
@@ -23,7 +23,7 @@ budgets:
     unit: jobs
     direction: max
     threshold: 1
-  # llmlint: ignore[budgets_track_product_owner_outcomes] The brief requests both jobs/run and Mac-spending runs/change; the manager approved these separate scheduling constraints.
+  # The brief requests both jobs/run and Mac-spending runs/change; the manager approved these separate scheduling constraints.
   - id: onejudge-macos-runs-per-change
     description: |
       Mac-spending workflow runs across one push's automatic lifecycle: ordinary
