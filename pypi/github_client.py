@@ -53,9 +53,9 @@ class Release:
 class WorkflowRun:
     id: RunId
     event: str
-    head_branch: Tag
+    head_branch: Tag | None
     head_sha: Commit
-    status: RunStatus
+    status: RunStatus | None
     conclusion: Conclusion | None
 
     def to_wire(self) -> dict[str, object]:
@@ -145,7 +145,18 @@ class GitHubClient:
             commit = string_value(row.get("head_sha"), "workflow run head_sha")
             if not re.fullmatch(r"[0-9a-f]{40}", commit):
                 raise ValueError("invalid workflow run head_sha")
-            status = RunStatus(string_value(row.get("status"), "workflow run status"))
+            status_raw = row["status"]
+            status = (
+                None
+                if status_raw is None
+                else RunStatus(string_value(status_raw, "workflow run status"))
+            )
+            branch_raw = row["head_branch"]
+            branch = (
+                None
+                if branch_raw is None
+                else Tag(string_value(branch_raw, "workflow run head_branch"))
+            )
             conclusion_raw = row.get("conclusion")
             conclusion = (
                 None
@@ -158,9 +169,7 @@ class GitHubClient:
                 WorkflowRun(
                     RunId(run_id),
                     string_value(row.get("event"), "workflow run event"),
-                    Tag(
-                        string_value(row.get("head_branch"), "workflow run head_branch")
-                    ),
+                    branch,
                     Commit(commit),
                     status,
                     conclusion,

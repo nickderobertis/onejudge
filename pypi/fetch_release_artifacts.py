@@ -62,6 +62,10 @@ async def fetch(
                 ]
                 if runs:
                     run = max(runs, key=lambda r: r.id)
+                    if run.status is None:
+                        raise ValueError(
+                            f"exact-tag producer {run.id} has unavailable status"
+                        )
                     if run.status is RunStatus.COMPLETED:
                         if run.conclusion is not Conclusion.SUCCESS:
                             raise ValueError(

@@ -221,7 +221,7 @@ class ReleaseArtifacts(unittest.TestCase):
                 "--root",
                 str(self.root / "consumed"),
                 "--attempts",
-                "2" if mode == "ordering" else "1",
+                "2" if mode in ("ordering", "competing-ordering") else "1",
             ],
             cwd=self.repo,
             env=self.transport(mode),
@@ -607,6 +607,44 @@ class ReleaseArtifacts(unittest.TestCase):
         result = self.fetch("ordering")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual((self.root / "calls").read_text().count("/workflows/"), 2)
+
+    def test_exact_producer_selection_excludes_other_tags_events_and_ambiguous_artifacts(
+        self,
+    ):
+        for mode, message in (
+            ("wrong-tag", "producer absent"),
+            ("manual-run", "producer absent"),
+            ("nullable-branch", "producer absent"),
+            ("unavailable-status", "producer 42 has unavailable status"),
+            ("duplicate-artifacts", "no unique unexpired artifact"),
+        ):
+            with self.subTest(mode=mode):
+                (self.root / "calls").unlink(missing_ok=True)
+                result = self.fetch(mode)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(message, result.stderr)
+                self.assertNotIn('"download"', (self.root / "calls").read_text())
+
+    def test_newest_matching_run_controls_recovery_even_when_older_run_succeeded(self):
+        result = self.fetch("competing-failure")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("producer 43 failed", result.stderr)
+        self.assertNotIn('"download"', (self.root / "calls").read_text())
+        (self.root / "calls").unlink()
+        result = self.fetch("competing-ordering")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        calls = (self.root / "calls").read_text()
+        self.assertIn("/runs/43/artifacts", calls)
+        self.assertIn('["run", "download", "43"', calls)
+        self.assertNotIn("/runs/42/artifacts", calls)
+        self.assertNotIn('["run", "download", "42"', calls)
+
+    def test_nullable_unrelated_runs_are_parsed_without_installing_their_output(self):
+        result = self.fetch("unrelated-nullable")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        calls = (self.root / "calls").read_text()
+        self.assertIn('["run", "download", "42"', calls)
+        self.assertNotIn('["run", "download", "43"', calls)
 
     def test_absent_failed_and_wrong_run_payload_are_visible_failures(self):
         for mode, expected in (

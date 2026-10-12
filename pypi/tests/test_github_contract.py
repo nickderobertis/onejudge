@@ -37,8 +37,11 @@ class GitHubContract(unittest.TestCase):
             self.assertEqual({f.name for f in fields(model)}, set(schema), name)
             for key, hint in get_type_hints(model).items():
                 args = get_args(hint)
-                if type(None) in args:
-                    self.assertTrue(schema[key].get("nullable"), (name, key))
+                nullable = type(None) in args
+                self.assertEqual(
+                    nullable, bool(schema[key].get("nullable", False)), (name, key)
+                )
+                if nullable:
                     hint = next(arg for arg in args if arg is not type(None))
                 hint = getattr(hint, "__supertype__", hint)
                 origin = get_origin(hint)

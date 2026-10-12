@@ -8,6 +8,7 @@ import os
 import shutil
 import sys
 from pathlib import Path
+from dataclasses import replace
 
 sys.path.insert(0, os.environ["TOOLING"])
 from github_client import (
@@ -67,8 +68,8 @@ def main() -> None:
             )
             run = WorkflowRun(
                 RunId(42),
-                "push",
-                Tag("v0.19.0"),
+                "workflow_dispatch" if mode == "manual-run" else "push",
+                Tag("onejudge-v0.19.0" if mode == "wrong-tag" else "v0.19.0"),
                 Commit("b" * 40) if mode == "wrong-run" else sha,
                 status,
                 None
@@ -78,6 +79,34 @@ def main() -> None:
                 else Conclusion.SUCCESS,
             )
             response = {"workflow_runs": [] if mode == "absent" else [run.to_wire()]}
+            if mode in ("competing-failure", "competing-ordering"):
+                newest = replace(
+                    run,
+                    id=RunId(43),
+                    status=RunStatus.RUNNING
+                    if mode == "competing-ordering" and calls == 1
+                    else RunStatus.COMPLETED,
+                    conclusion=None
+                    if mode == "competing-ordering" and calls == 1
+                    else Conclusion.FAILURE
+                    if mode == "competing-failure"
+                    else Conclusion.SUCCESS,
+                )
+                response["workflow_runs"] = [run.to_wire(), newest.to_wire()]
+            if mode == "unrelated-nullable":
+                unrelated = replace(
+                    run,
+                    id=RunId(43),
+                    event="workflow_dispatch",
+                    head_branch=None,
+                    status=None,
+                    conclusion=None,
+                )
+                response["workflow_runs"] = [unrelated.to_wire(), run.to_wire()]
+            if mode == "unavailable-status":
+                response["workflow_runs"][0]["status"] = None
+            if mode == "nullable-branch":
+                response["workflow_runs"][0]["head_branch"] = None
             if mode == "invalid-runs":
                 response["workflow_runs"][0]["id"] = (
                     True  # Deliberately invalid third-party wire data.
@@ -98,12 +127,15 @@ def main() -> None:
             if mode == "invalid-run-response":
                 response = []
         case ["api", path]:
-            assert "/runs/42/artifacts" in path, path
+            expected_run = "43" if mode == "competing-ordering" else "42"
+            assert f"/runs/{expected_run}/artifacts" in path, path
             artifact = Artifact(
                 "unrelated-artifact" if mode == "wrong-artifact" else name,
                 mode == "expired",
             )
             response = {"artifacts": [artifact.to_wire()]}
+            if mode == "duplicate-artifacts":
+                response["artifacts"].append(artifact.to_wire())
             if mode == "invalid-artifact":
                 response["artifacts"][0]["expired"] = (
                     "false"  # Deliberately invalid wire boolean.
@@ -128,7 +160,8 @@ def main() -> None:
             dest.mkdir(parents=True, exist_ok=True)
             shutil.copy2(root / (name + ".zip"), dest / (name + ".zip"))
             return
-        case ["run", "download", "42", *_]:
+        case ["run", "download", run_id, *_]:
+            assert run_id == ("43" if mode == "competing-ordering" else "42"), args
             assert args[args.index("--name") + 1] == name, args
             dest = Path(args[args.index("--dir") + 1])
             dest.mkdir(parents=True, exist_ok=True)
