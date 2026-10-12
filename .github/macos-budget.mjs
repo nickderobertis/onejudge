@@ -25,6 +25,10 @@ const jobRow = (row) =>
     isString(row[k]),
   ) &&
   isObject(row.matrix) &&
+  (row.targets === undefined ||
+    (Array.isArray(row.targets) &&
+      row.targets.length > 0 &&
+      row.targets.every(isString))) &&
   typeof row.enabled === "boolean" &&
   typeof row.macos === "boolean";
 if (

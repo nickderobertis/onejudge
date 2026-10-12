@@ -68,6 +68,29 @@ test("budget commands consume recorded telemetry, report through the SDK and ref
       { ...record, scenarios: [{}] },
       { ...record, perRun: [{}] },
       { ...record, lifecycle: [{}] },
+      {
+        ...record,
+        scenarios: [
+          {
+            id: "invalid-targets",
+            event: "push",
+            rows: [
+              {
+                workflow: "release-binaries.yml",
+                event: "push",
+                job: "darwin",
+                name: "darwin",
+                runner: "macos-15",
+                runWorkflow: "release-binaries.yml",
+                matrix: {},
+                enabled: true,
+                macos: true,
+                targets: "not-an-array",
+              },
+            ],
+          },
+        ],
+      },
     ]) {
       writeFileSync(telemetry, JSON.stringify(invalid));
       const failed = spawnSync(

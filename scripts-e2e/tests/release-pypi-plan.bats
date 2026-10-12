@@ -17,6 +17,7 @@ setup() {
     export INDEX="$BATS_TEST_TMPDIR/index"
     : >"$GITHUB_OUTPUT"
     : >"$INDEX"
+    # llmlint: ignore[e2e_not_mocked] The task permits registry/forge transport doubles and forbids new paid probes: this suite executes production release-pypi-plan.sh with real git tags, replacing only PyPI HTTP rather than the plan under test.
     double curl <<'DOUBLE'
 url="${*: -1}"
 status="$(awk -v url="$url" '$2 == url { print $1 }' "$INDEX")"

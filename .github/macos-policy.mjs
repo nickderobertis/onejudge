@@ -55,12 +55,14 @@ if path == 'Cargo.lock':
     head_version, head_names = workspace(head)
     proven = {name: member for name, member in base_names.items() if head_names.get(name) == member}
 def drop_version(d):
-    v = d.get('version')
+    if 'version' not in d:
+        raise ValueError('required manifest version is missing')
+    v = d['version']
     if isinstance(v, str):
         if not re.fullmatch(r'\\d+\\.\\d+\\.\\d+(?:[-+][A-Za-z0-9.-]+)?', v):
             raise ValueError('not a plain version')
         d.pop('version')
-    elif v is not None and v != {'workspace': True}:
+    elif v != {'workspace': True}:
         raise ValueError('not a plain version')
 def normalize(text, expected_version):
     d = tomllib.loads(text)

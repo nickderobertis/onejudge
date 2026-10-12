@@ -368,7 +368,22 @@ export function resolveRun(file, scenario, docs = workflows(), stack = []) {
             (Object.keys(matrix).length
               ? ` (${Object.values(matrix).join(", ")})`
               : "");
+        const targets =
+          matrix.target !== undefined
+            ? [render(matrix.target, context)]
+            : job.env?.TARGETS !== undefined
+              ? render(job.env.TARGETS, context).trim().split(/\s+/)
+              : [];
+        if (
+          !targets.every((target) =>
+            /^[a-z0-9_]+(?:-[a-z0-9_]+){2,3}$/.test(target),
+          )
+        )
+          throw new Error(
+            `unresolved release target declaration: ${JSON.stringify(targets)}`,
+          );
         rows.push({
+          ...(targets.length ? { targets } : {}),
           workflow: file,
           event: scenario.event,
           job: id,

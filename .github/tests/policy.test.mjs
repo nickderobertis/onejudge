@@ -328,6 +328,15 @@ test("actual workflow graph covers event fan-out, ownership, diffs and publish s
                   [],
                   scenario.id,
                 );
+              for (const row of scenario.rows.filter(
+                (row) => row.job === "darwin" && row.macos,
+              ))
+                assert.deepEqual(
+                  row.targets,
+                  docs["release-binaries.yml"].jobs.darwin.env.TARGETS.split(
+                    /\s+/,
+                  ),
+                );
               scenarios.push(scenario);
             }
     const lifecycle = [
@@ -815,6 +824,65 @@ test("production classifier command has nonempty fallback refs for base pushes a
       assert.equal(
         JSON.parse(result.stdout).macosRequired,
         event === "pull_request",
+      );
+    }
+  } finally {
+    rmSync(h.dir, { recursive: true, force: true });
+  }
+});
+
+test("removing a required version never authorizes a release-only PR", () => {
+  const h = history();
+  const git = (...args) =>
+    execFileSync("git", args, { cwd: h.dir, encoding: "utf8" }).trim();
+  try {
+    for (const [i, path] of [
+      "Cargo.toml",
+      "python/onejudge-sdk/pyproject.toml",
+      "crates/onejudge/Cargo.toml",
+    ].entries()) {
+      git("checkout", "-q", "-B", `deleted-version-${i}`, h.base);
+      let base = h.base;
+      if (path === "crates/onejudge/Cargo.toml") {
+        writeFileSync(
+          join(h.dir, path),
+          '[package]\nname = "onejudge"\nversion = "0.19.0"\n',
+        );
+        git("add", ".");
+        git("commit", "-qm", "ci: explicit package version");
+        base = git("rev-parse", "HEAD");
+        writeFileSync(
+          join(h.dir, path),
+          '[package]\nname = "onejudge"\nversion = "0.20.0"\n',
+        );
+        git("add", ".");
+        git("commit", "-qm", "ci: plain version bump");
+        assert.equal(
+          classify(
+            { ...h, base },
+            "pull_request",
+            pr(false, true),
+            git("rev-parse", "HEAD"),
+          ).isReleaseOnly,
+          true,
+        );
+      }
+      const text = execFileSync("git", ["show", `${base}:${path}`], {
+        cwd: h.dir,
+        encoding: "utf8",
+      });
+      writeFileSync(join(h.dir, path), text.replace(/^version = .*\n/m, ""));
+      git("add", ".");
+      git("commit", "-qm", "ci: remove required version");
+      assert.equal(
+        classify(
+          { ...h, base },
+          "pull_request",
+          pr(false, true),
+          git("rev-parse", "HEAD"),
+        ).macosRequired,
+        true,
+        path,
       );
     }
   } finally {
