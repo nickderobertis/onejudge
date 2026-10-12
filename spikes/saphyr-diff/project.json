@@ -1,0 +1,32 @@
+{
+  "name": "saphyr-diff",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "//": "SPIKE ONLY, never lands: the serde-saphyr differential harness for plan authoring:serde-yaml-replacement. Measurement only, so it is an external tier: the gate formats and lints it and runs nothing else; it runs by hand (README.md). Nothing may depend on it.",
+  "projectType": "application",
+  "sourceRoot": "spikes/saphyr-diff/src",
+  "tags": [
+    "type:external",
+    "lang:rust"
+  ],
+  "implicitDependencies": [
+    "onejudge"
+  ],
+  "targets": {
+    "format": {
+      "command": "just _rust-format saphyr-diff"
+    },
+    "format-check": {
+      "command": "just _rust-format-check saphyr-diff"
+    },
+    "lint": {
+      "command": "just _rust-lint saphyr-diff \"\"",
+      "inputs": [
+        "default",
+        "^default",
+        "{workspaceRoot}/nx.json",
+        "{workspaceRoot}/scripts/check-project-boundaries.mjs",
+        "{workspaceRoot}/scripts/check-target-commands.mjs"
+      ]
+    }
+  }
+}

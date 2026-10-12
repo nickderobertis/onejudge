@@ -10,10 +10,14 @@ const HERE: &str = env!("CARGO_MANIFEST_DIR");
 
 /// Every file named `name` under `dir`, skipping build, dependency and git trees.
 fn find(dir: &Path, name: &str, out: &mut Vec<PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
     for e in entries.flatten() {
         let p = e.path();
-        let skip = ["target", "node_modules", ".git"].iter().any(|s| p.file_name().is_some_and(|f| f == *s));
+        let skip = ["target", "node_modules", ".git"]
+            .iter()
+            .any(|s| p.file_name().is_some_and(|f| f == *s));
         match e.file_type() {
             Ok(t) if t.is_dir() && !skip => find(&p, name, out),
             Ok(t) if t.is_file() && p.file_name().is_some_and(|f| f == name) => out.push(p),
@@ -24,7 +28,10 @@ fn find(dir: &Path, name: &str, out: &mut Vec<PathBuf>) {
 
 /// The first 12 hex digits of the file's md5, as `md5sum | cut -c1-12` names it.
 fn md5_prefix(path: &Path) -> String {
-    let out = Command::new("md5sum").arg(path).output().expect("spawn md5sum");
+    let out = Command::new("md5sum")
+        .arg(path)
+        .output()
+        .expect("spawn md5sum");
     assert!(out.status.success(), "md5sum {}", path.display());
     String::from_utf8_lossy(&out.stdout)[..12].to_owned()
 }
@@ -46,7 +53,11 @@ fn main() {
     let effective = here.join("fixtures/effective");
     fresh(&effective);
     let mut configs = Vec::new();
-    find(&home.join(".local/state/oneagentgraph/runs"), "onejudge.yaml", &mut configs);
+    find(
+        &home.join(".local/state/oneagentgraph/runs"),
+        "onejudge.yaml",
+        &mut configs,
+    );
     configs.sort();
     for f in &configs {
         let member = f.parent().unwrap();
@@ -65,7 +76,8 @@ fn main() {
     let mut skills = Vec::new();
     for e in std::fs::read_dir(&ws).into_iter().flatten().flatten() {
         let n = e.file_name().to_string_lossy().into_owned();
-        if n.starts_with("github.com-nickderobertis-skilltest-") || n.starts_with("github.com-nickderobertis-dero-skills-")
+        if n.starts_with("github.com-nickderobertis-skilltest-")
+            || n.starts_with("github.com-nickderobertis-dero-skills-")
         {
             find(&e.path().join("pool/1/worktree"), "SKILL.md", &mut skills);
         }

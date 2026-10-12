@@ -82,17 +82,26 @@ fn origin(path: &Path) -> (String, String) {
 fn config_corpus() -> Vec<Doc> {
     let mut docs = Vec::new();
     for dir in ["single-judge", "single-judge-control"] {
-        let p = repo().join(format!("crates/onejudge-cli-e2e/tests/golden/{dir}/config.yaml"));
+        let p = repo().join(format!(
+            "crates/onejudge-cli-e2e/tests/golden/{dir}/config.yaml"
+        ));
         // The placeholders substituted as cli.rs's golden replays do (a JSON-encoded
         // binary path, plain store/record paths).
         let text = read(&p)
             .replace("{{ECHO}}", "\"/opt/doubles/onejudge-echo-provider\"")
-            .replace("{{ONEHARNESS}}", "\"/opt/doubles/onejudge-fake-oneharness\"")
+            .replace(
+                "{{ONEHARNESS}}",
+                "\"/opt/doubles/onejudge-fake-oneharness\"",
+            )
             .replace("{{AGENT_STORE}}", "/tmp/agent-store")
             .replace("{{JUDGE_STORE}}", "/tmp/judge-store")
             .replace("{{RECORD}}", "/tmp/record.jsonl");
         assert!(!text.contains("{{"), "{dir}: unsubstituted placeholder");
-        docs.push(Doc { kind: "config/golden", name: format!("golden/{dir}/config.yaml"), text });
+        docs.push(Doc {
+            kind: "config/golden",
+            name: format!("golden/{dir}/config.yaml"),
+            text,
+        });
     }
     docs.push(Doc {
         kind: "config/starter",
@@ -108,11 +117,17 @@ fn config_corpus() -> Vec<Doc> {
         };
         docs.push(Doc {
             kind,
-            name: format!("{} [{suites}; {test}]", p.file_name().unwrap().to_string_lossy()),
+            name: format!(
+                "{} [{suites}; {test}]",
+                p.file_name().unwrap().to_string_lossy()
+            ),
             text: read(&p),
         });
     }
-    for p in read_dir_sorted(&Path::new(HERE).join("fixtures/captured-sdk/config"), "yaml") {
+    for p in read_dir_sorted(
+        &Path::new(HERE).join("fixtures/captured-sdk/config"),
+        "yaml",
+    ) {
         docs.push(Doc {
             kind: "config/python-sdk-json",
             name: p.file_name().unwrap().to_string_lossy().into_owned(),
@@ -127,7 +142,11 @@ fn config_corpus() -> Vec<Doc> {
         });
     }
     for (name, text) in SYNTHETIC_CONFIGS {
-        docs.push(Doc { kind: "config/edge+malformed", name: (*name).into(), text: (*text).into() });
+        docs.push(Doc {
+            kind: "config/edge+malformed",
+            name: (*name).into(),
+            text: (*text).into(),
+        });
     }
     docs
 }
@@ -220,7 +239,9 @@ fn read(p: &Path) -> String {
 
 /// The same split `skill.rs::split_frontmatter` does (copied; it is private).
 fn split_frontmatter(text: &str) -> Option<&str> {
-    let rest = text.strip_prefix("---\n").or_else(|| text.strip_prefix("---\r\n"))?;
+    let rest = text
+        .strip_prefix("---\n")
+        .or_else(|| text.strip_prefix("---\r\n"))?;
     for sep in ["\n---\n", "\n---\r\n", "\r\n---\r\n"] {
         if let Some(idx) = rest.find(sep) {
             return Some(&rest[..idx]);
@@ -230,12 +251,17 @@ fn split_frontmatter(text: &str) -> Option<&str> {
 }
 
 fn skill_files(dir: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(rd) = std::fs::read_dir(dir) else { return };
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return;
+    };
     let mut entries: Vec<PathBuf> = rd.map(|e| e.unwrap().path()).collect();
     entries.sort();
     for p in entries {
         if p.is_dir() {
-            if !p.file_name().is_some_and(|n| n == ".trash" || n == "node_modules" || n == ".git") {
+            if !p
+                .file_name()
+                .is_some_and(|n| n == ".trash" || n == "node_modules" || n == ".git")
+            {
                 skill_files(&p, out);
             }
         } else if p.file_name().is_some_and(|n| n == "SKILL.md") {
@@ -246,11 +272,17 @@ fn skill_files(dir: &Path, out: &mut Vec<PathBuf>) {
 
 fn frontmatter_corpus() -> Vec<Doc> {
     let mut docs = Vec::new();
-    for p in read_dir_sorted(&Path::new(HERE).join("fixtures/captured/frontmatter"), "yaml") {
+    for p in read_dir_sorted(
+        &Path::new(HERE).join("fixtures/captured/frontmatter"),
+        "yaml",
+    ) {
         let (suites, test) = origin(&p);
         docs.push(Doc {
             kind: "frontmatter/test-suites",
-            name: format!("{} [{suites}; {test}]", p.file_name().unwrap().to_string_lossy()),
+            name: format!(
+                "{} [{suites}; {test}]",
+                p.file_name().unwrap().to_string_lossy()
+            ),
             text: read(&p),
         });
     }
@@ -260,11 +292,22 @@ fn frontmatter_corpus() -> Vec<Doc> {
         // Proves the copied split is the one load_skill applies: load_skill must
         // succeed exactly when serde_yaml_ng accepts the split front matter.
         let text = read(&p);
-        let Some(fm) = split_frontmatter(&text) else { continue };
+        let Some(fm) = split_frontmatter(&text) else {
+            continue;
+        };
         let loaded = onejudge::load_skill(p.parent().unwrap());
-        assert_eq!(loaded.is_ok(), serde_yaml_ng::from_str::<Frontmatter>(fm).is_ok(), "{}", p.display());
+        assert_eq!(
+            loaded.is_ok(),
+            serde_yaml_ng::from_str::<Frontmatter>(fm).is_ok(),
+            "{}",
+            p.display()
+        );
         let origin = read(&p.with_file_name("origin"));
-        docs.push(Doc { kind: "frontmatter/own-skills", name: origin.trim().to_owned(), text: fm.to_owned() });
+        docs.push(Doc {
+            kind: "frontmatter/own-skills",
+            name: origin.trim().to_owned(),
+            text: fm.to_owned(),
+        });
     }
     let mut seen = std::collections::BTreeSet::new();
     for dir in extra_skill_dirs().split(':').filter(|d| !d.is_empty()) {
@@ -272,30 +315,55 @@ fn frontmatter_corpus() -> Vec<Doc> {
         skill_files(Path::new(dir), &mut files);
         for p in files {
             let text = read(&p);
-            let Some(fm) = split_frontmatter(&text) else { continue };
+            let Some(fm) = split_frontmatter(&text) else {
+                continue;
+            };
             if !seen.insert(fm.to_owned()) {
                 continue;
             }
-            docs.push(Doc { kind: "frontmatter/extra-skills", name: p.display().to_string(), text: fm.to_owned() });
+            docs.push(Doc {
+                kind: "frontmatter/extra-skills",
+                name: p.display().to_string(),
+                text: fm.to_owned(),
+            });
         }
     }
     for (name, text) in SYNTHETIC_FRONTMATTER {
-        docs.push(Doc { kind: "frontmatter/edge+malformed", name: (*name).into(), text: (*text).into() });
+        docs.push(Doc {
+            kind: "frontmatter/edge+malformed",
+            name: (*name).into(),
+            text: (*text).into(),
+        });
     }
     docs
 }
 
 const SYNTHETIC_FRONTMATTER: &[(&str, &str)] = &[
     ("known keys only", "name: a\ndescription: b"),
-    ("unknown keys", "name: a\ndescription: b\nallowed-tools: [Bash, Read]\nmetadata:\n  version: 1\n"),
+    (
+        "unknown keys",
+        "name: a\ndescription: b\nallowed-tools: [Bash, Read]\nmetadata:\n  version: 1\n",
+    ),
     ("unknown key, YAML 1.1 bool", "name: a\nenabled: yes"),
     ("unknown key, custom tag", "name: a\nx: !custom {a: 1}"),
     ("unknown key, anchor reused", "base: &b n\nname: *b"),
     ("unknown key duplicated", "name: a\nfoo: 1\nfoo: 2"),
-    ("unknown duplicate, then known duplicate", "foo: 1\nfoo: 2\nname: a\nname: b"),
-    ("known duplicate, then unknown duplicate", "name: a\nname: b\nfoo: 1\nfoo: 2"),
-    ("unknown duplicate nested under an unknown key", "name: a\nmeta:\n  x: 1\n  x: 2"),
-    ("known key repeated inside an unknown mapping", "name: a\nmeta:\n  name: b\n  name: c"),
+    (
+        "unknown duplicate, then known duplicate",
+        "foo: 1\nfoo: 2\nname: a\nname: b",
+    ),
+    (
+        "known duplicate, then unknown duplicate",
+        "name: a\nname: b\nfoo: 1\nfoo: 2",
+    ),
+    (
+        "unknown duplicate nested under an unknown key",
+        "name: a\nmeta:\n  x: 1\n  x: 2",
+    ),
+    (
+        "known key repeated inside an unknown mapping",
+        "name: a\nmeta:\n  name: b\n  name: c",
+    ),
     ("known duplicate in flow style", "{name: a, name: b}"),
     ("merge key", "<<: {name: merged}\ndescription: d"),
     ("known key duplicated", "name: a\nname: b"),
@@ -306,12 +374,30 @@ const SYNTHETIC_FRONTMATTER: &[(&str, &str)] = &[
     ("name null", "name:\ndescription: d"),
     // split_frontmatter cuts before the closing fence's newline, so the front
     // matter of every real SKILL.md ends without a line break.
-    ("description folded, last key", "description: >\n  long\n  text"),
-    ("description literal, last key", "description: |\n  long\n  text"),
-    ("description folded strip, last key", "description: >-\n  long\n  text"),
-    ("description folded, not last", "description: >\n  long\n  text\nname: a"),
-    ("description plain multi-line, last key", "description: long\n  text"),
-    ("description colon unquoted", "name: a\ndescription: Use when: x"),
+    (
+        "description folded, last key",
+        "description: >\n  long\n  text",
+    ),
+    (
+        "description literal, last key",
+        "description: |\n  long\n  text",
+    ),
+    (
+        "description folded strip, last key",
+        "description: >-\n  long\n  text",
+    ),
+    (
+        "description folded, not last",
+        "description: >\n  long\n  text\nname: a",
+    ),
+    (
+        "description plain multi-line, last key",
+        "description: long\n  text",
+    ),
+    (
+        "description colon unquoted",
+        "name: a\ndescription: Use when: x",
+    ),
     ("empty", ""),
     ("only a comment", "# c"),
     ("non-mapping", "- a"),
@@ -356,18 +442,25 @@ fn de_variants() -> Vec<(&'static str, Options)> {
     o.strict_booleans = true;
     o.merge_keys = MergeKeyPolicy::AsOrdinary;
     o.duplicate_keys = DuplicateKeyPolicy::FirstWins;
-    v.push(("strict_booleans+merge_keys=AsOrdinary+duplicate_keys=FirstWins", o));
+    v.push((
+        "strict_booleans+merge_keys=AsOrdinary+duplicate_keys=FirstWins",
+        o,
+    ));
     v
 }
 
 type Read = Result<String, String>;
 
 fn ng<T: DeserializeOwned + Debug>(text: &str) -> Read {
-    serde_yaml_ng::from_str::<T>(text).map(|v| format!("{v:?}")).map_err(|e| e.to_string())
+    serde_yaml_ng::from_str::<T>(text)
+        .map(|v| format!("{v:?}"))
+        .map_err(|e| e.to_string())
 }
 
 fn sy<T: DeserializeOwned + Debug>(text: &str, o: Options) -> Read {
-    serde_saphyr::from_str_with_options::<T>(text, o).map(|v| format!("{v:?}")).map_err(|e| e.to_string())
+    serde_saphyr::from_str_with_options::<T>(text, o)
+        .map(|v| format!("{v:?}"))
+        .map_err(|e| e.to_string())
 }
 
 #[derive(Default)]
@@ -401,7 +494,9 @@ type Candidate = (&'static str, Read);
 /// string and serde's own typed refusal applies again.
 fn via_json<T: DeserializeOwned + Debug>(text: &str, o: Options) -> Read {
     let value: Json = serde_saphyr::from_str_with_options(text, o).map_err(|e| e.to_string())?;
-    serde_json::from_value::<T>(value).map(|v| format!("{v:?}")).map_err(|e| e.to_string())
+    serde_json::from_value::<T>(value)
+        .map(|v| format!("{v:?}"))
+        .map_err(|e| e.to_string())
 }
 
 fn via_json_variants() -> Vec<(&'static str, Options)> {
@@ -415,7 +510,10 @@ fn via_json_variants() -> Vec<(&'static str, Options)> {
     o.strict_booleans = true;
     o.merge_keys = MergeKeyPolicy::AsOrdinary;
     o.reject_non_finite_typeless_float = false;
-    v.push(("via-json strict_booleans+merge_keys=AsOrdinary+reject_non_finite_typeless_float=false", o));
+    v.push((
+        "via-json strict_booleans+merge_keys=AsOrdinary+reject_non_finite_typeless_float=false",
+        o,
+    ));
     v
 }
 
@@ -522,7 +620,10 @@ fn frontmatter_prescan(text: &str) -> Read {
 }
 
 fn indent(s: &str) -> String {
-    s.lines().map(|l| format!("      | {l}")).collect::<Vec<_>>().join("\n")
+    s.lines()
+        .map(|l| format!("      | {l}"))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// Compare one document read into `T`; `wrap` turns a parser message into the
@@ -536,8 +637,10 @@ fn compare_read<T: DeserializeOwned + Debug>(
 ) {
     out.tallies.entry(doc.kind).or_default().docs += 1;
     let before = ng::<T>(&doc.text);
-    let mut candidates: Vec<Candidate> =
-        via_json_variants().into_iter().map(|(n, o)| (n, via_json::<T>(&doc.text, o))).collect();
+    let mut candidates: Vec<Candidate> = via_json_variants()
+        .into_iter()
+        .map(|(n, o)| (n, via_json::<T>(&doc.text, o)))
+        .collect();
     candidates.extend(extra(&doc.text));
     for (name, v) in candidates {
         *out.resolution_docs.entry(name).or_default() += 1;
@@ -551,7 +654,12 @@ fn compare_read<T: DeserializeOwned + Debug>(
                 Ok(v) => format!("Ok {v}"),
                 Err(e) => format!("Err {e}"),
             };
-            out.resolutions.entry(name).or_default().push((doc.kind, doc.name.clone(), show(&before), show(&v)));
+            out.resolutions.entry(name).or_default().push((
+                doc.kind,
+                doc.name.clone(),
+                show(&before),
+                show(&v),
+            ));
         } else if let (Err(a), Err(b)) = (&before, &v) {
             // Both refuse: record the text only when the candidate claims to
             // reproduce today's message (the pre-scan's known-key refusal).
@@ -583,20 +691,34 @@ fn compare_read<T: DeserializeOwned + Debug>(
             // A probe that reads identically is still worth a line: it is
             // evidence that this shape is not a difference.
             if doc.kind.ends_with("edge+malformed") {
-                println!("  - [{}] {}: same read (both accept): {a}", doc.kind, doc.name);
+                println!(
+                    "  - [{}] {}: same read (both accept): {a}",
+                    doc.kind, doc.name
+                );
             }
         }
         (Err(a), Err(b)) => {
             tally.identical_err_class += 1;
             tally.err_text_diff += 1;
-            *out.classes.entry((doc.kind.into(), "error text differs (both refuse)".into())).or_default() += 1;
-            println!("  - [{}] {}: ERROR TEXT DIFFERS (both refuse)", doc.kind, doc.name);
-            println!("      before (serde_yaml_ng):\n{}", indent(&wrap(a.clone())));
+            *out.classes
+                .entry((doc.kind.into(), "error text differs (both refuse)".into()))
+                .or_default() += 1;
+            println!(
+                "  - [{}] {}: ERROR TEXT DIFFERS (both refuse)",
+                doc.kind, doc.name
+            );
+            println!(
+                "      before (serde_yaml_ng):\n{}",
+                indent(&wrap(a.clone()))
+            );
             println!("      after (serde-saphyr):\n{}", indent(&wrap(b.clone())));
             let mut plain = Options::default();
             plain.with_snippet = false;
             if let Err(c) = sy::<T>(&doc.text, plain) {
-                println!("      after (serde-saphyr, with_snippet=false):\n{}", indent(&wrap(c)));
+                println!(
+                    "      after (serde-saphyr, with_snippet=false):\n{}",
+                    indent(&wrap(c))
+                );
             }
         }
         _ => {
@@ -606,7 +728,9 @@ fn compare_read<T: DeserializeOwned + Debug>(
                 (Ok(_), Err(_)) => "serde-saphyr refuses what serde_yaml_ng accepts",
                 _ => "serde-saphyr accepts what serde_yaml_ng refuses",
             };
-            *out.classes.entry((doc.kind.into(), class.into())).or_default() += 1;
+            *out.classes
+                .entry((doc.kind.into(), class.into()))
+                .or_default() += 1;
             let reproduced: Vec<&str> = variants[1..]
                 .iter()
                 .filter(|(_, o)| {
@@ -626,7 +750,10 @@ fn compare_read<T: DeserializeOwned + Debug>(
                 Err(e) => format!("Err {}", wrap(e.clone())),
             };
             println!("      before (serde_yaml_ng):\n{}", indent(&show(&before)));
-            println!("      after (serde-saphyr default Options):\n{}", indent(&show(&after)));
+            println!(
+                "      after (serde-saphyr default Options):\n{}",
+                indent(&show(&after))
+            );
             if reproduced.is_empty() {
                 println!("      reproduced by Options: NONE");
             } else {
@@ -717,17 +844,29 @@ fn workflows_section() {
         let text = read(f);
         let name = f.file_name().unwrap().to_string_lossy();
         let ngv: serde_yaml_ng::Value = serde_yaml_ng::from_str(&text).unwrap();
-        let ng_on = ngv.as_mapping().unwrap().keys().find(|k| k.as_str() == Some("on")).map(|k| format!("{k:?}"));
+        let ng_on = ngv
+            .as_mapping()
+            .unwrap()
+            .keys()
+            .find(|k| k.as_str() == Some("on"))
+            .map(|k| format!("{k:?}"));
         let ng_json = serde_json::to_value(&ngv).map_err(|e| e.to_string());
         let sy_json = serde_saphyr::from_str::<Json>(&text).map_err(|e| e.to_string());
-        let tree = <saphyr::Yaml as saphyr::LoadableYamlNode>::load_from_str(&text).map_err(|e| e.to_string());
-        let sy_on = sy_json.as_ref().ok().and_then(|j| j.as_object()).map(|m| m.contains_key("on"));
+        let tree = <saphyr::Yaml as saphyr::LoadableYamlNode>::load_from_str(&text)
+            .map_err(|e| e.to_string());
+        let sy_on = sy_json
+            .as_ref()
+            .ok()
+            .and_then(|j| j.as_object())
+            .map(|m| m.contains_key("on"));
         let (tree_on, tree_json) = match &tree {
             Ok(docs) => {
                 let root = &docs[0];
-                let on = root
-                    .as_mapping()
-                    .map(|m| m.keys().find(|k| format!("{k:?}").contains("\"on\"")).map(|k| format!("{k:?}")));
+                let on = root.as_mapping().map(|m| {
+                    m.keys()
+                        .find(|k| format!("{k:?}").contains("\"on\""))
+                        .map(|k| format!("{k:?}"))
+                });
                 (on.flatten(), saphyr_to_json(root))
             }
             Err(e) => (None, Err(e.clone())),
@@ -761,7 +900,9 @@ fn workflows_section() {
                 let mut d = Vec::new();
                 json_diff(a, b, "$", &mut d);
                 if d.is_empty() {
-                    println!("      saphyr tree: identical to serde_yaml_ng (values and key order)");
+                    println!(
+                        "      saphyr tree: identical to serde_yaml_ng (values and key order)"
+                    );
                 } else {
                     for x in d {
                         println!("      saphyr tree DIFFERS: {x}");
@@ -791,7 +932,10 @@ fn workflows_section() {
             }
         }
     }
-    println!("  checker differences: {checker_diffs} of {} cases", a.len());
+    println!(
+        "  checker differences: {checker_diffs} of {} cases",
+        a.len()
+    );
 
     println!("\n### write: serde_yaml_ng::to_string(step) vs serde_saphyr::to_string(json step), every step of every workflow\n");
     let steps_ng = workflows_ng::all_steps();
@@ -824,18 +968,32 @@ fn workflows_section() {
             }
             println!(
                 "      reproduced by SerializerOptions: {}",
-                if matched.is_empty() { "NONE".to_owned() } else { matched.join(", ") }
+                if matched.is_empty() {
+                    "NONE".to_owned()
+                } else {
+                    matched.join(", ")
+                }
             );
         }
     }
-    println!("\n  {} steps rendered; byte-identical per SerializerOptions variant:", steps_ng.len());
+    println!(
+        "\n  {} steps rendered; byte-identical per SerializerOptions variant:",
+        steps_ng.len()
+    );
     for (vname, _) in &variants {
-        println!("    {vname}: {}/{}", by_variant.get(vname).copied().unwrap_or(0), steps_ng.len());
+        println!(
+            "    {vname}: {}/{}",
+            by_variant.get(vname).copied().unwrap_or(0),
+            steps_ng.len()
+        );
     }
     println!("  steps where `rendered.contains(\"secrets.\")` disagrees: {secrets_disagree}");
     let v = workflows_ng::validate_step();
     println!("\n  the step the gate renders (llmlint validate step):");
-    println!("      before (serde_yaml_ng):\n{}", indent(&serde_yaml_ng::to_string(&v).unwrap()));
+    println!(
+        "      before (serde_yaml_ng):\n{}",
+        indent(&serde_yaml_ng::to_string(&v).unwrap())
+    );
     println!(
         "      after (serde-saphyr):\n{}",
         indent(&serde_saphyr::to_string(&serde_json::to_value(&v).unwrap()).unwrap())
@@ -870,24 +1028,46 @@ fn timing_section(configs: &[Doc]) {
     println!("  largest: {name} ({} bytes)", text.len());
     let n = 200;
     let rows: Vec<(&str, f64)> = vec![
-        ("serde_yaml_ng -> Config", median_micros(n, &mut || {
-            std::hint::black_box(serde_yaml_ng::from_str::<Config>(text).unwrap());
-        })),
-        ("serde-saphyr -> Config", median_micros(n, &mut || {
-            std::hint::black_box(serde_saphyr::from_str::<Config>(text).unwrap());
-        })),
-        ("serde_yaml_ng -> serde_yaml_ng::Value", median_micros(n, &mut || {
-            std::hint::black_box(serde_yaml_ng::from_str::<serde_yaml_ng::Value>(text).unwrap());
-        })),
-        ("serde-saphyr -> serde_json::Value", median_micros(n, &mut || {
-            std::hint::black_box(serde_saphyr::from_str::<Json>(text).unwrap());
-        })),
-        ("serde-saphyr -> Config + via-json string guard (finding 3 alternative)", median_micros(n, &mut || {
-            std::hint::black_box(guarded::<Config>(text, resolution_options()).unwrap());
-        })),
-        ("saphyr -> Yaml tree", median_micros(n, &mut || {
-            std::hint::black_box(<saphyr::Yaml as saphyr::LoadableYamlNode>::load_from_str(text).unwrap());
-        })),
+        (
+            "serde_yaml_ng -> Config",
+            median_micros(n, &mut || {
+                std::hint::black_box(serde_yaml_ng::from_str::<Config>(text).unwrap());
+            }),
+        ),
+        (
+            "serde-saphyr -> Config",
+            median_micros(n, &mut || {
+                std::hint::black_box(serde_saphyr::from_str::<Config>(text).unwrap());
+            }),
+        ),
+        (
+            "serde_yaml_ng -> serde_yaml_ng::Value",
+            median_micros(n, &mut || {
+                std::hint::black_box(
+                    serde_yaml_ng::from_str::<serde_yaml_ng::Value>(text).unwrap(),
+                );
+            }),
+        ),
+        (
+            "serde-saphyr -> serde_json::Value",
+            median_micros(n, &mut || {
+                std::hint::black_box(serde_saphyr::from_str::<Json>(text).unwrap());
+            }),
+        ),
+        (
+            "serde-saphyr -> Config + via-json string guard (finding 3 alternative)",
+            median_micros(n, &mut || {
+                std::hint::black_box(guarded::<Config>(text, resolution_options()).unwrap());
+            }),
+        ),
+        (
+            "saphyr -> Yaml tree",
+            median_micros(n, &mut || {
+                std::hint::black_box(
+                    <saphyr::Yaml as saphyr::LoadableYamlNode>::load_from_str(text).unwrap(),
+                );
+            }),
+        ),
     ];
     for (what, us) in rows {
         println!("    {what}: median {us:.0} µs over {n} parses");
@@ -897,7 +1077,9 @@ fn timing_section(configs: &[Doc]) {
 // ------------------------------------------------------------------ main ----
 
 fn main() {
-    println!("# serde_yaml_ng 0.10.0 vs serde-saphyr 1.3.0 (saphyr 0.2.1 for the schema-less walk)");
+    println!(
+        "# serde_yaml_ng 0.10.0 vs serde-saphyr 1.3.0 (saphyr 0.2.1 for the schema-less walk)"
+    );
     println!("# 'before' = serde_yaml_ng (today), 'after' = serde-saphyr with default Options unless named.\n");
     let mut out = Out {
         tallies: BTreeMap::new(),
@@ -909,7 +1091,8 @@ fn main() {
 
     println!("## config: Config::from_yaml (serde_yaml_ng) vs serde_saphyr::from_str::<Config>\n");
     let configs = config_corpus();
-    let wrap_config = |e: String| CliError::Config(format!("could not parse config: {e}")).to_string();
+    let wrap_config =
+        |e: String| CliError::Config(format!("could not parse config: {e}")).to_string();
     for doc in &configs {
         compare_read::<Config>(&mut out, doc, &wrap_config, &|text| {
             vec![("typed strict_booleans+merge_keys=AsOrdinary + via-json string guard (finding 3 alternative)", guarded::<Config>(text, resolution_options()))]
@@ -937,7 +1120,10 @@ fn main() {
     timing_section(&configs);
 
     println!("\n## summary per document kind\n");
-    println!("  {:<34} {:>5} {:>10} {:>10} {:>10} {:>14}", "kind", "docs", "same-read", "read-diff", "both-err", "err-text-diff");
+    println!(
+        "  {:<34} {:>5} {:>10} {:>10} {:>10} {:>14}",
+        "kind", "docs", "same-read", "read-diff", "both-err", "err-text-diff"
+    );
     for (kind, t) in &out.tallies {
         println!(
             "  {kind:<34} {:>5} {:>10} {:>10} {:>10} {:>14}",
@@ -957,7 +1143,12 @@ fn main() {
             .filter(|((v, _), names)| *v == vname && !names.is_empty())
             .map(|((_, kind), names)| format!("{kind}: {}", names.join(" | ")))
             .collect();
-        let total: usize = out.scores.iter().filter(|((v, _), _)| *v == vname).map(|(_, n)| n.len()).sum();
+        let total: usize = out
+            .scores
+            .iter()
+            .filter(|((v, _), _)| *v == vname)
+            .map(|(_, n)| n.len())
+            .sum();
         println!("  {vname}: {total} document(s)");
         for r in rows {
             println!("      {r}");
@@ -971,7 +1162,10 @@ fn main() {
         for (kind, ..) in diffs {
             *per_kind.entry(kind).or_default() += 1;
         }
-        println!("### {name}: {} of {n} document(s) differ  {per_kind:?}\n", diffs.len());
+        println!(
+            "### {name}: {} of {n} document(s) differ  {per_kind:?}\n",
+            diffs.len()
+        );
         for (kind, doc, before, after) in diffs {
             println!("  - [{kind}] {doc}");
             println!("      before (serde_yaml_ng):\n{}", indent(before));
