@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
-import { sourceDigest } from "../workflow-graph.mjs";
+import { sourceDigest, workflows, resolveRun } from "../workflow-graph.mjs";
+import { recordingMeasures, TELEMETRY_SCHEMA_VERSION } from "../telemetry.mjs";
 
 test("budget commands consume recorded telemetry, report through the SDK and refuse missing/stale inputs", () => {
   const dir = mkdtempSync(
@@ -15,15 +16,53 @@ test("budget commands consume recorded telemetry, report through the SDK and ref
   try {
     const telemetry = join(dir, "telemetry.json"),
       result = join(dir, "result.json");
+    const docs = workflows();
+    const fixtureScenarios = [
+      {
+        id: "ordinary-pr",
+        event: "pull_request",
+        payload: { action: "synchronize" },
+        ref: "refs/heads/main",
+        policy: { macosRequired: true },
+      },
+      {
+        id: "tag-build",
+        event: "push",
+        payload: {},
+        ref: "refs/tags/v0.19.0",
+        outputs: {
+          "darwin-plan": {
+            build: "true",
+            tag: "v0.19.0",
+            sha: "a".repeat(40),
+            version: "0.19.0",
+          },
+        },
+      },
+    ];
+    for (const scenario of fixtureScenarios) {
+      const file =
+        scenario.event === "push" ? "release-binaries.yml" : "ci.yml";
+      scenario.rows = resolveRun(file, scenario, docs).map((row) => ({
+        ...row,
+        runWorkflow: file,
+      }));
+    }
+    const workflowNames = Object.keys(docs),
+      lifecycleScenarios = fixtureScenarios.map((s) => s.id);
     const record = {
-      schema_version: 1,
+      schema_version: TELEMETRY_SCHEMA_VERSION,
       digest: sourceDigest(),
-      scenarios: [],
-      lifecycle: [],
-      perRun: [],
-      jobsPerRun: 7,
-      runsPerChange: 9,
+      scenarios: fixtureScenarios,
+      workflowNames,
+      lifecycleScenarios,
+      ...recordingMeasures(fixtureScenarios, workflowNames, lifecycleScenarios),
     };
+    const golden = JSON.parse(
+      readFileSync(".github/tests/fixtures/telemetry-fields.json", "utf8"),
+    );
+    assert.equal(record.schema_version, golden.schema_version);
+    assert.deepEqual(Object.keys(record).sort(), golden.fields.sort());
     writeFileSync(telemetry, JSON.stringify(record));
     for (const [metric, expected] of [
       ["jobs-per-run", record.jobsPerRun],
@@ -64,6 +103,12 @@ test("budget commands consume recorded telemetry, report through the SDK and ref
     assert.match(JSON.parse(standalone.stdout).detail, /perWorkflow/);
     for (const invalid of [
       { ...record, jobsPerRun: -1 },
+      { ...record, jobsPerRun: 0 },
+      { ...record, runsPerChange: 0 },
+      { ...record, lifecycle: [] },
+      { ...record, perRun: record.perRun.map((row) => ({ ...row, jobs: 0 })) },
+      { ...record, lifecycleScenarios: ["missing-scenario"] },
+      { ...record, workflowNames: ["unregistered-workflow"] },
       { ...record, runsPerChange: "two" },
       { ...record, scenarios: [{}] },
       { ...record, perRun: [{}] },

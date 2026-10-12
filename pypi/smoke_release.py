@@ -1,4 +1,4 @@
-"""Install and run both packaged products; Darwin x86 uses Rosetta on Apple Silicon."""
+"""Install and run Unix packaged products; Darwin x86 uses Rosetta on Apple Silicon."""
 
 from __future__ import annotations
 
@@ -10,9 +10,18 @@ import tarfile
 import tempfile
 from pathlib import Path
 
+from release_artifacts import Target
+
+SUPPORTED_TARGETS = {target.value for target in Target} | {
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+}
+
 
 def smoke(target: str, root: Path, version: str) -> None:
-    arch = "x86_64" if target.startswith("x86_64") else "arm64"
+    if target not in SUPPORTED_TARGETS:
+        raise ValueError(f"unsupported smoke target: {target}")
+    arch = {"x86_64": "x86_64", "aarch64": "arm64"}[target.split("-", 1)[0]]
     prefix = (
         ["arch", "-x86_64"]
         if target.endswith("apple-darwin")

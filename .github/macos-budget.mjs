@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { report } from "@onebudgetspec/sdk";
 import { sourceDigest } from "./workflow-graph.mjs";
 import { commandOptions } from "./command-options.mjs";
+import { recordingMeasures, TELEMETRY_SCHEMA_VERSION } from "./telemetry.mjs";
 const args = process.argv.slice(2);
 const options = commandOptions(args, ["--metric", "--telemetry"]);
 const metric = options["--metric"];
@@ -30,12 +31,20 @@ const jobRow = (row) =>
       row.targets.length > 0 &&
       row.targets.every(isString))) &&
   typeof row.enabled === "boolean" &&
-  typeof row.macos === "boolean";
+  typeof row.macos === "boolean" &&
+  row.macos === (row.enabled && row.runner.startsWith("macos-"));
 if (
   !isObject(telemetry) ||
   !metricValue(telemetry.jobsPerRun) ||
   !metricValue(telemetry.runsPerChange) ||
+  !Array.isArray(telemetry.workflowNames) ||
+  telemetry.workflowNames.length === 0 ||
+  !telemetry.workflowNames.every(isString) ||
+  !Array.isArray(telemetry.lifecycleScenarios) ||
+  telemetry.lifecycleScenarios.length === 0 ||
+  !telemetry.lifecycleScenarios.every(isString) ||
   !Array.isArray(telemetry.scenarios) ||
+  telemetry.scenarios.length === 0 ||
   !telemetry.scenarios.every(
     (s) =>
       isObject(s) &&
@@ -63,10 +72,21 @@ if (
   )
 )
   throw new Error("invalid workflow telemetry shape");
-if (telemetry.schema_version !== 1 || telemetry.digest !== sourceDigest())
+if (
+  telemetry.schema_version !== TELEMETRY_SCHEMA_VERSION ||
+  telemetry.digest !== sourceDigest()
+)
   throw new Error(
     "missing/stale workflow telemetry: run github-workflows:test for this tree",
   );
+const expected = recordingMeasures(
+  telemetry.scenarios,
+  telemetry.workflowNames,
+  telemetry.lifecycleScenarios,
+);
+for (const key of ["perRun", "lifecycle", "jobsPerRun", "runsPerChange"])
+  if (JSON.stringify(telemetry[key]) !== JSON.stringify(expected[key]))
+    throw new Error(`invalid workflow telemetry: inconsistent recorded ${key}`);
 const value =
   metric === "jobs-per-run" ? telemetry.jobsPerRun : telemetry.runsPerChange;
 const detail = JSON.stringify({

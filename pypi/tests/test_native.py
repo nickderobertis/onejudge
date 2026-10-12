@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import os
 import re
@@ -11,6 +12,7 @@ import sys
 import tarfile
 import tempfile
 import unittest
+import tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -130,6 +132,52 @@ class NativeProducts(unittest.TestCase):
             self.assertEqual(result.returncode, 1)
             self.assertIn("wheel installed version mismatch", result.stderr)
             self.assertNotIn("archive installed version mismatch", result.stderr)
+
+    def test_unknown_target_is_refused_even_with_installable_real_products(self):
+        # Repack the actual host archive under an unknown triple; its executable
+        # and wheel still work on this host, so a missing-path error cannot pass.
+        with tempfile.TemporaryDirectory(
+            dir=os.environ.get("ONEPIPELINE_NODE_SCRATCH_DIR")
+            or os.environ.get("RUNNER_TEMP")
+        ) as scratch:
+            products = Path(scratch)
+            (archive,) = (ROOT / "target/pypi-wheel").glob("*.tar.gz")
+            (wheel,) = (ROOT / "target/pypi-wheel").glob("*.whl")
+            original_prefix = archive.name.removesuffix(".tar.gz")
+            unknown = "imaginary-unknown-linux-gnu"
+            with (
+                tarfile.open(archive) as source,
+                tarfile.open(products / f"onejudge-{unknown}.tar.gz", "w:gz") as output,
+            ):
+                for member in source.getmembers():
+                    renamed = copy.copy(member)
+                    renamed.name = member.name.replace(
+                        original_prefix, f"onejudge-{unknown}", 1
+                    )
+                    output.addfile(
+                        renamed, source.extractfile(member) if member.isfile() else None
+                    )
+            shutil.copy2(wheel, products / wheel.name)
+            version = tomllib.loads((ROOT / "Cargo.toml").read_text())["workspace"][
+                "package"
+            ]["version"]
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "pypi/smoke_release.py"),
+                    "--target",
+                    unknown,
+                    "--root",
+                    str(products),
+                    "--version",
+                    version,
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("unsupported smoke target", result.stderr)
 
     def test_cli_wheel_contains_no_private_pipeline_helpers(self):
         import zipfile

@@ -12,6 +12,8 @@ import {
   render,
 } from "../workflow-graph.mjs";
 
+import { recordingMeasures, TELEMETRY_SCHEMA_VERSION } from "../telemetry.mjs";
+
 const root = resolve(".");
 const scratchRoot =
   process.env.ONEPIPELINE_NODE_SCRATCH_DIR || process.env.RUNNER_TEMP;
@@ -348,41 +350,19 @@ test("actual workflow graph covers event fan-out, ownership, diffs and publish s
       "release/published/version/false/true/true",
       "workflow_run/completed/version/false/true/true",
     ];
-    const runs = lifecycle.flatMap((id) => {
-      const scenario = scenarios.find((s) => s.id === id);
-      assert.ok(scenario, id);
-      return [
-        ...new Set(
-          scenario.rows.filter((r) => r.macos).map((r) => r.runWorkflow),
-        ),
-      ].map((workflow) => ({
-        scenario: id,
-        workflow,
-        rows: scenario.rows.filter(
-          (r) => r.runWorkflow === workflow && r.macos,
-        ),
-      }));
-    });
-    const perRun = scenarios.flatMap((s) =>
-      Object.keys(docs).map((workflow) => ({
-        scenario: s.id,
-        workflow,
-        jobs: s.rows.filter((r) => r.runWorkflow === workflow && r.macos)
-          .length,
-      })),
-    );
+    const workflowNames = Object.keys(docs);
+    const measures = recordingMeasures(scenarios, workflowNames, lifecycle);
     execFileSync("mkdir", ["-p", ".github/.telemetry"]);
     writeFileSync(
       ".github/.telemetry/macos-policy.json",
       JSON.stringify(
         {
-          schema_version: 1,
+          schema_version: TELEMETRY_SCHEMA_VERSION,
           digest: sourceDigest(),
           scenarios,
-          perRun,
-          lifecycle: runs,
-          jobsPerRun: Math.max(...perRun.map((r) => r.jobs)),
-          runsPerChange: runs.length,
+          workflowNames,
+          lifecycleScenarios: lifecycle,
+          ...measures,
         },
         null,
         2,

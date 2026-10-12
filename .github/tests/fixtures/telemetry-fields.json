@@ -1,0 +1,14 @@
+{
+  "schema_version": 2,
+  "fields": [
+    "schema_version",
+    "digest",
+    "scenarios",
+    "workflowNames",
+    "lifecycleScenarios",
+    "perRun",
+    "lifecycle",
+    "jobsPerRun",
+    "runsPerChange"
+  ]
+}
