@@ -1324,7 +1324,6 @@ dependencies = [
  "serde",
  "serde-saphyr",
  "serde_json",
- "serde_norway",
  "serde_yaml_ng",
 ]
 

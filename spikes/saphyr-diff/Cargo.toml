@@ -1,12 +1,15 @@
 # SPIKE ONLY — throwaway differential harness for plan
 # authoring:serde-yaml-replacement (spike-onejudge-yaml). Its own workspace, so
-# nothing it pulls (serde-saphyr, saphyr, serde_norway) reaches the repository's
-# Cargo.lock or cargo-deny run. Run with `spikes/saphyr-diff/run.sh`.
+# nothing it pulls (serde-saphyr, saphyr) reaches the repository's Cargo.lock or
+# cargo-deny run. Run with
+# `cargo run -q --release --manifest-path spikes/saphyr-diff/Cargo.toml`; the
+# `deny_probe`, `capture` and `collect` bins are its helpers (README.md).
 [package]
 name = "saphyr-diff"
 version = "0.0.0"
 edition = "2021"
 publish = false
+default-run = "saphyr-diff"
 
 [workspace]
 
@@ -15,8 +18,5 @@ onejudge = { path = "../../crates/onejudge", features = ["cli", "skill"] }
 serde_yaml_ng = "=0.10.0"
 serde-saphyr = "=1.3.0"
 saphyr = "=0.2.1"
-# What oneagentgraph renders an effective config with, so the harness can show
-# the bytes a writer on the far side of the file produces.
-serde_norway = "0.9"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }

@@ -1,7 +1,8 @@
 //! SPIKE ONLY — differential harness: this repository's real YAML through
 //! `serde_yaml_ng` 0.10 (today) and `serde-saphyr` 1.3 (+ `saphyr` 0.2 for the
 //! schema-less walk), printing every difference in what is read, written and
-//! what errors say. Run with `spikes/saphyr-diff/run.sh`.
+//! what errors say. Run with
+//! `cargo run -q --release --manifest-path spikes/saphyr-diff/Cargo.toml`.
 
 mod workflows_json;
 mod workflows_ng;
@@ -24,6 +25,16 @@ fn repo() -> PathBuf {
 }
 
 // ---------------------------------------------------------------- corpus ----
+
+/// Third-party SKILL.md roots read in place (never copied in): an unset
+/// `SPIKE_EXTRA_SKILL_DIRS` defaults to this machine's synced skills and plugins;
+/// set it empty to run on the committed fixtures alone.
+fn extra_skill_dirs() -> String {
+    std::env::var("SPIKE_EXTRA_SKILL_DIRS").unwrap_or_else(|_| {
+        let home = std::env::var("HOME").unwrap_or_default();
+        format!("{home}/.claude/skills/synced:{home}/.claude/plugins")
+    })
+}
 
 struct Doc {
     kind: &'static str,
@@ -256,7 +267,7 @@ fn frontmatter_corpus() -> Vec<Doc> {
         docs.push(Doc { kind: "frontmatter/own-skills", name: origin.trim().to_owned(), text: fm.to_owned() });
     }
     let mut seen = std::collections::BTreeSet::new();
-    for dir in std::env::var("SPIKE_EXTRA_SKILL_DIRS").unwrap_or_default().split(':').filter(|d| !d.is_empty()) {
+    for dir in extra_skill_dirs().split(':').filter(|d| !d.is_empty()) {
         let mut files = Vec::new();
         skill_files(Path::new(dir), &mut files);
         for p in files {
