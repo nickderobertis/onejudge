@@ -359,6 +359,7 @@ fn llmlint_steps(doc: &mut Value) -> &mut Vec<Value> {
         .expect("llmlint steps")
 }
 
+
 pub fn parse(text: &str) -> Value {
     serde_yaml_ng::from_str(text).unwrap()
 }
@@ -367,54 +368,24 @@ pub fn parse(text: &str) -> Value {
 pub fn cases() -> Vec<(String, Vec<String>)> {
     let mut out: Vec<(String, Vec<String>)> = Vec::new();
     let ci = workflow("ci.yml");
-    out.push((
-        "required/real ci.yml".into(),
-        required_context_violations(&ci, REQUIRED_CONTEXTS),
-    ));
+    out.push(("required/real ci.yml".into(), required_context_violations(&ci, REQUIRED_CONTEXTS)));
 
     let mut gated = ci.clone();
-    set(
-        &mut gated,
-        &["jobs", "package", "needs"],
-        Value::from("cli-binary"),
-    );
-    set(
-        &mut gated,
-        &["jobs", "cli-binary", "if"],
-        Value::from("github.event_name == 'push'"),
-    );
-    out.push((
-        "required/gated".into(),
-        required_context_violations(&gated, REQUIRED_CONTEXTS),
-    ));
+    set(&mut gated, &["jobs", "package", "needs"], Value::from("cli-binary"));
+    set(&mut gated, &["jobs", "cli-binary", "if"], Value::from("github.event_name == 'push'"));
+    out.push(("required/gated".into(), required_context_violations(&gated, REQUIRED_CONTEXTS)));
 
     let mut filtered = ci.clone();
-    set(
-        &mut filtered,
-        &["on", "pull_request"],
-        parse("paths: [src/**]"),
-    );
-    out.push((
-        "required/filtered".into(),
-        required_context_violations(&filtered, REQUIRED_CONTEXTS),
-    ));
+    set(&mut filtered, &["on", "pull_request"], parse("paths: [src/**]"));
+    out.push(("required/filtered".into(), required_context_violations(&filtered, REQUIRED_CONTEXTS)));
 
     let mut disabled = ci.clone();
     set(&mut disabled, &["jobs", "msrv", "if"], Value::Bool(false));
-    out.push((
-        "required/disabled".into(),
-        required_context_violations(&disabled, REQUIRED_CONTEXTS),
-    ));
+    out.push(("required/disabled".into(), required_context_violations(&disabled, REQUIRED_CONTEXTS)));
 
-    out.push((
-        "required/notignored context".into(),
-        required_context_violations(&ci, &["notignored"]),
-    ));
+    out.push(("required/notignored context".into(), required_context_violations(&ci, &["notignored"])));
 
-    out.push((
-        "notignored/real".into(),
-        notignored_violations(&workflow("notignored.yml")),
-    ));
+    out.push(("notignored/real".into(), notignored_violations(&workflow("notignored.yml"))));
     let mut needing = Vec::new();
     for (file, doc) in workflows() {
         for (id, job) in jobs(&doc) {
@@ -428,30 +399,14 @@ pub fn cases() -> Vec<(String, Vec<String>)> {
 
     let doc = workflow("notignored.yml");
     let job = |path: &[&str]| -> Vec<String> {
-        [&["jobs", NOTIGNORED_JOB][..], path]
-            .concat()
-            .iter()
-            .map(|s| (*s).to_owned())
-            .collect()
+        [&["jobs", NOTIGNORED_JOB][..], path].concat().iter().map(|s| (*s).to_owned()).collect()
     };
     let cases: Vec<(&str, Vec<String>, Value)> = vec![
         ("on", vec!["on".into()], parse("push: {}")),
-        (
-            "permissions",
-            vec!["permissions".into()],
-            parse("contents: write\npull-requests: write"),
-        ),
+        ("permissions", vec!["permissions".into()], parse("contents: write\npull-requests: write")),
         ("if", job(&["if"]), Value::from("true")),
-        (
-            "shallow",
-            job(&["steps"]),
-            parse("[{uses: actions/checkout@v4}, {uses: nickderobertis/notignored@v0}]"),
-        ),
-        (
-            "no action",
-            job(&["steps"]),
-            parse("[{uses: actions/checkout@v4, with: {fetch-depth: 0}}]"),
-        ),
+        ("shallow", job(&["steps"]), parse("[{uses: actions/checkout@v4}, {uses: nickderobertis/notignored@v0}]")),
+        ("no action", job(&["steps"]), parse("[{uses: actions/checkout@v4, with: {fetch-depth: 0}}]")),
     ];
     for (name, path, value) in cases {
         let mut broken = doc.clone();
@@ -462,10 +417,7 @@ pub fn cases() -> Vec<(String, Vec<String>)> {
 
     out.push(("llmlint/real".into(), llmlint_job_violations(&ci)));
     let position = |steps: &[Value], needle: &str| {
-        steps
-            .iter()
-            .position(|step| text(step.get("run")).is_some_and(|run| run.contains(needle)))
-            .expect("step present")
+        steps.iter().position(|step| text(step.get("run")).is_some_and(|run| run.contains(needle))).expect("step present")
     };
     let mut late = ci.clone();
     let steps = llmlint_steps(&mut late);
@@ -476,33 +428,18 @@ pub fn cases() -> Vec<(String, Vec<String>)> {
     let mut credentialed = ci.clone();
     let steps = llmlint_steps(&mut credentialed);
     let validate = position(steps, LLMLINT_VALIDATE);
-    set(
-        &mut steps[validate],
-        &["env"],
-        parse("CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}"),
-    );
-    out.push((
-        "llmlint/credentialed".into(),
-        llmlint_job_violations(&credentialed),
-    ));
+    set(&mut steps[validate], &["env"], parse("CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}"));
+    out.push(("llmlint/credentialed".into(), llmlint_job_violations(&credentialed)));
 
     let mut uncredentialed = ci.clone();
     let steps = llmlint_steps(&mut uncredentialed);
     let model = position(steps, "just lint-llm-diff");
     steps[model].as_mapping_mut().unwrap().remove("env");
-    out.push((
-        "llmlint/uncredentialed".into(),
-        llmlint_job_violations(&uncredentialed),
-    ));
+    out.push(("llmlint/uncredentialed".into(), llmlint_job_violations(&uncredentialed)));
 
     out.push(("tier/real".into(), tier_routing_violations(&ci)));
     let steps = |doc: &Value, id: &str| -> Vec<Value> {
-        doc.get("jobs")
-            .and_then(|jobs| jobs.get(id))
-            .and_then(|job| job.get("steps"))
-            .and_then(Value::as_sequence)
-            .cloned()
-            .expect("steps")
+        doc.get("jobs").and_then(|jobs| jobs.get(id)).and_then(|job| job.get("steps")).and_then(Value::as_sequence).cloned().expect("steps")
     };
     let rewrite = |id: &str, edit: &dyn Fn(&mut Vec<Value>)| {
         let mut doc = ci.clone();
@@ -512,60 +449,16 @@ pub fn cases() -> Vec<(String, Vec<String>)> {
         tier_routing_violations(&doc)
     };
     let find = |list: &[Value], needle: &str| {
-        list.iter()
-            .position(|step| {
-                text(step.get("run")).is_some_and(|run| run.contains(needle))
-                    || text(step.get("uses")).is_some_and(|uses| uses.contains(needle))
-            })
-            .expect("step present")
+        list.iter().position(|step| {
+            text(step.get("run")).is_some_and(|run| run.contains(needle)) || text(step.get("uses")).is_some_and(|uses| uses.contains(needle))
+        }).expect("step present")
     };
-    out.push((
-        "tier/shallow".into(),
-        rewrite("check", &|list| {
-            let at = find(list, "actions/checkout@");
-            list[at].as_mapping_mut().unwrap().remove("with");
-        }),
-    ));
-    out.push((
-        "tier/unrouted".into(),
-        rewrite("test-os", &|list| {
-            let at = find(list, "scripts/ci-tier.mjs");
-            list.remove(at);
-        }),
-    ));
-    out.push((
-        "tier/unbased".into(),
-        rewrite("check", &|list| {
-            let at = find(list, "just check");
-            list[at].as_mapping_mut().unwrap().remove("env");
-        }),
-    ));
-    out.push((
-        "tier/late".into(),
-        rewrite("check", &|list| {
-            let at = find(list, "scripts/ci-tier.mjs");
-            let step = list.remove(at);
-            list.push(step);
-        }),
-    ));
-    out.push((
-        "tier/skipped".into(),
-        rewrite("check", &|list| {
-            let at = find(list, "just check");
-            set(
-                &mut list[at],
-                &["if"],
-                Value::from("github.event_name == 'pull_request'"),
-            );
-        }),
-    ));
-    out.push((
-        "tier/flagless".into(),
-        rewrite("test-os", &|list| {
-            let at = find(list, "just test-fast");
-            set(&mut list[at], &["run"], Value::from("just test-fast"));
-        }),
-    ));
+    out.push(("tier/shallow".into(), rewrite("check", &|list| { let at = find(list, "actions/checkout@"); list[at].as_mapping_mut().unwrap().remove("with"); })));
+    out.push(("tier/unrouted".into(), rewrite("test-os", &|list| { let at = find(list, "scripts/ci-tier.mjs"); list.remove(at); })));
+    out.push(("tier/unbased".into(), rewrite("check", &|list| { let at = find(list, "just check"); list[at].as_mapping_mut().unwrap().remove("env"); })));
+    out.push(("tier/late".into(), rewrite("check", &|list| { let at = find(list, "scripts/ci-tier.mjs"); let step = list.remove(at); list.push(step); })));
+    out.push(("tier/skipped".into(), rewrite("check", &|list| { let at = find(list, "just check"); set(&mut list[at], &["if"], Value::from("github.event_name == 'pull_request'")); })));
+    out.push(("tier/flagless".into(), rewrite("test-os", &|list| { let at = find(list, "just test-fast"); set(&mut list[at], &["run"], Value::from("just test-fast")); })));
     out
 }
 
@@ -575,14 +468,7 @@ pub fn all_steps() -> Vec<(String, Value)> {
     for (file, doc) in workflows() {
         for (id, job) in jobs(&doc) {
             let id = id.as_str().unwrap_or_default();
-            for (n, step) in job
-                .get("steps")
-                .and_then(Value::as_sequence)
-                .cloned()
-                .unwrap_or_default()
-                .into_iter()
-                .enumerate()
-            {
+            for (n, step) in job.get("steps").and_then(Value::as_sequence).cloned().unwrap_or_default().into_iter().enumerate() {
                 out.push((format!("{file} jobs.{id}.steps[{n}]"), step));
             }
         }
@@ -593,14 +479,6 @@ pub fn all_steps() -> Vec<(String, Value)> {
 /// The step the gate renders: the llmlint job's validate step.
 pub fn validate_step() -> Value {
     let ci = workflow("ci.yml");
-    let steps = jobs(&ci)
-        .get("llmlint")
-        .and_then(|j| j.get("steps"))
-        .and_then(Value::as_sequence)
-        .cloned()
-        .unwrap();
-    steps
-        .into_iter()
-        .find(|s| text(s.get("run")).is_some_and(|r| r.contains(LLMLINT_VALIDATE)))
-        .unwrap()
+    let steps = jobs(&ci).get("llmlint").and_then(|j| j.get("steps")).and_then(Value::as_sequence).cloned().unwrap();
+    steps.into_iter().find(|s| text(s.get("run")).is_some_and(|r| r.contains(LLMLINT_VALIDATE))).unwrap()
 }

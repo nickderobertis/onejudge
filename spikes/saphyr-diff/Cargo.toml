@@ -1,22 +1,22 @@
-# SPIKE ONLY — the throwaway differential harness for plan
-# authoring:serde-yaml-replacement (spike-onejudge-yaml); never lands. Commands
-# and helpers: README.md.
+# SPIKE ONLY — throwaway differential harness for plan
+# authoring:serde-yaml-replacement (spike-onejudge-yaml). Its own workspace, so
+# nothing it pulls (serde-saphyr, saphyr) reaches the repository's Cargo.lock or
+# cargo-deny run. Run with
+# `cargo run -q --release --manifest-path spikes/saphyr-diff/Cargo.toml`; the
+# `deny_probe`, `capture` and `collect` bins are its helpers (README.md).
 [package]
 name = "saphyr-diff"
-version.workspace = true
-edition.workspace = true
-rust-version.workspace = true
-license.workspace = true
-repository.workspace = true
-authors.workspace = true
+version = "0.0.0"
+edition = "2021"
 publish = false
 default-run = "saphyr-diff"
 
+[workspace]
+
 [dependencies]
 onejudge = { path = "../../crates/onejudge", features = ["cli", "skill"] }
-serde_yaml_ng = { workspace = true }
-serde-saphyr = { workspace = true }
-saphyr = { workspace = true }
-serde = { workspace = true }
-# `preserve_order`: the schema-less walk is measured on an insertion-ordered map.
-serde_json = { workspace = true, features = ["preserve_order"] }
+serde_yaml_ng = "=0.10.0"
+serde-saphyr = "=1.3.0"
+saphyr = "=0.2.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
