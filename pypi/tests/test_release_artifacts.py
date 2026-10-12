@@ -113,6 +113,15 @@ class ReleaseArtifacts(unittest.TestCase):
     def test_stage_verify_name_and_manifest_bytes(self):
         self.assertEqual(self.command("verify").returncode, 0)
         self.assertEqual(self.command("name").stdout.strip(), self.identity)
+        self.assertEqual(
+            set(self.original), {"schema_version", "tag", "sha", "version", "files"}
+        )
+        self.assertEqual(
+            (self.original["tag"], self.original["sha"], self.original["version"]),
+            (self.tag, self.sha, self.version),
+        )
+        for row in self.original["files"]:
+            self.assertEqual(set(row), {"path", "target", "kind", "sha256"})
         self.assertEqual(self.original["schema_version"], 1)
         self.assertEqual(
             {(f["target"], f["kind"]) for f in self.original["files"]},
@@ -397,6 +406,17 @@ class ReleaseArtifacts(unittest.TestCase):
             result = self.fetch(mode)
             self.assertNotEqual(result.returncode, 0)
             self.assertIn(message, result.stderr)
+
+    def test_verified_consumer_refuses_unlisted_wheels_from_an_unrelated_output(self):
+        (self.dist / "onejudge_cli-9.9.9-py3-none-macosx_11_0_arm64.whl").write_bytes(
+            b"unverified wheel"
+        )
+        result = self.command("verify")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("unlisted release payload", result.stderr)
+        result = self.fetch("success")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("unlisted release payload", result.stderr)
 
     def test_durable_zip_refuses_traversal(self):
         with zipfile.ZipFile(self.root / f"{self.identity}.zip", "w") as bundle:

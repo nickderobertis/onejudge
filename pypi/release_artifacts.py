@@ -236,6 +236,16 @@ def validate(root: Path, raw: object, tag: str, sha: str, version: str) -> Manif
         seen.add((row.target, row.kind))
     if seen != {(target, kind) for target in TARGETS for kind in KINDS}:
         raise ValueError("missing Darwin target/package kind")
+    declared = {str(row.path) for row in manifest.files} | {"release-artifacts.json"}
+    observed = {
+        file.relative_to(root).as_posix()
+        for file in root.rglob("*")
+        if file.is_file() or file.is_symlink()
+    }
+    if not observed <= declared:
+        raise ValueError(
+            "unlisted release payload: " + ", ".join(sorted(observed - declared))
+        )
     return manifest
 
 
