@@ -49,7 +49,7 @@ default:
 # Set up from a clean clone: pinned toolchain, cargo tools, the Nx install, the
 # shell toolchain, fetched deps.
 bootstrap:
-    rustup show active-toolchain >/dev/null   # installs the rust-toolchain.toml channel + components
+    just _rust-toolchain >/dev/null   # installs the rust-toolchain.toml channel + components
     for t in cargo-nextest cargo-llvm-cov cargo-deny cargo-machete; do \
         command -v "$t" >/dev/null 2>&1 || cargo install "$t" --locked; \
     done
@@ -58,6 +58,10 @@ bootstrap:
     command -v uv >/dev/null 2>&1 || { curl -LsSf https://astral.sh/uv/install.sh | sh; }
     ./scripts/shell-toolchain.sh              # pixi, then shellcheck, shfmt, actionlint, Ruby (pixi.lock) and bashcov (Gemfile.lock)
     cargo fetch --locked
+
+# Activate the Rust pin in the caller's working directory.
+_rust-toolchain:
+    rustup show
 
 # The quality gate. Default: the AFFECTED tier — every gate target of the projects
 # the diff from the merge base can reach (base: NX_BASE, a ref name or commit SHA,

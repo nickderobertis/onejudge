@@ -140,9 +140,9 @@ jobs:
           ref: ${{ github.workflow_sha }}
           path: .release-tools
           persist-credentials: false
-      - name: Install pinned toolchain (from rust-toolchain.toml)
-        run: rustup show
       - uses: extractions/setup-just@v3
+      - name: Install pinned toolchain (from rust-toolchain.toml)
+        run: just --justfile .release-tools/justfile --working-directory "$PWD" _rust-toolchain
       - uses: astral-sh/setup-uv@v6
       - name: Add both Darwin targets
         run: rustup target add x86_64-apple-darwin aarch64-apple-darwin

@@ -587,23 +587,26 @@ class ReleaseArtifacts(unittest.TestCase):
                 metadata = next(
                     name for name in contents if name.endswith(".dist-info/METADATA")
                 )
-                if mode == "name":
-                    contents[metadata] = contents[metadata].replace(
-                        b"Name: onejudge-cli", b"Name: unrelated"
-                    )
-                elif mode == "dist-info":
-                    contents[metadata.replace("onejudge_cli-", "unrelated-")] = (
-                        contents.pop(metadata)
-                    )
-                else:
-                    binary = next(
-                        name
-                        for name in contents
-                        if name.endswith(".data/scripts/onejudge")
-                    )
-                    contents[binary.replace("onejudge_cli-", "unrelated-")] = (
-                        contents.pop(binary)
-                    )
+                match mode:
+                    case "name":
+                        contents[metadata] = contents[metadata].replace(
+                            b"Name: onejudge-cli", b"Name: unrelated"
+                        )
+                    case "dist-info":
+                        contents[metadata.replace("onejudge_cli-", "unrelated-")] = (
+                            contents.pop(metadata)
+                        )
+                    case "data":
+                        binary = next(
+                            name
+                            for name in contents
+                            if name.endswith(".data/scripts/onejudge")
+                        )
+                        contents[binary.replace("onejudge_cli-", "unrelated-")] = (
+                            contents.pop(binary)
+                        )
+                    case _:
+                        self.fail(f"unknown mutation: {mode}")
                 with zipfile.ZipFile(file, "w") as package:
                     for name, value in contents.items():
                         package.writestr(name, value)
