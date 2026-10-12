@@ -571,6 +571,50 @@ class ReleaseArtifacts(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("wheel version/architecture mismatch", result.stderr)
 
+    def test_wheel_distribution_metadata_and_directory_identity_cannot_be_renamed(self):
+        row = next(row for row in self.original["files"] if row["kind"] == "cli-wheel")
+        file = self.dist / row["path"]
+        saved = file.read_bytes()
+        for mode, message in (
+            ("name", "wheel metadata distribution mismatch"),
+            ("dist-info", "wheel dist-info identity mismatch"),
+            ("data", "wheel script identity mismatch"),
+        ):
+            with self.subTest(mode=mode):
+                file.write_bytes(saved)
+                with zipfile.ZipFile(file) as package:
+                    contents = {name: package.read(name) for name in package.namelist()}
+                metadata = next(
+                    name for name in contents if name.endswith(".dist-info/METADATA")
+                )
+                if mode == "name":
+                    contents[metadata] = contents[metadata].replace(
+                        b"Name: onejudge-cli", b"Name: unrelated"
+                    )
+                elif mode == "dist-info":
+                    contents[metadata.replace("onejudge_cli-", "unrelated-")] = (
+                        contents.pop(metadata)
+                    )
+                else:
+                    binary = next(
+                        name
+                        for name in contents
+                        if name.endswith(".data/scripts/onejudge")
+                    )
+                    contents[binary.replace("onejudge_cli-", "unrelated-")] = (
+                        contents.pop(binary)
+                    )
+                with zipfile.ZipFile(file, "w") as package:
+                    for name, value in contents.items():
+                        package.writestr(name, value)
+                row["sha256"] = hashlib.sha256(file.read_bytes()).hexdigest()
+                (self.dist / "release-artifacts.json").write_text(
+                    json.dumps(self.original)
+                )
+                result = self.command("verify")
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(message, result.stderr)
+
     def test_manifest_scalar_fields_and_collections_are_validated_by_real_verifier(
         self,
     ):

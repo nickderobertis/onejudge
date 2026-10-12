@@ -10,6 +10,7 @@ import tarfile
 import zipfile
 from dataclasses import dataclass
 from enum import Enum
+from email.parser import BytesParser
 from pathlib import Path, PurePosixPath
 from typing import NewType
 
@@ -219,8 +220,25 @@ def validate(root: Path, raw: object, tag: str, sha: str, version: str) -> Manif
                     (metadata,) = [
                         n for n in wheel.namelist() if n.endswith(".dist-info/METADATA")
                     ]
-                    if f"Version: {version}\n" not in wheel.read(metadata).decode():
+                    if metadata != f"onejudge_cli-{version}.dist-info/METADATA":
+                        raise ValueError("wheel dist-info identity mismatch")
+                    headers = BytesParser().parsebytes(wheel.read(metadata))
+                    if headers.get_all("Version", []) != [version]:
                         raise ValueError("wheel metadata version mismatch")
+                    names = headers.get_all("Name", [])
+                    if (
+                        len(names) != 1
+                        or re.sub(r"[-_.]+", "-", names[0].strip().lower())
+                        != "onejudge-cli"
+                    ):
+                        raise ValueError("wheel metadata distribution mismatch")
+                    scripts = [
+                        name
+                        for name in wheel.namelist()
+                        if name.endswith(".data/scripts/onejudge")
+                    ]
+                    if scripts != [f"onejudge_cli-{version}.data/scripts/onejudge"]:
+                        raise ValueError("wheel script identity mismatch")
         binary = payload(file, row.kind)
         cpu = 0x01000007 if row.target is Target.INTEL else 0x0100000C
         if (
