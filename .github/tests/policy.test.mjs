@@ -166,6 +166,19 @@ test("real classifier authenticates identity AND parses content, failing closed"
         true,
       );
     }
+    for (const ref of [
+      ["release-plz-2026"],
+      null,
+      123,
+      { toString: "release-plz-2026" },
+    ]) {
+      const malformed = pr(false, true);
+      malformed.pull_request.head.ref = ref;
+      assert.equal(
+        classify(h, "pull_request", malformed, h.heads.version).macosRequired,
+        true,
+      );
+    }
     const botOnly = pr(false, true);
     botOnly.pull_request.head.ref = "feature";
     assert.equal(

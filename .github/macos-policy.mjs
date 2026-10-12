@@ -117,6 +117,7 @@ export function classify(
       repository !== "nickderobertis/onejudge" ||
       pr.head.repo.full_name !== repository ||
       pr.base.repo.full_name !== repository ||
+      typeof pr.head.ref !== "string" ||
       !/^release-plz-/.test(pr.head.ref) ||
       pr.user.login !== "nickderobertis"
     ) {

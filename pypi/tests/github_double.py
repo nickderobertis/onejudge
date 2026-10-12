@@ -13,6 +13,7 @@ from dataclasses import replace
 sys.path.insert(0, os.environ["TOOLING"])
 from github_client import (
     Artifact,
+    HeadRef,
     Asset,
     Conclusion,
     Release,
@@ -69,7 +70,7 @@ def main() -> None:
             run = WorkflowRun(
                 RunId(42),
                 "workflow_dispatch" if mode == "manual-run" else "push",
-                Tag("onejudge-v0.19.0" if mode == "wrong-tag" else "v0.19.0"),
+                HeadRef("onejudge-v0.19.0" if mode == "wrong-tag" else "v0.19.0"),
                 Commit("b" * 40) if mode == "wrong-run" else sha,
                 status,
                 None

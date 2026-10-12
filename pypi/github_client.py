@@ -13,6 +13,7 @@ from typing import NewType
 from release_artifacts import Commit, Tag
 
 RunId = NewType("RunId", int)
+HeadRef = NewType("HeadRef", str)
 
 
 class RunStatus(str, Enum):
@@ -53,7 +54,7 @@ class Release:
 class WorkflowRun:
     id: RunId
     event: str
-    head_branch: Tag | None
+    head_branch: HeadRef | None
     head_sha: Commit
     status: RunStatus | None
     conclusion: Conclusion | None
@@ -155,7 +156,7 @@ class GitHubClient:
             branch = (
                 None
                 if branch_raw is None
-                else Tag(string_value(branch_raw, "workflow run head_branch"))
+                else HeadRef(string_value(branch_raw, "workflow run head_branch"))
             )
             conclusion_raw = row.get("conclusion")
             conclusion = (
