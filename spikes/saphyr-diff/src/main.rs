@@ -281,6 +281,11 @@ const SYNTHETIC_FRONTMATTER: &[(&str, &str)] = &[
     ("unknown key, custom tag", "name: a\nx: !custom {a: 1}"),
     ("unknown key, anchor reused", "base: &b n\nname: *b"),
     ("unknown key duplicated", "name: a\nfoo: 1\nfoo: 2"),
+    ("unknown duplicate, then known duplicate", "foo: 1\nfoo: 2\nname: a\nname: b"),
+    ("known duplicate, then unknown duplicate", "name: a\nname: b\nfoo: 1\nfoo: 2"),
+    ("unknown duplicate nested under an unknown key", "name: a\nmeta:\n  x: 1\n  x: 2"),
+    ("known key repeated inside an unknown mapping", "name: a\nmeta:\n  name: b\n  name: c"),
+    ("known duplicate in flow style", "{name: a, name: b}"),
     ("merge key", "<<: {name: merged}\ndescription: d"),
     ("known key duplicated", "name: a\nname: b"),
     ("license", "name: a\nlicense: MIT"),
@@ -370,6 +375,139 @@ struct Out {
     /// (Options variant, kind) -> the documents whose accept/refuse outcome or
     /// read value differs from today's under that variant.
     scores: BTreeMap<(&'static str, &'static str), Vec<String>>,
+    /// Resolution candidate -> (kind, document, before, after) for every
+    /// document that candidate reads differently from today.
+    resolutions: BTreeMap<&'static str, Vec<(&'static str, String, String, String)>>,
+    /// Resolution candidate -> documents it was run on.
+    resolution_docs: BTreeMap<&'static str, usize>,
+}
+
+/// A reader under evaluation as a compatibility resolution.
+type Candidate = (&'static str, Read);
+
+/// Finding 3's proposed boundary change: serde-saphyr into `serde_json::Value`,
+/// then `serde_json::from_value::<T>`, so a quoted scalar arrives as a JSON
+/// string and serde's own typed refusal applies again.
+fn via_json<T: DeserializeOwned + Debug>(text: &str, o: Options) -> Read {
+    let value: Json = serde_saphyr::from_str_with_options(text, o).map_err(|e| e.to_string())?;
+    serde_json::from_value::<T>(value).map(|v| format!("{v:?}")).map_err(|e| e.to_string())
+}
+
+fn via_json_variants() -> Vec<(&'static str, Options)> {
+    let mut v = Vec::new();
+    v.push(("via-json default", Options::default()));
+    let mut o = Options::default();
+    o.strict_booleans = true;
+    o.merge_keys = MergeKeyPolicy::AsOrdinary;
+    v.push(("via-json strict_booleans+merge_keys=AsOrdinary", o));
+    let mut o = Options::default();
+    o.strict_booleans = true;
+    o.merge_keys = MergeKeyPolicy::AsOrdinary;
+    o.reject_non_finite_typeless_float = false;
+    v.push(("via-json strict_booleans+merge_keys=AsOrdinary+reject_non_finite_typeless_float=false", o));
+    v
+}
+
+fn resolution_options() -> Options {
+    let mut o = Options::default();
+    o.strict_booleans = true;
+    o.merge_keys = MergeKeyPolicy::AsOrdinary;
+    o
+}
+
+/// The compatible alternative this harness measures for finding 3: the typed
+/// read decides the value (so an unquoted `123` still reaches a string field,
+/// and a null section still defaults), and a second pass through
+/// `serde_json::Value` refuses only where a YAML *string* reached a field that
+/// is not a string — exactly the quoted-scalar coercion today's parser refuses.
+fn guarded<T: DeserializeOwned + Debug>(text: &str, typed: Options) -> Read {
+    let value = sy::<T>(text, typed)?;
+    match via_json::<T>(text, resolution_options()) {
+        Err(e) if e.starts_with("invalid type: string ") => Err(e),
+        _ => Ok(value),
+    }
+}
+
+/// Finding 5's first proposal: parse under `DuplicateKeyPolicy::Error`; when the
+/// duplicate is not a known field, retry the whole document under `FirstWins`.
+fn frontmatter_retry(text: &str) -> Read {
+    let o = resolution_options();
+    match serde_saphyr::from_str_with_options::<Frontmatter>(text, o.clone()) {
+        Ok(v) => Ok(format!("{v:?}")),
+        Err(e) => {
+            let msg = e.to_string();
+            let unknown_dup = msg.contains("duplicate mapping key:")
+                && !["name", "description", "license"]
+                    .iter()
+                    .any(|k| msg.contains(&format!("duplicate mapping key: {k},")));
+            if unknown_dup {
+                let mut first = o;
+                first.duplicate_keys = DuplicateKeyPolicy::FirstWins;
+                sy::<Frontmatter>(text, first)
+            } else {
+                Err(msg)
+            }
+        }
+    }
+}
+
+/// The front matter's top-level keys, in order, from serde-saphyr's own parser
+/// (`granit_parser`, re-exported) — every occurrence, duplicates included.
+/// `None` when the document does not scan or its root is not a mapping: the
+/// real parse reports that.
+fn top_level_keys(text: &str) -> Option<Vec<String>> {
+    use serde_saphyr::granit_parser::{Event, Parser};
+    let mut keys = Vec::new();
+    // Each open collection: (is_mapping, the next node is a key).
+    let mut stack: Vec<(bool, bool)> = Vec::new();
+    for item in Parser::new_from_str(text) {
+        let (event, _) = item.ok()?;
+        // Whether this node is a key of the root mapping, and flip key/value.
+        let at_root_key = stack.len() == 1 && stack[0] == (true, true);
+        let advance = |stack: &mut Vec<(bool, bool)>| {
+            if let Some(top) = stack.last_mut() {
+                if top.0 {
+                    top.1 = !top.1;
+                }
+            }
+        };
+        match event {
+            // A nested collection completes one node of its parent when it ends.
+            Event::MappingStart(..) => stack.push((true, true)),
+            Event::SequenceStart(..) => stack.push((false, false)),
+            Event::MappingEnd | Event::SequenceEnd => {
+                stack.pop();
+                advance(&mut stack);
+            }
+            Event::Scalar(value, ..) => {
+                if at_root_key {
+                    keys.push(value.into_owned());
+                }
+                advance(&mut stack);
+            }
+            Event::Alias(_) => advance(&mut stack),
+            _ => {}
+        }
+    }
+    Some(keys)
+}
+
+/// The compatible alternative this harness measures for finding 5: refuse a
+/// duplicated known field exactly as today (serde's `duplicate field` text),
+/// found by a pre-scan of every top-level key; then read under `FirstWins`, so a
+/// duplicated unknown key — which today's parser ignores — is ignored too.
+fn frontmatter_prescan(text: &str) -> Read {
+    if let Some(keys) = top_level_keys(text) {
+        let mut seen = std::collections::BTreeSet::new();
+        for k in &keys {
+            if ["name", "description", "license"].contains(&k.as_str()) && !seen.insert(k.clone()) {
+                return Err(format!("duplicate field `{k}`"));
+            }
+        }
+    }
+    let mut o = resolution_options();
+    o.duplicate_keys = DuplicateKeyPolicy::FirstWins;
+    sy::<Frontmatter>(text, o)
 }
 
 fn indent(s: &str) -> String {
@@ -379,9 +517,40 @@ fn indent(s: &str) -> String {
 /// Compare one document read into `T`; `wrap` turns a parser message into the
 /// message this repository surfaces (config: `CliError::Config`, front matter:
 /// load_skill's `invalid SKILL.md frontmatter in ...`).
-fn compare_read<T: DeserializeOwned + Debug>(out: &mut Out, doc: &Doc, wrap: &dyn Fn(String) -> String) {
+fn compare_read<T: DeserializeOwned + Debug>(
+    out: &mut Out,
+    doc: &Doc,
+    wrap: &dyn Fn(String) -> String,
+    extra: &dyn Fn(&str) -> Vec<Candidate>,
+) {
     out.tallies.entry(doc.kind).or_default().docs += 1;
     let before = ng::<T>(&doc.text);
+    let mut candidates: Vec<Candidate> =
+        via_json_variants().into_iter().map(|(n, o)| (n, via_json::<T>(&doc.text, o))).collect();
+    candidates.extend(extra(&doc.text));
+    for (name, v) in candidates {
+        *out.resolution_docs.entry(name).or_default() += 1;
+        let same = match (&before, &v) {
+            (Ok(a), Ok(b)) => a == b,
+            (Err(_), Err(_)) => true,
+            _ => false,
+        };
+        if !same {
+            let show = |r: &Read| match r {
+                Ok(v) => format!("Ok {v}"),
+                Err(e) => format!("Err {e}"),
+            };
+            out.resolutions.entry(name).or_default().push((doc.kind, doc.name.clone(), show(&before), show(&v)));
+        } else if let (Err(a), Err(b)) = (&before, &v) {
+            // Both refuse: record the text only when the candidate claims to
+            // reproduce today's message (the pre-scan's known-key refusal).
+            if (name.starts_with("prescan") && b.starts_with("duplicate field"))
+                || (name.contains("string guard") && b.starts_with("invalid type: string "))
+            {
+                println!("  - [{}] {}: {name} refusal text: before {a:?}, after {b:?}, byte-identical: {}", doc.kind, doc.name, a == b);
+            }
+        }
+    }
     let variants = de_variants();
     for (vname, o) in &variants {
         let v = sy::<T>(&doc.text, o.clone());
@@ -702,6 +871,9 @@ fn timing_section(configs: &[Doc]) {
         ("serde-saphyr -> serde_json::Value", median_micros(n, &mut || {
             std::hint::black_box(serde_saphyr::from_str::<Json>(text).unwrap());
         })),
+        ("serde-saphyr -> Config + via-json string guard (finding 3 alternative)", median_micros(n, &mut || {
+            std::hint::black_box(guarded::<Config>(text, resolution_options()).unwrap());
+        })),
         ("saphyr -> Yaml tree", median_micros(n, &mut || {
             std::hint::black_box(<saphyr::Yaml as saphyr::LoadableYamlNode>::load_from_str(text).unwrap());
         })),
@@ -716,20 +888,38 @@ fn timing_section(configs: &[Doc]) {
 fn main() {
     println!("# serde_yaml_ng 0.10.0 vs serde-saphyr 1.3.0 (saphyr 0.2.1 for the schema-less walk)");
     println!("# 'before' = serde_yaml_ng (today), 'after' = serde-saphyr with default Options unless named.\n");
-    let mut out = Out { tallies: BTreeMap::new(), classes: BTreeMap::new(), scores: BTreeMap::new() };
+    let mut out = Out {
+        tallies: BTreeMap::new(),
+        classes: BTreeMap::new(),
+        scores: BTreeMap::new(),
+        resolutions: BTreeMap::new(),
+        resolution_docs: BTreeMap::new(),
+    };
 
     println!("## config: Config::from_yaml (serde_yaml_ng) vs serde_saphyr::from_str::<Config>\n");
     let configs = config_corpus();
     let wrap_config = |e: String| CliError::Config(format!("could not parse config: {e}")).to_string();
     for doc in &configs {
-        compare_read::<Config>(&mut out, doc, &wrap_config);
+        compare_read::<Config>(&mut out, doc, &wrap_config, &|text| {
+            vec![("typed strict_booleans+merge_keys=AsOrdinary + via-json string guard (finding 3 alternative)", guarded::<Config>(text, resolution_options()))]
+        });
     }
 
     println!("\n## frontmatter: SKILL.md front matter into onejudge::Frontmatter\n");
     let fms = frontmatter_corpus();
     let wrap_fm = |e: String| format!("invalid SKILL.md frontmatter in `<dir>/SKILL.md`: {e}");
     for doc in &fms {
-        compare_read::<Frontmatter>(&mut out, doc, &wrap_fm);
+        compare_read::<Frontmatter>(&mut out, doc, &wrap_fm, &|text| {
+            vec![
+                ("retry FirstWins after an unknown duplicate (finding 5 proposal)", frontmatter_retry(text)),
+                ("prescan known keys + FirstWins (finding 5 alternative)", frontmatter_prescan(text)),
+                ("prescan known keys + FirstWins + via-json string guard (findings 3+5 together)", {
+                    let mut first = resolution_options();
+                    first.duplicate_keys = DuplicateKeyPolicy::FirstWins;
+                    frontmatter_prescan(text).and_then(|_| guarded::<Frontmatter>(text, first))
+                }),
+            ]
+        });
     }
 
     workflows_section();
@@ -761,5 +951,21 @@ fn main() {
         for r in rows {
             println!("      {r}");
         }
+    }
+
+    println!("\n## resolution candidates: every document each reads differently from today (accept/refuse, or the value)\n");
+    for (name, n) in &out.resolution_docs {
+        let diffs = out.resolutions.get(name).map(Vec::as_slice).unwrap_or(&[]);
+        let mut per_kind: BTreeMap<&str, usize> = BTreeMap::new();
+        for (kind, ..) in diffs {
+            *per_kind.entry(kind).or_default() += 1;
+        }
+        println!("### {name}: {} of {n} document(s) differ  {per_kind:?}\n", diffs.len());
+        for (kind, doc, before, after) in diffs {
+            println!("  - [{kind}] {doc}");
+            println!("      before (serde_yaml_ng):\n{}", indent(before));
+            println!("      after:\n{}", indent(after));
+        }
+        println!();
     }
 }
