@@ -1,11 +1,5 @@
 # llmlint: ignore-file[crates_stay_in_one_cargo_workspace] SPIKE ONLY, on a branch that is kept and never landed: this harness is outside the root workspace on purpose, so the candidate YAML crates it measures (serde-saphyr, saphyr) never enter the root Cargo.lock, cargo-deny run or Nx graph before the move is approved; it commits no Cargo.lock of its own and pins the crates that decide what it measures exactly, below.
-# SPIKE ONLY — throwaway differential harness for plan
-# authoring:serde-yaml-replacement (spike-onejudge-yaml). Its own workspace, so
-# nothing it pulls (serde-saphyr, saphyr) reaches the repository's Cargo.lock or
-# cargo-deny run. Its lock is not committed (`.gitignore`); the parser crates and
-# the error renderer the measurement depends on are pinned exactly instead. Run with
-# `cargo run -q --release --manifest-path spikes/saphyr-diff/Cargo.toml`; the
-# `deny_probe`, `capture` and `collect` bins are its helpers (README.md).
+# Commands and helpers: README.md.
 [package]
 name = "saphyr-diff"
 version = "0.0.0"

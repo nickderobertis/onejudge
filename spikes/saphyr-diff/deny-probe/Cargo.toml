@@ -1,9 +1,5 @@
 # llmlint: ignore-file[crates_stay_in_one_cargo_workspace] SPIKE ONLY, on a branch that is kept and never landed: this probe is its own workspace on purpose, because it approximates the repository after the move (serde-saphyr and saphyr in, serde_yaml_ng out) so cargo-deny can judge that graph against deny.toml without the root workspace ever resolving the candidate crates.
-# SPIKE ONLY: approximates this repository after the move — the published crate
-# with no YAML feature (so no serde_yaml_ng), clap as the `cli` feature pulls it,
-# and serde-saphyr + saphyr — so cargo-deny can be run against the repository's
-# own deny.toml. Run with
-# `cargo run -q --manifest-path spikes/saphyr-diff/Cargo.toml --bin deny_probe`.
+# Run through the harness's `deny_probe` bin (../README.md).
 [package]
 name = "saphyr-deny-probe"
 version = "0.0.0"
