@@ -1,3 +1,4 @@
+target/
+deny-probe/Cargo.lock
 # SPIKE ONLY: the harness resolves its own lock; it is not committed (see Cargo.toml).
 /Cargo.lock
-/deny-probe/Cargo.lock
