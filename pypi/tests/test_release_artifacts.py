@@ -201,11 +201,11 @@ if args[0]=='api':
         print(json.dumps({'tag_name':path.split('/')[-1], 'assets':[{'name':name+'.zip'}] if mode in ('durable','alias') else []}))
     elif '/workflows/' in path:
         calls = (root/'calls').read_text().count('/workflows/')
-        runs = [] if mode=='absent' else [{'id':42,'event':'push','head_branch':'v0.19.0','head_sha':sha,'status':'in_progress' if mode=='ordering' and calls==1 else 'completed','conclusion':'failure' if mode=='failed' else 'success'}]
+        runs = [] if mode=='absent' else [{'id':42,'event':'push','head_branch':'v0.19.0','head_sha':'b'*40 if mode=='wrong-run' else sha,'status':'in_progress' if mode=='ordering' and calls==1 else 'completed','conclusion':'failure' if mode=='failed' else 'success'}]
         print(json.dumps({'workflow_runs':runs}))
     else:
         assert '/runs/42/artifacts' in path, path
-        print(json.dumps({'artifacts':[{'name':name,'expired':False}]}))
+        print(json.dumps({'artifacts':[{'name':'unrelated-artifact' if mode=='wrong-artifact' else name,'expired':mode=='expired'}]}))
 else:
     dest=pathlib.Path(args[args.index('--dir')+1])
     dest.mkdir(parents=True,exist_ok=True)
@@ -293,6 +293,53 @@ else:
         result = self.fetch("alias")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("do not agree with exact SHA", result.stderr)
+
+    def test_same_version_partial_registry_recovery_reuses_verified_release_bundle(
+        self,
+    ):
+        with zipfile.ZipFile(self.root / f"{self.identity}.zip", "w") as bundle:
+            for file in self.dist.iterdir():
+                bundle.write(file, file.name)
+        env = self.transport("durable")
+        curl = self.root / "bin" / "curl"
+        curl.write_text(
+            "#!/usr/bin/env python3\nimport sys\nprint('404' if '/onejudge-cli/' in sys.argv[-1] else '200',end='')\n"
+        )
+        curl.chmod(0o755)
+        event, output = self.root / "event.json", self.root / "plan.out"
+        event.write_text(json.dumps({"inputs": {"tag": self.tag}}))
+        env.update(
+            GITHUB_EVENT_NAME="workflow_dispatch",
+            GITHUB_EVENT_PATH=str(event),
+            GITHUB_OUTPUT=str(output),
+        )
+        plan = subprocess.run(
+            [str(ROOT / "scripts/release-pypi-plan.sh")],
+            cwd=self.repo,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(plan.returncode, 0, plan.stderr)
+        values = dict(line.split("=", 1) for line in output.read_text().splitlines())
+        self.assertEqual(values["sha"], self.sha)
+        self.assertEqual(values["version"], self.version)
+        self.assertEqual(values["upload-cli"], "true")
+        self.assertEqual(values["upload-sdk"], "false")
+        result = self.fetch("durable")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("/workflows/", (self.root / "calls").read_text())
+
+    def test_wrong_run_wrong_artifact_and_expired_outputs_fail_visibly(self):
+        for mode, expected in (
+            ("wrong-run", "producer absent"),
+            ("wrong-artifact", "no unique unexpired artifact"),
+            ("expired", "no unique unexpired artifact"),
+        ):
+            result = self.fetch(mode)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(expected, result.stderr)
 
     def test_waits_for_exact_producer_completion(self):
         result = self.fetch("ordering")

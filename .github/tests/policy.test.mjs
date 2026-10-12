@@ -444,3 +444,47 @@ test("local reusable calls expand their actual matrices and refuse automatic dia
     /automatic reusable caller/,
   );
 });
+
+test("classifier CLI recognizes non-PR automatic payloads without an event-name environment", () => {
+  const h = history();
+  try {
+    const env = { ...process.env };
+    delete env.GITHUB_EVENT_NAME;
+    for (const payload of [
+      { ref: "refs/heads/main", before: h.base },
+      { release: { tag_name: "v0.19.0" } },
+      { workflow_run: { name: "release-binaries" } },
+      { inputs: {} },
+      { schedule: "0 0 * * *" },
+      { client_payload: {} },
+    ]) {
+      const path = join(h.dir, "without-env.json");
+      writeFileSync(path, JSON.stringify(payload));
+      const policy = JSON.parse(
+        execFileSync(
+          "node",
+          [
+            join(root, ".github/macos-policy.mjs"),
+            "classify",
+            "--event",
+            path,
+            "--base",
+            h.base,
+            "--head",
+            h.heads.source,
+          ],
+          { cwd: h.dir, env, encoding: "utf8" },
+        ),
+      );
+      assert.equal(policy.macosRequired, false, JSON.stringify(payload));
+    }
+    const foreign = pr(false, true);
+    foreign.repository.full_name = "other/repo";
+    assert.equal(
+      classify(h, "pull_request", foreign, h.heads.version).macosRequired,
+      true,
+    );
+  } finally {
+    rmSync(h.dir, { recursive: true, force: true });
+  }
+});

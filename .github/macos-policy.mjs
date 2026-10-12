@@ -132,14 +132,29 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
   } catch {
     event = null;
   }
+  const inferred =
+    event?.pull_request !== undefined
+      ? "pull_request"
+      : event?.release
+        ? "release"
+        : event?.workflow_run
+          ? "workflow_run"
+          : event?.inputs
+            ? "workflow_dispatch"
+            : event?.schedule
+              ? "schedule"
+              : event?.client_payload
+                ? "repository_dispatch"
+                : event?.ref && event?.before
+                  ? "push"
+                  : "pull_request";
   console.log(
     JSON.stringify(
       classify(
         event,
         options["--base"],
         options["--head"],
-        process.env.GITHUB_EVENT_NAME ||
-          (event?.pull_request ? "pull_request" : "pull_request"),
+        process.env.GITHUB_EVENT_NAME || inferred,
       ),
     ),
   );
