@@ -1,0 +1,14 @@
+task: x
+provider:
+  kind: split
+  skill:
+    kind: oneharness
+  judges:
+    - kind: oneharness
+      judge_config: a.toml
+    - kind: command
+      command: [lint]
+      label: lint_run
+    - kind: command
+      command: [other]
+    - kind: oneharness

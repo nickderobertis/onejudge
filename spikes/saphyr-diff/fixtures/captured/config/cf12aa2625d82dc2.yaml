@@ -1,0 +1,4 @@
+task: t
+user:
+  persona: p
+  artifacts: [from-file.md, .plans]

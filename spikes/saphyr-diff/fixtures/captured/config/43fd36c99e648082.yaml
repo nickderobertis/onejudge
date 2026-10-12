@@ -1,0 +1,13 @@
+provider:
+  kind: split
+  skill:
+    kind: oneharness
+    bin: "/home/nick/.onevcs/workspaces/github.com-nickderobertis-onejudge-d92c2bbfcde5/pool/1/worktree/target/debug/onejudge-fake-oneharness"
+  judge:
+    kind: oneharness
+    bin: "/home/nick/.onevcs/workspaces/github.com-nickderobertis-onejudge-d92c2bbfcde5/pool/1/worktree/target/debug/onejudge-fake-oneharness"
+task: 'go [[orphan:/home/nick/.onevcs/workspaces/github.com-nickderobertis-onejudge-d92c2bbfcde5/pool/1/worktree/target/tmp/plan-grouped-judge.handle]][[hold:/home/nick/.onevcs/workspaces/github.com-nickderobertis-onejudge-d92c2bbfcde5/pool/1/worktree/target/tmp/plan-grouped-judge.hold]]'
+system_prompt: '[[reply:acknowledged]][[orphan:/home/nick/.onevcs/workspaces/github.com-nickderobertis-onejudge-d92c2bbfcde5/pool/1/worktree/target/tmp/plan-grouped-agent.handle]]'
+user:
+  persona: A patient tester.
+  max_turns: 2

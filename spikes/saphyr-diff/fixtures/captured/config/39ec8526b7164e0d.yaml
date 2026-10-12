@@ -1,0 +1,30 @@
+# The single-judge baseline: a `kind: split` with one `judge:` — the shape every
+# pre-existing config has — over the echo double on both sides. Captured by
+# `scripts/capture-single-judge-baseline.sh` from the published `onejudge` 0.8.1
+# and replayed by `tests/cli.rs` on every build, so a panel of one is proven to
+# produce today's transcript, session names, control addresses and usage.
+#
+# `"/home/nick/.onevcs/workspaces/github.com-nickderobertis-onejudge-d92c2bbfcde5/pool/1/worktree/target/debug/onejudge-echo-provider"` is the JSON-encoded echo double path; `/home/nick/.onevcs/workspaces/github.com-nickderobertis-onejudge-d92c2bbfcde5/pool/1/worktree/target/tmp/single-judge-baseline.jsonl` the file the judge
+# side appends every supervisor request to (session names live there).
+provider:
+  kind: split
+  skill:
+    kind: command
+    command: ["/home/nick/.onevcs/workspaces/github.com-nickderobertis-onejudge-d92c2bbfcde5/pool/1/worktree/target/debug/onejudge-echo-provider"]
+  judge:
+    kind: command
+    command: ["/home/nick/.onevcs/workspaces/github.com-nickderobertis-onejudge-d92c2bbfcde5/pool/1/worktree/target/debug/onejudge-echo-provider"]
+task: please commit
+system_prompt: 'Commit it on the second try.'
+user:
+  persona: 'A tester. [[record:/home/nick/.onevcs/workspaces/github.com-nickderobertis-onejudge-d92c2bbfcde5/pool/1/worktree/target/tmp/single-judge-baseline.jsonl]]'
+  done_when: next step
+  max_turns: 4
+session: baseline
+evals:
+  - criterion: echo
+    kind: boolean
+  - criterion: please
+    kind: numeric
+    scale: [1, 5]
+assessment: Identify follow-up work.

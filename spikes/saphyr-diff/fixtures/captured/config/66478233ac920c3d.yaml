@@ -1,0 +1,5 @@
+provider:
+  kind: command
+  command: ["/home/nick/.onevcs/workspaces/github.com-nickderobertis-onejudge-d92c2bbfcde5/pool/1/worktree/target/debug/onejudge-echo-provider"]
+task: greet me
+system_prompt: Be warm.

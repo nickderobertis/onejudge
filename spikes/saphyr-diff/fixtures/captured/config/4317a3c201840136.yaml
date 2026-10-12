@@ -1,0 +1,9 @@
+task: x
+skill: "/tmp/oj-writable-panel-3364164"
+provider:
+  kind: split
+  skill:
+    kind: oneharness
+  judge:
+    kind: oneharness
+    judge_config: "/tmp/oj-writable-panel-3364164/auto.toml"

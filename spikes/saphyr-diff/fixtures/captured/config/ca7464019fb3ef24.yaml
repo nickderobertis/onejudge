@@ -1,0 +1,5 @@
+provider:
+  kind: oneharness
+  bin: "/home/nick/.onevcs/workspaces/github.com-nickderobertis-onejudge-d92c2bbfcde5/pool/1/worktree/target/debug/onejudge-fake-oneharness"
+task: attribute this
+system_prompt: '[[reply:attributed]][[fallback:codex|quota]][[history:/home/nick/.onevcs/workspaces/github.com-nickderobertis-onejudge-d92c2bbfcde5/pool/1/worktree/target/tmp/cli-attribution-history.jsonl]]'

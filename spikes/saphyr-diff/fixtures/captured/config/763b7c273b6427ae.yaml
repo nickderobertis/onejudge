@@ -1,0 +1,7 @@
+provider:
+  kind: oneharness
+  bin: "/home/nick/.onevcs/workspaces/github.com-nickderobertis-onejudge-d92c2bbfcde5/pool/1/worktree/target/debug/onejudge-fake-oneharness"
+  control: true
+task: go
+session: Run 7
+system_prompt: "[[reply:the task is complete]][[control-store:/tmp/oj-cli-ctl-3380702]]"

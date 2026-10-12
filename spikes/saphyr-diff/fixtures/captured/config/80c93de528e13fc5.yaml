@@ -1,0 +1,4 @@
+task: x
+provider:
+  kind: command
+  command: [my-prov, --flag]

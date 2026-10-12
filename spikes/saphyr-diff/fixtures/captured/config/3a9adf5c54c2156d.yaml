@@ -1,0 +1,12 @@
+task: x
+provider:
+  kind: split
+  skill:
+    kind: oneharness
+  judges:
+    - kind: command
+      command: [j]
+evals:
+  - criterion: q
+    kind: numeric
+assessment: follow-ups

@@ -1,0 +1,8 @@
+task: x
+provider:
+  kind: split
+  judge_config: j.toml
+  skill:
+    kind: oneharness
+  judge:
+    kind: oneharness

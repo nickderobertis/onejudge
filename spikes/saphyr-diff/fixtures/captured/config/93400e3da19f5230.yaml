@@ -1,0 +1,11 @@
+task: x
+provider:
+  kind: split
+  allow_writable_judges: true
+  skill:
+    kind: oneharness
+  judges:
+    - kind: oneharness
+      instructions: run the tests
+      events: false
+    - kind: oneharness

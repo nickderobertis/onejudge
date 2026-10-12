@@ -1,0 +1,15 @@
+provider:
+  kind: command
+  command: ["/home/nick/.onevcs/workspaces/github.com-nickderobertis-onejudge-d92c2bbfcde5/pool/1/worktree/target/debug/onejudge-echo-provider"]
+task: please commit
+system_prompt: 'Commit it. [[event:git commit -m fix]]'
+user:
+  persona: A tester.
+  done_when: git commit
+  max_turns: 5
+evals:
+  - criterion: echo
+    kind: boolean
+  - criterion: please
+    kind: numeric
+    scale: [1, 5]

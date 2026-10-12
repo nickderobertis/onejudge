@@ -1,0 +1,4 @@
+provider:
+  kind: oneharness
+  config: llmlint.yml
+task: go

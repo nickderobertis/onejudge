@@ -1,0 +1,6 @@
+
+task: refactor it
+user:
+  persona: a demanding lead
+  done_when: tests pass
+  max_turns: 5

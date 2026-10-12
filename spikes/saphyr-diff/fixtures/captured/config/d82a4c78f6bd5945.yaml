@@ -1,0 +1,5 @@
+provider:
+  kind: oneharness
+  bin: "/home/nick/.onevcs/workspaces/github.com-nickderobertis-onejudge-d92c2bbfcde5/pool/1/worktree/target/debug/onejudge-fake-oneharness"
+task: read it back
+system_prompt: "[[reply:read back]][[recorded:/home/nick/.onevcs/workspaces/github.com-nickderobertis-onejudge-d92c2bbfcde5/pool/1/worktree/target/tmp/cli-pre-cutover-history/store/tmp-onejudge-pre-cutover-project/recorded-before-the-cutover-20260930T205534Z-4109410.jsonl]]"

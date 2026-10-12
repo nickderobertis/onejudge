@@ -1,0 +1,11 @@
+task: x
+provider:
+  kind: split
+  skill:
+    kind: oneharness
+  judges:
+    - kind: oneharness
+      label: same
+    - kind: command
+      command: [j]
+      label: same

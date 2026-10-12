@@ -1,0 +1,17 @@
+provider:
+  kind: split
+  skill:
+    kind: oneharness
+  judges:
+    - kind: oneharness
+      judge_config: "/home/nick/.onevcs/workspaces/github.com-nickderobertis-onejudge-d92c2bbfcde5/pool/1/worktree/target/tmp/cli-history-panel/judge.toml"
+      label: reviewer
+    - kind: oneharness
+      judge_config: "/home/nick/.onevcs/workspaces/github.com-nickderobertis-onejudge-d92c2bbfcde5/pool/1/worktree/target/tmp/cli-history-panel/judge.toml"
+      label: second
+skill: "/home/nick/.onevcs/workspaces/github.com-nickderobertis-onejudge-d92c2bbfcde5/pool/1/worktree/target/tmp/cli-history-panel"
+task: "write the plan [[artifact-evaluator:/home/nick/.onevcs/workspaces/github.com-nickderobertis-onejudge-d92c2bbfcde5/pool/1/worktree/target/tmp/cli-history-panel/prompts.log]]"
+user:
+  persona: a reviewer
+  done_when: the plan is written
+  max_turns: 2

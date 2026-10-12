@@ -1,0 +1,5 @@
+provider:
+  kind: command
+  command: ["onejudge-no-such-binary-zzz"]
+task: please commit
+system_prompt: Commit it.

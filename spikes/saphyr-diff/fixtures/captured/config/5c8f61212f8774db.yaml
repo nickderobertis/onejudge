@@ -1,0 +1,6 @@
+task: x
+provider:
+  kind: command
+  command: [p]
+  judges:
+    - kind: oneharness

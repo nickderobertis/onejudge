@@ -1,0 +1,4 @@
+provider:
+  kind: oneharness
+skill: "/home/nick/.onevcs/workspaces/github.com-nickderobertis-onejudge-d92c2bbfcde5/pool/1/worktree/target/tmp/cli-history-without-scans/skill"
+task: record this turn

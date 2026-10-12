@@ -1,0 +1,13 @@
+provider:
+  kind: split
+  skill:
+    kind: oneharness
+    bin: "/home/nick/.onevcs/workspaces/github.com-nickderobertis-onejudge-d92c2bbfcde5/pool/1/worktree/target/debug/onejudge-fake-oneharness"
+  judge:
+    kind: command
+    command: ["/home/nick/.onevcs/workspaces/github.com-nickderobertis-onejudge-d92c2bbfcde5/pool/1/worktree/target/debug/onejudge-echo-provider", "[[record:/home/nick/.onevcs/workspaces/github.com-nickderobertis-onejudge-d92c2bbfcde5/pool/1/worktree/target/tmp/protocol-v8-taken-empty.jsonl]]", '[[supervisor-complete:done]]']
+task: go
+system_prompt: '[[no-text]]'
+user:
+  persona: reviewer
+  max_turns: 2

@@ -1,0 +1,5 @@
+task: x
+evals:
+  - criterion: it works
+    kind: boolean
+    scale: [1, 5]

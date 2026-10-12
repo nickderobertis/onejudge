@@ -1,0 +1,5 @@
+task: x
+evals:
+  - criterion: q
+    kind: numeric
+    scale: [5, 1]

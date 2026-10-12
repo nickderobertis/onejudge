@@ -1,0 +1,4 @@
+task: x
+provider:
+  kind: oneharness
+  mock_harness: [claude-code, codex]

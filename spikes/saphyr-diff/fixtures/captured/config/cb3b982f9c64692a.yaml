@@ -1,0 +1,18 @@
+provider:
+  kind: split
+  skill:
+    kind: command
+    command: ["/home/nick/.onevcs/workspaces/github.com-nickderobertis-onejudge-d92c2bbfcde5/pool/1/worktree/target/debug/onejudge-echo-provider"]
+  judges:
+    - kind: command
+      label: reviewer
+      command: ["/home/nick/.onevcs/workspaces/github.com-nickderobertis-onejudge-d92c2bbfcde5/pool/1/worktree/target/debug/onejudge-echo-provider", "[[supervisor-exit]]"]
+    - kind: command
+      label: lint
+      command: ["/home/nick/.onevcs/workspaces/github.com-nickderobertis-onejudge-d92c2bbfcde5/pool/1/worktree/target/debug/onejudge-echo-provider", "[[supervisor-sleep:300]]", "[[supervisor-continue:Fix it.]]"]
+task: please commit
+system_prompt: Commit it.
+user:
+  persona: A tester.
+  done_when: next step
+  max_turns: 4

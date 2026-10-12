@@ -1,0 +1,9 @@
+
+task: x
+provider:
+  kind: split
+  skill:
+    kind: oneharness
+  judge:
+    kind: command
+    command: [judge-prov]

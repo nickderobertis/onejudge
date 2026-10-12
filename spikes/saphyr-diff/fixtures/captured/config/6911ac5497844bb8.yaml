@@ -1,0 +1,9 @@
+task: x
+provider:
+  kind: split
+  skill:
+    kind: oneharness
+    stream: true
+  judge:
+    kind: command
+    command: [j]

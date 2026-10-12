@@ -1,0 +1,12 @@
+provider:
+  kind: command
+  command: ["/home/nick/.onevcs/workspaces/github.com-nickderobertis-onejudge-d92c2bbfcde5/pool/1/worktree/target/debug/onejudge-echo-provider"]
+task: say hi
+system_prompt: Be helpful.
+user:
+  persona: A tester.
+  done_when: echo
+  max_turns: 3
+evals:
+  - criterion: deployed to production
+    kind: boolean

@@ -1,0 +1,3 @@
+task: x
+evals:
+  - criterion: it works

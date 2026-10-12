@@ -1,0 +1,25 @@
+provider:
+  kind: split
+  skill:
+    kind: oneharness
+    bin: "/home/nick/.onevcs/workspaces/github.com-nickderobertis-onejudge-d92c2bbfcde5/pool/1/worktree/target/debug/onejudge-fake-oneharness"
+  judges:
+    - kind: oneharness
+      bin: "/home/nick/.onevcs/workspaces/github.com-nickderobertis-onejudge-d92c2bbfcde5/pool/1/worktree/target/debug/onejudge-fake-oneharness"
+      judge_config: "/home/nick/.onevcs/workspaces/github.com-nickderobertis-onejudge-d92c2bbfcde5/pool/1/worktree/target/tmp/posture-refused-spawned/plain.toml"
+      label: reader
+    - kind: oneharness
+      bin: "/home/nick/.onevcs/workspaces/github.com-nickderobertis-onejudge-d92c2bbfcde5/pool/1/worktree/target/debug/onejudge-fake-oneharness"
+      judge_config: "/home/nick/.onevcs/workspaces/github.com-nickderobertis-onejudge-d92c2bbfcde5/pool/1/worktree/target/tmp/posture-refused-spawned/auto.toml"
+      label: fixer
+task: "do it [[record-harness:/home/nick/.onevcs/workspaces/github.com-nickderobertis-onejudge-d92c2bbfcde5/pool/1/worktree/target/tmp/posture-refused-spawned/harness.jsonl]] [[evaluate]]"
+system_prompt: '[[reply:done]]'
+user:
+  persona: a reviewer
+  done_when: the work is done
+  max_turns: 2
+session: posture
+evals:
+  - criterion: done
+    kind: boolean
+assessment: anything left?

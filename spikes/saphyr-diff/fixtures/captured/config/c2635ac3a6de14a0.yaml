@@ -1,0 +1,8 @@
+task: x
+provider:
+  kind: split
+  events: true
+  skill:
+    kind: oneharness
+  judge:
+    kind: oneharness

@@ -1,0 +1,29 @@
+# The single-judge CONTROLLED baseline: the same one-`judge:` split, both sides on
+# the fake oneharness double with `control: true`. Captured from the released
+# 0.8.1 by `scripts/capture-single-judge-baseline.sh` and replayed by
+# `tests/cli.rs` (unix, where a control socket exists).
+#
+# What it proves is deliberate: everything but `supervisor_control` /
+# `supervisor_control_unavailable` is identical to 0.8.1, and those two now carry
+# the first judge's answer where 0.8.1's CLI wrote `null` for every config — a
+# defect against docs/control.md, ruled so by the planner (docs/judges.md).
+#
+# `"/home/nick/.onevcs/workspaces/github.com-nickderobertis-onejudge-d92c2bbfcde5/pool/1/worktree/target/debug/onejudge-fake-oneharness"` is the JSON-encoded fake-oneharness path; `/tmp/oj-ctl-03379177/agent-store` /
+# `/tmp/oj-ctl-03379177/judge-store` the per-party session stores the sockets open under;
+# `/tmp/oj-ctl-03379177/prompts.log` the file the judge side appends every supervisor prompt to.
+provider:
+  kind: split
+  skill:
+    kind: oneharness
+    bin: "/home/nick/.onevcs/workspaces/github.com-nickderobertis-onejudge-d92c2bbfcde5/pool/1/worktree/target/debug/onejudge-fake-oneharness"
+    control: true
+  judge:
+    kind: oneharness
+    bin: "/home/nick/.onevcs/workspaces/github.com-nickderobertis-onejudge-d92c2bbfcde5/pool/1/worktree/target/debug/onejudge-fake-oneharness"
+    control: true
+task: start the long job
+system_prompt: '[[reply:on it]][[control-store:/tmp/oj-ctl-03379177/agent-store]]'
+user:
+  persona: 'A reviewer. [[control-store:/tmp/oj-ctl-03379177/judge-store]][[record-prompt:/tmp/oj-ctl-03379177/prompts.log]]'
+  max_turns: 2
+session: ctl-baseline

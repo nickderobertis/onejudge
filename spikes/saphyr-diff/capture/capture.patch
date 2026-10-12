@@ -1,0 +1,62 @@
+diff --git a/crates/onejudge/src/cli/config.rs b/crates/onejudge/src/cli/config.rs
+index d17c063..e91d3ae 100644
+--- a/crates/onejudge/src/cli/config.rs
++++ b/crates/onejudge/src/cli/config.rs
+@@ -347,6 +347,7 @@ impl Config {
+     /// # Errors
+     /// [`CliError::Config`] if the YAML is malformed or carries an unknown key.
+     pub fn from_yaml(text: &str) -> Result<Self, CliError> {
++        crate::skill::spike_capture("config", text);
+         serde_yaml_ng::from_str(text)
+             .map_err(|e| CliError::Config(format!("could not parse config: {e}")))
+     }
+diff --git a/crates/onejudge/src/skill.rs b/crates/onejudge/src/skill.rs
+index 8718f13..a80413e 100644
+--- a/crates/onejudge/src/skill.rs
++++ b/crates/onejudge/src/skill.rs
+@@ -119,6 +119,9 @@ pub fn load_skill(dir: &Path) -> Result<SkillDefinition> {
+         Error::Invalid(format!("could not read `{}`: {source}", skill_md.display()))
+     })?;
+     let (fm, body) = split_frontmatter(&text);
++    if let Some(fm) = fm {
++        spike_capture("frontmatter", fm);
++    }
+     let frontmatter: Frontmatter = match fm {
+         Some(fm) => serde_yaml_ng::from_str(fm).map_err(|source| {
+             Error::Invalid(format!(
+@@ -140,6 +143,35 @@ pub fn load_skill(dir: &Path) -> Result<SkillDefinition> {
+     })
+ }
+ 
++/// SPIKE ONLY (spikes/saphyr-diff): record every YAML document this crate
++/// parses into `$ONEJUDGE_SPIKE_CAPTURE`, keyed by content hash, with the
++/// executable and thread (libtest names it after the test) that parsed it.
++pub(crate) fn spike_capture(kind: &str, text: &str) {
++    use std::hash::{Hash, Hasher};
++    use std::io::Write;
++    let Some(dir) = std::env::var_os("ONEJUDGE_SPIKE_CAPTURE") else {
++        return;
++    };
++    let dir = std::path::PathBuf::from(dir).join(kind);
++    let _ = std::fs::create_dir_all(&dir);
++    let mut hasher = std::collections::hash_map::DefaultHasher::new();
++    text.hash(&mut hasher);
++    let key = format!("{:016x}", hasher.finish());
++    let _ = std::fs::write(dir.join(format!("{key}.yaml")), text);
++    let exe = std::env::current_exe()
++        .ok()
++        .and_then(|p| p.file_stem().map(|s| s.to_string_lossy().into_owned()))
++        .unwrap_or_default();
++    let thread = std::thread::current().name().unwrap_or("?").to_owned();
++    if let Ok(mut f) = std::fs::OpenOptions::new()
++        .create(true)
++        .append(true)
++        .open(dir.join(format!("{key}.origin")))
++    {
++        let _ = writeln!(f, "{exe}\t{thread}");
++    }
++}
++
+ #[cfg(test)]
+ mod tests {
+     use super::*;

@@ -1,0 +1,10 @@
+provider:
+  kind: split
+  skill:
+    kind: command
+    command: ["/home/nick/.onevcs/workspaces/github.com-nickderobertis-onejudge-d92c2bbfcde5/pool/1/worktree/target/debug/onejudge-echo-provider"]
+  judge:
+    kind: command
+    command: ["/home/nick/.onevcs/workspaces/github.com-nickderobertis-onejudge-d92c2bbfcde5/pool/1/worktree/target/debug/onejudge-echo-provider"]
+  args: [x]
+task: go

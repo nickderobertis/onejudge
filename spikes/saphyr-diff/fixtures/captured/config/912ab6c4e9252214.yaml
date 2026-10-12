@@ -1,0 +1,13 @@
+provider:
+  kind: oneharness
+  judge_config: "/home/nick/.onevcs/workspaces/github.com-nickderobertis-onejudge-d92c2bbfcde5/pool/1/worktree/target/tmp/cli-history-bare/judge.toml"
+skill: "/home/nick/.onevcs/workspaces/github.com-nickderobertis-onejudge-d92c2bbfcde5/pool/1/worktree/target/tmp/cli-history-bare"
+task: "write the plan [[artifact-evaluator:/home/nick/.onevcs/workspaces/github.com-nickderobertis-onejudge-d92c2bbfcde5/pool/1/worktree/target/tmp/cli-history-bare/prompts.log]]"
+user:
+  persona: a reviewer
+  done_when: the plan is written
+  max_turns: 2
+evals:
+  - criterion: the plan is written
+    kind: boolean
+assessment: anything left to do?

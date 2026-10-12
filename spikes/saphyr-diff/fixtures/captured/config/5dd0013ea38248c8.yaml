@@ -1,0 +1,4 @@
+task: x
+provider:
+  kind: oneharness
+  judge_config: custom.judge.toml

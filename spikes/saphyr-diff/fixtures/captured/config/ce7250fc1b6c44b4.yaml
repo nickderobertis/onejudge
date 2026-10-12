@@ -1,0 +1,23 @@
+provider:
+  kind: split
+  skill:
+    kind: oneharness
+  judges:
+    - kind: oneharness
+      judge_config: "/home/nick/.onevcs/workspaces/github.com-nickderobertis-onejudge-d92c2bbfcde5/pool/1/worktree/target/tmp/posture-instructions-in-process/judge.toml"
+      label: reviewer
+      instructions: "Run `cargo test` yourself and read the commit log."
+    - kind: oneharness
+      judge_config: "/home/nick/.onevcs/workspaces/github.com-nickderobertis-onejudge-d92c2bbfcde5/pool/1/worktree/target/tmp/posture-instructions-in-process/judge.toml"
+      label: plain
+task: "do it [[record-harness:/home/nick/.onevcs/workspaces/github.com-nickderobertis-onejudge-d92c2bbfcde5/pool/1/worktree/target/tmp/posture-instructions-in-process/harness.jsonl]] [[evaluate]]"
+system_prompt: '[[reply:done]]'
+user:
+  persona: a reviewer
+  done_when: the work is done
+  max_turns: 2
+session: posture
+evals:
+  - criterion: done
+    kind: boolean
+assessment: anything left?

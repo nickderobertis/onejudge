@@ -1,0 +1,7 @@
+task: x
+evals:
+  - criterion: quality
+    kind: numeric
+  - criterion: depth
+    kind: numeric
+    scale: [1, 5]

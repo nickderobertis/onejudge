@@ -1,0 +1,5 @@
+provider:
+  kind: oneharness
+  stream: true
+skill: "/home/nick/.onevcs/workspaces/github.com-nickderobertis-onejudge-d92c2bbfcde5/pool/1/worktree/target/tmp/cli-agent-config-extends"
+task: please commit

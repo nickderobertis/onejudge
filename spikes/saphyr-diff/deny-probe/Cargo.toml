@@ -1,0 +1,18 @@
+# SPIKE ONLY: approximates this repository after the move — the published crate
+# with no YAML feature (so no serde_yaml_ng), clap as the `cli` feature pulls it,
+# and serde-saphyr + saphyr — so cargo-deny can be run against the repository's
+# own deny.toml. Run with `spikes/saphyr-diff/deny-probe.sh`.
+[package]
+name = "saphyr-deny-probe"
+version = "0.0.0"
+edition = "2021"
+publish = false
+license = "MIT"
+
+[workspace]
+
+[dependencies]
+onejudge = { path = "../../../crates/onejudge", default-features = false }
+clap = { version = "4", features = ["derive"] }
+serde-saphyr = "=1.3.0"
+saphyr = "=0.2.1"

@@ -1,0 +1,14 @@
+provider:
+  kind: split
+  skill:
+    kind: oneharness
+    bin: "/home/nick/.onevcs/workspaces/github.com-nickderobertis-onejudge-d92c2bbfcde5/pool/1/worktree/target/debug/onejudge-fake-oneharness"
+  judge:
+    kind: oneharness
+    bin: "/home/nick/.onevcs/workspaces/github.com-nickderobertis-onejudge-d92c2bbfcde5/pool/1/worktree/target/debug/onejudge-fake-oneharness"
+task: spawn on both sides
+system_prompt: '[[reply:spawned]]'
+user:
+  persona: A tester.
+  done_when: spawned
+  max_turns: 3

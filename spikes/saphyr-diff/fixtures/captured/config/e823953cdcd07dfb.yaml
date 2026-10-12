@@ -1,0 +1,4 @@
+task: x
+provider:
+  kind: oneharness
+  stream: true

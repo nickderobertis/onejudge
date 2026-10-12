@@ -1,0 +1,6 @@
+onejudge-760574d0ef665fc4	cli::config::tests::a_plan_carries_no_spawn_hook_until_an_embedder_installs_one
+onejudge-760574d0ef665fc4	cli::config::tests::control_resolves_onto_the_oneharness_spec_and_defaults_off
+onejudge-760574d0ef665fc4	cli::config::tests::neither_skill_nor_system_prompt_leaves_empty_instructions
+onejudge-760574d0ef665fc4	cli::config::tests::mock_harness_resolves_onto_the_oneharness_spec_and_defaults_to_none
+onejudge-760574d0ef665fc4	cli::config::tests::stream_resolves_onto_the_oneharness_spec_and_defaults_off
+onejudge-760574d0ef665fc4	cli::tests::rebase_skill_leaves_absolute_paths_and_no_skill_alone

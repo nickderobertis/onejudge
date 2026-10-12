@@ -1,0 +1,8 @@
+provider:
+  kind: oneharness
+  bin: "/home/nick/.onevcs/workspaces/github.com-nickderobertis-onejudge-d92c2bbfcde5/pool/1/worktree/target/debug/onejudge-fake-oneharness"
+task: go
+system_prompt: '[[reply:working]]'
+user:
+  persona: A tester.
+  max_turns: 2

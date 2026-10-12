@@ -1,0 +1,5 @@
+task: x
+provider:
+  kind: oneharness
+  judges:
+    - kind: oneharness

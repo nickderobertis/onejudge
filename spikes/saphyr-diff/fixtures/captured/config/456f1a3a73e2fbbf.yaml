@@ -1,0 +1,5 @@
+task: x
+provider:
+  kind: command
+  command: [p]
+  events: true

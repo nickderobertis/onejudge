@@ -1,0 +1,17 @@
+provider:
+  kind: split
+  skill:
+    kind: oneharness
+  judges:
+    - kind: oneharness
+task: "do it [[record-harness:/home/nick/.onevcs/workspaces/github.com-nickderobertis-onejudge-d92c2bbfcde5/pool/1/worktree/target/tmp/posture-discovered-in-process/harness.jsonl]] [[evaluate]]"
+system_prompt: '[[reply:done]]'
+user:
+  persona: a reviewer
+  done_when: the work is done
+  max_turns: 2
+session: posture
+evals:
+  - criterion: done
+    kind: boolean
+assessment: anything left?

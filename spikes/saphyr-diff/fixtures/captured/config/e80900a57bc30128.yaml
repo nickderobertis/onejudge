@@ -1,0 +1,13 @@
+task: x
+skill: "/tmp/oj-writable-panel-3364164"
+provider:
+  kind: split
+  allow_writable_judges: false
+  skill:
+    kind: oneharness
+  judges:
+    - kind: oneharness
+      judge_config: "/tmp/oj-writable-panel-3364164/plan.toml"
+    - kind: oneharness
+      label: fixer
+      judge_config: "/tmp/oj-writable-panel-3364164/plan.toml"

@@ -1,0 +1,26 @@
+provider:
+  kind: split
+  skill:
+    kind: command
+    command: ["/home/nick/.onevcs/workspaces/github.com-nickderobertis-onejudge-d92c2bbfcde5/pool/1/worktree/target/debug/onejudge-echo-provider"]
+  judges:
+    - kind: oneharness
+      label: reviewer
+      bin: "/home/nick/.onevcs/workspaces/github.com-nickderobertis-onejudge-d92c2bbfcde5/pool/1/worktree/target/debug/onejudge-fake-oneharness"
+    - kind: llmlint
+      label: lint
+      bin: "/home/nick/.onevcs/workspaces/github.com-nickderobertis-onejudge-d92c2bbfcde5/pool/1/worktree/target/debug/onejudge-fake-llmlint"
+      config: llmlint.strict.yml
+      diff_base: origin/main
+      args: [--rule, scripts_are_quiet_on_success]
+task: please commit
+system_prompt: Commit it.
+user:
+  persona: A tester.
+  done_when: commit
+  max_turns: 4
+evals:
+  - criterion: commit
+    kind: numeric
+    scale: [1, 5]
+assessment: What was left out?

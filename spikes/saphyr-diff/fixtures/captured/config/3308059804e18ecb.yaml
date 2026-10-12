@@ -1,0 +1,8 @@
+task: x
+provider:
+  kind: split
+  mock_harness: [claude-code]
+  skill:
+    kind: oneharness
+  judge:
+    kind: oneharness

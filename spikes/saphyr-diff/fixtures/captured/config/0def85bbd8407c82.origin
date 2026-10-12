@@ -1,0 +1,2 @@
+onejudge-760574d0ef665fc4	cli::config::tests::artifact_overrides_replace_the_configured_list_flag_over_env_over_file
+onejudge-760574d0ef665fc4	cli::config::tests::settle_on_noop_defaults_to_true_and_is_declarable_either_way

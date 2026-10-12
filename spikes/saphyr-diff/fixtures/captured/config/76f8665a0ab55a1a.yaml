@@ -1,0 +1,14 @@
+provider:
+  kind: split
+  skill:
+    kind: command
+    command: ["/home/nick/.onevcs/workspaces/github.com-nickderobertis-onejudge-d92c2bbfcde5/pool/1/worktree/target/debug/onejudge-echo-provider", "[[record:/home/nick/.onevcs/workspaces/github.com-nickderobertis-onejudge-d92c2bbfcde5/pool/1/worktree/target/tmp/llmlint-absent-skill.jsonl]]"]
+  judge:
+    kind: llmlint
+    bin: onejudge-no-such-llmlint-zzz
+task: please commit
+system_prompt: Commit it.
+user:
+  persona: A tester.
+  done_when: commit
+  max_turns: 4

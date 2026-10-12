@@ -1,0 +1,3 @@
+task: x
+system_prompt: Preamble first.
+skill: "/tmp/onejudge-cfg-skill-3364374-0/merged"

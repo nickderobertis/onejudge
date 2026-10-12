@@ -1,0 +1,3 @@
+onejudge-760574d0ef665fc4	cli::config::tests::artifact_overrides_replace_the_configured_list_flag_over_env_over_file
+onejudge-760574d0ef665fc4	cli::config::tests::env_persona_implies_a_user_like_the_flag_does
+onejudge-760574d0ef665fc4	cli::config::tests::overrides_apply_judge_config_session_and_persona

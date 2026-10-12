@@ -1,0 +1,10 @@
+provider:
+  kind: oneharness
+  judge_config: "/home/nick/.onevcs/workspaces/github.com-nickderobertis-onejudge-d92c2bbfcde5/pool/1/worktree/target/tmp/cli-artifacts/oneharness.toml"
+skill: "/home/nick/.onevcs/workspaces/github.com-nickderobertis-onejudge-d92c2bbfcde5/pool/1/worktree/target/tmp/cli-artifacts"
+task: "write the plan [[artifact-evaluator:/home/nick/.onevcs/workspaces/github.com-nickderobertis-onejudge-d92c2bbfcde5/pool/1/worktree/target/tmp/cli-artifacts-prompts.log]]"
+user:
+  persona: a reviewer
+  done_when: the plan is written
+  max_turns: 2
+  artifacts: [from-config.md]

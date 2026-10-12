@@ -1,0 +1,4 @@
+task: from file
+user:
+  persona: p
+  max_turns: 2
