@@ -398,7 +398,14 @@ fn compare_read<T: DeserializeOwned + Debug>(out: &mut Out, doc: &Doc, wrap: &dy
     let tally = out.tallies.entry(doc.kind).or_default();
     let after = sy::<T>(&doc.text, variants[0].1.clone());
     match (&before, &after) {
-        (Ok(a), Ok(b)) if a == b => tally.identical_ok += 1,
+        (Ok(a), Ok(b)) if a == b => {
+            tally.identical_ok += 1;
+            // A probe that reads identically is still worth a line: it is
+            // evidence that this shape is not a difference.
+            if doc.kind.ends_with("edge+malformed") {
+                println!("  - [{}] {}: same read (both accept): {a}", doc.kind, doc.name);
+            }
+        }
         (Err(a), Err(b)) => {
             tally.identical_err_class += 1;
             tally.err_text_diff += 1;
