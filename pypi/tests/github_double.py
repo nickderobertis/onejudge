@@ -10,7 +10,15 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, os.environ["TOOLING"])
-from github_client import Artifact, Asset, Conclusion, Release, RunStatus, WorkflowRun
+from github_client import (
+    Artifact,
+    Asset,
+    Conclusion,
+    Release,
+    RunId,
+    RunStatus,
+    WorkflowRun,
+)
 from release_artifacts import Commit, Tag
 
 
@@ -49,7 +57,7 @@ def main() -> None:
                 else RunStatus.COMPLETED
             )
             run = WorkflowRun(
-                42,
+                RunId(42),
                 "push",
                 Tag("v0.19.0"),
                 Commit("b" * 40) if mode == "wrong-run" else sha,

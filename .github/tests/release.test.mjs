@@ -8,6 +8,16 @@ test("production release jobs retain every declared platform and use one Darwin 
   const docs = workflows(),
     producer = docs["release-binaries.yml"].jobs,
     consumer = docs["release-pypi.yml"].jobs;
+  assert.equal(
+    docs["release-binaries.yml"].on.workflow_dispatch.inputs.diagnostic_rebuild
+      .default,
+    false,
+  );
+  assert.equal(
+    docs["release-binaries.yml"].on.workflow_dispatch.inputs.diagnostic_rebuild
+      .type,
+    "boolean",
+  );
   const targets = producer.darwin.env.TARGETS.split(" ");
   const manifestTargets = JSON.parse(
     execFileSync(
@@ -153,6 +163,14 @@ test("Linux archive transport wiring uses the real verified publisher journey", 
   );
   assert.equal(download.with.pattern, "archive-*");
   assert.equal(download.with["merge-multiple"], true);
+  const publish = job.steps.find((s) => s.run?.includes("publish_release.py"));
+  assert.deepEqual(
+    publish.env.TARGETS.split(" ").sort(),
+    expand(workflows()["release-binaries.yml"].jobs.archives.strategy.matrix)
+      .map((m) => m.target)
+      .sort(),
+  );
+
   assert.match(
     job.steps.map((s) => s.run || "").join("\n"),
     /publish_release\.py --archive-only/,

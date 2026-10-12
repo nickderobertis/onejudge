@@ -1,0 +1,96 @@
+{
+  "source": {
+    "url": "https://raw.githubusercontent.com/github/rest-api-description/58b1e0c00b39b9e46c24dc4a0ba6a2669c90e9c1/descriptions/api.github.com/api.github.com.json",
+    "commit": "58b1e0c00b39b9e46c24dc4a0ba6a2669c90e9c1",
+    "sha256": "da3d22e417611cca9a4131dceea89d4d61c3be021b0917f32d9e4422e4fe60f1"
+  },
+  "schemas": {
+    "release": {
+      "properties": {
+        "tag_name": {
+          "description": "The name of the tag.",
+          "example": "v1.0.0",
+          "type": "string"
+        },
+        "assets": {
+          "type": "array",
+          "items": {
+            "$ref": "#/components/schemas/release-asset"
+          }
+        }
+      }
+    },
+    "release-asset": {
+      "properties": {
+        "name": {
+          "description": "The file name of the asset.",
+          "type": "string",
+          "example": "Team Environment"
+        }
+      }
+    },
+    "workflow-run": {
+      "properties": {
+        "id": {
+          "type": "integer",
+          "format": "int64",
+          "description": "The ID of the workflow run.",
+          "example": 5
+        },
+        "event": {
+          "type": "string",
+          "example": "push"
+        },
+        "head_branch": {
+          "type": "string",
+          "nullable": true,
+          "example": "master"
+        },
+        "head_sha": {
+          "description": "The SHA of the head commit that points to the version of the workflow being run.",
+          "example": "009b8a3a9ccbb128af87f9b1c0f4c62e8a304f6d",
+          "type": "string"
+        },
+        "status": {
+          "type": "string",
+          "nullable": true,
+          "example": "completed"
+        },
+        "conclusion": {
+          "type": "string",
+          "nullable": true,
+          "example": "neutral"
+        }
+      }
+    },
+    "artifact": {
+      "properties": {
+        "name": {
+          "description": "The name of the artifact.",
+          "type": "string",
+          "example": "AdventureWorks.Framework"
+        },
+        "expired": {
+          "description": "Whether or not the artifact has expired.",
+          "type": "boolean"
+        }
+      }
+    }
+  },
+  "run_status_or_conclusion": [
+    "completed",
+    "action_required",
+    "cancelled",
+    "failure",
+    "neutral",
+    "skipped",
+    "stale",
+    "success",
+    "timed_out",
+    "in_progress",
+    "queued",
+    "requested",
+    "waiting",
+    "pending"
+  ]
+}

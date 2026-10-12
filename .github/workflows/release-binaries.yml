@@ -95,9 +95,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
           SHA: ${{ github.sha }}
+          TARGETS: x86_64-unknown-linux-gnu x86_64-pc-windows-msvc
         run: |
           version=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"])')
-          python3 pypi/publish_release.py --archive-only --repo "$GITHUB_REPOSITORY" --tag "$TAG" --sha "$SHA" --version "$version" --root archives
+          python3 pypi/publish_release.py --archive-only --repo "$GITHUB_REPOSITORY" --tag "$TAG" --sha "$SHA" --version "$version" --root archives --targets "$TARGETS"
 
   darwin-plan:
     if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.diagnostic_rebuild)

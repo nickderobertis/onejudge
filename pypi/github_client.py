@@ -8,8 +8,11 @@ import re
 from dataclasses import asdict, dataclass
 from enum import Enum
 from pathlib import Path
+from typing import NewType
 
 from release_artifacts import Commit, Tag
+
+RunId = NewType("RunId", int)
 
 
 class RunStatus(str, Enum):
@@ -30,7 +33,6 @@ class Conclusion(str, Enum):
     TIMED_OUT = "timed_out"
     ACTION_REQUIRED = "action_required"
     STALE = "stale"
-    STARTUP_FAILURE = "startup_failure"
 
 
 @dataclass(frozen=True)
@@ -49,7 +51,7 @@ class Release:
 
 @dataclass(frozen=True)
 class WorkflowRun:
-    id: int
+    id: RunId
     event: str
     head_branch: Tag
     head_sha: Commit
@@ -154,7 +156,7 @@ class GitHubClient:
                 raise ValueError("completed workflow run has no conclusion")
             runs.append(
                 WorkflowRun(
-                    run_id,
+                    RunId(run_id),
                     string_value(row.get("event"), "workflow run event"),
                     Tag(
                         string_value(row.get("head_branch"), "workflow run head_branch")
@@ -166,7 +168,7 @@ class GitHubClient:
             )
         return tuple(runs)
 
-    async def artifacts(self, run_id: int) -> tuple[Artifact, ...]:
+    async def artifacts(self, run_id: RunId) -> tuple[Artifact, ...]:
         raw = json.loads(
             await self.command(
                 "api", f"repos/{self.repository}/actions/runs/{run_id}/artifacts"
@@ -196,7 +198,7 @@ class GitHubClient:
             str(destination),
         )
 
-    async def run_download(self, run_id: int, name: str, destination: Path) -> None:
+    async def run_download(self, run_id: RunId, name: str, destination: Path) -> None:
         await self.command(
             "run",
             "download",

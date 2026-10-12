@@ -322,11 +322,52 @@ class ReleaseArtifacts(unittest.TestCase):
 
     def publisher(self, mode="success", archive_only=False):
         directory = self.dist
+        expected_targets = ("x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc")
         if archive_only:
             directory = self.root / "archives"
             directory.mkdir(exist_ok=True)
-            for file in self.dist.glob("*.tar.gz"):
-                (directory / file.name).write_bytes(file.read_bytes())
+            # Non-native compatibility specimens are not executed. The native
+            # installer journey separately drives the real host-built archive.
+            linux = b"\x7fELF\x02\x01" + b"\0" * 12 + (62).to_bytes(2, "little")
+            windows = (
+                b"MZ"
+                + b"\0" * 58
+                + (64).to_bytes(4, "little")
+                + b"PE\0\0"
+                + (0x8664).to_bytes(2, "little")
+            )
+            if mode == "wrong-architecture":
+                linux = linux[:18] + (183).to_bytes(2, "little")
+            for target, binary in zip(expected_targets, (linux, windows), strict=True):
+                prefix = f"onejudge-{target}"
+                executable = (
+                    "onejudge.exe" if target.endswith("windows-msvc") else "onejudge"
+                )
+                contents = {
+                    executable: binary,
+                    "README.md": b"README",
+                    "LICENSE": b"MIT",
+                }
+                if mode == "corrupt-contents":
+                    contents.pop("LICENSE")
+                if target.endswith("windows-msvc"):
+                    with zipfile.ZipFile(directory / f"{prefix}.zip", "w") as package:
+                        for name, value in contents.items():
+                            package.writestr(f"{prefix}/{name}", value)
+                else:
+                    with tarfile.open(
+                        directory / f"{prefix}.tar.gz", "w:gz"
+                    ) as package:
+                        for name, value in contents.items():
+                            member = tarfile.TarInfo(f"{prefix}/{name}")
+                            member.size = len(value)
+                            package.addfile(member, io.BytesIO(value))
+        if archive_only and mode not in ("wrong-architecture", "corrupt-contents"):
+            native = ROOT / "target/pypi-wheel/onejudge-x86_64-unknown-linux-gnu.tar.gz"
+            if native.exists():
+                (directory / native.name).write_bytes(native.read_bytes())
+        if archive_only and mode == "missing-archive":
+            (directory / "onejudge-x86_64-pc-windows-msvc.zip").unlink()
         args = [
             sys.executable,
             str(SCRIPTS / "publish_release.py"),
@@ -342,7 +383,7 @@ class ReleaseArtifacts(unittest.TestCase):
             str(directory),
         ]
         if archive_only:
-            args.append("--archive-only")
+            args.extend(["--archive-only", "--targets", " ".join(expected_targets)])
         return subprocess.run(
             args,
             cwd=self.repo,
@@ -382,8 +423,16 @@ class ReleaseArtifacts(unittest.TestCase):
         result = self.publisher(archive_only=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         calls = (self.root / "calls").read_text()
-        for target in self.targets:
-            self.assertIn(f"onejudge-{target}.tar.gz", calls)
+        self.assertIn("onejudge-x86_64-unknown-linux-gnu.tar.gz", calls)
+        self.assertIn("onejudge-x86_64-pc-windows-msvc.zip", calls)
+        for mode, message in (
+            ("missing-archive", "missing required targets"),
+            ("wrong-architecture", "ELF architecture mismatch"),
+            ("corrupt-contents", "archive contents mismatch"),
+        ):
+            failed = self.publisher(mode, archive_only=True)
+            self.assertNotEqual(failed.returncode, 0, mode)
+            self.assertIn(message, failed.stderr)
         result = self.publisher("upload-failure", archive_only=True)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("upload rejected", result.stderr)

@@ -15,9 +15,9 @@
       ]
     },
     "lint": {
-      "command": "just _actionlint"
+      "command": "node .github/check-syntax.mjs && just _actionlint"
     },
-    "typecheck": {
+    "syntax-check": {
       "command": "node .github/check-syntax.mjs"
     },
     "budgets": {

@@ -162,6 +162,34 @@ export function triggered(doc, scenario) {
   }
   if (typeof config !== "object" || Array.isArray(config))
     throw new Error("unsupported event trigger configuration");
+  const supported =
+    scenario.event === "push"
+      ? ["branches", "tags", "paths", "paths-ignore"]
+      : scenario.event === "pull_request"
+        ? ["types", "paths", "paths-ignore"]
+        : scenario.event === "workflow_dispatch"
+          ? ["inputs"]
+          : scenario.event === "workflow_run"
+            ? ["workflows", "types"]
+            : ["types"];
+  for (const key of [
+    "types",
+    "branches",
+    "tags",
+    "paths",
+    "paths-ignore",
+    "workflows",
+  ]) {
+    if (
+      key in config &&
+      (!Array.isArray(config[key]) ||
+        !config[key].every((value) => typeof value === "string"))
+    )
+      throw new Error(`unsupported ${scenario.event} trigger value: ${key}`);
+  }
+  for (const key of Object.keys(config))
+    if (!supported.includes(key))
+      throw new Error(`unsupported ${scenario.event} trigger key: ${key}`);
   if (config.types && !config.types.includes(scenario.payload.action))
     return false;
   if (scenario.event === "push") {
@@ -219,6 +247,23 @@ export function resolveRun(file, scenario, docs = workflows(), stack = []) {
       progressed = true;
       pending.delete(id);
       const needs = Object.fromEntries(needsIds.map((n) => [n, results[n]]));
+      const declaredInputs =
+        doc.on?.workflow_dispatch?.inputs ||
+        doc.on?.workflow_call?.inputs ||
+        {};
+      const inputDefaults = Object.fromEntries(
+        Object.entries(declaredInputs)
+          .filter(([, definition]) => "default" in definition)
+          .map(([key, definition]) => [key, definition.default]),
+      );
+      const actualInputs = { ...inputDefaults, ...scenario.inputs };
+      if (
+        scenario.event !== "workflow_dispatch" &&
+        actualInputs.diagnostic_rebuild
+      )
+        throw new Error(
+          "automatic workflow cannot opt into diagnostic rebuild",
+        );
       const context = {
         github: {
           event_name: scenario.event,
@@ -228,7 +273,7 @@ export function resolveRun(file, scenario, docs = workflows(), stack = []) {
           ref_name: scenario.ref.split("/").pop(),
         },
         needs,
-        inputs: scenario.inputs || {},
+        inputs: actualInputs,
         vars: { PYPI_PUBLISH: scenario.publish ? "true" : "false" },
         secrets: {},
         matrix: {},

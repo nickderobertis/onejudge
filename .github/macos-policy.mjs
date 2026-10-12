@@ -9,7 +9,7 @@ const git = (...args) =>
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
   });
-function versionOnly(path, before, after) {
+function versionOnly(path, before, after, base, head) {
   if (path === "CHANGELOG.md" || /^crates\/onejudge\/CHANGELOG\.md$/.test(path))
     return true;
   if (
@@ -23,8 +23,36 @@ function versionOnly(path, before, after) {
       [
         "-c",
         `
-import json, re, sys, tomllib
-path = sys.argv[1]
+import json, pathlib, re, subprocess, sys, tomllib
+path, base, head = sys.argv[1:]
+def workspace(ref):
+    def manifest(path):
+        return tomllib.loads(subprocess.check_output(['git', 'show', f'{ref}:{path}'], text=True))
+    root = manifest('Cargo.toml')['workspace']
+    version = root['package']['version']
+    if not isinstance(version, str) or not re.fullmatch(r'\\d+\\.\\d+\\.\\d+(?:[-+][A-Za-z0-9.-]+)?', version):
+        raise ValueError('invalid workspace version')
+    members = root['members']
+    if not isinstance(members, list) or not members:
+        raise ValueError('workspace members not established')
+    names = {}
+    for member in members:
+        if not isinstance(member, str) or pathlib.PurePosixPath(member).is_absolute() or any(part in ('..', '*', '?') for part in member.split('/')) or any(c in member for c in '*?[]'):
+            raise ValueError('unsupported workspace member path')
+        package = manifest(f'{member}/Cargo.toml')['package']
+        name = package['name']
+        if not isinstance(name, str) or not name:
+            raise ValueError('invalid workspace package name')
+        if package.get('version') == {'workspace': True}:
+            if name in names:
+                raise ValueError('duplicate workspace package name')
+            names[name] = member
+    return version, names
+proven = {}
+if path == 'Cargo.lock':
+    base_version, base_names = workspace(base)
+    head_version, head_names = workspace(head)
+    proven = {name: member for name, member in base_names.items() if head_names.get(name) == member}
 def drop_version(d):
     v = d.get('version')
     if isinstance(v, str):
@@ -33,19 +61,24 @@ def drop_version(d):
         d.pop('version')
     elif v is not None and v != {'workspace': True}:
         raise ValueError('not a plain version')
-def normalize(text):
+def normalize(text, expected_version):
     d = tomllib.loads(text)
     if path == 'Cargo.lock':
         for p in d.get('package', []):
-            if p.get('name') == 'onejudge': drop_version(p)
+            if p.get('name') in proven and 'source' not in p and 'checksum' not in p:
+                if p.get('version') != expected_version:
+                    raise ValueError('local lock version differs from workspace version')
+                drop_version(p)
     elif path == 'Cargo.toml': drop_version(d.get('workspace', {}).get('package', {}))
     elif path.endswith('Cargo.toml'): drop_version(d.get('package', {}))
     else: drop_version(d.get('project', {}))
     return d
 v = json.load(sys.stdin)
-print(json.dumps(normalize(v[0]) == normalize(v[1])))
+print(json.dumps(normalize(v[0], base_version if proven else None) == normalize(v[1], head_version if proven else None)))
 `,
         path,
+        base,
+        head,
       ],
       { input: JSON.stringify([before, after]), encoding: "utf8" },
     ).trim();
@@ -102,6 +135,8 @@ export function classify(
           path,
           git("show", `${from}:${path}`),
           git("show", `${to}:${path}`),
+          from,
+          to,
         )
       ) {
         return ordinary(`non-release content: ${path}`);

@@ -29,13 +29,18 @@ function history() {
   git("config", "user.name", "Policy fixture");
   writeFileSync(
     join(dir, "Cargo.toml"),
-    '[workspace.package]\nversion = "0.19.0"\n[workspace.dependencies]\nserde = "1.0"\n',
+    '[workspace]\nmembers = ["crates/onejudge", "crates/onejudge-repo"]\n[workspace.package]\nversion = "0.19.0"\n[workspace.dependencies]\nserde = "1.0"\n',
   );
   writeFileSync(join(dir, "CHANGELOG.md"), "# Changes\n");
   mkdirSync(join(dir, "crates/onejudge"), { recursive: true });
   writeFileSync(
     join(dir, "crates/onejudge/Cargo.toml"),
-    '[package]\nname = "onejudge"\nversion = "0.19.0"\n',
+    '[package]\nname = "onejudge"\nversion.workspace = true\n',
+  );
+  mkdirSync(join(dir, "crates/onejudge-repo"), { recursive: true });
+  writeFileSync(
+    join(dir, "crates/onejudge-repo/Cargo.toml"),
+    '[package]\nname = "onejudge-repo"\nversion.workspace = true\n',
   );
   mkdirSync(join(dir, "python/onejudge-sdk"), { recursive: true });
   writeFileSync(
@@ -45,7 +50,7 @@ function history() {
 
   writeFileSync(
     join(dir, "Cargo.lock"),
-    'version = 4\n[[package]]\nname = "onejudge"\nversion = "0.19.0"\n[[package]]\nname = "serde"\nversion = "1.0.0"\n',
+    'version = 4\n[[package]]\nname = "onejudge"\nversion = "0.19.0"\n[[package]]\nname = "onejudge-repo"\nversion = "0.19.0"\n[[package]]\nname = "serde"\nversion = "1.0.0"\n',
   );
   mkdirSync(join(dir, "python/onejudge-sdk/src/onejudge_sdk"), {
     recursive: true,
@@ -63,19 +68,15 @@ function history() {
     if (kind === "version")
       writeFileSync(
         join(dir, "Cargo.toml"),
-        '[workspace.package]\nversion = "0.20.0"\n[workspace.dependencies]\nserde = "1.0"\n',
+        '[workspace]\nmembers = ["crates/onejudge", "crates/onejudge-repo"]\n[workspace.package]\nversion = "0.20.0"\n[workspace.dependencies]\nserde = "1.0"\n',
       );
     else if (kind === "dependency")
       writeFileSync(
         join(dir, "Cargo.toml"),
-        '[workspace.package]\nversion = "0.20.0"\n[workspace.dependencies]\nserde = "2.0"\n',
+        '[workspace]\nmembers = ["crates/onejudge", "crates/onejudge-repo"]\n[workspace.package]\nversion = "0.20.0"\n[workspace.dependencies]\nserde = "2.0"\n',
       );
     else writeFileSync(join(dir, "source.rs"), "fn new_behavior() {}\n");
     if (kind === "version") {
-      writeFileSync(
-        join(dir, "crates/onejudge/Cargo.toml"),
-        '[package]\nname = "onejudge"\nversion = "0.20.0"\n',
-      );
       writeFileSync(
         join(dir, "python/onejudge-sdk/pyproject.toml"),
         '[project]\nname = "onejudge"\nversion = "0.20.0"\nrequires-python = ">=3.9"\n',
@@ -83,7 +84,7 @@ function history() {
 
       writeFileSync(
         join(dir, "Cargo.lock"),
-        'version = 4\n[[package]]\nname = "onejudge"\nversion = "0.20.0"\n[[package]]\nname = "serde"\nversion = "1.0.0"\n',
+        'version = 4\n[[package]]\nname = "onejudge"\nversion = "0.20.0"\n[[package]]\nname = "onejudge-repo"\nversion = "0.20.0"\n[[package]]\nname = "serde"\nversion = "1.0.0"\n',
       );
       writeFileSync(
         join(dir, "python/onejudge-sdk/src/onejudge_sdk/_version.py"),
@@ -240,7 +241,9 @@ test("actual workflow graph covers event fan-out, ownership, diffs and publish s
               };
               const inputs = {
                 tag: "v0.19.0",
-                diagnostic_rebuild: action === "diagnostic",
+                ...(action === "diagnostic"
+                  ? { diagnostic_rebuild: true }
+                  : {}),
               };
               const key = `${event}/${diff}/${fork}`;
               if (!policies.has(key))
@@ -550,7 +553,7 @@ test("real semantic diff parser admits changelog-only releases and refuses malfo
         () =>
           writeFileSync(
             join(h.dir, "Cargo.toml"),
-            '[workspace.package]\nversion = false\n[workspace.dependencies]\nserde = "1.0"\n',
+            '[workspace]\nmembers = ["crates/onejudge", "crates/onejudge-repo"]\n[workspace.package]\nversion = false\n[workspace.dependencies]\nserde = "1.0"\n',
           ),
         false,
       ],
@@ -577,7 +580,77 @@ test("real semantic diff parser admits changelog-only releases and refuses malfo
         () =>
           writeFileSync(
             join(h.dir, "Cargo.lock"),
-            'version = 4\n[[package]]\nname = "onejudge"\nversion = "0.20.0"\n[[package]]\nname = "serde"\nversion = "2.0.0"\n',
+            'version = 4\n[[package]]\nname = "onejudge"\nversion = "0.20.0"\n[[package]]\nname = "onejudge-repo"\nversion = "0.20.0"\n[[package]]\nname = "serde"\nversion = "2.0.0"\n',
+          ),
+        false,
+      ],
+      [
+        "wrong-member-version",
+        () =>
+          writeFileSync(
+            join(h.dir, "Cargo.lock"),
+            git("show", `${h.base}:Cargo.lock`).replace(
+              'name = "onejudge-repo"\nversion = "0.19.0"',
+              'name = "onejudge-repo"\nversion = "0.20.0"',
+            ),
+          ),
+        false,
+      ],
+      [
+        "local-non-version-field",
+        () =>
+          writeFileSync(
+            join(h.dir, "Cargo.lock"),
+            git("show", `${h.base}:Cargo.lock`).replace(
+              'name = "onejudge-repo"',
+              'dependencies = ["serde"]\nname = "onejudge-repo"',
+            ),
+          ),
+        false,
+      ],
+      [
+        "unproven-member",
+        () => {
+          writeFileSync(
+            join(h.dir, "crates/onejudge-repo/Cargo.toml"),
+            '[package]\nname = "onejudge-repo"\nversion = "0.20.0"\n',
+          );
+          writeFileSync(
+            join(h.dir, "Cargo.lock"),
+            git("show", `${h.base}:Cargo.lock`).replace(
+              'name = "onejudge-repo"\nversion = "0.19.0"',
+              'name = "onejudge-repo"\nversion = "0.20.0"',
+            ),
+          );
+        },
+        false,
+      ],
+      [
+        "malformed-member",
+        () => {
+          writeFileSync(
+            join(h.dir, "crates/onejudge-repo/Cargo.toml"),
+            "[broken",
+          );
+          writeFileSync(
+            join(h.dir, "Cargo.lock"),
+            git("show", `${h.base}:Cargo.lock`).replace(
+              'name = "onejudge-repo"\nversion = "0.19.0"',
+              'name = "onejudge-repo"\nversion = "0.20.0"',
+            ),
+          );
+        },
+        false,
+      ],
+      [
+        "sourced-member-name",
+        () =>
+          writeFileSync(
+            join(h.dir, "Cargo.lock"),
+            git("show", `${h.base}:Cargo.lock`).replace(
+              'name = "onejudge-repo"\nversion = "0.19.0"',
+              'name = "onejudge-repo"\nversion = "0.20.0"\nsource = "registry+https://example.invalid"\nchecksum = "abc"',
+            ),
           ),
         false,
       ],
@@ -601,4 +674,20 @@ test("real semantic diff parser admits changelog-only releases and refuses malfo
   } finally {
     rmSync(h.dir, { recursive: true, force: true });
   }
+});
+
+test("unsupported trigger filter keys fail instead of silently widening routing", () => {
+  for (const [event, filter] of [
+    ["push", "branches-ignore"],
+    ["push", "tags-ignore"],
+    ["pull_request", "branches"],
+  ])
+    assert.throws(
+      () =>
+        triggered(
+          { on: { [event]: { [filter]: ["main"] } } },
+          { event, payload: {}, ref: "refs/heads/main" },
+        ),
+      /unsupported .*trigger key/,
+    );
 });
