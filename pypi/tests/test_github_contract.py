@@ -52,6 +52,64 @@ class GitHubContract(unittest.TestCase):
             set(contract["run_status_or_conclusion"]),
         )
 
+    def test_projection_command_copies_the_pinned_contract_and_records_provenance(self):
+        import hashlib
+        import os
+        import subprocess
+        import tempfile
+
+        contract = json.loads(
+            (Path(__file__).resolve().parents[1] / "github-contract.json").read_text()
+        )
+        with tempfile.TemporaryDirectory(
+            dir=os.environ.get("ONEPIPELINE_NODE_SCRATCH_DIR")
+            or os.environ.get("RUNNER_TEMP")
+        ) as scratch:
+            raw, out = Path(scratch) / "schema.json", Path(scratch) / "projection.json"
+            raw.write_text(
+                json.dumps(
+                    {
+                        "components": {
+                            "schemas": contract["schemas"],
+                            "parameters": {
+                                "workflow-run-status": {
+                                    "schema": {
+                                        "enum": contract["run_status_or_conclusion"]
+                                    }
+                                }
+                            },
+                        }
+                    }
+                )
+            )
+            subprocess.run(
+                [
+                    sys.executable,
+                    str(
+                        Path(__file__).resolve().parents[1]
+                        / "update_github_contract.py"
+                    ),
+                    "--schema",
+                    str(raw),
+                    "--commit",
+                    contract["source"]["commit"],
+                    "--out",
+                    str(out),
+                ],
+                check=True,
+            )
+            projected = json.loads(out.read_text())
+            self.assertEqual(projected["schemas"], contract["schemas"])
+            self.assertEqual(
+                projected["run_status_or_conclusion"],
+                contract["run_status_or_conclusion"],
+            )
+            self.assertEqual(projected["source"]["url"], contract["source"]["url"])
+            self.assertEqual(
+                projected["source"]["sha256"],
+                hashlib.sha256(raw.read_bytes()).hexdigest(),
+            )
+
     def test_projection_refuses_an_unresolved_external_contract(self):
         import os
         import subprocess

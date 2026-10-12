@@ -49,6 +49,15 @@ def main() -> None:
                 response["assets"] = (
                     "not a list"  # Deliberately invalid third-party wire data.
                 )
+            if mode == "invalid-release-object":
+                response = []
+            for value, selected in (
+                (None, "invalid-asset-object"),
+                ({"name": ""}, "empty-asset-name"),
+                ({"name": 3}, "nonstring-asset-name"),
+            ):
+                if mode == selected:
+                    response["assets"] = [value]
         case ["api", path] if "/workflows/" in path:
             calls = (root / "calls").read_text().count("/workflows/")
             status = (
@@ -73,6 +82,21 @@ def main() -> None:
                 response["workflow_runs"][0]["id"] = (
                     True  # Deliberately invalid third-party wire data.
                 )
+            changes = {
+                "malformed-sha": ("head_sha", "bad"),
+                "unknown-status": ("status", "future"),
+                "unknown-conclusion": ("conclusion", "future"),
+                "missing-conclusion": ("conclusion", None),
+            }
+            if mode in changes:
+                key, value = changes[mode]
+                response["workflow_runs"][0][key] = value
+            if mode == "invalid-run-object":
+                response["workflow_runs"] = [None]
+            if mode == "invalid-run-collection":
+                response["workflow_runs"] = "invalid"
+            if mode == "invalid-run-response":
+                response = []
         case ["api", path]:
             assert "/runs/42/artifacts" in path, path
             artifact = Artifact(
@@ -84,6 +108,14 @@ def main() -> None:
                 response["artifacts"][0]["expired"] = (
                     "false"  # Deliberately invalid wire boolean.
                 )
+            if mode == "invalid-artifact-collection":
+                response["artifacts"] = {}
+            if mode == "invalid-artifact-object":
+                response["artifacts"] = [None]
+            if mode == "empty-artifact-name":
+                response["artifacts"][0]["name"] = ""
+            if mode == "nonstring-artifact-name":
+                response["artifacts"][0]["name"] = 3
         case ["release", "upload", *_]:
             if mode == "upload-failure":
                 sys.exit("gh: upload rejected (HTTP 503)")

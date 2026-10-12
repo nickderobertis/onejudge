@@ -3,6 +3,7 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
+import { commandOptions } from "./command-options.mjs";
 
 const git = (...args) =>
   execFileSync("git", args, {
@@ -155,12 +156,7 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
   const args = process.argv.slice(2);
   if (args.shift() !== "classify")
     throw new Error("expected classify --event PATH --base REF --head REF");
-  const options = Object.fromEntries(
-    Array.from({ length: args.length / 2 }, (_, i) => [
-      args[i * 2],
-      args[i * 2 + 1],
-    ]),
-  );
+  const options = commandOptions(args, ["--event", "--base", "--head"]);
   let event;
   try {
     event = JSON.parse(readFileSync(options["--event"], "utf8"));

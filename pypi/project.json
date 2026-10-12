@@ -11,6 +11,7 @@
   "implicitDependencies": [
     "onejudge"
   ],
+  "// release tooling": "llmlint: ignore[new_command_or_client_gets_its_own_project] This task keeps production builders in their existing owning domain: these private release/GitHub helpers and their real packaging tests belong to the CLI-wheel packaging project, rather than a second release-tooling project. The client serves only this internal packaging pipeline; published application APIs and wheel contents are unchanged.",
   "targets": {
     "build": {
       "command": "just _pypi-build",

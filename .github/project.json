@@ -17,9 +17,6 @@
     "lint": {
       "command": "node .github/check-syntax.mjs && just _actionlint"
     },
-    "syntax-check": {
-      "command": "node .github/check-syntax.mjs"
-    },
     "budgets": {
       "command": "node .github/check-budgets.mjs",
       "dependsOn": ["test"],

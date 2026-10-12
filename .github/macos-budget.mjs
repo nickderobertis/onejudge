@@ -4,13 +4,12 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { report } from "@onebudgetspec/sdk";
 import { sourceDigest } from "./workflow-graph.mjs";
+import { commandOptions } from "./command-options.mjs";
 const args = process.argv.slice(2);
-const options = Object.fromEntries(
-  Array.from({ length: args.length / 2 }, (_, i) => [
-    args[i * 2],
-    args[i * 2 + 1],
-  ]),
-);
+const options = commandOptions(args, ["--metric", "--telemetry"]);
+const metric = options["--metric"];
+if (!["jobs-per-run", "runs-per-change"].includes(metric))
+  throw new Error("unknown Mac metric");
 const telemetry = JSON.parse(
   readFileSync(resolve(options["--telemetry"]), "utf8"),
 );
@@ -64,9 +63,6 @@ if (telemetry.schema_version !== 1 || telemetry.digest !== sourceDigest())
   throw new Error(
     "missing/stale workflow telemetry: run github-workflows:test for this tree",
   );
-const metric = options["--metric"];
-if (!["jobs-per-run", "runs-per-change"].includes(metric))
-  throw new Error("unknown Mac metric");
 const value =
   metric === "jobs-per-run" ? telemetry.jobsPerRun : telemetry.runsPerChange;
 const detail = JSON.stringify({

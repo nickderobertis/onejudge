@@ -1,9 +1,10 @@
 #!/usr/bin/env bats
-# The release plan and canonical producer selection meet over real git tags.
+# Recovery keeps the original tag and independently holds each published distribution.
 load ../../tests/support/helpers
 bats_require_minimum_version 1.5.0
 
 setup() {
+    use_doubles
     REPO="$BATS_TEST_TMPDIR/repo"
     git_repo "$REPO"
     printf '[workspace.package]\nversion = "0.19.0"\n' >"$REPO/Cargo.toml"
@@ -12,37 +13,42 @@ setup() {
     git -C "$REPO" tag onejudge-v0.19.0
     SHA="$(git -C "$REPO" rev-parse HEAD)"
     cd "$REPO" || return
+    export GITHUB_OUTPUT="$BATS_TEST_TMPDIR/output" GITHUB_EVENT_PATH="$BATS_TEST_TMPDIR/event.json"
+    export INDEX="$BATS_TEST_TMPDIR/index"
+    : >"$GITHUB_OUTPUT"
+    : >"$INDEX"
+    double curl <<'DOUBLE'
+url="${*: -1}"
+status="$(awk -v url="$url" '$2 == url { print $1 }' "$INDEX")"
+printf '%s' "${status:-404}"
+DOUBLE
 }
 
-@test "both tag aliases choose the same automatic producer and only its push builds" {
-    for tag in v0.19.0 onejudge-v0.19.0; do
-        TAG="$tag" GITHUB_EVENT_NAME=push run python3 "$ROOT/pypi/producer_plan.py"
-        [ "$status" -eq 0 ]
-        [[ "$output" == *"tag=v0.19.0"* ]]
-        [[ "$output" == *"sha=$SHA"* ]]
-        [[ "$output" == *"name=onejudge-darwin-v0.19.0-$SHA"* ]]
-        if [ "$tag" = v0.19.0 ]; then
-            [[ "$output" == *"build=true"* ]]
-        else
-            [[ "$output" == *"build=false"* ]]
-        fi
-    done
-}
-
-@test "an alias alone builds and diagnostic recovery resolves the same existing commit" {
-    git tag -d v0.19.0
-    TAG=onejudge-v0.19.0 GITHUB_EVENT_NAME=push run python3 "$ROOT/pypi/producer_plan.py"
+@test "manual alias recovery preserves the exact tag and holds an already published CLI" {
+    echo '200 https://pypi.org/pypi/onejudge-cli/0.19.0/json' >"$INDEX"
+    printf '{"inputs":{"tag":"onejudge-v0.19.0"}}\n' >"$GITHUB_EVENT_PATH"
+    GITHUB_EVENT_NAME=workflow_dispatch run "$ROOT/scripts/release-pypi-plan.sh"
     [ "$status" -eq 0 ]
-    [[ "$output" == *"tag=onejudge-v0.19.0"* ]]
-    [[ "$output" == *"build=true"* ]]
-    TAG=onejudge-v0.19.0 GITHUB_EVENT_NAME=workflow_dispatch run python3 "$ROOT/pypi/producer_plan.py"
-    [ "$status" -eq 0 ]
-    [[ "$output" == *"sha=$SHA"* ]]
+    [[ "$(cat "$GITHUB_OUTPUT")" == *"tag=onejudge-v0.19.0"* ]]
+    [[ "$(cat "$GITHUB_OUTPUT")" == *"sha=$SHA"* ]]
+    [[ "$(cat "$GITHUB_OUTPUT")" == *"upload-cli=false"* ]]
+    [[ "$(cat "$GITHUB_OUTPUT")" == *"upload-sdk=true"* ]]
 }
 
-@test "a version-mismatched tag cannot start a producer" {
+@test "manual recovery holds the SDK independently while selecting its missing CLI" {
+    echo '200 https://pypi.org/pypi/onejudge/0.19.0/json' >"$INDEX"
+    printf '{"inputs":{"tag":"v0.19.0"}}\n' >"$GITHUB_EVENT_PATH"
+    GITHUB_EVENT_NAME=workflow_dispatch run "$ROOT/scripts/release-pypi-plan.sh"
+    [ "$status" -eq 0 ]
+    [[ "$(cat "$GITHUB_OUTPUT")" == *"upload-cli=true"* ]]
+    [[ "$(cat "$GITHUB_OUTPUT")" == *"upload-sdk=false"* ]]
+}
+
+@test "manual recovery refuses a tag whose committed version does not match" {
     git tag v0.20.0
-    TAG=v0.20.0 GITHUB_EVENT_NAME=push run python3 "$ROOT/pypi/producer_plan.py"
+    printf '{"inputs":{"tag":"v0.20.0"}}\n' >"$GITHUB_EVENT_PATH"
+    GITHUB_EVENT_NAME=workflow_dispatch run "$ROOT/scripts/release-pypi-plan.sh"
     [ "$status" -ne 0 ]
-    [[ "$output" == *"tag does not name the Cargo version"* ]]
+    [[ "$output" == *"does not name the version its tree releases"* ]]
+    [ ! -s "$GITHUB_OUTPUT" ]
 }

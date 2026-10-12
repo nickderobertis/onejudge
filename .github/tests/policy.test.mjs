@@ -9,6 +9,7 @@ import {
   triggered,
   sourceDigest,
   expand,
+  render,
 } from "../workflow-graph.mjs";
 
 const root = resolve(".");
@@ -690,4 +691,133 @@ test("unsupported trigger filter keys fail instead of silently widening routing"
         ),
       /unsupported .*trigger key/,
     );
+});
+
+test("CLI syntax is distinct from unreadable event data, and malformed matrix/filter inputs fail", () => {
+  for (const [command, valid] of [
+    [
+      resolve(".github/macos-policy.mjs"),
+      [
+        "classify",
+        "--event",
+        "unreadable.json",
+        "--base",
+        "HEAD",
+        "--head",
+        "HEAD",
+      ],
+    ],
+    [
+      resolve(".github/macos-budget.mjs"),
+      [
+        "--metric",
+        "jobs-per-run",
+        "--telemetry",
+        ".github/.telemetry/macos-policy.json",
+      ],
+    ],
+  ]) {
+    for (const suffix of [
+      ["--unknown", "value"],
+      [valid.at(-2), "duplicate"],
+      ["--incomplete"],
+    ]) {
+      const result = spawnSync("node", [command, ...valid, ...suffix], {
+        encoding: "utf8",
+      });
+      assert.equal(result.status, 1);
+      assert.equal(result.stdout, "");
+      assert.match(
+        result.stderr,
+        /unknown option|duplicate option|complete option/,
+      );
+    }
+    const missing = spawnSync("node", [command, ...valid.slice(0, -2)], {
+      encoding: "utf8",
+    });
+    assert.equal(missing.status, 1);
+    assert.match(missing.stderr, /missing required option/);
+  }
+  for (const matrix of [
+    { include: ["invalid"] },
+    { include: {} },
+    { exclude: [1] },
+    { exclude: [null] },
+    { exclude: [["os"]] },
+  ])
+    assert.throws(() => expand(matrix), /unresolved matrix/);
+  for (const config of [false, 0, ""])
+    assert.throws(
+      () => triggered({ on: { push: config } }, { event: "push" }),
+      /unsupported event/,
+    );
+  for (const pattern of ["!main", "m?in", "v+", "[ab]", "{main}"])
+    assert.throws(
+      () =>
+        triggered(
+          { on: { push: { branches: [pattern] } } },
+          { event: "push", ref: "refs/heads/main" },
+        ),
+      /unsupported trigger pattern/,
+    );
+  assert.equal(
+    triggered(
+      { on: { push: { paths: ["src/*.rs"] } } },
+      { event: "push", ref: "refs/heads/main", paths: ["src/deep/lib.rs"] },
+    ),
+    false,
+  );
+  assert.equal(
+    triggered(
+      { on: { push: { paths: ["**/lib.rs"] } } },
+      { event: "push", ref: "refs/heads/main", paths: ["lib.rs"] },
+    ),
+    true,
+  );
+});
+
+test("production classifier command has nonempty fallback refs for base pushes and unknown PR metadata", () => {
+  const h = history();
+  try {
+    const env = workflows()["ci.yml"].jobs["macos-policy"].steps.find(
+      (s) => s.id === "classify",
+    ).env;
+    for (const event of ["push", "pull_request"]) {
+      const payload =
+        event === "push"
+          ? { ref: "refs/heads/main", before: h.base }
+          : pr(false, true);
+      const context = { github: { event: payload } };
+      const base = render(env.BASE, context),
+        head = render(env.HEAD, context);
+      assert.ok(base.length && head.length);
+      const path = join(h.dir, "event.json");
+      writeFileSync(path, JSON.stringify(payload));
+      const result = spawnSync(
+        "node",
+        [
+          resolve(".github/macos-policy.mjs"),
+          "classify",
+          "--event",
+          path,
+          "--base",
+          base,
+          "--head",
+          head,
+        ],
+        {
+          cwd: h.dir,
+          env: { ...process.env, GITHUB_EVENT_NAME: event },
+          encoding: "utf8",
+        },
+      );
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(
+        JSON.parse(result.stdout).macosRequired,
+        event === "pull_request",
+      );
+    }
+  } finally {
+    rmSync(h.dir, { recursive: true, force: true });
+  }
 });

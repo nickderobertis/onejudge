@@ -106,6 +106,16 @@ export function render(source, context) {
 export function expand(matrix = {}) {
   if (typeof matrix !== "object" || matrix === null || Array.isArray(matrix))
     throw new Error("unresolved matrix expression");
+  for (const key of ["include", "exclude"])
+    if (
+      key in matrix &&
+      (!Array.isArray(matrix[key]) ||
+        !matrix[key].every(
+          (row) =>
+            row !== null && typeof row === "object" && !Array.isArray(row),
+        ))
+    )
+      throw new Error(`unresolved matrix ${key}: expected object rows`);
   const axes = Object.entries(matrix).filter(
     ([k]) => !["include", "exclude"].includes(k),
   );
@@ -135,17 +145,30 @@ export function expand(matrix = {}) {
   );
   return axes.length || matrix.include ? rows : [{}];
 }
-const glob = (p, s) =>
-  new RegExp(
-    "^" + p.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*") + "$",
-  ).test(s);
+function glob(pattern, text) {
+  if (typeof pattern !== "string" || /[!+?\[\]{}()\\]/.test(pattern))
+    throw new Error(`unsupported trigger pattern: ${pattern}`);
+  let regex = "";
+  for (let i = 0; i < pattern.length; i++) {
+    if (pattern[i] === "*") {
+      if (pattern[i + 1] === "*") {
+        i++;
+        if (pattern[i + 1] === "/") {
+          i++;
+          regex += "(?:.*/)?";
+        } else regex += ".*";
+      } else regex += "[^/]*";
+    } else regex += pattern[i].replace(/[.\^$|]/g, "\\$&");
+  }
+  return new RegExp(`^${regex}$`).test(text);
+}
 export function triggered(doc, scenario) {
   const on = doc.on;
   if (!on || typeof on !== "object" || Array.isArray(on))
     throw new Error("unsupported workflow trigger declaration");
   if (!(scenario.event in on)) return false;
   const config = on[scenario.event];
-  if (!config) return true;
+  if (config === null) return true;
   if (scenario.event === "schedule") {
     if (
       !Array.isArray(config) ||

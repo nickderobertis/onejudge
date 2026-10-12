@@ -70,8 +70,8 @@ jobs:
           fetch-depth: 0
       - id: classify
         env:
-          BASE: ${{ github.event.pull_request.base.sha }}
-          HEAD: ${{ github.event.pull_request.head.sha }}
+          BASE: ${{ github.event.pull_request.base.sha || 'unavailable base SHA' }}
+          HEAD: ${{ github.event.pull_request.head.sha || 'unavailable head SHA' }}
         run: |
           node .github/macos-policy.mjs classify --event "$GITHUB_EVENT_PATH" --base "$BASE" --head "$HEAD" > policy.json
           node -e 'const p=require("./policy.json"); console.log("required="+p.macosRequired); console.error(p.reason)' >> "$GITHUB_OUTPUT"

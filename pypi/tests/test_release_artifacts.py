@@ -338,6 +338,12 @@ class ReleaseArtifacts(unittest.TestCase):
             )
             if mode == "wrong-architecture":
                 linux = linux[:18] + (183).to_bytes(2, "little")
+            if mode == "wrong-pe-signature":
+                windows = windows[:64] + b"BAD!" + windows[68:]
+            if mode == "wrong-pe-offset":
+                windows = windows[:60] + (9999).to_bytes(4, "little") + windows[64:]
+            if mode == "wrong-pe-machine":
+                windows = windows[:68] + (0xAA64).to_bytes(2, "little")
             for target, binary in zip(expected_targets, (linux, windows), strict=True):
                 prefix = f"onejudge-{target}"
                 executable = (
@@ -366,6 +372,11 @@ class ReleaseArtifacts(unittest.TestCase):
             native = ROOT / "target/pypi-wheel/onejudge-x86_64-unknown-linux-gnu.tar.gz"
             if native.exists():
                 (directory / native.name).write_bytes(native.read_bytes())
+        if archive_only and mode == "symlink-archive":
+            file = directory / "onejudge-x86_64-pc-windows-msvc.zip"
+            original = self.root / "original-windows.zip"
+            file.replace(original)
+            file.symlink_to(original)
         if archive_only and mode == "missing-archive":
             (directory / "onejudge-x86_64-pc-windows-msvc.zip").unlink()
         args = [
@@ -429,10 +440,16 @@ class ReleaseArtifacts(unittest.TestCase):
             ("missing-archive", "missing required targets"),
             ("wrong-architecture", "ELF architecture mismatch"),
             ("corrupt-contents", "archive contents mismatch"),
+            ("wrong-pe-signature", "PE architecture mismatch"),
+            ("wrong-pe-offset", "PE architecture mismatch"),
+            ("wrong-pe-machine", "PE architecture mismatch"),
+            ("symlink-archive", "unsafe archive payload"),
         ):
             failed = self.publisher(mode, archive_only=True)
             self.assertNotEqual(failed.returncode, 0, mode)
             self.assertIn(message, failed.stderr)
+            if mode == "symlink-archive":
+                (self.root / "archives/onejudge-x86_64-pc-windows-msvc.zip").unlink()
         result = self.publisher("upload-failure", archive_only=True)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("upload rejected", result.stderr)
@@ -451,6 +468,21 @@ class ReleaseArtifacts(unittest.TestCase):
             ("wrong-release", "Release tag wrong"),
             ("transport-failure", "HTTP 503"),
             ("ambiguous", "ambiguous durable"),
+            ("invalid-release-object", "Release must be an object"),
+            ("invalid-asset-object", "asset must be an object"),
+            ("empty-asset-name", "asset name must be a nonempty string"),
+            ("nonstring-asset-name", "asset name must be a nonempty string"),
+            ("invalid-run-object", "workflow run must be an object"),
+            ("invalid-run-collection", "workflow_runs must be a list"),
+            ("invalid-run-response", "workflow_runs must be an object"),
+            ("malformed-sha", "invalid workflow run head_sha"),
+            ("unknown-status", "not a valid RunStatus"),
+            ("unknown-conclusion", "not a valid Conclusion"),
+            ("missing-conclusion", "completed workflow run has no conclusion"),
+            ("invalid-artifact-collection", "artifacts must be a list"),
+            ("invalid-artifact-object", "artifact must be an object"),
+            ("empty-artifact-name", "artifact name must be a nonempty string"),
+            ("nonstring-artifact-name", "artifact name must be a nonempty string"),
         ):
             result = self.fetch(mode)
             self.assertNotEqual(result.returncode, 0)
@@ -538,6 +570,38 @@ class ReleaseArtifacts(unittest.TestCase):
         result = self.command("verify")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("wheel version/architecture mismatch", result.stderr)
+
+    def test_manifest_scalar_fields_and_collections_are_validated_by_real_verifier(
+        self,
+    ):
+        cases = [([], "manifest must be an object")]
+        for key, value, message in (
+            ("tag", 1, "identity fields must be strings"),
+            ("sha", None, "identity fields must be strings"),
+            ("version", [], "identity fields must be strings"),
+            ("files", {}, "files must be a list"),
+        ):
+            manifest = copy.deepcopy(self.original)
+            manifest[key] = value
+            cases.append((manifest, message))
+        for key, value, message in (
+            ("target", "unknown", "unknown target/kind"),
+            ("target", 1, "unknown target/kind"),
+            ("kind", "unknown", "unknown target/kind"),
+            ("kind", False, "unknown target/kind"),
+            ("sha256", "not-a-hash", "invalid payload hash"),
+            ("sha256", 123, "invalid payload hash"),
+            ("sha256", "A" * 64, "invalid payload hash"),
+        ):
+            manifest = copy.deepcopy(self.original)
+            manifest["files"][0][key] = value
+            cases.append((manifest, message))
+        for manifest, message in cases:
+            with self.subTest(message=message, manifest=manifest):
+                (self.dist / "release-artifacts.json").write_text(json.dumps(manifest))
+                result = self.command("verify")
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(message, result.stderr)
 
     def test_waits_for_exact_producer_completion(self):
         result = self.fetch("ordering")
