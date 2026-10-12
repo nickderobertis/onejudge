@@ -3,21 +3,17 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import os
-import subprocess
 import tempfile
-import time
 import zipfile
 from pathlib import Path
 
+from github_client import Conclusion, GitHubClient, RunStatus
 from producer_plan import canonical
-from release_artifacts import identity, validate
+from release_artifacts import Commit, ReleaseIdentity, Tag, Version, validate
 from release_storage import locate
-
-
-def gh(*args: str) -> str:
-    return subprocess.check_output(["gh", *args], text=True)
 
 
 def unpack(bundle: Path, root: Path) -> None:
@@ -33,98 +29,66 @@ def unpack(bundle: Path, root: Path) -> None:
         package.extractall(root)
 
 
-def fetch(
+async def fetch(
     repo: str, tag: str, sha: str, version: str, root: Path, attempts: int = 60
 ) -> None:
     if attempts < 1:
         raise ValueError("producer wait attempts must be positive")
-    tag = canonical(tag, sha, version)
-    name = identity(tag, sha, version)
+    release = ReleaseIdentity(
+        Tag(canonical(tag, sha, version)), Commit(sha), Version(version)
+    )
+    client = GitHubClient(repo)
     root.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(
         dir=os.environ.get("ONEPIPELINE_NODE_SCRATCH_DIR")
         or os.environ.get("RUNNER_TEMP")
     ) as scratch:
-        bundle = Path(scratch) / f"{name}.zip"
-        # Durable assets survive Actions retention. Absence may mean the producer is live.
-        storage_tag, release = locate(repo, tag, sha, version)
-        assets = [a for a in release["assets"] if a["name"] == bundle.name]
+        bundle = Path(scratch) / f"{release.name}.zip"
+        location = await locate(client, release)
+        assets = [a for a in location.release.assets if a.name == bundle.name]
         if len(assets) > 1:
             raise ValueError("ambiguous durable release artifact")
         if assets:
-            gh(
-                "release",
-                "download",
-                storage_tag,
-                "--repo",
-                repo,
-                "--pattern",
-                bundle.name,
-                "--dir",
-                scratch,
-            )
+            await client.release_download(location.tag, bundle.name, Path(scratch))
             unpack(bundle, root)
         else:
             for attempt in range(attempts):
-                runs = json.loads(
-                    gh(
-                        "api",
-                        f"repos/{repo}/actions/workflows/release-binaries.yml/runs?head_sha={sha}&per_page=100",
-                    )
-                )["workflow_runs"]
                 runs = [
                     r
-                    for r in runs
-                    if r["head_sha"] == sha
-                    and r["head_branch"] == tag
-                    and r["event"] == "push"
+                    for r in await client.runs(release.sha)
+                    if r.head_sha == release.sha
+                    and r.head_branch == release.tag
+                    and r.event == "push"
                 ]
-                # Retry only while no producer exists yet or the exact producer is still running.
                 if runs:
-                    run = max(runs, key=lambda r: r["id"])
-                    if run["status"] == "completed":
-                        if run["conclusion"] != "success":
+                    run = max(runs, key=lambda r: r.id)
+                    if run.status is RunStatus.COMPLETED:
+                        if run.conclusion is not Conclusion.SUCCESS:
                             raise ValueError(
-                                f"exact-tag producer {run['id']} failed: {run['conclusion']}"
+                                f"exact-tag producer {run.id} failed: {run.conclusion.value}"
                             )
-                        artifacts = json.loads(
-                            gh(
-                                "api",
-                                f"repos/{repo}/actions/runs/{run['id']}/artifacts",
-                            )
-                        )["artifacts"]
                         matches = [
                             a
-                            for a in artifacts
-                            if a["name"] == name and not a["expired"]
+                            for a in await client.artifacts(run.id)
+                            if a.name == release.name and not a.expired
                         ]
                         if len(matches) != 1:
                             raise ValueError(
                                 "successful exact-tag producer has no unique unexpired artifact"
                             )
-                        gh(
-                            "run",
-                            "download",
-                            str(run["id"]),
-                            "--repo",
-                            repo,
-                            "--name",
-                            name,
-                            "--dir",
-                            str(root),
-                        )
+                        await client.run_download(run.id, release.name, root)
                         break
                 if attempt == attempts - 1:
                     raise ValueError(
                         "exact-tag producer absent or did not finish; recovery never automatically rebuilds macOS"
                     )
-                time.sleep(10)
+                await asyncio.sleep(10)
         validate(
             root,
             json.loads((root / "release-artifacts.json").read_text()),
-            tag,
-            sha,
-            version,
+            release.tag,
+            release.sha,
+            release.version,
         )
 
 
@@ -135,4 +99,6 @@ if __name__ == "__main__":
     parser.add_argument("--root", type=Path, default=Path("darwin"))
     parser.add_argument("--attempts", type=int, default=60)
     args = parser.parse_args()
-    fetch(args.repo, args.tag, args.sha, args.version, args.root, args.attempts)
+    asyncio.run(
+        fetch(args.repo, args.tag, args.sha, args.version, args.root, args.attempts)
+    )

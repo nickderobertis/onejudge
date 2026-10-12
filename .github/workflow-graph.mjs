@@ -24,7 +24,11 @@ export function sourceDigest() {
     for (const row of readdirSync(dir, { withFileTypes: true }).sort((a, b) =>
       a.name.localeCompare(b.name),
     )) {
-      if (["node_modules", ".telemetry", "__pycache__"].includes(row.name))
+      if (
+        ["node_modules", ".telemetry", "__pycache__", ".ruff_cache"].includes(
+          row.name,
+        )
+      )
         continue;
       const path = join(dir, row.name);
       if (row.isDirectory()) scan(path);
@@ -137,9 +141,27 @@ const glob = (p, s) =>
   ).test(s);
 export function triggered(doc, scenario) {
   const on = doc.on;
-  if (!on || !(scenario.event in on)) return false;
+  if (!on || typeof on !== "object" || Array.isArray(on))
+    throw new Error("unsupported workflow trigger declaration");
+  if (!(scenario.event in on)) return false;
   const config = on[scenario.event];
   if (!config) return true;
+  if (scenario.event === "schedule") {
+    if (
+      !Array.isArray(config) ||
+      !config.every(
+        (row) =>
+          row &&
+          typeof row === "object" &&
+          typeof row.cron === "string" &&
+          row.cron.length,
+      )
+    )
+      throw new Error("unsupported schedule trigger configuration");
+    return true;
+  }
+  if (typeof config !== "object" || Array.isArray(config))
+    throw new Error("unsupported event trigger configuration");
   if (config.types && !config.types.includes(scenario.payload.action))
     return false;
   if (scenario.event === "push") {

@@ -46,6 +46,28 @@ test("budget commands consume recorded telemetry, report through the SDK and ref
       assert.equal(run.status, 0, run.stderr);
       assert.equal(JSON.parse(readFileSync(result, "utf8")).value, expected);
     }
+    for (const invalid of [
+      { ...record, jobsPerRun: -1 },
+      { ...record, runsPerChange: "two" },
+      { ...record, scenarios: [{}] },
+      { ...record, perRun: [{}] },
+      { ...record, lifecycle: [{}] },
+    ]) {
+      writeFileSync(telemetry, JSON.stringify(invalid));
+      const failed = spawnSync(
+        "node",
+        [
+          ".github/macos-budget.mjs",
+          "--metric",
+          "jobs-per-run",
+          "--telemetry",
+          telemetry,
+        ],
+        { encoding: "utf8" },
+      );
+      assert.notEqual(failed.status, 0);
+      assert.match(failed.stderr, /invalid workflow telemetry/);
+    }
     writeFileSync(telemetry, JSON.stringify({ ...record, digest: "stale" }));
     const stale = spawnSync(
       "node",

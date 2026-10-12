@@ -26,6 +26,7 @@
       "type:e2e": ["type:contract", "type:test-support", "type:sdk"],
       "type:external": ["type:contract", "type:test-support", "type:repo"],
       "type:repo": [],
+      "type:workflow-tooling": ["type:packaging"],
       "type:workspace": ["type:contract", "type:test-support", "type:e2e"]
     }
   },

@@ -10,4 +10,8 @@ console.log(
     })),
   ),
 );
-if (result.results?.some((r) => r.verdict !== "within")) process.exit(1);
+for (const row of result.results) {
+  if (row.verdict !== "within")
+    console.error(`${row.id}: ${row.error || row.verdict}`);
+}
+if (result.results.some((r) => r.verdict !== "within")) process.exit(1);

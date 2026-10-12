@@ -5,9 +5,10 @@ from __future__ import annotations
 import os
 import re
 import subprocess
-
 import tomllib
-from release_artifacts import identity
+from dataclasses import dataclass
+
+from release_artifacts import Commit, ReleaseIdentity, Tag, Version, identity
 
 
 def git(*args: str) -> str:
@@ -25,7 +26,22 @@ def canonical(tag: str, sha: str, version: str) -> str:
     return tag
 
 
-def plan(tag: str) -> dict[str, str]:
+@dataclass(frozen=True)
+class ProducerPlan:
+    release: ReleaseIdentity
+    build: bool
+
+    def to_outputs(self) -> dict[str, str]:
+        return {
+            "tag": self.release.tag,
+            "sha": self.release.sha,
+            "version": self.release.version,
+            "name": self.release.name,
+            "build": str(self.build).lower(),
+        }
+
+
+def plan(tag: str) -> ProducerPlan:
     if not re.fullmatch(r"(?:onejudge-)?v\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?", tag):
         raise ValueError("invalid release tag")
     sha = git("rev-parse", "--verify", f"refs/tags/{tag}^{{commit}}")
@@ -33,18 +49,12 @@ def plan(tag: str) -> dict[str, str]:
         "version"
     ]
     producer = canonical(tag, sha, version)
-    return {
-        "tag": producer,
-        "sha": sha,
-        "version": version,
-        "name": identity(producer, sha, version),
-        "build": str(
-            tag == producer
-            or os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch"
-        ).lower(),
-    }
+    return ProducerPlan(
+        ReleaseIdentity(Tag(producer), Commit(sha), Version(version)),
+        tag == producer or os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch",
+    )
 
 
 if __name__ == "__main__":
-    for key, value in plan(os.environ["TAG"]).items():
+    for key, value in plan(os.environ["TAG"]).to_outputs().items():
         print(f"{key}={value}")

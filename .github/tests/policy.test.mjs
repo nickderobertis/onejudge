@@ -21,6 +21,10 @@ function history() {
   const git = (...args) =>
     execFileSync("git", args, { cwd: dir, encoding: "utf8" }).trim();
   git("init", "-q");
+  writeFileSync(
+    join(dir, ".git/info/exclude"),
+    "event.json\nwithout-env.json\n",
+  );
   git("config", "user.email", "test@example.com");
   git("config", "user.name", "Policy fixture");
   writeFileSync(
@@ -28,6 +32,17 @@ function history() {
     '[workspace.package]\nversion = "0.19.0"\n[workspace.dependencies]\nserde = "1.0"\n',
   );
   writeFileSync(join(dir, "CHANGELOG.md"), "# Changes\n");
+  mkdirSync(join(dir, "crates/onejudge"), { recursive: true });
+  writeFileSync(
+    join(dir, "crates/onejudge/Cargo.toml"),
+    '[package]\nname = "onejudge"\nversion = "0.19.0"\n',
+  );
+  mkdirSync(join(dir, "python/onejudge-sdk"), { recursive: true });
+  writeFileSync(
+    join(dir, "python/onejudge-sdk/pyproject.toml"),
+    '[project]\nname = "onejudge"\nversion = "0.19.0"\nrequires-python = ">=3.9"\n',
+  );
+
   writeFileSync(
     join(dir, "Cargo.lock"),
     'version = 4\n[[package]]\nname = "onejudge"\nversion = "0.19.0"\n[[package]]\nname = "serde"\nversion = "1.0.0"\n',
@@ -57,6 +72,15 @@ function history() {
       );
     else writeFileSync(join(dir, "source.rs"), "fn new_behavior() {}\n");
     if (kind === "version") {
+      writeFileSync(
+        join(dir, "crates/onejudge/Cargo.toml"),
+        '[package]\nname = "onejudge"\nversion = "0.20.0"\n',
+      );
+      writeFileSync(
+        join(dir, "python/onejudge-sdk/pyproject.toml"),
+        '[project]\nname = "onejudge"\nversion = "0.20.0"\nrequires-python = ">=3.9"\n',
+      );
+
       writeFileSync(
         join(dir, "Cargo.lock"),
         'version = 4\n[[package]]\nname = "onejudge"\nversion = "0.20.0"\n[[package]]\nname = "serde"\nversion = "1.0.0"\n',
@@ -484,6 +508,96 @@ test("classifier CLI recognizes non-PR automatic payloads without an event-name 
       classify(h, "pull_request", foreign, h.heads.version).macosRequired,
       true,
     );
+  } finally {
+    rmSync(h.dir, { recursive: true, force: true });
+  }
+});
+
+test("unsupported string/array event declarations fail instead of appearing untriggered", () => {
+  for (const on of ["push", ["push"], { push: "unsupported" }])
+    assert.throws(
+      () =>
+        triggered(
+          { on },
+          { event: "push", payload: {}, ref: "refs/heads/main" },
+        ),
+      /unsupported/,
+    );
+});
+
+test("real semantic diff parser admits changelog-only releases and refuses malformed or destructive edits", () => {
+  const h = history();
+  const git = (...args) =>
+    execFileSync("git", args, { cwd: h.dir, encoding: "utf8" }).trim();
+  try {
+    assert.equal(
+      classify(h, "pull_request", pr(false, true), h.base).macosRequired,
+      true,
+    );
+    const cases = [
+      [
+        "changelog",
+        () => writeFileSync(join(h.dir, "CHANGELOG.md"), "# New release\n"),
+        true,
+      ],
+      [
+        "malformed-toml",
+        () => writeFileSync(join(h.dir, "Cargo.toml"), "[broken"),
+        false,
+      ],
+      [
+        "malformed-version",
+        () =>
+          writeFileSync(
+            join(h.dir, "Cargo.toml"),
+            '[workspace.package]\nversion = false\n[workspace.dependencies]\nserde = "1.0"\n',
+          ),
+        false,
+      ],
+      [
+        "crate-dependency",
+        () =>
+          writeFileSync(
+            join(h.dir, "crates/onejudge/Cargo.toml"),
+            '[package]\nname = "other-name"\nversion = "0.20.0"\n',
+          ),
+        false,
+      ],
+      [
+        "sdk-content",
+        () =>
+          writeFileSync(
+            join(h.dir, "python/onejudge-sdk/pyproject.toml"),
+            '[project]\nname = "onejudge"\nversion = "0.20.0"\nrequires-python = ">=3.10"\n',
+          ),
+        false,
+      ],
+      [
+        "lock-dependency",
+        () =>
+          writeFileSync(
+            join(h.dir, "Cargo.lock"),
+            'version = 4\n[[package]]\nname = "onejudge"\nversion = "0.20.0"\n[[package]]\nname = "serde"\nversion = "2.0.0"\n',
+          ),
+        false,
+      ],
+      ["remove", () => git("rm", "CHANGELOG.md"), false],
+      ["rename", () => git("mv", "CHANGELOG.md", "OTHER.md"), false],
+    ];
+    for (const [name, edit, releaseOnly] of cases) {
+      git("checkout", "-q", "-B", name, h.base);
+      edit();
+      git("add", ".");
+      git("commit", "-qm", "ci: semantic fixture");
+      const result = classify(
+        h,
+        "pull_request",
+        pr(false, true),
+        git("rev-parse", "HEAD"),
+      );
+      assert.equal(result.isReleaseOnly, releaseOnly, name);
+      assert.equal(result.macosRequired, !releaseOnly, name);
+    }
   } finally {
     rmSync(h.dir, { recursive: true, force: true });
   }

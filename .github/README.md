@@ -11,7 +11,7 @@ budgets target reads that recording; it never starts a scenario or model call.
 Run from the repository root:
 
 ```
-node --test .github/tests/*.test.mjs
+just check --projects github-workflows --targets test
 node .github/macos-budget.mjs --metric jobs-per-run --telemetry .github/.telemetry/macos-policy.json
 node .github/macos-budget.mjs --metric runs-per-change --telemetry .github/.telemetry/macos-policy.json
 ```

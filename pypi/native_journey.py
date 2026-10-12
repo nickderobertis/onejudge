@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import argparse
 import subprocess
+import tomllib
 from pathlib import Path
 
-import tomllib
 from release_artifacts import payload
 from smoke_release import smoke
 

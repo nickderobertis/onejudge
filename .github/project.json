@@ -2,7 +2,7 @@
   "name": "github-workflows",
   "projectType": "application",
   "sourceRoot": ".github",
-  "tags": ["type:repo", "lang:javascript"],
+  "tags": ["type:workflow-tooling", "lang:javascript"],
   "targets": {
     "test": {
       "command": "bun install --cwd .github --frozen-lockfile && node --test .github/tests/*.test.mjs",
@@ -14,12 +14,17 @@
         "{workspaceRoot}/scripts/release-pypi-plan.sh"
       ]
     },
-    "lint": { "command": "just _actionlint" },
-    "typecheck": { "command": "node .github/check-syntax.mjs" },
+    "lint": {
+      "command": "just _actionlint"
+    },
+    "typecheck": {
+      "command": "node .github/check-syntax.mjs"
+    },
     "budgets": {
       "command": "node .github/check-budgets.mjs",
       "dependsOn": ["test"],
       "cache": false
     }
-  }
+  },
+  "implicitDependencies": ["onejudge-pypi"]
 }

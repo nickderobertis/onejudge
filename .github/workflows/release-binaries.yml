@@ -82,15 +82,22 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/download-artifact@v4
         with:
           pattern: archive-*
           path: archives
           merge-multiple: true
-      - uses: softprops/action-gh-release@v2
-        with:
-          files: archives/*
-          tag_name: ${{ github.ref_name }}
+      - name: Publish staged archives
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          SHA: ${{ github.sha }}
+        run: |
+          version=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"])')
+          python3 pypi/publish_release.py --archive-only --repo "$GITHUB_REPOSITORY" --tag "$TAG" --sha "$SHA" --version "$version" --root archives
 
   darwin-plan:
     if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.diagnostic_rebuild)
@@ -173,9 +180,5 @@ jobs:
           TAG: ${{ needs.darwin-plan.outputs.tag }}
           SHA: ${{ needs.darwin-plan.outputs.sha }}
           VERSION: ${{ needs.darwin-plan.outputs.version }}
-          NAME: ${{ needs.darwin-plan.outputs.name }}
         run: |
-          python3 pypi/release_artifacts.py verify --root dist --tag "$TAG" --sha "$SHA" --version "$VERSION"
-          (cd dist && zip "../$NAME.zip" ./*)
-          storage_tag=$(python3 pypi/release_storage.py --repo "$GITHUB_REPOSITORY" --tag "$TAG" --sha "$SHA" --version "$VERSION")
-          gh release upload "$storage_tag" "$NAME.zip" dist/onejudge-*.tar.gz --clobber
+          python3 pypi/publish_release.py --repo "$GITHUB_REPOSITORY" --tag "$TAG" --sha "$SHA" --version "$VERSION" --root dist

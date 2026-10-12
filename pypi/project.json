@@ -28,14 +28,7 @@
       ]
     },
     "lint": {
-      "executor": "nx:run-commands",
-      "options": {
-        "commands": [
-          "node scripts/check-project-boundaries.mjs onejudge-pypi",
-          "node scripts/check-target-commands.mjs onejudge-pypi"
-        ],
-        "parallel": false
-      },
+      "command": "just _py-lint pypi onejudge-pypi",
       "inputs": [
         "default",
         "^default",
@@ -43,6 +36,12 @@
         "{workspaceRoot}/scripts/check-project-boundaries.mjs",
         "{workspaceRoot}/scripts/check-target-commands.mjs"
       ]
+    },
+    "format": {
+      "command": "just _py-format pypi"
+    },
+    "format-check": {
+      "command": "just _py-format-check pypi"
     }
   }
 }

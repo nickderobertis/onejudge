@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import argparse
-import json
+import asyncio
 import subprocess
+from dataclasses import dataclass
+
+from github_client import GitHubClient, Release
+from release_artifacts import Commit, ReleaseIdentity, Tag, Version
 
 
 def git(*args: str) -> str:
@@ -13,45 +17,38 @@ def git(*args: str) -> str:
     ).strip()
 
 
-def locate(repo: str, tag: str, sha: str, version: str) -> tuple[str, dict]:
-    from release_artifacts import identity
+@dataclass(frozen=True)
+class ReleaseLocation:
+    tag: Tag
+    release: Release
 
-    identity(tag, sha, version)
-    tags = [f"v{version}", f"onejudge-v{version}"]
-    existing = {}
+
+async def locate(client: GitHubClient, identity: ReleaseIdentity) -> ReleaseLocation:
+    tags = (Tag(f"v{identity.version}"), Tag(f"onejudge-v{identity.version}"))
+    existing: dict[Tag, Commit] = {}
     for candidate in tags:
         try:
-            existing[candidate] = git(
-                "rev-parse", "--verify", f"refs/tags/{candidate}^{{commit}}"
+            existing[candidate] = Commit(
+                git("rev-parse", "--verify", f"refs/tags/{candidate}^{{commit}}")
             )
         except subprocess.CalledProcessError:
             continue
-    if not existing or any(commit != sha for commit in existing.values()):
+    if not existing or any(commit != identity.sha for commit in existing.values()):
         raise ValueError(
-            f"release tags {existing} do not agree with exact SHA {sha}; considered {tags}"
+            f"release tags {existing} do not agree with exact SHA {identity.sha}; considered {tags}"
         )
     for candidate in tags:
         if candidate not in existing:
             continue
-        response = subprocess.run(
-            ["gh", "api", f"repos/{repo}/releases/tags/{candidate}"],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if response.returncode:
-            if "HTTP 404" in response.stderr:
-                continue
+        release = await client.release(candidate)
+        if release is None:
+            continue
+        if release.tag_name != candidate or existing[candidate] != identity.sha:
             raise ValueError(
-                f"reading Release {candidate} at {sha} failed: {response.stderr}"
+                f"Release tag {release.tag_name} does not match {candidate} at exact SHA {identity.sha}"
             )
-        release = json.loads(response.stdout)
-        if release.get("tag_name") != candidate or existing[candidate] != sha:
-            raise ValueError(
-                f"Release tag {release.get('tag_name')} does not match {candidate} at exact SHA {sha}"
-            )
-        return candidate, release
-    raise ValueError(f"no existing Release for {tags} at exact SHA {sha}")
+        return ReleaseLocation(candidate, release)
+    raise ValueError(f"no existing Release for {tags} at exact SHA {identity.sha}")
 
 
 if __name__ == "__main__":
@@ -59,4 +56,5 @@ if __name__ == "__main__":
     for key in ("repo", "tag", "sha", "version"):
         parser.add_argument("--" + key, required=True)
     args = parser.parse_args()
-    print(locate(args.repo, args.tag, args.sha, args.version)[0])
+    release = ReleaseIdentity(Tag(args.tag), Commit(args.sha), Version(args.version))
+    print(asyncio.run(locate(GitHubClient(args.repo), release)).tag)

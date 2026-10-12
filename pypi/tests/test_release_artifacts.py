@@ -183,38 +183,7 @@ class ReleaseArtifacts(unittest.TestCase):
         bin_dir.mkdir(exist_ok=True)
         executable = bin_dir / "gh"
         executable.write_text(
-            "#!/usr/bin/env python3\n"
-            + """
-import json, os, pathlib, shutil, sys
-args = sys.argv[1:]
-root = pathlib.Path(os.environ['FIXTURE'])
-mode = os.environ['MODE']
-with (root/'calls').open('a') as log: log.write(json.dumps(args)+'\\n')
-name = os.environ['ARTIFACT']
-sha = os.environ['SHA']
-if args[0]=='api':
-    path=args[1]
-    if '/releases/tags/' in path:
-        if mode=='no-release' or (mode=='alias' and path.endswith('/v0.19.0')):
-            print('gh: Not Found (HTTP 404)',file=sys.stderr)
-            sys.exit(1)
-        print(json.dumps({'tag_name':path.split('/')[-1], 'assets':[{'name':name+'.zip'}] if mode in ('durable','alias') else []}))
-    elif '/workflows/' in path:
-        calls = (root/'calls').read_text().count('/workflows/')
-        runs = [] if mode=='absent' else [{'id':42,'event':'push','head_branch':'v0.19.0','head_sha':'b'*40 if mode=='wrong-run' else sha,'status':'in_progress' if mode=='ordering' and calls==1 else 'completed','conclusion':'failure' if mode=='failed' else 'success'}]
-        print(json.dumps({'workflow_runs':runs}))
-    else:
-        assert '/runs/42/artifacts' in path, path
-        print(json.dumps({'artifacts':[{'name':'unrelated-artifact' if mode=='wrong-artifact' else name,'expired':mode=='expired'}]}))
-else:
-    dest=pathlib.Path(args[args.index('--dir')+1])
-    dest.mkdir(parents=True,exist_ok=True)
-    if args[0]=='release': shutil.copy2(root/(name+'.zip'),dest/(name+'.zip'))
-    else:
-        assert args[0:3]==['run','download','42'], args
-        assert args[args.index('--name')+1]==name, args
-        for file in (root/'dist').iterdir(): shutil.copy2(file,dest/file.name)
-"""
+            (Path(__file__).with_name("github_double.py")).read_text()
         )
         executable.chmod(0o755)
         return {
@@ -224,6 +193,7 @@ else:
             "MODE": mode,
             "ARTIFACT": self.identity,
             "SHA": self.sha,
+            "TOOLING": str(SCRIPTS),
         }
 
     def fetch(self, mode):
@@ -340,6 +310,165 @@ else:
             result = self.fetch(mode)
             self.assertNotEqual(result.returncode, 0)
             self.assertIn(expected, result.stderr)
+
+    def publisher(self, mode="success", archive_only=False):
+        directory = self.dist
+        if archive_only:
+            directory = self.root / "archives"
+            directory.mkdir(exist_ok=True)
+            for file in self.dist.glob("*.tar.gz"):
+                (directory / file.name).write_bytes(file.read_bytes())
+        args = [
+            sys.executable,
+            str(SCRIPTS / "publish_release.py"),
+            "--repo",
+            "nickderobertis/onejudge",
+            "--tag",
+            "v0.19.0",
+            "--sha",
+            self.sha,
+            "--version",
+            self.version,
+            "--root",
+            str(directory),
+        ]
+        if archive_only:
+            args.append("--archive-only")
+        return subprocess.run(
+            args,
+            cwd=self.repo,
+            env=self.transport(mode),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    def test_real_publisher_verifies_zips_uploads_and_supports_retention_recovery(self):
+        result = self.publisher()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        with zipfile.ZipFile(self.root / f"{self.identity}.zip") as bundle:
+            self.assertEqual(
+                set(bundle.namelist()),
+                {
+                    "release-artifacts.json",
+                    *(f["path"] for f in self.original["files"]),
+                },
+            )
+            for name in bundle.namelist():
+                self.assertEqual(bundle.read(name), (self.dist / name).read_bytes())
+        result = self.fetch("durable")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        result = self.publisher("upload-failure")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("upload rejected", result.stderr)
+        self.original["sha"] = "b" * 40
+        (self.dist / "release-artifacts.json").write_text(json.dumps(self.original))
+        result = self.publisher()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("sha mismatch", result.stderr)
+
+    def test_real_archive_publish_composition_uploads_staged_products_and_refuses_failure(
+        self,
+    ):
+        result = self.publisher(archive_only=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        calls = (self.root / "calls").read_text()
+        for target in self.targets:
+            self.assertIn(f"onejudge-{target}.tar.gz", calls)
+        result = self.publisher("upload-failure", archive_only=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("upload rejected", result.stderr)
+        (self.root / "archives" / "unrelated.txt").write_text("not a released product")
+        result = self.publisher(archive_only=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("unexpected products", result.stderr)
+
+    def test_typed_transport_refuses_invalid_assets_runs_artifacts_and_release_answers(
+        self,
+    ):
+        for mode, message in (
+            ("invalid-assets", "assets must be a list"),
+            ("invalid-runs", "id must be a positive integer"),
+            ("invalid-artifact", "expired must be a boolean"),
+            ("wrong-release", "Release tag wrong"),
+            ("transport-failure", "HTTP 503"),
+            ("ambiguous", "ambiguous durable"),
+        ):
+            result = self.fetch(mode)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(message, result.stderr)
+
+    def test_durable_zip_refuses_traversal(self):
+        with zipfile.ZipFile(self.root / f"{self.identity}.zip", "w") as bundle:
+            bundle.writestr("../outside", "not an artifact")
+        result = self.fetch("unsafe-zip")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("unsafe artifact zip path", result.stderr)
+        self.assertFalse((self.root / "outside").exists())
+
+    def test_malformed_manifest_records_identity_and_symlinks_fail_at_boundary(self):
+        for value in (None, "file", {}):
+            manifest = copy.deepcopy(self.original)
+            manifest["files"][0] = value
+            (self.dist / "release-artifacts.json").write_text(json.dumps(manifest))
+            self.assertNotEqual(self.command("verify").returncode, 0)
+        for key, value in (
+            ("sha", "short"),
+            ("tag", "not-a-release"),
+            ("version", "invalid"),
+        ):
+            (self.dist / "release-artifacts.json").write_text(json.dumps(self.original))
+            self.assertNotEqual(self.command("verify", **{key: value}).returncode, 0)
+        (self.dist / "release-artifacts.json").write_text(json.dumps(self.original))
+        file = self.dist / self.original["files"][0]["path"]
+        outside = self.root / "outside.tar.gz"
+        outside.write_bytes(file.read_bytes())
+        file.unlink()
+        file.symlink_to(outside)
+        result = self.command("verify")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("unsafe payload", result.stderr)
+
+    def test_archive_contents_and_wheel_metadata_or_filename_mismatch_fail_even_with_valid_hashes(
+        self,
+    ):
+        for kind in ("archive", "cli-wheel"):
+            row = next(r for r in self.original["files"] if r["kind"] == kind)
+            file = self.dist / row["path"]
+            saved = file.read_bytes()
+            if kind == "archive":
+                with tarfile.open(file, "w:gz") as archive:
+                    member = tarfile.TarInfo("unexpected")
+                    member.size = 3
+                    archive.addfile(member, io.BytesIO(b"bad"))
+            else:
+                with zipfile.ZipFile(file) as package:
+                    contents = {n: package.read(n) for n in package.namelist()}
+                metadata = next(n for n in contents if n.endswith("METADATA"))
+                contents[metadata] = b"Version: 9.9.9\n"
+                with zipfile.ZipFile(file, "w") as package:
+                    for name, value in contents.items():
+                        package.writestr(name, value)
+            row["sha256"] = hashlib.sha256(file.read_bytes()).hexdigest()
+            (self.dist / "release-artifacts.json").write_text(json.dumps(self.original))
+            result = self.command("verify")
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(
+                "contents mismatch"
+                if kind == "archive"
+                else "metadata version mismatch",
+                result.stderr,
+            )
+            file.write_bytes(saved)
+            row["sha256"] = hashlib.sha256(saved).hexdigest()
+        wheel = next(r for r in self.original["files"] if r["kind"] == "cli-wheel")
+        original = self.dist / wheel["path"]
+        wheel["path"] = wheel["path"].replace(self.version, "9.9.9")
+        original.rename(self.dist / wheel["path"])
+        (self.dist / "release-artifacts.json").write_text(json.dumps(self.original))
+        result = self.command("verify")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("wheel version/architecture mismatch", result.stderr)
 
     def test_waits_for_exact_producer_completion(self):
         result = self.fetch("ordering")

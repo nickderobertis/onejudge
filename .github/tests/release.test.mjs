@@ -42,6 +42,9 @@ test("production release jobs retain every declared platform and use one Darwin 
     "Windows archive lost",
   );
   assert.ok(wheels.every((t) => !t.endsWith("apple-darwin")));
+  // Rosetta and Mach-O execution require the real hosted macOS runner; Linux
+  // proves the same installer with a native product and the typed artifact
+  // contract for both Darwin targets, without pretending to execute Darwin.
   const commands = producer.darwin.steps.map((s) => s.run || "").join("\n");
   assert.match(commands, /for target in \$TARGETS/);
   assert.match(commands, /just .*pypi-release "\$target" dist/);
@@ -60,7 +63,7 @@ test("production release jobs retain every declared platform and use one Darwin 
   assert.equal(producer["publish-darwin"]["runs-on"], "ubuntu-latest");
   assert.match(
     producer["publish-darwin"].steps.map((s) => s.run || "").join("\n"),
-    /release_artifacts\.py verify[\s\S]*gh release upload/,
+    /publish_release\.py --repo/,
   );
   const handoff = consumer["darwin-wheels"];
   assert.equal(handoff["runs-on"], "ubuntu-latest");
@@ -137,4 +140,21 @@ test("actual publishing condition propagates failed/cancelled prerequisites and 
           `${held}/${planResult}/${buildResult}`,
         );
       }
+});
+
+test("Linux archive transport wiring uses the real verified publisher journey", () => {
+  // actions/download-artifact is GitHub's hosted transport. Its job wiring is
+  // checked here; packaging tests drive the production publish command with
+  // only the Forge transport doubled, including upload refusal.
+  const job = workflows()["release-binaries.yml"].jobs["publish-archives"];
+  assert.equal(job["runs-on"], "ubuntu-latest");
+  const download = job.steps.find((s) =>
+    s.uses?.startsWith("actions/download-artifact@"),
+  );
+  assert.equal(download.with.pattern, "archive-*");
+  assert.equal(download.with["merge-multiple"], true);
+  assert.match(
+    job.steps.map((s) => s.run || "").join("\n"),
+    /publish_release\.py --archive-only/,
+  );
 });

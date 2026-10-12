@@ -15,6 +15,51 @@ const telemetry = JSON.parse(
   readFileSync(resolve(options["--telemetry"]), "utf8"),
 );
 process.chdir(fileURLToPath(new URL("../", import.meta.url)));
+const isObject = (v) =>
+  v !== null && typeof v === "object" && !Array.isArray(v);
+const isString = (v) => typeof v === "string";
+const metricValue = (v) =>
+  typeof v === "number" && Number.isFinite(v) && v >= 0;
+const jobRow = (row) =>
+  isObject(row) &&
+  ["workflow", "event", "job", "name", "runner", "runWorkflow"].every((k) =>
+    isString(row[k]),
+  ) &&
+  isObject(row.matrix) &&
+  typeof row.enabled === "boolean" &&
+  typeof row.macos === "boolean";
+if (
+  !isObject(telemetry) ||
+  !metricValue(telemetry.jobsPerRun) ||
+  !metricValue(telemetry.runsPerChange) ||
+  !Array.isArray(telemetry.scenarios) ||
+  !telemetry.scenarios.every(
+    (s) =>
+      isObject(s) &&
+      isString(s.id) &&
+      isString(s.event) &&
+      Array.isArray(s.rows) &&
+      s.rows.every(jobRow),
+  ) ||
+  !Array.isArray(telemetry.perRun) ||
+  !telemetry.perRun.every(
+    (r) =>
+      isObject(r) &&
+      isString(r.scenario) &&
+      isString(r.workflow) &&
+      metricValue(r.jobs),
+  ) ||
+  !Array.isArray(telemetry.lifecycle) ||
+  !telemetry.lifecycle.every(
+    (r) =>
+      isObject(r) &&
+      isString(r.scenario) &&
+      isString(r.workflow) &&
+      Array.isArray(r.rows) &&
+      r.rows.every(jobRow),
+  )
+)
+  throw new Error("invalid workflow telemetry shape");
 if (telemetry.schema_version !== 1 || telemetry.digest !== sourceDigest())
   throw new Error(
     "missing/stale workflow telemetry: run github-workflows:test for this tree",

@@ -9,10 +9,17 @@ import subprocess
 import tarfile
 import tempfile
 import zipfile
+from dataclasses import dataclass
 from pathlib import Path
 
 
-def build(target: str, output: Path) -> tuple[Path, Path]:
+@dataclass(frozen=True)
+class Products:
+    archive: Path
+    wheel: Path
+
+
+def build(target: str, output: Path) -> Products:
     if target == "host":
         from native_journey import host
 
@@ -55,7 +62,7 @@ def build(target: str, output: Path) -> tuple[Path, Path]:
         archive = output / f"onejudge-{target}.tar.gz"
         with tarfile.open(archive, "w:gz") as package:
             package.add(staging, arcname=staging.name)
-    return archive, wheel
+    return Products(archive, wheel)
 
 
 if __name__ == "__main__":
