@@ -1,7 +1,9 @@
+# llmlint: ignore-file[crates_stay_in_one_cargo_workspace] SPIKE ONLY, on a branch that is kept and never landed: this harness is outside the root workspace on purpose, so the candidate YAML crates it measures (serde-saphyr, saphyr) never enter the root Cargo.lock, cargo-deny run or Nx graph before the move is approved; it commits no Cargo.lock of its own and pins the crates that decide what it measures exactly, below.
 # SPIKE ONLY — throwaway differential harness for plan
 # authoring:serde-yaml-replacement (spike-onejudge-yaml). Its own workspace, so
 # nothing it pulls (serde-saphyr, saphyr) reaches the repository's Cargo.lock or
-# cargo-deny run. Run with
+# cargo-deny run. Its lock is not committed (`.gitignore`); the parser crates and
+# the error renderer the measurement depends on are pinned exactly instead. Run with
 # `cargo run -q --release --manifest-path spikes/saphyr-diff/Cargo.toml`; the
 # `deny_probe`, `capture` and `collect` bins are its helpers (README.md).
 [package]
@@ -18,5 +20,11 @@ onejudge = { path = "../../crates/onejudge", features = ["cli", "skill"] }
 serde_yaml_ng = "=0.10.0"
 serde-saphyr = "=1.3.0"
 saphyr = "=0.2.1"
+# Not used directly: pinned so the parsers and the error renderer the findings
+# were measured with resolve to the same versions without a committed lock.
+granit-parser = "=1.3.0"
+saphyr-parser = "=0.2.1"
+annotate-snippets = "=0.12.16"
+unsafe-libyaml = "=0.2.11"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
