@@ -795,7 +795,29 @@ fn binary_reports_a_bad_config_and_exits_two() {
         .unwrap();
     assert_eq!(output.status.code(), Some(2));
     let stderr = String::from_utf8(output.stderr).unwrap();
-    assert!(stderr.contains("config error"));
+    assert!(stderr.contains("config error"), "{stderr}");
+    // The file, the key that is wrong, and where it is.
+    assert!(stderr.contains(path.to_str().unwrap()), "{stderr}");
+    assert!(stderr.contains("unknown field `not_a_key`"), "{stderr}");
+    assert!(stderr.contains("line 2, column 1"), "{stderr}");
+}
+
+#[test]
+fn binary_reports_a_config_refused_for_its_syntax_naming_the_file_and_position() {
+    // Refused before any key exists, so the position is all there is to name.
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR"));
+    let path = dir.join("unterminated.yaml");
+    std::fs::write(&path, "[\n").unwrap();
+    let output = Command::new(onejudge_bin())
+        .args(["run", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("config error"), "{stderr}");
+    assert!(stderr.contains(path.to_str().unwrap()), "{stderr}");
+    assert!(stderr.contains("unclosed bracket '['"), "{stderr}");
+    assert!(stderr.contains("line 1, column 1"), "{stderr}");
 }
 
 #[test]

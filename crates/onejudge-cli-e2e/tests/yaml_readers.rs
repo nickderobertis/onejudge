@@ -3,8 +3,8 @@
 //! Every config and SKILL.md here is a real document — committed to this tree,
 //! written by the Python SDK's own suite, written by oneagentgraph for a real run,
 //! or the user's own skill — and each `.expected` beside it is the value the crate
-//! read from it on `d4f2a15`, the last tree parsing YAML through `serde_yaml_ng`
-//! (`tests/golden/README.md`). A reader change that moves what a user's file
+//! read from it on `d4f2a15`, the released 0.19.1 and the last tree reading YAML
+//! through a libyaml translation (`tests/golden/README.md`). A reader change that moves what a user's file
 //! means fails here, naming the file.
 
 use std::path::{Path, PathBuf};

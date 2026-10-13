@@ -52,7 +52,7 @@ oneharness-core = "0.26.0"
 # a git rev. Whatever this names is what the crates that link onejudge
 # (oneagentgraph, onepipeline) must link too: they hold one copy of the bus
 # across their seams, so moving it here moves it for them.
-onemessagebus = "0.9.0"
+onemessagebus = "0.9.1"
 # Unix only, and for exactly one call: `kill(pid, SIGTERM)` to ask a cancelled
 # `oneharness run` to tear down the harness tree it owns (`oneharness/mod.rs`).
 # A safe wrapper, because this crate forbids `unsafe_code`; already in the tree
@@ -62,11 +62,13 @@ rustix = { version = "1", features = ["process"] }
 # oneharness's cancellation contract. Test-only: only the `publish = false`
 # `onejudge-test-doubles` crate depends on it.
 signal-hook = "0.3"
-# Parsers the repo-level suites read the release configuration and the CI
-# workflows with. Both already in the tree (via `oneharness-core` and the `skill`
-# feature), so they cost no new dependency.
+# The release configuration's parser, for the repo-level suites; already in the
+# tree via `oneharness-core`, so it costs no new dependency.
 toml = "1"
-serde_yaml_ng = "0.10"
+# The one YAML reader: the CLI config, SKILL.md front matter, and the CI
+# workflows the repo-level suite walks. Safe Rust, unlike the libyaml
+# translations `deny.toml` bans (RUSTSEC-2024-0449).
+serde-saphyr = "1.3"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
