@@ -32,12 +32,11 @@ description = "A simulated interaction and evaluation loop over oneharness: driv
 # 0.26.0 is the floor that starts Codex with its plugins feature off
 # (`-c features.plugins=false`) unless a config sets `plugins = true`, so a Codex
 # turn the linked engine runs in process no longer downloads the ~29 MB remote
-# plugin catalog on every launch (oneharness #1449; 0.25.0's usage-report change
-# asked nothing of onejudge's code). 0.24.0 records a run's history without
-# reading the legacy index or walking the store: each run and event is indexed
-# in a dated segment under `<history_dir>/.index.d/`, so recording costs the
-# same however much history a host holds (listings default to the last 7 UTC
-# days). 0.21.0 brought the public text renderer (`domain::render`) that draws
+# plugin catalog on every launch (oneharness #1449). 0.24.0 records a run's
+# history without reading the legacy index or walking the store: each run and
+# event is indexed in a dated segment under `<history_dir>/.index.d/`, so
+# recording costs the same however much history a host holds (listings default
+# to the last 7 UTC days). 0.21.0 brought the public text renderer (`domain::render`) that draws
 # the worker's events in `--format text` and the agent's own `message` /
 # `reasoning` items as events;
 # 0.18.0 resolved a config file's `extends` chain, so an agent-side config may
