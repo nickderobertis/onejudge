@@ -3550,6 +3550,96 @@ fn an_in_process_turn_runs_the_real_engine_over_a_deterministic_harness() {
     assert!(outcome.processes.is_empty());
 }
 
+/// Run one in-process Codex turn in a project whose `oneharness.toml` carries
+/// `harness_extra` under `[harness.codex]`, with no `bin` — so the linked engine
+/// finds `codex` on `PATH`, where the fake-harness double stands in for it — and
+/// return the argv that double recorded being started with.
+fn codex_turn_argv(name: &str, harness_extra: &str) -> Vec<String> {
+    let dir = scratch_path(name);
+    let _ = std::fs::remove_dir_all(&dir);
+    let bin = dir.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    std::fs::copy(
+        doubles::fake_harness(),
+        bin.join(format!("codex{}", std::env::consts::EXE_SUFFIX)),
+    )
+    .unwrap();
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    let path =
+        std::env::join_paths(std::iter::once(bin.clone()).chain(std::env::split_paths(&path)))
+            .unwrap();
+    std::env::set_var("PATH", path);
+    std::fs::write(
+        dir.join("oneharness.toml"),
+        format!(
+            "harnesses = [\"codex\"]\nhistory_dir = {:?}\n\n[harness.codex]\n{harness_extra}",
+            dir.join("history").display().to_string(),
+        ),
+    )
+    .unwrap();
+    let record = dir.join("codex-argv.jsonl");
+    let provider = OneharnessProvider::new();
+    let engine = Engine::new(&provider, settings());
+    let skill = Skill::new(
+        "demo",
+        dir.to_str().unwrap(),
+        format!(
+            "[[reply:codex reply]] [[record-harness:{}]]",
+            record.display()
+        ),
+    );
+    let outcome = engine
+        .run(&Conversation::single_turn(skill, "do it"))
+        .unwrap();
+
+    assert_eq!(outcome.transcript.messages[1].content, "codex reply");
+    let telemetry = outcome.telemetry.as_ref().expect("the run is measured");
+    assert_eq!(telemetry.attribution[0].candidates[0].harness, "codex");
+    // The in-process seam: the engine that started Codex is the linked core.
+    assert!(outcome.processes.is_empty());
+    let recorded = std::fs::read_to_string(&record).expect("codex was started");
+    let lines: Vec<&str> = recorded.lines().collect();
+    assert_eq!(lines.len(), 1, "one Codex process per turn: {recorded}");
+    let line: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
+    serde_json::from_value(line["argv"].clone()).unwrap()
+}
+
+/// Whether `argv` turns Codex's plugins feature back on at or after `from`, in
+/// either spelling Codex accepts.
+fn reenables_plugins(argv: &[String], from: usize) -> bool {
+    argv[from..].windows(2).any(|w| {
+        (w[0] == "-c" && w[1].replace(' ', "") == "features.plugins=true")
+            || (w[0] == "--enable" && w[1] == "plugins")
+    })
+}
+
+#[test]
+fn an_in_process_codex_turn_starts_codex_with_plugins_off_unless_the_config_opts_in() {
+    // Codex otherwise downloads its whole remote plugin catalog on every launch.
+    // The default is the linked core's, so this drives that core, not a spawned
+    // `oneharness`, and reads the answer off the argv Codex itself was handed.
+    let argv = codex_turn_argv("codex-plugins-default", "");
+    assert_eq!(argv.first().map(String::as_str), Some("exec"), "{argv:?}");
+    let off = argv
+        .windows(2)
+        .position(|w| w[0] == "-c" && w[1] == "features.plugins=false")
+        .unwrap_or_else(|| panic!("no `-c features.plugins=false` in {argv:?}"));
+    assert!(!reenables_plugins(&argv, off + 2), "{argv:?}");
+
+    // `plugins = true` is the opt-in: no plugins flag at all, so Codex's own
+    // configuration decides.
+    let argv = codex_turn_argv("codex-plugins-opted-in", "plugins = true\n");
+    assert_eq!(argv.first().map(String::as_str), Some("exec"), "{argv:?}");
+    let names_plugins = argv.windows(2).any(|w| {
+        (w[0] == "-c" && w[1].starts_with("features.plugins"))
+            || ((w[0] == "--enable" || w[0] == "--disable") && w[1] == "plugins")
+    });
+    assert!(
+        !names_plugins,
+        "an opted-in run names no plugins flag: {argv:?}"
+    );
+}
+
 #[test]
 fn the_linked_core_writes_a_history_pointer_for_every_run_and_reads_it_back_typed() {
     // What the 0.17.0 floor (gated in `cli/mod.rs`) is for, driven end to end.
