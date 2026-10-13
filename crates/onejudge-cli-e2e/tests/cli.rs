@@ -795,7 +795,86 @@ fn binary_reports_a_bad_config_and_exits_two() {
         .unwrap();
     assert_eq!(output.status.code(), Some(2));
     let stderr = String::from_utf8(output.stderr).unwrap();
-    assert!(stderr.contains("config error"));
+    assert!(stderr.contains("config error"), "{stderr}");
+    assert!(stderr.contains(path.to_str().unwrap()), "{stderr}");
+    assert!(stderr.contains("unknown field `not_a_key`"), "{stderr}");
+    assert!(stderr.contains("line 2, column 1"), "{stderr}");
+}
+
+#[test]
+fn binary_refuses_a_config_without_echoing_its_text() {
+    // A config's prompts are the user's, so the refusal names where the bad node
+    // is and never quotes the document back into stderr, in either format.
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR"));
+    let path = dir.join("unterminated-prompt.yaml");
+    let prompt = "Keep the launch codes in the vault";
+    std::fs::write(
+        &path,
+        format!("task: x\nsystem_prompt: \"{prompt}\nuser:\n  persona: p\n"),
+    )
+    .unwrap();
+    for format in ["text", "json"] {
+        let output = Command::new(onejudge_bin())
+            .args(["run", path.to_str().unwrap(), "--format", format])
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(2), "{format}");
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert!(stderr.contains("config error"), "{format}: {stderr}");
+        assert!(
+            stderr.contains(path.to_str().unwrap()),
+            "{format}: {stderr}"
+        );
+        assert!(!stderr.contains("launch codes"), "{format}: {stderr}");
+        assert!(stderr.contains("line 3, column 1"), "{format}: {stderr}");
+    }
+}
+
+#[test]
+fn binary_refuses_a_skill_whose_front_matter_is_malformed() {
+    // The `skill:` a config names is read through the same reader: a malformed
+    // front matter fails the run naming the SKILL.md, what was wrong, and where.
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("skill-malformed");
+    let skill = dir.join("skills/greeter");
+    std::fs::create_dir_all(&skill).unwrap();
+    std::fs::write(
+        skill.join("SKILL.md"),
+        "---\nname: greeter\ndescription: [Greet warmly\n---\nGreet the user.\n",
+    )
+    .unwrap();
+    let config = dir.join("onejudge.yaml");
+    std::fs::write(&config, config_yaml("task: go\nskill: skills/greeter\n")).unwrap();
+    let output = Command::new(onejudge_bin())
+        .args(["run", config.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("could not load skill"), "{stderr}");
+    assert!(stderr.contains("invalid SKILL.md frontmatter"), "{stderr}");
+    assert!(
+        stderr.contains(&skill.join("SKILL.md").display().to_string()),
+        "{stderr}"
+    );
+    assert!(stderr.contains("line 2, column 14"), "{stderr}");
+}
+
+#[test]
+fn binary_reports_a_config_refused_for_its_syntax_naming_the_file_and_position() {
+    // Refused before any key exists, so the position is all there is to name.
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR"));
+    let path = dir.join("unterminated.yaml");
+    std::fs::write(&path, "[\n").unwrap();
+    let output = Command::new(onejudge_bin())
+        .args(["run", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("config error"), "{stderr}");
+    assert!(stderr.contains(path.to_str().unwrap()), "{stderr}");
+    assert!(stderr.contains("unclosed bracket '['"), "{stderr}");
+    assert!(stderr.contains("line 1, column 1"), "{stderr}");
 }
 
 #[test]

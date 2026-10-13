@@ -98,6 +98,8 @@ mod stream;
 mod telemetry;
 mod transcript;
 mod usage;
+#[cfg(feature = "skill")]
+mod yaml;
 
 pub use command::CommandProvider;
 pub use control::{ControlAddress, ControlOutcome};

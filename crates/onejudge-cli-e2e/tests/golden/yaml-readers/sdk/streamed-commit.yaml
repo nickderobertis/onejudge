@@ -1,0 +1,2 @@
+# Redacted copy of a real host file (a config the Python SDK test suite wrote): identifying values replaced with placeholders, every other byte kept.
+{"provider": {"kind": "oneharness", "bin": "/home/user/.onevcs/workspaces/github.com-nickderobertis-onejudge-d92c2bbfcde5/pool/1/worktree/target/debug/onejudge-fake-oneharness", "stream": true}, "system_prompt": "[[reply:streamed]][[event:git commit -m fix]][[stream-wait:/tmp/onejudge-sdk-stream-fvh_fu23/release.marker]]", "evals": [{"criterion": "git commit", "kind": "boolean"}]}

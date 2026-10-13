@@ -638,7 +638,12 @@ fn load_config(path: Option<&PathBuf>) -> Result<Config, CliError> {
             let text = std::fs::read_to_string(p).map_err(|e| {
                 CliError::Config(format!("could not read config `{}`: {e}", p.display()))
             })?;
-            Config::from_yaml(&text)
+            // The reader's message says what was wrong and where in the text;
+            // this names the file it is in.
+            Config::from_yaml(&text).map_err(|e| match e {
+                CliError::Config(why) => CliError::Config(format!("`{}`: {why}", p.display())),
+                other => other,
+            })
         }
         None => Ok(Config::default()),
     }

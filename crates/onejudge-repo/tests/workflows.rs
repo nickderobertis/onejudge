@@ -15,11 +15,16 @@
 //! - the gate jobs take their tier from `scripts/ci-tier.mjs` over a full-history
 //!   checkout and hand it to the one gate recipe (`tests/ci_tier.rs` drives that
 //!   script with each event it routes).
+//!
+//! Each workflow is read through serde-saphyr into a `serde_json::Value`, in its
+//! own key order, and nothing here writes YAML back.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use serde_yaml_ng::{Mapping, Value};
+use serde_json::{Map, Value};
+
+type Mapping = Map<String, Value>;
 
 /// The status-check contexts branch protection requires, by exact name.
 // llmlint: ignore[contracts_have_one_source_or_a_drift_gate] Branch protection is only readable through the GitHub API with admin credentials, which this offline gate never has; the live settings are reconciled against this list by the maintainer's governance step, and AGENTS.md's "All gating checks required" names the same set.
@@ -59,11 +64,28 @@ fn workflow_dir() -> PathBuf {
         .join(".github/workflows")
 }
 
+/// `text` read as YAML: schema-less, into a `Value`, under serde-saphyr's own
+/// defaults.
+fn yaml(text: &str) -> Result<Value, serde_saphyr::Error> {
+    serde_saphyr::from_str(text)
+}
+
 fn workflow(name: &str) -> Value {
     let path = workflow_dir().join(name);
     let text =
         fs::read_to_string(&path).unwrap_or_else(|err| panic!("reading {}: {err}", path.display()));
-    serde_yaml_ng::from_str(&text).unwrap_or_else(|err| panic!("parsing {}: {err}", path.display()))
+    yaml(&text).unwrap_or_else(|err| panic!("parsing {}: {err}", path.display()))
+}
+
+/// Whether any string anywhere in `value` contains `needle` — what a search of
+/// the rendered YAML found, without rendering any.
+fn mentions(value: &Value, needle: &str) -> bool {
+    match value {
+        Value::String(text) => text.contains(needle),
+        Value::Array(items) => items.iter().any(|item| mentions(item, needle)),
+        Value::Object(map) => map.values().any(|item| mentions(item, needle)),
+        Value::Null | Value::Bool(_) | Value::Number(_) => false,
+    }
 }
 
 fn workflows() -> Vec<(String, Value)> {
@@ -87,7 +109,7 @@ fn workflows() -> Vec<(String, Value)> {
 
 fn jobs(doc: &Value) -> &Mapping {
     doc.get("jobs")
-        .and_then(Value::as_mapping)
+        .and_then(Value::as_object)
         .expect("workflow has a `jobs` mapping")
 }
 
@@ -106,7 +128,7 @@ fn needs(job: &Value) -> Vec<String> {
     };
     match job.get("needs") {
         None => Vec::new(),
-        Some(Value::Sequence(many)) => many.iter().map(id).collect(),
+        Some(Value::Array(many)) => many.iter().map(id).collect(),
         Some(one) => vec![id(one)],
     }
 }
@@ -117,16 +139,16 @@ fn contexts(id: &str, job: &Value) -> Vec<String> {
     let Some(matrix) = job.get("strategy").and_then(|s| s.get("matrix")) else {
         return vec![base.to_owned()];
     };
-    let axes: Vec<(&Value, &Value)> = matrix
-        .as_mapping()
+    let axes: Vec<(&String, &Value)> = matrix
+        .as_object()
         .expect("matrix is a mapping")
         .iter()
-        .filter(|(key, _)| !matches!(key.as_str(), Some("include" | "exclude")))
+        .filter(|(key, _)| !matches!(key.as_str(), "include" | "exclude"))
         .collect();
     assert_eq!(axes.len(), 1, "{id}: only a single-axis matrix is modelled");
     axes[0]
         .1
-        .as_sequence()
+        .as_array()
         .expect("matrix axis is a list")
         .iter()
         .map(|value| format!("{base} ({})", value.as_str().expect("string matrix value")))
@@ -147,12 +169,8 @@ fn required_context_violations(doc: &Value, required: &[&str]) -> Vec<String> {
     for context in required {
         let reporting: Vec<&str> = jobs
             .iter()
-            .filter(|(id, job)| {
-                contexts(id.as_str().unwrap_or_default(), job)
-                    .iter()
-                    .any(|c| c == context)
-            })
-            .map(|(id, _)| id.as_str().unwrap_or_default())
+            .filter(|(id, job)| contexts(id, job).iter().any(|c| c == context))
+            .map(|(id, _)| id.as_str())
             .collect();
         let [id] = reporting[..] else {
             violations.push(format!(
@@ -175,9 +193,8 @@ fn required_context_violations(doc: &Value, required: &[&str]) -> Vec<String> {
             // is intentionally omitted. The real command's outcome journeys live
             // in github-workflows:test; never walk through its conditional lane.
             if id == "macos-context" && text(job.get("if")) == Some("always()") {
-                let rendered = serde_yaml_ng::to_string(job).expect("carrier serializes");
                 if needs(job) != ["macos-policy", "macos-tests"]
-                    || !rendered.contains("node .github/macos-result.mjs")
+                    || !mentions(job, "node .github/macos-result.mjs")
                 {
                     violations
                         .push("Mac carrier must validate both policy and test results".into());
@@ -202,14 +219,16 @@ fn required_context_violations(doc: &Value, required: &[&str]) -> Vec<String> {
 /// Why `doc` is not the notignored review-comment workflow, if it is not.
 fn notignored_violations(doc: &Value) -> Vec<String> {
     let mut violations = Vec::new();
-    let on = doc.get("on").and_then(Value::as_mapping);
+    let on = doc.get("on").and_then(Value::as_object);
     if on.is_none_or(|on| on.len() != 1 || !on.contains_key("pull_request")) {
         violations.push("notignored must run on pull_request and nothing else".to_owned());
     }
-    let permissions = doc.get("permissions").and_then(Value::as_mapping);
-    let expected: Mapping = serde_yaml_ng::from_str("contents: read\npull-requests: write")
-        .expect("literal permissions parse");
-    if permissions != Some(&expected) {
+    let permissions = doc.get("permissions").and_then(Value::as_object);
+    let expected = yaml("contents: read\npull-requests: write").expect("literal permissions parse");
+    let expected = expected
+        .as_object()
+        .expect("literal permissions are a mapping");
+    if permissions != Some(expected) {
         violations.push(format!(
             "notignored permissions must be exactly {expected:?}, got {permissions:?}"
         ));
@@ -225,7 +244,7 @@ fn notignored_violations(doc: &Value) -> Vec<String> {
     }
     let steps = job
         .get("steps")
-        .and_then(Value::as_sequence)
+        .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
     let uses = |step: &Value| text(step.get("uses")).map(str::to_owned);
@@ -258,7 +277,7 @@ fn llmlint_job_violations(doc: &Value) -> Vec<String> {
     let steps = jobs(doc)
         .get("llmlint")
         .and_then(|job| job.get("steps"))
-        .and_then(Value::as_sequence)
+        .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
     let find = |needle: &str| {
@@ -285,8 +304,7 @@ fn llmlint_job_violations(doc: &Value) -> Vec<String> {
         ));
     }
     let validate_step = &steps[validate];
-    let rendered = serde_yaml_ng::to_string(validate_step).expect("step serializes");
-    if validate_step.get("env").is_some() || rendered.contains("secrets.") {
+    if validate_step.get("env").is_some() || mentions(validate_step, "secrets.") {
         violations.push("the llmlint validate step must receive no credential".to_owned());
     }
     let credential = steps[model]
@@ -311,7 +329,7 @@ fn tier_routing_violations(doc: &Value) -> Vec<String> {
         let steps = jobs(doc)
             .get(*id)
             .and_then(|job| job.get("steps"))
-            .and_then(Value::as_sequence)
+            .and_then(Value::as_array)
             .cloned()
             .unwrap_or_default();
         let position = |pred: &dyn Fn(&Value) -> bool| steps.iter().position(pred);
@@ -382,16 +400,16 @@ fn set(doc: &mut Value, path: &[&str], value: Value) {
     for key in parents {
         node = node.get_mut(*key).unwrap_or_else(|| panic!("no `{key}`"));
     }
-    node.as_mapping_mut()
+    node.as_object_mut()
         .expect("mapping")
-        .insert(Value::from(*last), value);
+        .insert((*last).to_owned(), value);
 }
 
 fn llmlint_steps(doc: &mut Value) -> &mut Vec<Value> {
     doc.get_mut("jobs")
         .and_then(|jobs| jobs.get_mut("llmlint"))
         .and_then(|job| job.get_mut("steps"))
-        .and_then(Value::as_sequence_mut)
+        .and_then(Value::as_array_mut)
         .expect("llmlint steps")
 }
 
@@ -428,7 +446,7 @@ fn the_required_context_check_refuses_a_skipped_or_missing_context() {
     set(
         &mut filtered,
         &["on", "pull_request"],
-        serde_yaml_ng::from_str("paths: [src/**]").unwrap(),
+        yaml("paths: [src/**]").unwrap(),
     );
     let violations = required_context_violations(&filtered, REQUIRED_CONTEXTS);
     assert!(
@@ -443,6 +461,21 @@ fn the_required_context_check_refuses_a_skipped_or_missing_context() {
         violations
             .iter()
             .any(|v| v.contains("job `msrv` whose condition Bool(false)")),
+        "{violations:#?}"
+    );
+
+    // A carrier whose steps no longer run the Mac result script.
+    let mut unvalidated = ci.clone();
+    set(
+        &mut unvalidated,
+        &["jobs", "macos-context", "steps"],
+        yaml("[{uses: actions/checkout@v4}, {run: echo ok}]").unwrap(),
+    );
+    let violations = required_context_violations(&unvalidated, REQUIRED_CONTEXTS);
+    assert!(
+        violations
+            .iter()
+            .any(|v| v.contains("Mac carrier must validate")),
         "{violations:#?}"
     );
 
@@ -463,7 +496,7 @@ fn notignored_is_an_unrequired_review_comment_workflow() {
     for (file, doc) in workflows() {
         for (id, job) in jobs(&doc) {
             assert!(
-                !needs(job).iter().any(|need| need == NOTIGNORED_JOB) || file == "notignored.yml" && id.as_str() == Some(NOTIGNORED_JOB),
+                !needs(job).iter().any(|need| need == NOTIGNORED_JOB) || file == "notignored.yml" && id == NOTIGNORED_JOB,
                 "{file}: job {id:?} needs the notignored job, so a fork pull request would leave it unreported"
             );
         }
@@ -483,12 +516,12 @@ fn the_notignored_check_refuses_each_broken_property() {
     let cases: Vec<(Vec<String>, Value, &str)> = vec![
         (
             vec!["on".into()],
-            serde_yaml_ng::from_str("push: {}").unwrap(),
+            yaml("push: {}").unwrap(),
             "run on pull_request",
         ),
         (
             vec!["permissions".into()],
-            serde_yaml_ng::from_str("contents: write\npull-requests: write").unwrap(),
+            yaml("contents: write\npull-requests: write").unwrap(),
             "permissions must be exactly",
         ),
         (
@@ -498,16 +531,12 @@ fn the_notignored_check_refuses_each_broken_property() {
         ),
         (
             job(&["steps"]),
-            serde_yaml_ng::from_str(
-                "[{uses: actions/checkout@v4}, {uses: nickderobertis/notignored@v0}]",
-            )
-            .unwrap(),
+            yaml("[{uses: actions/checkout@v4}, {uses: nickderobertis/notignored@v0}]").unwrap(),
             "fetch-depth: 0",
         ),
         (
             job(&["steps"]),
-            serde_yaml_ng::from_str("[{uses: actions/checkout@v4, with: {fetch-depth: 0}}]")
-                .unwrap(),
+            yaml("[{uses: actions/checkout@v4, with: {fetch-depth: 0}}]").unwrap(),
             "nickderobertis/notignored@v0",
         ),
     ];
@@ -555,10 +584,26 @@ fn the_llmlint_check_refuses_a_late_or_credentialed_validate_step() {
     set(
         &mut steps[validate],
         &["env"],
-        serde_yaml_ng::from_str("CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}")
-            .unwrap(),
+        yaml("CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}").unwrap(),
     );
     let violations = llmlint_job_violations(&credentialed);
+    assert!(
+        violations.iter().any(|v| v.contains("no credential")),
+        "{violations:#?}"
+    );
+
+    // A credential reaching the step through its command, with no `env`.
+    let mut inlined = ci.clone();
+    let steps = llmlint_steps(&mut inlined);
+    let validate = position(steps, LLMLINT_VALIDATE);
+    set(
+        &mut steps[validate],
+        &["run"],
+        Value::from(format!(
+            "TOKEN=${{{{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}}} {LLMLINT_VALIDATE}"
+        )),
+    );
+    let violations = llmlint_job_violations(&inlined);
     assert!(
         violations.iter().any(|v| v.contains("no credential")),
         "{violations:#?}"
@@ -567,7 +612,7 @@ fn the_llmlint_check_refuses_a_late_or_credentialed_validate_step() {
     let mut uncredentialed = ci.clone();
     let steps = llmlint_steps(&mut uncredentialed);
     let model = position(steps, "just lint-llm-diff");
-    steps[model].as_mapping_mut().unwrap().remove("env");
+    steps[model].as_object_mut().unwrap().shift_remove("env");
     let violations = llmlint_job_violations(&uncredentialed);
     assert!(
         violations.iter().any(|v| v.contains("must require")),
@@ -588,7 +633,7 @@ fn the_tier_routing_check_refuses_each_broken_property() {
         doc.get("jobs")
             .and_then(|jobs| jobs.get(id))
             .and_then(|job| job.get("steps"))
-            .and_then(Value::as_sequence)
+            .and_then(Value::as_array)
             .cloned()
             .expect("steps")
     };
@@ -596,7 +641,7 @@ fn the_tier_routing_check_refuses_each_broken_property() {
         let mut doc = ci.clone();
         let mut list = steps(&doc, id);
         edit(&mut list);
-        set(&mut doc, &["jobs", id, "steps"], Value::Sequence(list));
+        set(&mut doc, &["jobs", id, "steps"], Value::Array(list));
         tier_routing_violations(&doc)
     };
     let find = |list: &[Value], needle: &str| {
@@ -610,7 +655,7 @@ fn the_tier_routing_check_refuses_each_broken_property() {
 
     let shallow = rewrite("check", &|list| {
         let at = find(list, "actions/checkout@");
-        list[at].as_mapping_mut().unwrap().remove("with");
+        list[at].as_object_mut().unwrap().shift_remove("with");
     });
     assert!(
         shallow.iter().any(|v| v.contains("fetch-depth: 0")),
@@ -628,7 +673,7 @@ fn the_tier_routing_check_refuses_each_broken_property() {
 
     let unbased = rewrite("check", &|list| {
         let at = find(list, "just check");
-        list[at].as_mapping_mut().unwrap().remove("env");
+        list[at].as_object_mut().unwrap().shift_remove("env");
     });
     assert!(
         unbased.iter().any(|v| v.contains("must pass NX_BASE")),

@@ -120,7 +120,7 @@ pub fn load_skill(dir: &Path) -> Result<SkillDefinition> {
     })?;
     let (fm, body) = split_frontmatter(&text);
     let frontmatter: Frontmatter = match fm {
-        Some(fm) => serde_yaml_ng::from_str(fm).map_err(|source| {
+        Some(fm) => crate::yaml::from_str(fm).map_err(|source| {
             Error::Invalid(format!(
                 "invalid SKILL.md frontmatter in `{}`: {source}",
                 skill_md.display()
@@ -216,7 +216,15 @@ mod tests {
     fn load_skill_bad_frontmatter_is_invalid() {
         let dir = skill_dir("badyaml", "x", "---\nname: [unterminated\n---\nbody\n");
         let err = load_skill(&dir).unwrap_err();
-        assert!(matches!(err, Error::Invalid(m) if m.contains("frontmatter")));
+        let Error::Invalid(message) = err else {
+            panic!("not invalid: {err:?}")
+        };
+        assert!(message.contains("frontmatter"), "{message}");
+        assert!(
+            message.contains(&dir.join("SKILL.md").display().to_string()),
+            "{message}"
+        );
+        assert!(message.contains("line 1, column 7"), "{message}");
     }
 
     #[test]

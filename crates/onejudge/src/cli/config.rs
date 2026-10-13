@@ -347,7 +347,7 @@ impl Config {
     /// # Errors
     /// [`CliError::Config`] if the YAML is malformed or carries an unknown key.
     pub fn from_yaml(text: &str) -> Result<Self, CliError> {
-        serde_yaml_ng::from_str(text)
+        crate::yaml::from_str(text)
             .map_err(|e| CliError::Config(format!("could not parse config: {e}")))
     }
 
@@ -1214,7 +1214,11 @@ mod tests {
     #[test]
     fn unknown_top_level_key_is_a_loud_error() {
         let err = Config::from_yaml("task: x\nnope: 1\n").unwrap_err();
-        assert!(matches!(err, CliError::Config(_)));
+        let CliError::Config(message) = err else {
+            panic!("not a config error: {err:?}")
+        };
+        assert!(message.contains("unknown field `nope`"), "{message}");
+        assert!(message.contains("line 2, column 1"), "{message}");
     }
 
     #[test]

@@ -1,0 +1,2 @@
+# Redacted copy of a real host file (a config the Python SDK test suite wrote): identifying values replaced with placeholders, every other byte kept.
+{"provider": {"kind": "command", "command": ["missing-onejudge-provider"]}}

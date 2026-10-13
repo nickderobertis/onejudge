@@ -49,7 +49,7 @@ Built up from the `create-repo` skill's reference axes, not a single template.
   `CommandProvider` JSON-lines protocol, `docs/protocol.md`), plus a standalone
   `onejudge` binary behind the **non-default `cli` feature** that drives a harness
   through a simulated-user loop to complete one task (`docs/cli.md`, issue #8).
-  CLI deps (`clap`, `serde_yaml_ng`) never reach a `cargo add onejudge` consumer.
+  CLI deps (`clap`, `serde-saphyr`) never reach a `cargo add onejudge` consumer.
 - **Language(s):** rust (`languages/rust.md`) — stable toolchain, `rustfmt` +
   `clippy -D warnings`, `cargo nextest`, `cargo llvm-cov` coverage gate, `cargo
   deny` + `cargo machete` supply-chain job. python (`languages/python.md`) for

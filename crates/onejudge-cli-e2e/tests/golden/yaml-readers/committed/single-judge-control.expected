@@ -1,0 +1,92 @@
+Config {
+    provider: ProviderConfig {
+        kind: Split,
+        bin: None,
+        judge_config: None,
+        instructions: None,
+        events: None,
+        allow_writable_judges: None,
+        stream: None,
+        control: None,
+        mock_harness: None,
+        command: None,
+        config: None,
+        diff_base: None,
+        args: None,
+        skill: Some(
+            ProviderConfig {
+                kind: Oneharness,
+                bin: Some(
+                    "/bin/onejudge-fake-oneharness",
+                ),
+                judge_config: None,
+                instructions: None,
+                events: None,
+                allow_writable_judges: None,
+                stream: None,
+                control: Some(
+                    true,
+                ),
+                mock_harness: None,
+                command: None,
+                config: None,
+                diff_base: None,
+                args: None,
+                skill: None,
+                judge: None,
+                judges: None,
+                label: None,
+            },
+        ),
+        judge: Some(
+            ProviderConfig {
+                kind: Oneharness,
+                bin: Some(
+                    "/bin/onejudge-fake-oneharness",
+                ),
+                judge_config: None,
+                instructions: None,
+                events: None,
+                allow_writable_judges: None,
+                stream: None,
+                control: Some(
+                    true,
+                ),
+                mock_harness: None,
+                command: None,
+                config: None,
+                diff_base: None,
+                args: None,
+                skill: None,
+                judge: None,
+                judges: None,
+                label: None,
+            },
+        ),
+        judges: None,
+        label: None,
+    },
+    skill: None,
+    system_prompt: Some(
+        "[[reply:on it]][[control-store:/tmp/agent-store]]",
+    ),
+    task: Some(
+        "start the long job",
+    ),
+    user: Some(
+        UserConfig {
+            persona: "A reviewer. [[control-store:/tmp/judge-store]][[record-prompt:/tmp/record]]",
+            done_when: None,
+            max_turns: Some(
+                2,
+            ),
+            settle_on_noop: None,
+            artifacts: [],
+        },
+    ),
+    session: Some(
+        "ctl-baseline",
+    ),
+    evals: [],
+    assessment: None,
+}

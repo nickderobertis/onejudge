@@ -1,0 +1,68 @@
+Config {
+    provider: ProviderConfig {
+        kind: Oneharness,
+        bin: Some(
+            "oneharness",
+        ),
+        judge_config: Some(
+            "oneharness.judge.toml",
+        ),
+        instructions: None,
+        events: None,
+        allow_writable_judges: None,
+        stream: None,
+        control: None,
+        mock_harness: None,
+        command: None,
+        config: None,
+        diff_base: None,
+        args: None,
+        skill: None,
+        judge: None,
+        judges: None,
+        label: None,
+    },
+    skill: None,
+    system_prompt: Some(
+        "You are a senior engineer. Complete the task and keep tests green.\n",
+    ),
+    task: Some(
+        "Describe the task to complete here.",
+    ),
+    user: Some(
+        UserConfig {
+            persona: "You are a demanding tech lead reviewing the work. Push for tests and edge\ncases; do not accept \"done\" until you have verified it.\n",
+            done_when: Some(
+                "the task is complete and all tests pass",
+            ),
+            max_turns: Some(
+                12,
+            ),
+            settle_on_noop: Some(
+                true,
+            ),
+            artifacts: [],
+        },
+    ),
+    session: Some(
+        "onejudge",
+    ),
+    evals: [
+        EvalConfig {
+            criterion: "the code compiles and tests pass",
+            kind: Boolean,
+            scale: None,
+        },
+        EvalConfig {
+            criterion: "the change is well-scoped and readable",
+            kind: Numeric,
+            scale: Some(
+                [
+                    1.0,
+                    5.0,
+                ],
+            ),
+        },
+    ],
+    assessment: None,
+}
