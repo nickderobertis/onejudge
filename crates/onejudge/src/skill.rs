@@ -219,7 +219,6 @@ mod tests {
         let Error::Invalid(message) = err else {
             panic!("not invalid: {err:?}")
         };
-        // The file, what was wrong, and where in the front matter.
         assert!(message.contains("frontmatter"), "{message}");
         assert!(
             message.contains(&dir.join("SKILL.md").display().to_string()),

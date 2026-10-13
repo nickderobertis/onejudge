@@ -1,11 +1,6 @@
-//! The YAML readers held to what real documents read as.
-//!
-//! Every config and SKILL.md here is a real document — committed to this tree,
-//! written by the Python SDK's own suite, written by oneagentgraph for a real run,
-//! or the user's own skill — and each `.expected` beside it is the value the crate
-//! read from it on `d4f2a15`, the released 0.19.1 and the last tree reading YAML
-//! through a libyaml translation (`tests/golden/README.md`). A reader change that moves what a user's file
-//! means fails here, naming the file.
+//! The YAML readers held to what real documents read as: a reader change that
+//! moves what a user's config or skill means fails here, naming the file. Where
+//! each document and its `.expected` came from is `tests/golden/README.md`.
 
 use std::path::{Path, PathBuf};
 
@@ -16,7 +11,6 @@ fn golden() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden")
 }
 
-/// What `Config::from_yaml` reads from `text`, rendered whole.
 fn read_config(text: &str, origin: &Path) -> String {
     let config = Config::from_yaml(text)
         .unwrap_or_else(|err| panic!("{} no longer reads: {err}", origin.display()));

@@ -11,7 +11,6 @@
 use serde::de::DeserializeOwned;
 use serde_saphyr::MergeKeyPolicy;
 
-/// Read `text` as a `T`.
 pub(crate) fn from_str<T: DeserializeOwned>(text: &str) -> Result<T, serde_saphyr::Error> {
     serde_saphyr::from_str_with_options(
         text,

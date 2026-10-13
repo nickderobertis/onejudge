@@ -796,7 +796,6 @@ fn binary_reports_a_bad_config_and_exits_two() {
     assert_eq!(output.status.code(), Some(2));
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert!(stderr.contains("config error"), "{stderr}");
-    // The file, the key that is wrong, and where it is.
     assert!(stderr.contains(path.to_str().unwrap()), "{stderr}");
     assert!(stderr.contains("unknown field `not_a_key`"), "{stderr}");
     assert!(stderr.contains("line 2, column 1"), "{stderr}");
