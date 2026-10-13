@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.19.2](https://github.com/nickderobertis/onejudge/compare/onejudge-v0.19.1...onejudge-v0.19.2) - 2026-10-13
+
+### Fixed
+
+- *(deps)* read configs and skill front matter with serde-saphyr in place of serde_yaml_ng ([#168](https://github.com/nickderobertis/onejudge/pull/168))
+
 ## [0.19.1](https://github.com/nickderobertis/onejudge/compare/onejudge-v0.19.0...onejudge-v0.19.1) - 2026-10-13
 
 ### Fixed
