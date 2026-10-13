@@ -64,17 +64,10 @@ fn workflow_dir() -> PathBuf {
         .join(".github/workflows")
 }
 
-/// `text` read as YAML, under the options the `onejudge` crate reads its own
-/// documents with (`src/yaml.rs`).
+/// `text` read as YAML: schema-less, into a `Value`, under serde-saphyr's own
+/// defaults.
 fn yaml(text: &str) -> Result<Value, serde_saphyr::Error> {
-    serde_saphyr::from_str_with_options(
-        text,
-        serde_saphyr::options! {
-            with_snippet: false,
-            strict_booleans: true,
-            merge_keys: serde_saphyr::MergeKeyPolicy::AsOrdinary,
-        },
-    )
+    serde_saphyr::from_str(text)
 }
 
 fn workflow(name: &str) -> Value {
