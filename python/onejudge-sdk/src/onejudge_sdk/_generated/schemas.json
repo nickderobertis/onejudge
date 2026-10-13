@@ -1777,7 +1777,7 @@
             "type": "string"
           },
           "name": {
-            "description": "Normalized tool name where knowable (e.g. `bash`, `Edit`); `null` for a\n`tool_result`, or when the harness did not name the tool.",
+            "description": "Normalized tool name where knowable (e.g. `bash`, `Edit`); `null` when\nthe harness did not name the tool. A `tool_result` carries the name of\nthe `tool_call` it answers (matched by `tool_call_id`) when that call\nwas seen earlier in the same run, else `null`.",
             "type": [
               "string",
               "null"
@@ -1806,7 +1806,7 @@
                 "type": "null"
               }
             ],
-            "description": "Terminal tool state, populated on history tool-call events."
+            "description": "Terminal tool state, populated on history tool-call events. On a\n`tool_result` it is the outcome the harness reported for the call:\n`failed` when the result is marked an error (a Claude Code / Qwen\n`is_error: true` block), else `completed`; `null` when the harness\nreports no error state for its results, and in a history record with\nno tool timing, which makes no tool-state claim on any event."
           },
           "timing_source": {
             "anyOf": [

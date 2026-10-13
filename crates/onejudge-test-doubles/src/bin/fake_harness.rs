@@ -31,6 +31,10 @@
 //!   here for one reason: its control mechanism drives the turn over its own HTTP
 //!   protocol and implements no resume request, which is the case oneharness
 //!   0.12 refuses a named session's *continuation* on.
+//! * **codex** — `exec … --json <prompt>`, answering with the `thread.started` /
+//!   `agent_message` JSONL oneharness reads its text from. It is here so a journey
+//!   can copy this binary onto `PATH` as `codex` and record the argv the linked
+//!   engine starts Codex with (its plugins default is decided there).
 //!
 //! # Markers
 //!
@@ -123,6 +127,7 @@ fn main() {
     let invoked = invocation(&args);
     let stream = matches!(invoked, Invocation::ClaudeCode { stream: true });
     let opencode = matches!(invoked, Invocation::OpenCode);
+    let codex = matches!(invoked, Invocation::Codex);
 
     let mut reply = restrictive_evaluator_reply(&prompt, &args)
         .or_else(|| artifact_evaluator_reply(&prompt, &args))
@@ -154,6 +159,21 @@ fn main() {
             r#"{{"type":"text","sessionID":"fake-opencode-session","part":{{"type":"text","text":{}}}}}"#,
             json_string(&reply)
         ));
+        return;
+    }
+
+    if codex {
+        // `codex exec --json`: the thread handle first, then the final
+        // `agent_message` item, which is the turn's text. Tool items are not
+        // modelled: the journeys that need events drive the claude-code shape.
+        emit(r#"{"type":"thread.started","thread_id":"fake-codex-thread"}"#);
+        emit(&format!(
+            r#"{{"type":"item.completed","item":{{"id":"item_0","type":"agent_message","text":{}}}}}"#,
+            json_string(&reply)
+        ));
+        emit(
+            r#"{"type":"turn.completed","usage":{"input_tokens":1,"cached_input_tokens":0,"output_tokens":1}}"#,
+        );
         return;
     }
 
@@ -419,6 +439,8 @@ enum Invocation {
     /// `run --format json <message>`: the one harness here whose argv carries no
     /// `-p` / `--output-format` at all.
     OpenCode,
+    /// `exec … --json <prompt>`, codex's non-interactive subcommand.
+    Codex,
 }
 
 /// The harness `args` invoke, or a refusal naming why they are neither: an
@@ -438,9 +460,17 @@ fn invocation(args: &[String]) -> Invocation {
         }
         return Invocation::OpenCode;
     }
+    if args.first().map(String::as_str) == Some("exec") {
+        if !args.iter().any(|arg| arg == "--json") {
+            fail(&format!(
+                "codex is invoked `exec … --json …` by oneharness, not {args:?}"
+            ));
+        }
+        return Invocation::Codex;
+    }
     if !args.iter().any(|arg| arg == "-p") {
         fail(&format!(
-            "neither claude-code's `-p …` nor opencode's `run …`, as oneharness builds them: {args:?}"
+            "none of claude-code's `-p …`, opencode's `run …` or codex's `exec …`, as oneharness builds them: {args:?}"
         ));
     }
     let Some(spec) = by_id("claude-code") else {
