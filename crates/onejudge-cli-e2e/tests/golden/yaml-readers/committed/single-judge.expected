@@ -1,0 +1,112 @@
+Config {
+    provider: ProviderConfig {
+        kind: Split,
+        bin: None,
+        judge_config: None,
+        instructions: None,
+        events: None,
+        allow_writable_judges: None,
+        stream: None,
+        control: None,
+        mock_harness: None,
+        command: None,
+        config: None,
+        diff_base: None,
+        args: None,
+        skill: Some(
+            ProviderConfig {
+                kind: Command,
+                bin: None,
+                judge_config: None,
+                instructions: None,
+                events: None,
+                allow_writable_judges: None,
+                stream: None,
+                control: None,
+                mock_harness: None,
+                command: Some(
+                    [
+                        "/bin/onejudge-echo-provider",
+                    ],
+                ),
+                config: None,
+                diff_base: None,
+                args: None,
+                skill: None,
+                judge: None,
+                judges: None,
+                label: None,
+            },
+        ),
+        judge: Some(
+            ProviderConfig {
+                kind: Command,
+                bin: None,
+                judge_config: None,
+                instructions: None,
+                events: None,
+                allow_writable_judges: None,
+                stream: None,
+                control: None,
+                mock_harness: None,
+                command: Some(
+                    [
+                        "/bin/onejudge-echo-provider",
+                    ],
+                ),
+                config: None,
+                diff_base: None,
+                args: None,
+                skill: None,
+                judge: None,
+                judges: None,
+                label: None,
+            },
+        ),
+        judges: None,
+        label: None,
+    },
+    skill: None,
+    system_prompt: Some(
+        "Commit it on the second try.",
+    ),
+    task: Some(
+        "please commit",
+    ),
+    user: Some(
+        UserConfig {
+            persona: "A tester. [[record:/tmp/record]]",
+            done_when: Some(
+                "next step",
+            ),
+            max_turns: Some(
+                4,
+            ),
+            settle_on_noop: None,
+            artifacts: [],
+        },
+    ),
+    session: Some(
+        "baseline",
+    ),
+    evals: [
+        EvalConfig {
+            criterion: "echo",
+            kind: Boolean,
+            scale: None,
+        },
+        EvalConfig {
+            criterion: "please",
+            kind: Numeric,
+            scale: Some(
+                [
+                    1.0,
+                    5.0,
+                ],
+            ),
+        },
+    ],
+    assessment: Some(
+        "Identify follow-up work.",
+    ),
+}

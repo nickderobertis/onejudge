@@ -1,0 +1,2 @@
+# Redacted copy of a real host file (a config the Python SDK test suite wrote): identifying values replaced with placeholders, every other byte kept.
+{"provider": {"kind": "oneharness", "bin": "/home/user/.onevcs/workspaces/github.com-nickderobertis-onejudge-d92c2bbfcde5/pool/1/worktree/target/debug/onejudge-fake-oneharness", "control": true}, "system_prompt": "[[reply:on it]][[control-store:/tmp/oj-sdk-ctl-muht1syb]]", "session": "Run 9"}

@@ -2,7 +2,8 @@
 
 Replay fixtures `tests/cli.rs` holds the CLI to, each captured from a **released**
 binary by a script under `scripts/` and never from the tree under test — save
-`judge-posture-one-contract/`, whose release does not exist yet (below).
+`judge-posture-one-contract/`, whose release does not exist yet, and
+`yaml-readers/`, held by `tests/yaml_readers.rs` (both below).
 
 ## `single-judge/` and `single-judge-control/`
 
@@ -48,3 +49,20 @@ standing in for `claude-code`. `tests/cli.rs` copies it and holds onejudge's
 history read to it (the record's `history_id` must reach the report and no file
 may change), and uses its session line as the other sessions a large store holds.
 Re-capture it only against another pre-cutover release.
+
+## `yaml-readers/`
+
+Real YAML documents and the value the released 0.19.1 (`d4f2a15`, the last tree
+reading YAML through `serde_yaml_ng`) read from each, as its `{:#?}` in a
+`.expected` beside it; `tests/yaml_readers.rs` holds the current reader to them.
+`committed/` holds the expectations for `single-judge/config.yaml`,
+`single-judge-control/config.yaml` (templates filled with fixed paths) and
+`cli/starter.yaml`; `sdk/` configs the Python SDK's own suite wrote (JSON handed
+over as YAML); `effective/` one config of each kind oneagentgraph wrote for a real
+run, the largest among them included; `skill/` the user's own skills, one with
+front-matter keys `Frontmatter` does not declare (`create-repo`) and one without.
+Every document under `sdk/`, `effective/` and `skill/` is a **redacted** copy of a
+host file, saying so in its first comment: employer and organization names, the
+home directory and a private checkout path are replaced with placeholders, every
+other byte kept. The expectations were read from the redacted copies, so add a
+document the same way: redact it, then record what that release reads from it.

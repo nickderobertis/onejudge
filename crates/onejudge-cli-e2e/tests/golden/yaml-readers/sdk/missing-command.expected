@@ -1,0 +1,32 @@
+Config {
+    provider: ProviderConfig {
+        kind: Command,
+        bin: None,
+        judge_config: None,
+        instructions: None,
+        events: None,
+        allow_writable_judges: None,
+        stream: None,
+        control: None,
+        mock_harness: None,
+        command: Some(
+            [
+                "missing-onejudge-provider",
+            ],
+        ),
+        config: None,
+        diff_base: None,
+        args: None,
+        skill: None,
+        judge: None,
+        judges: None,
+        label: None,
+    },
+    skill: None,
+    system_prompt: None,
+    task: None,
+    user: None,
+    session: None,
+    evals: [],
+    assessment: None,
+}

@@ -1,0 +1,32 @@
+Config {
+    provider: ProviderConfig {
+        kind: Oneharness,
+        bin: Some(
+            "/home/user/.onevcs/workspaces/github.com-nickderobertis-onejudge-d92c2bbfcde5/pool/1/worktree/target/debug/onejudge-fake-oneharness",
+        ),
+        judge_config: None,
+        instructions: None,
+        events: None,
+        allow_writable_judges: None,
+        stream: None,
+        control: None,
+        mock_harness: None,
+        command: None,
+        config: None,
+        diff_base: None,
+        args: None,
+        skill: None,
+        judge: None,
+        judges: None,
+        label: None,
+    },
+    skill: None,
+    system_prompt: Some(
+        "[[fallback-exhausted:codex|quota,claude-code|auth]]",
+    ),
+    task: None,
+    user: None,
+    session: None,
+    evals: [],
+    assessment: None,
+}

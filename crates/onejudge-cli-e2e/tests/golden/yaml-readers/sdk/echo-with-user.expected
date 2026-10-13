@@ -1,0 +1,50 @@
+Config {
+    provider: ProviderConfig {
+        kind: Command,
+        bin: None,
+        judge_config: None,
+        instructions: None,
+        events: None,
+        allow_writable_judges: None,
+        stream: None,
+        control: None,
+        mock_harness: None,
+        command: Some(
+            [
+                "/home/user/.onevcs/workspaces/github.com-nickderobertis-onejudge-d92c2bbfcde5/pool/1/worktree/target/debug/onejudge-echo-provider",
+            ],
+        ),
+        config: None,
+        diff_base: None,
+        args: None,
+        skill: None,
+        judge: None,
+        judges: None,
+        label: None,
+    },
+    skill: None,
+    system_prompt: Some(
+        "work carefully [[event:git status]]",
+    ),
+    task: None,
+    user: Some(
+        UserConfig {
+            persona: "tester",
+            done_when: None,
+            max_turns: Some(
+                1,
+            ),
+            settle_on_noop: None,
+            artifacts: [],
+        },
+    ),
+    session: None,
+    evals: [
+        EvalConfig {
+            criterion: "git status",
+            kind: Boolean,
+            scale: None,
+        },
+    ],
+    assessment: None,
+}

@@ -1,0 +1,2 @@
+# Redacted copy of a real host file (a config the Python SDK test suite wrote): identifying values replaced with placeholders, every other byte kept.
+{"provider": {"kind": "oneharness", "bin": "/home/user/.onevcs/workspaces/github.com-nickderobertis-onejudge-d92c2bbfcde5/pool/1/worktree/target/debug/onejudge-fake-oneharness"}, "system_prompt": "[[fallback-exhausted:codex|quota,claude-code|auth]]"}
