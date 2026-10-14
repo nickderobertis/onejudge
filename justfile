@@ -39,6 +39,10 @@ export PATH := if os_family() == "windows" { env("PATH") } else { env("PATH") + 
 # thin `onejudge` entrypoint or the test doubles' crate.
 coverage_ignore := "(src/bin/|crates/onejudge-test-doubles/)"
 
+# The cargo-prune-superseded release `just bootstrap` installs, which the
+# `pool-maintenance` recipe runs.
+prune_superseded_version := "0.1.1"
+
 # The Python SDK's pinned tool environment.
 py_sdk := "uv run --no-project --python 3.9 --with-requirements python/onejudge-sdk/requirements-dev.txt"
 
@@ -58,6 +62,9 @@ bootstrap:
     command -v uv >/dev/null 2>&1 || { curl -LsSf https://astral.sh/uv/install.sh | sh; }
     ./scripts/shell-toolchain.sh              # pixi, then shellcheck, shfmt, actionlint, Ruby (pixi.lock) and bashcov (Gemfile.lock)
     cargo fetch --locked
+    # The pruner needs Rust 1.97, above rust-toolchain.toml's pin, so it builds on stable.
+    [ "$(cargo-prune-superseded --version 2>/dev/null)" = "cargo-prune-superseded {{prune_superseded_version}}" ] || \
+        { rustup toolchain install stable --profile minimal && cargo +stable install --locked cargo-prune-superseded --version {{prune_superseded_version}}; }
 
 # Activate the Rust pin in the caller's working directory.
 _rust-toolchain:
@@ -170,6 +177,12 @@ check-python-sdk-release-trigger:
 # denying warnings like every other gate step: a floor-only diagnostic fails here.
 msrv:
     ./scripts/nx run workspace:msrv
+
+# onevcs pool maintenance (onevcs.toml): remove each unit's superseded builds
+# older than 2 days from every directory this repository's cargo builds write to
+# (`target`, from .cargo/config.toml), keeping each unit's newest build.
+pool-maintenance:
+    cargo-prune-superseded --keep-within 2d target
 
 # Upgrade dependencies, then re-run the broader gate; commit the refreshed lockfile.
 upgrade:
