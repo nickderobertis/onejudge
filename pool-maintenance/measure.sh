@@ -57,12 +57,14 @@ step() {
 
 # The gate's test targets (each Rust project's `test` and the doubles' `build`),
 # one package per cargo invocation as the gate runs them, under `features`.
+# Every command returns on failure: `step` runs this under `if !`, where `set -e`
+# does not apply.
 build() {
     local features="$1" crate
     for crate in onejudge onejudge-e2e onejudge-cli-e2e; do
-        cargo nextest run --no-run --locked -p "$crate" --features "$features"
+        cargo nextest run --no-run --locked -p "$crate" --features "$features" || return
     done
-    cargo build --locked -p onejudge-test-doubles --bins --features "$features"
+    cargo build --locked -p onejudge-test-doubles --bins --features "$features" || return
     cargo nextest run --no-run --locked -p onejudge-repo
 }
 
