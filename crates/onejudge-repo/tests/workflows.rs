@@ -3,7 +3,7 @@
 //! Branch protection names status-check contexts by string, so a renamed job, a
 //! path filter, or a `needs` edge onto a job that skips leaves a required context
 //! unreported and every pull request blocked — and nothing in the workflow files
-//! says so. Four properties are held here, each by a checker that returns its
+//! says so. Five properties are held here, each by a checker that returns its
 //! violations, and each checker is also driven against a mutated workflow to show
 //! it refuses the break it exists for:
 //!
@@ -14,7 +14,10 @@
 //!   that calls the model, and that step still requires its credential;
 //! - the gate jobs take their tier from `scripts/ci-tier.mjs` over a full-history
 //!   checkout and hand it to the one gate recipe (`tests/ci_tier.rs` drives that
-//!   script with each event it routes).
+//!   script with each event it routes);
+//! - the pool-maintenance budget, which builds the workspace twice, runs in the
+//!   `check` job after its gate and only when that script reports the release
+//!   pull request (`release=true`), and no other step runs it.
 //!
 //! Each workflow is read through serde-saphyr into a `serde_json::Value`, in its
 //! own key order, and nothing here writes YAML back.
@@ -53,6 +56,10 @@ const GATE_JOBS: &[(&str, &str)] = &[
     ("macos-tests", "just test-fast"),
 ];
 const TIER_SCRIPT: &str = "node scripts/ci-tier.mjs >> \"$GITHUB_OUTPUT\"";
+/// The release-only budget check, and the `ci-tier.mjs` output that gates it.
+const RELEASE_BUDGET: &str =
+    "./scripts/nx run pool-maintenance:budgets-release --outputStyle=static";
+const RELEASE_OUTPUT: &str = "release";
 const LLMLINT_VALIDATE: &str = "just lint-llm-validate --diff-base origin/main";
 const LLMLINT_CREDENTIAL: &str = "CLAUDE_CODE_OAUTH_TOKEN";
 
@@ -394,6 +401,57 @@ fn tier_routing_violations(doc: &Value) -> Vec<String> {
     violations
 }
 
+fn release_budget_violations(doc: &Value) -> Vec<String> {
+    let mut violations = Vec::new();
+    let mut runs = Vec::new();
+    for (id, job) in jobs(doc) {
+        let steps = job.get("steps").and_then(Value::as_array);
+        for (at, step) in steps.into_iter().flatten().enumerate() {
+            if text(step.get("run"))
+                .is_some_and(|run| run.contains("pool-maintenance:budgets-release"))
+            {
+                runs.push((id.clone(), at));
+            }
+        }
+    }
+    let Some((job, budget)) = runs.first().cloned() else {
+        return vec![format!("no step runs `{RELEASE_BUDGET}`")];
+    };
+    if runs.len() > 1 || job != "check" {
+        violations.push(format!(
+            "`{RELEASE_BUDGET}` must run in one step of `check` alone, not {runs:?}"
+        ));
+    }
+    let steps = jobs(doc)[&job]["steps"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    if text(steps[budget].get("run")) != Some(RELEASE_BUDGET) {
+        violations.push(format!(
+            "the release budget step must run `{RELEASE_BUDGET}`"
+        ));
+    }
+    let gate = steps
+        .iter()
+        .position(|step| text(step.get("run")).is_some_and(|run| run.contains("just check")));
+    if gate.is_none_or(|gate| budget < gate) {
+        violations.push(format!(
+            "`{job}` must run the release budget after `just check`"
+        ));
+    }
+    let tier = steps
+        .iter()
+        .find(|step| text(step.get("run")) == Some(TIER_SCRIPT))
+        .and_then(|step| text(step.get("id")));
+    let expected = tier.map(|id| format!("steps.{id}.outputs.{RELEASE_OUTPUT} == 'true'"));
+    if expected.is_none() || text(steps[budget].get("if")) != expected.as_deref() {
+        violations.push(format!(
+            "the release budget step must run only if `{TIER_SCRIPT}` reports {RELEASE_OUTPUT}=true ({expected:?})"
+        ));
+    }
+    violations
+}
+
 fn set(doc: &mut Value, path: &[&str], value: Value) {
     let (last, parents) = path.split_last().expect("non-empty path");
     let mut node = doc;
@@ -712,5 +770,90 @@ fn the_tier_routing_check_refuses_each_broken_property() {
             .iter()
             .any(|v| v.contains("with the selected flags")),
         "{flagless:#?}"
+    );
+}
+
+#[test]
+fn the_pool_maintenance_budget_runs_on_the_release_pull_request_alone() {
+    let violations = release_budget_violations(&workflow("ci.yml"));
+    assert!(violations.is_empty(), "{violations:#?}");
+}
+
+#[test]
+fn the_release_budget_check_refuses_each_broken_property() {
+    let ci = workflow("ci.yml");
+    let rewrite = |edit: &dyn Fn(&mut Vec<Value>)| {
+        let mut doc = ci.clone();
+        let mut list = doc["jobs"]["check"]["steps"]
+            .as_array()
+            .cloned()
+            .expect("steps");
+        edit(&mut list);
+        set(&mut doc, &["jobs", "check", "steps"], Value::Array(list));
+        release_budget_violations(&doc)
+    };
+    let budget = |list: &[Value]| {
+        list.iter()
+            .position(|step| text(step.get("run")) == Some(RELEASE_BUDGET))
+            .expect("release budget step")
+    };
+
+    let missing = rewrite(&|list| {
+        let at = budget(list);
+        list.remove(at);
+    });
+    assert!(
+        missing.iter().any(|v| v.contains("no step runs")),
+        "{missing:#?}"
+    );
+
+    let early = rewrite(&|list| {
+        let at = budget(list);
+        let step = list.remove(at);
+        list.insert(0, step);
+    });
+    assert!(
+        early.iter().any(|v| v.contains("after `just check`")),
+        "{early:#?}"
+    );
+
+    for condition in [
+        None,
+        Some("github.event_name == 'pull_request'"),
+        Some("steps.tier.outputs.tier == 'sweep'"),
+        Some("steps.tier.outputs.releases == 'true'"),
+    ] {
+        let ungated = rewrite(&|list| {
+            let at = budget(list);
+            let step = list[at].as_object_mut().unwrap();
+            match condition {
+                Some(condition) => {
+                    step.insert("if".to_owned(), Value::from(condition));
+                }
+                None => {
+                    step.shift_remove("if");
+                }
+            }
+        });
+        assert!(
+            ungated.iter().any(|v| v.contains("run only if")),
+            "{condition:?}: {ungated:#?}"
+        );
+    }
+
+    let mut doc = ci.clone();
+    let step = doc["jobs"]["check"]["steps"]
+        [budget(ci["jobs"]["check"]["steps"].as_array().unwrap())]
+    .clone();
+    doc["jobs"]["msrv"]["steps"]
+        .as_array_mut()
+        .expect("msrv steps")
+        .push(step);
+    let elsewhere = release_budget_violations(&doc);
+    assert!(
+        elsewhere
+            .iter()
+            .any(|v| v.contains("one step of `check` alone")),
+        "{elsewhere:#?}"
     );
 }
