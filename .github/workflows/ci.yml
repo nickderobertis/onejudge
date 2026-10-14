@@ -57,10 +57,10 @@ jobs:
           [ -n "$NX_BASE" ] || unset NX_BASE
           just check ${FLAGS:+"$FLAGS"}
       # The pool-maintenance budget builds the workspace twice, so it runs on the
-      # release pull request alone, after its gate (release-plz.yml names the
-      # `release-plz-` branch, as scripts/ci-tier.mjs reads it), never per change.
+      # release pull request alone (scripts/ci-tier.mjs's `release`), after its
+      # gate, never per change.
       - name: Pool maintenance budget (release pull request)
-        if: github.event_name == 'pull_request' && startsWith(github.head_ref, 'release-plz-')
+        if: steps.tier.outputs.release == 'true'
         env:
           NX_SHOW_OUTPUT: "1"
         run: ./scripts/nx run pool-maintenance:budgets-release --outputStyle=static
