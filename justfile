@@ -184,6 +184,14 @@ msrv:
 pool-maintenance:
     cargo-prune-superseded --keep-within 2d target
 
+# The onebudgetspec budgets: the affected projects' `budgets` and `budgets-host`
+# targets (`all`: every project's), then a root budgets.yaml when there is one.
+# Not in `check`, which runs github-workflows:budgets itself; pool-maintenance's
+# budget is `budgets-release`, which only the release pull request runs.
+budgets tier="affected":
+    ./scripts/nx {{ if tier == "all" { "run-many" } else if tier == "affected" { "affected" } else { error("unknown tier '" + tier + "' — use 'affected' (the default) or 'all'") } }} -t budgets budgets-host --outputStyle=static
+    [ ! -f budgets.yaml ] || bunx onebudgetspec check budgets.yaml
+
 # Upgrade dependencies, then re-run the broader gate; commit the refreshed lockfile.
 upgrade:
     cargo update
