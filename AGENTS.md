@@ -135,7 +135,7 @@ Use the `just` recipes; do not hand-roll equivalents. `just --list` is the index
   PATH. The release job authenticates with a PAT
   (`RELEASE_PLZ_TOKEN`), not the default `GITHUB_TOKEN`, so the tag fires publish
   **and** the `release-binaries` workflow, which builds the `onejudge` CLI for
-  each platform (linux/macos-x64+arm64/windows) and attaches the archives to the
+  each platform (linux/macos-arm64/windows) and attaches the archives to the
   tag's GitHub Release for `install.sh` / manual download to fetch.
   **Bump policy (pre-1.0):** `feat` / `feat!` / `BREAKING CHANGE` → minor;
   `fix` / `perf` / `refactor` / `build` → patch; `chore` / `docs` / `ci` /

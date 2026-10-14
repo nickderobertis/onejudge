@@ -52,12 +52,9 @@ class ReleaseArtifacts(unittest.TestCase):
         self.version = "0.19.0"
         self.tag = "v0.19.0"
         self.identity = f"onejudge-darwin-{self.tag}-{self.sha}"
-        self.targets = ("x86_64-apple-darwin", "aarch64-apple-darwin")
+        self.targets = ("aarch64-apple-darwin",)
         # Mach-O contract specimens are never executed as native binaries.
-        for target, arch, cpu in (
-            (self.targets[0], "x86_64", 0x01000007),
-            (self.targets[1], "arm64", 0x0100000C),
-        ):
+        for target, arch, cpu in ((self.targets[0], "arm64", 0x0100000C),):
             binary = (
                 b"\xcf\xfa\xed\xfe" + cpu.to_bytes(4, "little") + b"contract specimen"
             )
@@ -122,7 +119,7 @@ class ReleaseArtifacts(unittest.TestCase):
         )
         for row in self.original["files"]:
             self.assertEqual(set(row), {"path", "target", "kind", "sha256"})
-        self.assertEqual(self.original["schema_version"], 1)
+        self.assertEqual(self.original["schema_version"], 2)
         self.assertEqual(
             {(f["target"], f["kind"]) for f in self.original["files"]},
             {
@@ -174,7 +171,7 @@ class ReleaseArtifacts(unittest.TestCase):
         with zipfile.ZipFile(file) as wheel:
             contents = {n: wheel.read(n) for n in wheel.namelist()}
         binary = next(n for n in contents if n.endswith("/onejudge"))
-        for cpu, message in ((0x0100000C, "architecture"), (0x01000007, "reuse")):
+        for cpu, message in ((0x01000007, "architecture"), (0x0100000C, "reuse")):
             contents[binary] = (
                 b"\xcf\xfa\xed\xfe" + cpu.to_bytes(4, "little") + b"different binary"
             )
@@ -309,6 +306,150 @@ class ReleaseArtifacts(unittest.TestCase):
         result = self.fetch("durable")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertNotIn("/workflows/", (self.root / "calls").read_text())
+
+    def test_published_macos_set_is_exactly_the_arm64_archive_and_wheel(self):
+        result = self.publisher()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        archive = "onejudge-aarch64-apple-darwin.tar.gz"
+        wheel = f"onejudge_cli-{self.version}-py3-none-macosx_11_0_arm64.whl"
+        self.assertEqual(
+            [(f["path"], f["target"], f["kind"]) for f in self.original["files"]],
+            [
+                (archive, "aarch64-apple-darwin", "archive"),
+                (wheel, "aarch64-apple-darwin", "cli-wheel"),
+            ],
+        )
+        (upload,) = [
+            json.loads(line)
+            for line in (self.root / "calls").read_text().splitlines()
+            if json.loads(line)[:2] == ["release", "upload"]
+        ]
+        self.assertEqual(upload[2], self.tag)
+        self.assertEqual(
+            [Path(a).name for a in upload[3:5]],
+            [f"{self.identity}.zip", archive],
+        )
+        self.assertEqual(upload[5:], ["--repo", "nickderobertis/onejudge", "--clobber"])
+        with zipfile.ZipFile(self.root / f"{self.identity}.zip") as bundle:
+            self.assertEqual(
+                sorted(bundle.namelist()),
+                sorted(["release-artifacts.json", archive, wheel]),
+            )
+            published = json.loads(bundle.read("release-artifacts.json"))
+            with zipfile.ZipFile(io.BytesIO(bundle.read(wheel))) as package:
+                binary = package.read(
+                    f"onejudge_cli-{self.version}.data/scripts/onejudge"
+                )
+        self.assertEqual(
+            (published["tag"], published["sha"], published["version"]),
+            (self.tag, self.sha, self.version),
+        )
+        self.assertEqual({f["target"] for f in published["files"]}, set(self.targets))
+        # The Mach-O header names the arm64 CPU type, not x86_64's 0x01000007.
+        self.assertEqual(
+            binary[:8], b"\xcf\xfa\xed\xfe" + (0x0100000C).to_bytes(4, "little")
+        )
+
+    def test_intel_macos_is_refused_rather_than_built_staged_or_published(self):
+        intel = "x86_64-apple-darwin"
+        # The release builder refuses before it reaches the compiler: a `uvx`
+        # double records any build it would otherwise have started.
+        bin_dir = self.root / "bin"
+        bin_dir.mkdir()
+        (bin_dir / "uvx").write_text('#!/bin/sh\ntouch "$FIXTURE/built"\n')
+        (bin_dir / "uvx").chmod(0o755)
+        out = self.root / "intel-out"
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPTS / "build_release.py"),
+                "--target",
+                intel,
+                "--out",
+                str(out),
+            ],
+            cwd=ROOT,
+            env={
+                **os.environ,
+                "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+                "FIXTURE": str(self.root),
+            },
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            f"{intel} is not released: Intel macOS is no longer supported",
+            result.stderr,
+        )
+        self.assertFalse((self.root / "built").exists())
+        self.assertFalse(out.exists())
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPTS / "smoke_release.py"),
+                "--target",
+                intel,
+                "--root",
+                str(self.dist),
+                "--version",
+                self.version,
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(f"unsupported smoke target: {intel}", result.stderr)
+        # A manifest naming Intel, current or from the two-architecture schema, is refused.
+        for edit, message in (
+            (lambda m: m["files"][0].update(target=intel), "unknown target/kind"),
+            (
+                lambda m: m.update(schema_version=1),
+                "unsupported release manifest schema",
+            ),
+        ):
+            manifest = copy.deepcopy(self.original)
+            edit(manifest)
+            (self.dist / "release-artifacts.json").write_text(json.dumps(manifest))
+            for failed in (self.command("verify"), self.publisher()):
+                self.assertNotEqual(failed.returncode, 0)
+                self.assertIn(message, failed.stderr)
+        # Intel products beside the arm64 ones are unlisted payload: neither staged
+        # nor published.
+        (self.dist / "release-artifacts.json").write_text(json.dumps(self.original))
+        (self.dist / f"onejudge-{intel}.tar.gz").write_bytes(b"intel archive")
+        (
+            self.dist / f"onejudge_cli-{self.version}-py3-none-macosx_11_0_x86_64.whl"
+        ).write_bytes(b"intel wheel")
+        for failed in (self.command("verify"), self.publisher()):
+            self.assertNotEqual(failed.returncode, 0)
+            self.assertIn(
+                f"unlisted release payload: onejudge-{intel}.tar.gz", failed.stderr
+            )
+        calls = self.root / "calls"
+        self.assertNotIn('"upload"', calls.read_text() if calls.exists() else "")
+        stage = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPTS / "release_artifacts.py"),
+                "stage",
+                "--root",
+                str(self.dist),
+                "--tag",
+                self.tag,
+                "--sha",
+                self.sha,
+                "--version",
+                self.version,
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertNotEqual(stage.returncode, 0)
+        self.assertIn("unlisted release payload", stage.stderr)
 
     def test_wrong_run_wrong_artifact_and_expired_outputs_fail_visibly(self):
         for mode, expected in (

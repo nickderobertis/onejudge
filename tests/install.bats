@@ -72,14 +72,38 @@ EOF
     [ -x "$INSTALL_DIR/onejudge" ]
 }
 
-@test "an Intel macOS host fetches the x86_64 darwin archive" {
+# rosetta ANSWER — `sysctl -n sysctl.proc_translated` answers ANSWER (1 under
+# Rosetta, 0 natively).
+rosetta() {
+    double sysctl <<EOF
+[ "\$*" = "-n sysctl.proc_translated" ] || exit 64
+echo "$1"
+EOF
+}
+
+@test "an Intel macOS host is refused as no longer supported before any download" {
     host Darwin x86_64
-    release x86_64-apple-darwin
+    rosetta 0
+    release aarch64-apple-darwin
+
+    run "$ROOT/install.sh"
+
+    [ "$status" -eq 1 ]
+    [ "$output" = "install.sh: Intel macOS is no longer supported — releases ship Apple silicon (arm64) macOS archives only; build from source (cargo install onejudge --features cli)" ]
+    [ ! -e "$URL_LOG" ]
+    [ ! -e "$INSTALL_DIR/onejudge" ]
+}
+
+@test "a Rosetta-translated shell on Apple silicon installs the arm64 archive" {
+    host Darwin x86_64
+    rosetta 1
+    release aarch64-apple-darwin
 
     run "$ROOT/install.sh"
 
     [ "$status" -eq 0 ]
-    [[ "$(cat "$URL_LOG")" == */onejudge-x86_64-apple-darwin.tar.gz ]]
+    [ "$(cat "$URL_LOG")" = "https://github.com/nickderobertis/onejudge/releases/latest/download/onejudge-aarch64-apple-darwin.tar.gz" ]
+    [ "$("$INSTALL_DIR/onejudge")" = "onejudge 9.9.9" ]
 }
 
 @test "an unsupported Linux arch is refused before any download" {

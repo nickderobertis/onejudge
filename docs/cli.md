@@ -35,6 +35,10 @@ curl -fsSL https://raw.githubusercontent.com/nickderobertis/onejudge/main/instal
 [releases page](https://github.com/nickderobertis/onejudge/releases) or use
 `cargo install`.
 
+Prebuilt archives ship for Linux x86_64, Apple silicon (arm64) macOS and Windows
+x86_64. Intel macOS archives and wheels are no longer built: `install.sh` refuses
+an Intel Mac, so build from source there with `cargo install`.
+
 ## Commands
 
 ```
