@@ -1,0 +1,26 @@
+{
+  "name": "pool-maintenance",
+  "$schema": "../node_modules/nx/schemas/project-schema.json",
+  "//": "The budget on this repository's declared pool maintenance (onevcs.toml, the justfile's pool-maintenance recipe): budgets.yaml and the measurement it runs, measure.sh, which builds the workspace twice. So its budget check is `budgets-release`, a name no per-change selection runs — neither `just check` nor the `budgets` recipe's `budgets`/`budgets-host` — and only the release pull request's CI job runs it, after the gate. The gate reaches only its shell format and lint targets.",
+  "projectType": "application",
+  "tags": [
+    "type:repo",
+    "lang:shell"
+  ],
+  "implicitDependencies": [],
+  "targets": {
+    "format": {
+      "command": "just _sh-format pool-maintenance"
+    },
+    "format-check": {
+      "command": "just _sh-format-check pool-maintenance"
+    },
+    "lint": {
+      "command": "just _sh-lint pool-maintenance pool-maintenance"
+    },
+    "budgets-release": {
+      "command": "bunx onebudgetspec check pool-maintenance/budgets.yaml --label host",
+      "cache": false
+    }
+  }
+}

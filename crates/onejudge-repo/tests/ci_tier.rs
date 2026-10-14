@@ -78,6 +78,12 @@ fn route(repo: &Repo, name: &str, event: &serde_json::Value) -> (String, String,
 
 /// Takes the payload as raw text, so a journey can hand over one that is not JSON.
 fn route_payload(repo: &Repo, name: &str, payload_text: &str) -> (String, String, String) {
+    let value = routed(repo, name, payload_text);
+    (value("tier"), value("base"), value("flags"))
+}
+
+/// The script's `key=value` lines for one event, read by key.
+fn routed(repo: &Repo, name: &str, payload_text: &str) -> impl Fn(&str) -> String {
     let payload = repo.dir.join(format!("{name}-event.json"));
     std::fs::write(&payload, payload_text).unwrap();
     let output = Command::new("node")
@@ -93,14 +99,13 @@ fn route_payload(repo: &Repo, name: &str, payload_text: &str) -> (String, String
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
-    let value = |key: &str| {
+    move |key: &str| {
         stdout
             .lines()
             .find_map(|line| line.strip_prefix(&format!("{key}=")))
             .unwrap_or_else(|| panic!("no `{key}=` line in {stdout:?}"))
             .to_owned()
-    };
-    (value("tier"), value("base"), value("flags"))
+    }
 }
 
 fn pull_request(head_ref: &str, base_sha: &str) -> serde_json::Value {
@@ -120,6 +125,28 @@ fn release_plz_s_release_pull_request_runs_the_broader_tier() {
         route(&repo, "pull_request", &event),
         ("sweep".into(), String::new(), "--sweep".into())
     );
+}
+
+#[test]
+fn only_release_plz_s_release_pull_request_is_the_release_run() {
+    // `release` gates the work kept off every per-change run (ci.yml's pool
+    // maintenance budget), so a sweep that is not the release pull request — a
+    // pull request whose base is not in the checkout — is not one.
+    let repo = repo();
+    let release = pull_request("release-plz-2026-10-06T12-00-00Z", &repo.moved);
+    let ordinary = pull_request("nick/a-feature", &repo.moved);
+    let unscoped = pull_request("nick/a-feature", &"0".repeat(40));
+    let push = serde_json::json!({ "ref": "refs/heads/main", "before": repo.base });
+    for (name, event, expected) in [
+        ("pull_request", release, "true"),
+        ("pull_request", ordinary, "false"),
+        ("pull_request", unscoped, "false"),
+        ("push", push, "false"),
+        ("workflow_dispatch", serde_json::json!({}), "false"),
+    ] {
+        let value = routed(&repo, name, &event.to_string());
+        assert_eq!(value("release"), expected, "{name} {event}");
+    }
 }
 
 #[test]

@@ -1,0 +1,17 @@
+# This repository's pool maintenance, declared for onevcs. onevcs reads this file
+# from the publication checkout of the base branch (never from a session's
+# branch) and runs `command` in each idle warm-pool slot's worktree, never in a
+# slot a session holds. Without it no slot of this repository is maintained.
+#
+# The `pool-maintenance` recipe in the justfile runs the released
+# cargo-prune-superseded over every directory this repository's cargo builds
+# write to (`target`, from .cargo/config.toml). It removes each unit's superseded
+# builds in deps/, .fingerprint/, build/ and incremental/ older than 2 days by
+# modification time, and keeps each unit's newest build and every build modified
+# within those 2 days, so a rebuild stays warm. pool-maintenance/budgets.yaml
+# bounds how long one pass holds a slot out of service.
+schema_version = 1
+
+[pool.maintain]
+command = ["just", "pool-maintenance"]
+timeout = "30m"

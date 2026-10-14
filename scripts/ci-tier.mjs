@@ -3,9 +3,12 @@
 //
 //   node scripts/ci-tier.mjs >> "$GITHUB_OUTPUT"
 //
-// Prints `tier=…`, `base=…` and `flags=…` lines; the workflow passes `base` to the
-// recipe as NX_BASE and `flags` as its arguments (`just check $flags`), so the
-// tier is a flag on the one recipe and never a second implementation of the gate.
+// Prints `tier=…`, `base=…`, `flags=…` and `release=…` lines; the workflow passes
+// `base` to the recipe as NX_BASE and `flags` as its arguments (`just check
+// $flags`), so the tier is a flag on the one recipe and never a second
+// implementation of the gate. `release` is `true` for release-plz's release pull
+// request alone, which also runs the work kept off every other run (the pool
+// maintenance budget), and `false` everywhere else, a fallback sweep included.
 //
 // onejudge batches releases: release-plz's release pull request accumulates every
 // merge since the last release and auto-merges once green, so the commit that
@@ -55,11 +58,12 @@ function note(message) {
   console.error(`ci-tier: ${message}`);
 }
 
-function emit(tier, base, why, flags = tier === "sweep" ? "--sweep" : "") {
+function emit(tier, base, why, flags = tier === "sweep" ? "--sweep" : "", release = false) {
   note(`${tier} tier: ${why}`);
   console.log(`tier=${tier}`);
   console.log(`base=${base ?? ""}`);
   console.log(`flags=${flags}`);
+  console.log(`release=${release}`);
   process.exit(0);
 }
 
@@ -94,7 +98,7 @@ if (name === "pull_request") {
   }
   const head = event.pull_request?.head?.ref ?? "";
   if (typeof head === "string" && head.startsWith(prefix)) {
-    emit("sweep", null, "release-plz's release pull request: the commit that ships is swept here");
+    emit("sweep", null, "release-plz's release pull request: the commit that ships is swept here", "--sweep", true);
   }
   const base = mergeBase(event.pull_request?.base?.sha);
   if (!base) emit("sweep", null, "the pull request's base commit is not in this checkout (fetch-depth: 0)");

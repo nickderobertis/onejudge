@@ -56,6 +56,14 @@ jobs:
         run: |
           [ -n "$NX_BASE" ] || unset NX_BASE
           just check ${FLAGS:+"$FLAGS"}
+      # The pool-maintenance budget builds the workspace twice, so it runs on the
+      # release pull request alone (scripts/ci-tier.mjs's `release`), after its
+      # gate, never per change.
+      - name: Pool maintenance budget (release pull request)
+        if: steps.tier.outputs.release == 'true'
+        env:
+          NX_SHOW_OUTPUT: "1"
+        run: ./scripts/nx run pool-maintenance:budgets-release --outputStyle=static
 
   # Portability: the affected Rust suites (no coverage/audit) on macOS and
   # Windows, so the engine and its real-subprocess e2e are proven cross-platform —
