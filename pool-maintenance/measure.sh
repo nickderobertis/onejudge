@@ -88,8 +88,9 @@ backlog_seconds="$(seconds_since "$started")"
 
 entries >"$evidence/before-alternative.txt"
 # Before every entry already there, and past the 2-day window either way.
-oldest="$(find "$profile/deps" "$profile/.fingerprint" "$profile/build" "$profile/incremental" \
-    -printf '%T@\n' 2>/dev/null | awk 'NR == 1 || $1 < min { min = $1 } END { print min }')"
+oldest="$(for dir in deps .fingerprint build incremental; do
+    [ ! -d "$profile/$dir" ] || find "$profile/$dir" -printf '%T@\n'
+done | awk 'NR == 1 || $1 < min { min = $1 } END { print min }')"
 stamp=$(($(date +%s) - 3 * 86400))
 if [ -n "$oldest" ] && [ $((${oldest%.*} - 86400)) -lt "$stamp" ]; then
     stamp=$((${oldest%.*} - 86400))
