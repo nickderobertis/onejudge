@@ -14,7 +14,8 @@
       "{workspaceRoot}/package.json",
       "{workspaceRoot}/bun.lock"
     ],
-    "default": ["{projectRoot}/**/*", "sharedGlobals"]
+    "default": ["{projectRoot}/**/*", "sharedGlobals"],
+    "production": ["default"]
   },
   "boundaries": {
     "//": "Which project types may depend on which, by tag; every project carries exactly one `type:` tag. Enforced by scripts/check-project-boundaries.mjs in every project's `lint` target, over the real Nx project graph (`nx graph`) joined with Cargo's path dependencies, so an edge is checked whether it is declared in a project.json or drawn by a Cargo.toml. The contract crate depends on nothing in this repository; the e2e suites and the external tiers are reachable only from the workspace root.",
@@ -41,6 +42,16 @@
     "test": { "cache": false },
     "coverage": { "cache": false },
     "audit": { "cache": false },
-    "msrv": { "cache": false }
+    "msrv": { "cache": false },
+    "budgets": {
+      "cache": true,
+      "inputs": [
+        "{projectRoot}/**/*",
+        "^production",
+        { "dependentTasksOutputFiles": "**/telemetry/*.json" },
+        { "externalDependencies": ["@onebudgetspec/cli"] }
+      ]
+    },
+    "budgets-host": { "cache": false }
   }
 }
