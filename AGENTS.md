@@ -340,7 +340,6 @@ CLI scripted through the environment, so the gate needs no llmlint installed. Th
 reports come from `RunResult::telemetry` on the **run report** (oneharness report
 schema `0.5`); the history file is still read, but only for `history_id`.
 
-[//]: # "llmlint: ignore[agents_md_durable_and_terse] The numeric CLI floor is not a free copy here: `cli/mod.rs`'s `the_advertised_oneharness_minimum_tracks_the_report_schema_and_the_prose` requires AGENTS.md to state `MIN_ONEHARNESS` and fails the gate when it does not, so this is the one mention that gate reconciles; the second mention further down was removed instead."
 **Cancelling a turn must terminate the harness tree, not just the party onejudge
 talks to** — an orphaned harness keeps billing. In process that is
 `RunControls::cancel` plus the sink's `SinkStep::Stop`; either alone suffices
@@ -348,12 +347,17 @@ talks to** — an orphaned harness keeps billing. In process that is
 tree. The **spawning** seam still escalates through three rungs — close stdout,
 SIGTERM, kill — because a spawned producer has to be reached through the OS, and
 each rung reaches a case the one before cannot; two e2e tests gate that pair, one
-per rung. The `oneharness-core` pin lives in the workspace manifest and nowhere
+per rung.
+
+[//]: # "llmlint: ignore-block[agents_md_durable_and_terse] The numeric CLI floor is not a free copy here: `cli/mod.rs`'s `the_advertised_oneharness_minimum_tracks_the_report_schema_and_the_prose` requires AGENTS.md to state `MIN_ONEHARNESS` and fails the gate when it does not, so this is the one mention that gate reconciles; the second mention further down was removed instead."
+The `oneharness-core` pin lives in the workspace manifest and nowhere
 else; the **CLI** floor an operator installs is a different number (**0.25.1+**,
 the first release accepting the repeated `run --config` the judge side passes,
 and writing the report schema the linked core parses) because the two crates version independently. Never infer
 one from the other — `cli/mod.rs` gates each. See `docs/oneharness-library.md`
 before touching either.
+
+[//]: # "llmlint: ignore-end[agents_md_durable_and_terse]"
 
 The **free deterministic harness** is reachable through this layer:
 `provider.mock_harness` / `OneharnessProvider::with_mock_harness` forwards

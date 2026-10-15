@@ -3752,14 +3752,21 @@ fn concurrent_in_process_codex_turns_share_one_app_server() {
 #[test]
 fn an_in_process_codex_turn_whose_shared_app_server_dies_fails_classified() {
     // The failure half: the shared server crashing under a live turn is
-    // oneharness's `app_server_lost`, new in 0.28. It must fail the run loudly,
+    // oneharness's `app_server_lost`, new in 0.28. The core falls the candidate
+    // through on it (`FallThroughReason::AppServerLost`), so a one-candidate
+    // chain is exhausted and onejudge classifies the run by that last reason —
+    // the `reason_kind` arm this core move added. It must fail the run loudly,
     // attributed to the candidate under that token — never bank an empty turn.
     let dir = shared_codex_project("codex-app-server-lost");
     let err = controlled_codex_turn(&dir, "run-lost", "[[app-server-exit]]")
         .expect_err("a turn whose server died is not a turn");
     let rendered = format!("{err}");
     assert_eq!(err.kind(), Some(ProviderErrorKind::Other), "{rendered}");
-    assert!(rendered.contains("[app-server-lost]"), "{rendered}");
+    assert!(
+        rendered.contains("no oneharness fallback candidate could run the turn")
+            && rendered.contains("(codex [app-server-lost])"),
+        "the chain fell through on the lost server: {rendered}"
+    );
 }
 
 #[test]

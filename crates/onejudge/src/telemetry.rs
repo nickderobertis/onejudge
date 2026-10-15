@@ -127,6 +127,9 @@ pub struct CandidateAttempt {
     pub available: bool,
     /// Whether this is the candidate that actually ran the turn.
     pub ran: bool,
+    // The list below restates oneharness's closed `FailureKind` set; the
+    // `the_restated_failure_kinds_are_oneharnesss_own` test derives that set from
+    // the linked core and fails until every token is named here.
     /// oneharness's normalized failure reason (`auth`, `rate_limit`,
     /// `server_overloaded`, `model_not_found`, `quota`, `tool_deferred`,
     /// `session_not_found`, `untrusted_directory`, `input_too_large`,
@@ -159,6 +162,9 @@ pub struct CandidateAttempt {
     pub usage: Option<Usage>,
 }
 
+// The list below restates oneharness's closed `FallThroughReason` set; the
+// `the_restated_fall_through_reasons_are_oneharnesss_own` test derives that set
+// from the linked core and fails until every token is named here.
 /// One candidate a fallback chain fell through, with oneharness's reason token
 /// (`not-installed`, `spawn-error`, `auth`, `quota`, `model-not-found`,
 /// `rate-limit`, `session-not-found`, `untrusted-directory`, `input-too-large`,
