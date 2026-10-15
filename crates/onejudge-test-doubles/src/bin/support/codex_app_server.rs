@@ -29,7 +29,9 @@
 //! The server exits on its own once it has served a connection and then held
 //! none for [`IDLE_EXIT`]: the pool would stop it after its linger, but only a
 //! process hosting oneharness's sweeper does that unprompted, and a test
-//! executable is none.
+//! executable is none. A journey proving that the `onejudge` binary *does* host
+//! one sets [`CODEX_IDLE_EXIT_ENV`] past what it waits, so the server outlasting
+//! the wait is the sweeper's absence rather than this double's own exit.
 
 use std::collections::HashSet;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -41,6 +43,8 @@ use std::time::{Duration, Instant};
 
 use serde::Deserialize;
 use serde_json::{json, Value};
+
+use onejudge_test_doubles::CODEX_IDLE_EXIT_ENV;
 
 /// Long enough that two dispatches started together both connect before the
 /// first one's departure stops the server, and short enough that a suite's
@@ -108,7 +112,24 @@ pub fn run(argv: &[String], wait_limit: Duration) -> ! {
     std::process::exit(0);
 }
 
+/// [`IDLE_EXIT`], or the whole milliseconds [`CODEX_IDLE_EXIT_ENV`] names;
+/// anything else set there is refused.
+fn idle_exit() -> Duration {
+    let Some(raw) = std::env::var_os(CODEX_IDLE_EXIT_ENV) else {
+        return IDLE_EXIT;
+    };
+    raw.to_str()
+        .and_then(|text| text.parse().ok())
+        .map(Duration::from_millis)
+        .unwrap_or_else(|| {
+            super::fail(&format!(
+                "{CODEX_IDLE_EXIT_ENV}={raw:?} is not whole milliseconds"
+            ))
+        })
+}
+
 fn exit_when_idle(server: &Server) {
+    let idle_exit = idle_exit();
     let started = Instant::now();
     let mut idle_since: Option<Instant> = None;
     loop {
@@ -122,7 +143,7 @@ fn exit_when_idle(server: &Server) {
             continue;
         }
         let since = *idle_since.get_or_insert_with(Instant::now);
-        if since.elapsed() >= IDLE_EXIT {
+        if since.elapsed() >= idle_exit {
             std::process::exit(0);
         }
     }

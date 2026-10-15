@@ -5776,3 +5776,208 @@ fn watch_follows_a_live_run_from_its_start_and_never_mixes_in_an_earlier_one() {
     assert!(all.contains("the watched run"));
     assert!(!all.contains("the earlier run"), "{all}");
 }
+
+// The shared Codex app-server's sweeper. oneharness-core 0.28 runs a controlled
+// Codex turn on a pooled `codex app-server --listen` that outlives the dispatch
+// that started it, and stops it after its linger from a sweeper process it
+// starts by re-running the current executable — but only from a binary whose
+// `main` called `serve_sweeper_if_requested` first. These drive the built
+// `onejudge` binary, so what is proven is that the shipped `main` makes the call.
+
+/// A pooled-Codex scratch project: the fake harness on a private `PATH` as
+/// `codex`, an `oneharness.toml` selecting it, and a state home short enough
+/// to address the run's control socket.
+#[cfg(unix)]
+struct PooledCodex {
+    dir: std::path::PathBuf,
+    state: std::path::PathBuf,
+    path: std::ffi::OsString,
+}
+
+#[cfg(unix)]
+impl PooledCodex {
+    fn new(name: &str) -> Self {
+        let dir = scratch_path(name);
+        let _ = std::fs::remove_dir_all(&dir);
+        let bin = dir.join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::copy(fake_harness_bin(), bin.join("codex")).unwrap();
+        std::fs::write(
+            dir.join("oneharness.toml"),
+            format!(
+                "harnesses = [\"codex\"]\nhistory_dir = {:?}\n",
+                dir.join("history").display().to_string(),
+            ),
+        )
+        .unwrap();
+        let path = std::env::var_os("PATH").unwrap_or_default();
+        let path =
+            std::env::join_paths(std::iter::once(bin).chain(std::env::split_paths(&path))).unwrap();
+        // The store a controlled run's socket lands in is `<state>/oneharness/
+        // sessions`, so the state home is measured for that.
+        let state = support::use_private_session_store(name)
+            .ancestors()
+            .nth(2)
+            .unwrap()
+            .to_path_buf();
+        PooledCodex { dir, state, path }
+    }
+
+    /// The `onejudge` binary under this project's hermetic environment.
+    fn onejudge(&self) -> Command {
+        let mut command = Command::new(onejudge_bin());
+        command
+            .current_dir(&self.dir)
+            .env("PATH", &self.path)
+            .env("XDG_STATE_HOME", &self.state)
+            .env("XDG_CONFIG_HOME", self.dir.join("xdg"));
+        for (key, _) in std::env::vars().filter(|(key, _)| key.starts_with("ONEHARNESS_")) {
+            command.env_remove(key);
+        }
+        command
+    }
+
+    /// The pool's root, where each server's entry is a directory named by its key.
+    fn pool_root(&self) -> std::path::PathBuf {
+        self.state.join("oneharness").join("servers")
+    }
+}
+
+/// Poll `done` until it holds or `within` passes, saying whether it held.
+#[cfg(unix)]
+fn holds_within(within: std::time::Duration, mut done: impl FnMut() -> bool) -> bool {
+    let deadline = std::time::Instant::now() + within;
+    while std::time::Instant::now() < deadline {
+        if done() {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    done()
+}
+
+#[cfg(unix)]
+#[test]
+fn binary_run_stops_its_pooled_codex_app_server_after_the_linger_with_no_later_dispatch() {
+    use oneharness_core::io::app_server::LINGER_ENV;
+    use oneharness_core::io::server_pool::LeaseHolder;
+
+    let project = PooledCodex::new("pooled-codex-sweeper");
+    let record = project.dir.join("app-server.jsonl");
+    let config = project.dir.join("onejudge.yaml");
+    let task = format!(
+        "go [[reply:pooled]] [[record-harness:{}]]",
+        record.display()
+    );
+    std::fs::write(
+        &config,
+        format!(
+            "provider:\n  kind: oneharness\n  control: true\ntask: {}\nsession: pooled\n",
+            serde_json::to_string(&task).unwrap()
+        ),
+    )
+    .unwrap();
+
+    let output = project
+        .onejudge()
+        .args(["run", config.to_str().unwrap(), "--format", "json"])
+        // A linger short enough to watch, and a double that would otherwise
+        // outlive the whole wait below: only the sweeper can stop it in time.
+        .env(LINGER_ENV, "200")
+        .env(doubles::CODEX_IDLE_EXIT_ENV, "120000")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["transcript"]["messages"][1]["content"], "pooled");
+
+    // The turn ran on the pooled server, which outlived the `onejudge` process.
+    let recorded = std::fs::read_to_string(&record).expect("the app-server served the turn");
+    let line: serde_json::Value = serde_json::from_str(recorded.trim()).unwrap();
+    assert_eq!(line["argv"][0], "app-server", "{recorded}");
+    let server = u32::try_from(line["server_pid"].as_u64().unwrap()).unwrap();
+    let entries: Vec<_> = std::fs::read_dir(project.pool_root())
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect();
+    assert_eq!(entries.len(), 1, "one pool entry: {entries:?}");
+    let entry = &entries[0];
+
+    // No later pool operation: nothing but the sweeper the run left behind can
+    // stop the server now. Its interval is 2s, its stop drains for up to 10s.
+    let stopped = holds_within(std::time::Duration::from_secs(20), || {
+        !process_exists(server)
+    });
+    if !stopped {
+        // Captured from the double's own record, so this pid is the server.
+        let _ = Command::new("kill").arg(server.to_string()).status();
+    }
+    let log = std::fs::read_to_string(entry.join("sweeper.log")).unwrap_or_default();
+    assert!(
+        stopped,
+        "the pooled server {server} outlived its linger with nobody left to stop it; \
+         sweeper log: {log:?}"
+    );
+
+    // …and the sweeper, its server gone, exited and left its entry unclaimed.
+    // The sweeper record is removed as it exits, so read whichever is there.
+    let sweeper = std::fs::read_to_string(entry.join("sweeper.json"))
+        .ok()
+        .and_then(|text| serde_json::from_str::<LeaseHolder>(&text).ok());
+    if let Some(holder) = sweeper {
+        assert!(
+            holds_within(std::time::Duration::from_secs(10), || !holder.is_live()),
+            "the sweeper {holder:?} outlived its server"
+        );
+    }
+    assert!(
+        holds_within(std::time::Duration::from_secs(10), || !entry
+            .join("sweeper.json")
+            .exists()),
+        "the sweeper's record outlived it"
+    );
+    assert_eq!(log, "", "the sweeper warned");
+}
+
+#[cfg(unix)]
+#[test]
+fn binary_started_as_a_sweeper_exits_without_running_its_own_commands() {
+    use oneharness_core::io::app_server::SWEEPER_ENV;
+
+    // An entry that names no server: the sweeper has nothing to watch and exits
+    // cleanly. Started with no arguments, so a `main` that ran its own command
+    // handling instead would print clap's usage and exit 2.
+    let project = PooledCodex::new("sweeper-entry");
+    let entry = project.pool_root().join("codex-idle");
+    std::fs::create_dir_all(&entry).unwrap();
+    let output = project
+        .onejudge()
+        .env(SWEEPER_ENV, &entry)
+        .output()
+        .unwrap();
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stdout.is_empty() && output.stderr.is_empty());
+
+    // Pointed outside the pool, it refuses rather than sweep there — still as
+    // the sweeper, never as `onejudge`.
+    let stray = project.dir.join("not-an-entry");
+    std::fs::create_dir_all(&stray).unwrap();
+    let output = project
+        .onejudge()
+        .env(SWEEPER_ENV, &stray)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(2), "{stderr}");
+    assert!(
+        stderr.contains("is not a shared app-server pool entry") && !stderr.contains("Usage"),
+        "{stderr}"
+    );
+    assert!(output.stdout.is_empty());
+}
