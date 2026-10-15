@@ -342,6 +342,11 @@ pub(crate) fn classify(kind: FailureKind) -> ProviderErrorKind {
         FailureKind::UntrustedDirectory
         | FailureKind::InputTooLarge
         | FailureKind::ModelMismatch => ProviderErrorKind::Other,
+        // The shared Codex app-server went away under a turn it had accepted. The
+        // candidate and the task are both fine — it is no environment category
+        // onejudge names, and not `Overloaded`, which reports a server that
+        // refused for capacity rather than one that crashed or restarted.
+        FailureKind::AppServerLost => ProviderErrorKind::Other,
     }
 }
 
@@ -517,6 +522,8 @@ fn reason_kind(reason: FallThroughReason) -> ProviderErrorKind {
         | FallThroughReason::UntrustedDirectory
         | FallThroughReason::InputTooLarge
         | FallThroughReason::ModelMismatch => ProviderErrorKind::Other,
+        // As in `classify`: the shared app-server went away, not the candidate.
+        FallThroughReason::AppServerLost => ProviderErrorKind::Other,
         FallThroughReason::ServerOverloaded => ProviderErrorKind::Overloaded,
     }
 }
@@ -878,6 +885,7 @@ mod tests {
             ),
             (FallThroughReason::InputTooLarge, ProviderErrorKind::Other),
             (FallThroughReason::ModelMismatch, ProviderErrorKind::Other),
+            (FallThroughReason::AppServerLost, ProviderErrorKind::Other),
             (
                 FallThroughReason::ServerOverloaded,
                 ProviderErrorKind::Overloaded,
@@ -905,6 +913,7 @@ mod tests {
             (FailureKind::UntrustedDirectory, ProviderErrorKind::Other),
             (FailureKind::InputTooLarge, ProviderErrorKind::Other),
             (FailureKind::ModelMismatch, ProviderErrorKind::Other),
+            (FailureKind::AppServerLost, ProviderErrorKind::Other),
         ] {
             assert_eq!(classify(kind), expected);
             // The token onejudge surfaces is oneharness's own wire spelling.
