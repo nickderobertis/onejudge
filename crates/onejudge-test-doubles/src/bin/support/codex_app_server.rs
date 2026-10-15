@@ -42,7 +42,9 @@ use std::time::{Duration, Instant};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-/// How long the server outlives its last connection.
+/// Long enough that two dispatches started together both connect before the
+/// first one's departure stops the server, and short enough that a suite's
+/// servers are gone well before the runner reaps its processes.
 const IDLE_EXIT: Duration = Duration::from_secs(3);
 
 /// How long the server waits for a first connection before giving up, so a
@@ -57,7 +59,8 @@ const SUN_PATH_BUDGET: usize = 100;
 /// oneharness sends; a frame past this is refused rather than allocated.
 const MESSAGE_LIMIT: u64 = 16 * 1024 * 1024;
 
-/// The most one upgrade-request line may hold.
+/// oneharness's upgrade lines are a few dozen bytes; the bound keeps a client
+/// that never sends `\r\n` from growing this process's memory.
 const HEADER_LINE_LIMIT: u64 = 8 * 1024;
 
 struct Server {
@@ -368,7 +371,8 @@ enum JsonRpcVersion {
     V2,
 }
 
-/// The requests this server answers, each with the parameters it reads.
+/// Every method outside this set is refused by [`Request::parse`], so a request
+/// oneharness started sending would fail a journey rather than be answered.
 enum Request {
     Initialize,
     ThreadStart(OpenParams),
