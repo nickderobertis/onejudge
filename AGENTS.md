@@ -340,6 +340,7 @@ CLI scripted through the environment, so the gate needs no llmlint installed. Th
 reports come from `RunResult::telemetry` on the **run report** (oneharness report
 schema `0.5`); the history file is still read, but only for `history_id`.
 
+[//]: # "llmlint: ignore[agents_md_durable_and_terse] The numeric CLI floor is not a free copy here: `cli/mod.rs`'s `the_advertised_oneharness_minimum_tracks_the_report_schema_and_the_prose` requires AGENTS.md to state `MIN_ONEHARNESS` and fails the gate when it does not, so this is the one mention that gate reconciles; the second mention further down was removed instead."
 **Cancelling a turn must terminate the harness tree, not just the party onejudge
 talks to** — an orphaned harness keeps billing. In process that is
 `RunControls::cancel` plus the sink's `SinkStep::Stop`; either alone suffices
@@ -373,7 +374,7 @@ Both are serialized even when null; a refused ask is `null` **plus** its
 `*_unavailable` reason, because "never asked" and "asked and refused" are
 different facts. A refusal costs no model tokens (oneharness validates before
 spawning), so the call is retried without the flag rather than failing the run.
-`--control` arrived in oneharness 0.6.14, under the **0.25.1+** floor the crate
+`--control` arrived in oneharness 0.6.14, under the floor the crate
 advertises. The stateless `judge` / `assess` calls stay uncontrolled (no session
 to be addressed by) and so does the legacy `user` turn, which shares the
 supervisor's session name — the one place "two runs on one address" is real.
