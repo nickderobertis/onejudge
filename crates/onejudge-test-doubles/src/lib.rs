@@ -25,6 +25,13 @@ pub mod support;
 /// `onejudge-test-doubles:build` produced.
 pub const DOUBLES_DIR_ENV: &str = "ONEJUDGE_TEST_DOUBLES_DIR";
 
+/// Whole milliseconds replacing how long the fake harness's `codex app-server`
+/// stays up once it has no connection left. Shared by the double that reads it
+/// and the journeys that set it, so the two cannot name different variables.
+/// `CODEX_`-prefixed because that is what oneharness's pool keeps of a
+/// dispatch's environment when it launches a shared server.
+pub const CODEX_IDLE_EXIT_ENV: &str = "CODEX_ONEJUDGE_FAKE_IDLE_EXIT_MS";
+
 /// `onejudge-echo-provider`: speaks the `CommandProvider` JSON-lines protocol.
 pub fn echo_provider() -> &'static str {
     double("onejudge-echo-provider")

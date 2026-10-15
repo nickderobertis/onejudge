@@ -5884,7 +5884,7 @@ fn binary_run_stops_its_pooled_codex_app_server_after_the_linger_with_no_later_d
         // A linger short enough to watch, and a double that would otherwise
         // outlive the whole wait below: only the sweeper can stop it in time.
         .env(LINGER_ENV, "200")
-        .env("CODEX_ONEJUDGE_FAKE_IDLE_EXIT_MS", "120000")
+        .env(doubles::CODEX_IDLE_EXIT_ENV, "120000")
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&output.stderr);

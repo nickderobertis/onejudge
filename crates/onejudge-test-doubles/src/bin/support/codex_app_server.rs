@@ -30,10 +30,8 @@
 //! none for [`IDLE_EXIT`]: the pool would stop it after its linger, but only a
 //! process hosting oneharness's sweeper does that unprompted, and a test
 //! executable is none. A journey proving that the `onejudge` binary *does* host
-//! one sets [`IDLE_EXIT_ENV`] past what it waits, so the server outlasting the
-//! wait is the sweeper's absence rather than this double's own exit. The
-//! variable is `CODEX_`-prefixed because that is what the pool keeps of a
-//! dispatch's environment when it launches a shared server.
+//! one sets [`CODEX_IDLE_EXIT_ENV`] past what it waits, so the server outlasting
+//! the wait is the sweeper's absence rather than this double's own exit.
 
 use std::collections::HashSet;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -46,13 +44,12 @@ use std::time::{Duration, Instant};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
+use onejudge_test_doubles::CODEX_IDLE_EXIT_ENV;
+
 /// Long enough that two dispatches started together both connect before the
 /// first one's departure stops the server, and short enough that a suite's
 /// servers are gone well before the runner reaps its processes.
 const IDLE_EXIT: Duration = Duration::from_secs(3);
-
-/// Whole milliseconds replacing [`IDLE_EXIT`]; anything else is refused.
-const IDLE_EXIT_ENV: &str = "CODEX_ONEJUDGE_FAKE_IDLE_EXIT_MS";
 
 /// How long the server waits for a first connection before giving up, so a
 /// launch nobody dials cannot leak this process onto a runner.
@@ -115,15 +112,20 @@ pub fn run(argv: &[String], wait_limit: Duration) -> ! {
     std::process::exit(0);
 }
 
+/// [`IDLE_EXIT`], or the whole milliseconds [`CODEX_IDLE_EXIT_ENV`] names;
+/// anything else set there is refused.
 fn idle_exit() -> Duration {
-    match std::env::var(IDLE_EXIT_ENV) {
-        Err(_) => IDLE_EXIT,
-        Ok(raw) => raw.parse().map(Duration::from_millis).unwrap_or_else(|_| {
+    let Some(raw) = std::env::var_os(CODEX_IDLE_EXIT_ENV) else {
+        return IDLE_EXIT;
+    };
+    raw.to_str()
+        .and_then(|text| text.parse().ok())
+        .map(Duration::from_millis)
+        .unwrap_or_else(|| {
             super::fail(&format!(
-                "{IDLE_EXIT_ENV}={raw:?} is not whole milliseconds"
+                "{CODEX_IDLE_EXIT_ENV}={raw:?} is not whole milliseconds"
             ))
-        }),
-    }
+        })
 }
 
 fn exit_when_idle(server: &Server) {
