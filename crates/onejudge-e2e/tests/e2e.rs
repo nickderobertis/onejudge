@@ -805,6 +805,24 @@ fn oneharness_server_overloaded_failure_kind_is_classified() {
 }
 
 #[test]
+fn oneharness_app_server_lost_failure_kind_is_classified() {
+    // A report whose candidate itself carries oneharness 0.28's `app_server_lost`
+    // — the shared Codex server went away under the turn — rather than a chain
+    // that fell through on it. The candidate and the task are both fine, so it
+    // is no environment category onejudge names; the token still reaches the
+    // caller verbatim.
+    let provider = fake_oneharness();
+    let engine = Engine::new(&provider, settings());
+    let skill = skill_with("[[fail:app_server_lost]]");
+    let err = engine
+        .run(&Conversation::single_turn(skill, "go"))
+        .unwrap_err();
+
+    assert_eq!(err.kind(), Some(ProviderErrorKind::Other));
+    assert!(err.to_string().contains("app_server_lost"), "{err}");
+}
+
+#[test]
 fn oneharness_judge_decides_over_the_transcript() {
     let provider = fake_oneharness();
     let engine = Engine::new(&provider, settings());
