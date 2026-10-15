@@ -1515,6 +1515,8 @@ mod control {
                 .unwrap_or_else(|e| emit_error(&format!("control socket path: {e}"))),
             mechanism: shape(),
             interrupts: served_redirect(system),
+            // The stand-in serves no Codex turn, so none ran on a shared server.
+            app_server: None,
         }
     }
 

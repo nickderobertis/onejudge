@@ -805,6 +805,24 @@ fn oneharness_server_overloaded_failure_kind_is_classified() {
 }
 
 #[test]
+fn oneharness_app_server_lost_failure_kind_is_classified() {
+    // A report whose candidate itself carries oneharness 0.28's `app_server_lost`
+    // — the shared Codex server went away under the turn — rather than a chain
+    // that fell through on it. The candidate and the task are both fine, so it
+    // is no environment category onejudge names; the token still reaches the
+    // caller verbatim.
+    let provider = fake_oneharness();
+    let engine = Engine::new(&provider, settings());
+    let skill = skill_with("[[fail:app_server_lost]]");
+    let err = engine
+        .run(&Conversation::single_turn(skill, "go"))
+        .unwrap_err();
+
+    assert_eq!(err.kind(), Some(ProviderErrorKind::Other));
+    assert!(err.to_string().contains("app_server_lost"), "{err}");
+}
+
+#[test]
 fn oneharness_judge_decides_over_the_transcript() {
     let provider = fake_oneharness();
     let engine = Engine::new(&provider, settings());
@@ -3637,6 +3655,135 @@ fn an_in_process_codex_turn_starts_codex_with_plugins_off_unless_the_config_opts
     assert!(
         !names_plugins,
         "an opted-in run names no plugins flag: {argv:?}"
+    );
+}
+
+/// A project whose `oneharness.toml` selects Codex and says nothing about where
+/// its turns run — no `bin`, no `app_server` key — with the fake-harness double
+/// copied onto `PATH` as `codex`, and this test process's state directory (where
+/// the linked engine keeps its app-server pool) made private.
+#[cfg(unix)]
+fn shared_codex_project(name: &str) -> std::path::PathBuf {
+    support::use_private_session_store(name);
+    let dir = scratch_path(name);
+    let _ = std::fs::remove_dir_all(&dir);
+    let bin = dir.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    std::fs::copy(doubles::fake_harness(), bin.join("codex")).unwrap();
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    let path =
+        std::env::join_paths(std::iter::once(bin).chain(std::env::split_paths(&path))).unwrap();
+    std::env::set_var("PATH", path);
+    std::fs::write(
+        dir.join("oneharness.toml"),
+        format!(
+            "harnesses = [\"codex\"]\nhistory_dir = {:?}\n",
+            dir.join("history").display().to_string(),
+        ),
+    )
+    .unwrap();
+    dir
+}
+
+/// One controlled Codex turn through the default (in-process) provider, under
+/// its own session name so two of them address two control sockets.
+#[cfg(unix)]
+fn controlled_codex_turn(
+    dir: &std::path::Path,
+    session: &str,
+    instructions: &str,
+) -> Result<onejudge::Outcome, onejudge::Error> {
+    let provider = OneharnessProvider::new().with_control(true);
+    let engine = Engine::new(&provider, settings().with_session_name(session));
+    engine.run(&Conversation::single_turn(
+        Skill::new("demo", dir.to_str().unwrap(), instructions),
+        "do it",
+    ))
+}
+
+#[cfg(unix)]
+#[test]
+fn concurrent_in_process_codex_turns_share_one_app_server() {
+    // oneharness-core 0.28 runs a controlled Codex turn on a shared `codex
+    // app-server --listen`, one per configuration, by default. The default is
+    // the linked core's, so this drives that core — two dispatches at once, as
+    // an orchestrator runs them — and reads the answer off what the `codex`
+    // double on `PATH` recorded: which server process served each turn, and how
+    // many turns that process had started when each one finished.
+    let dir = shared_codex_project("codex-shared-app-server");
+    let record = dir.join("app-server.jsonl");
+    let instructions = format!(
+        "[[reply:shared reply]] [[await-turns:2]] [[record-harness:{}]]",
+        record.display()
+    );
+    let turns: Vec<_> = ["run-a", "run-b"]
+        .into_iter()
+        .map(|session| {
+            let dir = dir.clone();
+            let instructions = instructions.clone();
+            std::thread::spawn(move || controlled_codex_turn(&dir, session, &instructions))
+        })
+        .collect();
+    for turn in turns {
+        let outcome = turn
+            .join()
+            .unwrap()
+            .expect("a turn on the shared server is an ordinary turn");
+        assert_eq!(outcome.transcript.messages[1].content, "shared reply");
+        let telemetry = outcome.telemetry.as_ref().expect("the run is measured");
+        assert_eq!(telemetry.attribution[0].candidates[0].harness, "codex");
+        // The in-process seam: the engine that started Codex is the linked core.
+        assert!(outcome.processes.is_empty());
+    }
+
+    let recorded = std::fs::read_to_string(&record).expect("the app-server served the turns");
+    let lines: Vec<serde_json::Value> = recorded
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(lines.len(), 2, "one record per turn: {recorded}");
+    assert_eq!(
+        lines[0]["server_pid"], lines[1]["server_pid"],
+        "both turns ran on one app-server process: {recorded}"
+    );
+    assert_ne!(lines[0]["thread"], lines[1]["thread"], "{recorded}");
+    for line in &lines {
+        assert_eq!(
+            line["turns_started"], 2,
+            "each turn finished only once the same process had started both: {recorded}"
+        );
+        let argv: Vec<String> = serde_json::from_value(line["argv"].clone()).unwrap();
+        assert_eq!(
+            argv.first().map(String::as_str),
+            Some("app-server"),
+            "{argv:?}"
+        );
+        assert!(
+            argv.windows(2)
+                .any(|w| w[0] == "--listen" && w[1].starts_with("unix://")),
+            "{argv:?}"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn an_in_process_codex_turn_whose_shared_app_server_dies_fails_classified() {
+    // The failure half: the shared server crashing under a live turn is
+    // oneharness's `app_server_lost`, new in 0.28. The core falls the candidate
+    // through on it (`FallThroughReason::AppServerLost`), so a one-candidate
+    // chain is exhausted and onejudge classifies the run by that last reason —
+    // the `reason_kind` arm this core move added. It must fail the run loudly,
+    // attributed to the candidate under that token — never bank an empty turn.
+    let dir = shared_codex_project("codex-app-server-lost");
+    let err = controlled_codex_turn(&dir, "run-lost", "[[app-server-exit]]")
+        .expect_err("a turn whose server died is not a turn");
+    let rendered = format!("{err}");
+    assert_eq!(err.kind(), Some(ProviderErrorKind::Other), "{rendered}");
+    assert!(
+        rendered.contains("no oneharness fallback candidate could run the turn")
+            && rendered.contains("(codex [app-server-lost])"),
+        "the chain fell through on the lost server: {rendered}"
     );
 }
 

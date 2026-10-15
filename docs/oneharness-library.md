@@ -7,7 +7,7 @@ expressed as a typed call — **including the invocation itself**. A turn is
 
 The pin is in the workspace manifest; everything below is verified against it.
 The **CLI** floor an operator installs is a different number — currently
-**0.18.0+**, the first release that accepts the repeated `run --config` the
+**0.25.1+**, the first release that accepts the repeated `run --config` the
 judge side passes (onejudge's defaults, then the judge's config), and writes the
 report schema the pinned core parses — because
 the two crates version independently: the pin may be newer than the core that

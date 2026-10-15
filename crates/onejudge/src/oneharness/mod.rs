@@ -12,7 +12,7 @@
 //! separately-configured harness/model — again without `--harness`/`--model`.
 //! Scaffold both with `onejudge init` (which shells out to `oneharness init`).
 //!
-//! It targets **oneharness v0.18.0+** — the first release that accepts the
+//! It targets **oneharness v0.25.1+** — the first release that accepts the
 //! repeated `run --config` an evaluator judge's call passes (onejudge's judge-side
 //! defaults, then the judge's own config), and writes the report schema the
 //! `oneharness-core` this crate compiles against (pinned in the workspace

@@ -50,18 +50,19 @@ pub const STARTER_CONFIG: &str = include_str!("starter.yaml");
 /// It is the CLI's own version, which is **not** the linked core's, and the two
 /// are deliberately **not** ordered against each other. The crates version
 /// independently — there is no `oneharness` 0.6.13, the 0.6.14 CLI carried
-/// `oneharness-core` 0.6.13, and the 0.18.0 CLI carries `oneharness-core` 0.20.0
+/// `oneharness-core` 0.6.13, and the 0.25.1 CLI carries `oneharness-core` 0.28.1
 /// — so naming the core version here would tell an operator to install a CLI
 /// that was never published, and holding the CLI to embed a core at least as new
 /// as the linked one would move the floor on every relink whether or not the
 /// report changed. The linked core may be newer than the one this floor embeds
 /// so long as both write the same report schema: what ties the two is
 /// [`MIN_ONEHARNESS_REPORT_SCHEMA`], and the gate below is written against that.
-const MIN_ONEHARNESS: &str = "0.18.0";
+const MIN_ONEHARNESS: &str = "0.25.1";
 
 /// The oneharness **report schema** the [`MIN_ONEHARNESS`] CLI writes, read off
-/// the `oneharness-core` that release embeds (`oneharness` 0.18.0 depends on
-/// `^0.20.0`, whose `domain::report::SCHEMA_VERSION` is `0.11`). The gate holds
+/// the `oneharness-core` that release embeds (`oneharness` 0.25.1 depends on
+/// `^0.28.1`, whose `domain::report::SCHEMA_VERSION` is `0.12` — the first CLI
+/// to write it, since the 0.23.1 before it embeds `^0.26.0`, which writes `0.11`). The gate holds
 /// the linked core's declared schema equal to it (see [`MIN_ONEHARNESS`] for why
 /// the schema, not a version, is what ties the two), so a relink that moves the
 /// report fails until the floor and this constant follow.
@@ -70,7 +71,7 @@ const MIN_ONEHARNESS: &str = "0.18.0";
 /// operator sees names a schema, and a second number in a CLI message would be
 /// one more copy to drift.
 #[cfg(test)]
-const MIN_ONEHARNESS_REPORT_SCHEMA: &str = "0.11";
+const MIN_ONEHARNESS_REPORT_SCHEMA: &str = "0.12";
 
 /// The oldest `oneharness-core` this crate can be built against: the release
 /// whose public text renderer (`domain::render`) draws the worker's events in

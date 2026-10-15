@@ -34,7 +34,10 @@
 //! * **codex** — `exec … --json <prompt>`, answering with the `thread.started` /
 //!   `agent_message` JSONL oneharness reads its text from. It is here so a journey
 //!   can copy this binary onto `PATH` as `codex` and record the argv the linked
-//!   engine starts Codex with (its plugins default is decided there).
+//!   engine starts Codex with (its plugins default is decided there). Under
+//!   `--control` the engine runs the turn on a shared `app-server --listen`
+//!   instead, which this binary also plays (`support/codex_app_server.rs`, with
+//!   markers of its own), after answering the `--version` probe that keys it.
 //!
 //! # Markers
 //!
@@ -96,6 +99,11 @@ mod coverage;
 
 use coverage::{detached_profile, publish_profile};
 
+/// The shared `codex app-server --listen` a controlled Codex turn runs on.
+#[cfg(unix)]
+#[path = "support/codex_app_server.rs"]
+mod codex_app_server;
+
 /// How long a marker that waits for the world is given before failing loudly.
 /// Generous against a loaded CI box, and far short of a test-runner timeout, so a
 /// build that broke incremental delivery reports *why* instead of hanging.
@@ -118,6 +126,20 @@ fn main() {
         };
         descendant(handle);
         return;
+    }
+    // `codex --version`: what the linked engine asks before keying a shared
+    // app-server, and the one invocation that carries no prompt.
+    if args == ["--version"] {
+        emit("codex-cli 0.0.0-onejudge-fake");
+        return;
+    }
+    // `codex app-server … --listen unix://PATH`: the shared server a controlled
+    // Codex turn runs on. Its turns' prompts arrive over its socket, not here.
+    #[cfg(unix)]
+    if args.first().map(String::as_str) == Some("app-server")
+        && args.iter().any(|arg| arg == "--listen")
+    {
+        codex_app_server::run(&args, WAIT_LIMIT);
     }
     let (prompt, stdin) = steering(&args);
     if let Some(path) = marker(&prompt, "record-harness") {
