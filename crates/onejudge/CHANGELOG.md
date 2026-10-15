@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.19.4](https://github.com/nickderobertis/onejudge/compare/onejudge-v0.19.3...onejudge-v0.19.4) - 2026-10-15
+
+### Fixed
+
+- *(deps)* link the oneharness-core that shares one Codex app-server across dispatches ([#175](https://github.com/nickderobertis/onejudge/pull/175))
+
 ## [0.19.3](https://github.com/nickderobertis/onejudge/compare/onejudge-v0.19.2...onejudge-v0.19.3) - 2026-10-14
 
 ### Other
