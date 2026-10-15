@@ -22,12 +22,23 @@ RelativePath = NewType("RelativePath", str)
 Checksum = NewType("Checksum", str)
 
 
+# Apple silicon is the only released Darwin target. Intel macOS is no longer
+# built, so a manifest naming its target is refused.
 class Target(str, Enum):
-    INTEL = "x86_64-apple-darwin"
     ARM = "aarch64-apple-darwin"
 
     def __str__(self) -> str:
         return self.value
+
+    @property
+    def wheel_arch(self) -> str:
+        """The architecture in the wheel's `macosx_*_<arch>` platform tag."""
+        return {Target.ARM: "arm64"}[self]
+
+    @property
+    def cpu(self) -> int:
+        """The Mach-O header's CPU type."""
+        return {Target.ARM: 0x0100000C}[self]
 
 
 class Kind(str, Enum):
@@ -37,7 +48,8 @@ class Kind(str, Enum):
 
 TARGETS = tuple(Target)
 KINDS = tuple(Kind)
-SCHEMA_VERSION = 1
+# 2: Intel macOS left the target set; a version-1 manifest may still carry it.
+SCHEMA_VERSION = 2
 
 
 @dataclass(frozen=True)
@@ -210,9 +222,8 @@ def validate(root: Path, raw: object, tag: str, sha: str, version: str) -> Manif
                     ):
                         raise ValueError("archive contents mismatch")
             case Kind.WHEEL:
-                arch = "x86_64" if row.target is Target.INTEL else "arm64"
                 if not re.fullmatch(
-                    rf"onejudge_cli-{re.escape(version)}-py3-none-macosx_\d+_\d+_{arch}\.whl",
+                    rf"onejudge_cli-{re.escape(version)}-py3-none-macosx_\d+_\d+_{row.target.wheel_arch}\.whl",
                     file.name,
                 ):
                     raise ValueError("wheel version/architecture mismatch")
@@ -240,10 +251,9 @@ def validate(root: Path, raw: object, tag: str, sha: str, version: str) -> Manif
                     if scripts != [f"onejudge_cli-{version}.data/scripts/onejudge"]:
                         raise ValueError("wheel script identity mismatch")
         binary = payload(file, row.kind)
-        cpu = 0x01000007 if row.target is Target.INTEL else 0x0100000C
         if (
             binary[:4] != b"\xcf\xfa\xed\xfe"
-            or int.from_bytes(binary[4:8], "little") != cpu
+            or int.from_bytes(binary[4:8], "little") != row.target.cpu
         ):
             raise ValueError("binary Mach-O architecture mismatch")
         binary_hash = hashlib.sha256(binary).hexdigest()
@@ -270,8 +280,9 @@ def validate(root: Path, raw: object, tag: str, sha: str, version: str) -> Manif
 def stage(root: Path, tag: str, sha: str, version: str) -> Manifest:
     rows = []
     for target in TARGETS:
-        arch = "x86_64" if target is Target.INTEL else "arm64"
-        (wheel,) = root.glob(f"onejudge_cli-{version}-*-macosx_*_{arch}.whl")
+        (wheel,) = root.glob(
+            f"onejudge_cli-{version}-*-macosx_*_{target.wheel_arch}.whl"
+        )
         for kind, file in (
             (Kind.ARCHIVE, root / f"onejudge-{target}.tar.gz"),
             (Kind.WHEEL, wheel),

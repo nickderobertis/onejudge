@@ -343,15 +343,11 @@ test("actual workflow graph covers event fan-out, ownership, diffs and publish s
                   [],
                   scenario.id,
                 );
+              // The one Mac release job builds Apple silicon only.
               for (const row of scenario.rows.filter(
                 (row) => row.job === "darwin" && row.macos,
               ))
-                assert.deepEqual(
-                  row.targets,
-                  docs["release-binaries.yml"].jobs.darwin.env.TARGETS.split(
-                    /\s+/,
-                  ),
-                );
+                assert.deepEqual(row.targets, ["aarch64-apple-darwin"]);
               scenarios.push(scenario);
             }
     const lifecycle = [
@@ -453,8 +449,8 @@ test("local reusable calls expand their actual matrices and refuse automatic dia
           strategy: {
             matrix: {
               include: [
+                { os: "macos-14", target: "aarch64-apple-darwin" },
                 { os: "macos-15", target: "aarch64-apple-darwin" },
-                { os: "macos-15", target: "x86_64-apple-darwin" },
               ],
             },
           },
@@ -464,8 +460,8 @@ test("local reusable calls expand their actual matrices and refuse automatic dia
   };
   const rows = resolveRun("outer.yml", scenario, docs);
   assert.deepEqual(
-    rows.map((r) => r.matrix.target),
-    ["aarch64-apple-darwin", "x86_64-apple-darwin"],
+    rows.map((r) => r.matrix.os),
+    ["macos-14", "macos-15"],
   );
   assert.ok(rows.every((r) => r.macos));
   docs["outer.yml"].jobs.call.with = { diagnostic_rebuild: true };

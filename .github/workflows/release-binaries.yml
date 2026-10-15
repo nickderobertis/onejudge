@@ -124,7 +124,7 @@ jobs:
     runs-on: macos-15
     # These target declarations are also read by the release-platform drift gate.
     env:
-      TARGETS: x86_64-apple-darwin aarch64-apple-darwin
+      TARGETS: aarch64-apple-darwin
       MACOSX_DEPLOYMENT_TARGET: '11.0'
       VERSION: ${{ needs.darwin-plan.outputs.version }}
       TAG: ${{ needs.darwin-plan.outputs.tag }}
@@ -144,11 +144,11 @@ jobs:
       - name: Install pinned toolchain (from rust-toolchain.toml)
         run: just --justfile .release-tools/justfile --working-directory "$PWD" _rust-toolchain
       - uses: astral-sh/setup-uv@v6
-      - name: Add both Darwin targets
-        run: rustup target add x86_64-apple-darwin aarch64-apple-darwin
-      - name: Enable Rosetta for the Intel install journey
-        run: sudo softwareupdate --install-rosetta --agree-to-license
-      - name: Build, package, install and run each architecture sequentially
+      # Apple silicon only: Intel macOS is no longer released, so nothing
+      # here cross-compiles or runs under Rosetta.
+      - name: Add the Darwin target
+        run: rustup target add aarch64-apple-darwin
+      - name: Build, package, install and run natively
         run: |
           test "$(uname -m)" = arm64
           for target in $TARGETS; do

@@ -19,6 +19,8 @@ test("production release jobs retain every declared platform and use one Darwin 
     "boolean",
   );
   const targets = producer.darwin.env.TARGETS.split(" ");
+  // Apple silicon is the only released macOS target; Intel was discontinued.
+  assert.deepEqual(targets, ["aarch64-apple-darwin"]);
   const manifestTargets = JSON.parse(
     execFileSync(
       "python3",
@@ -52,9 +54,9 @@ test("production release jobs retain every declared platform and use one Darwin 
     "Windows archive lost",
   );
   assert.ok(wheels.every((t) => !t.endsWith("apple-darwin")));
-  // Rosetta and Mach-O execution require the real hosted macOS runner; Linux
-  // proves the same installer with a native product and the typed artifact
-  // contract for both Darwin targets, without pretending to execute Darwin.
+  // Mach-O execution requires the real hosted macOS runner; Linux proves the
+  // same installer with a native product and the typed artifact contract for the
+  // arm64 Darwin target, without pretending to execute Darwin.
   const commands = producer.darwin.steps.map((s) => s.run || "").join("\n");
   assert.match(commands, /for target in \$TARGETS/);
   assert.match(commands, /just .*pypi-release "\$target" dist/);
@@ -63,9 +65,9 @@ test("production release jobs retain every declared platform and use one Darwin 
     /smoke_release\.py --target "\$target" --root dist --version "\$VERSION"/,
   );
   assert.match(commands, /release_artifacts\.py stage/);
-  assert.ok(
-    producer.darwin.steps.some((s) => s.run?.includes("--install-rosetta")),
-  );
+  assert.match(commands, /rustup target add aarch64-apple-darwin\n/);
+  // Native arm64 only: no Rosetta, and no x86_64 cross-compilation.
+  assert.doesNotMatch(commands, /rosetta|arch -x86_64|x86_64-apple-darwin/i);
   const artifact = producer.darwin.steps.find((s) =>
     s.uses?.startsWith("actions/upload-artifact@"),
   );

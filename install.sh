@@ -30,11 +30,18 @@ case "$os" in
         x86_64 | amd64) target="x86_64-unknown-linux-gnu" ;;
         *) fail "unsupported Linux arch '$arch' — build from source (cargo install onejudge --features cli)" ;;
     esac ;;
-    Darwin) case "$arch" in
-        arm64 | aarch64) target="aarch64-apple-darwin" ;;
-        x86_64) target="x86_64-apple-darwin" ;;
-        *) fail "unsupported macOS arch '$arch' — build from source (cargo install onejudge --features cli)" ;;
-    esac ;;
+    Darwin)
+        # A shell translated by Rosetta on Apple silicon reports x86_64; the arm64
+        # archive runs natively there.
+        if [ "$arch" = x86_64 ] && [ "$(sysctl -n sysctl.proc_translated 2>/dev/null || true)" = 1 ]; then
+            arch=arm64
+        fi
+        case "$arch" in
+            arm64 | aarch64) target="aarch64-apple-darwin" ;;
+            x86_64) fail "Intel macOS is no longer supported — releases ship Apple silicon (arm64) macOS archives only; build from source (cargo install onejudge --features cli)" ;;
+            *) fail "unsupported macOS arch '$arch' — build from source (cargo install onejudge --features cli)" ;;
+        esac
+        ;;
     *) fail "unsupported OS '$os' — on Windows download the .zip from the releases page, or use cargo install" ;;
 esac
 

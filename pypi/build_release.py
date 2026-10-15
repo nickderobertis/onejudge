@@ -12,6 +12,8 @@ import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 
+from release_artifacts import TARGETS
+
 
 @dataclass(frozen=True)
 class Products:
@@ -24,6 +26,11 @@ def build(target: str, output: Path) -> Products:
         from native_journey import host
 
         target = host()
+    if target.endswith("-apple-darwin") and target not in TARGETS:
+        raise ValueError(
+            f"{target} is not released: Intel macOS is no longer supported; "
+            f"the only macOS release target is {', '.join(TARGETS)}"
+        )
     output.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(
         dir=os.environ.get("ONEPIPELINE_NODE_SCRATCH_DIR")

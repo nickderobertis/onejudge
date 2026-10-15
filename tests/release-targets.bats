@@ -18,7 +18,7 @@ setup() {
     run "$ROOT/scripts/check-release-targets.sh"
 
     [ "$status" -eq 0 ]
-    [ "$output" = "check-release-targets: 3 install target(s) all built by the release producers" ]
+    [ "$output" = "check-release-targets: 2 install target(s) all built by the release producers" ]
 }
 
 @test "an install target the producers do not build fails, listing both sides" {
@@ -28,7 +28,7 @@ setup() {
 
     [ "$status" -eq 1 ]
     [ "${lines[0]}" = "check-release-targets: install.sh downloads target(s) the release producers do not build: riscv64gc-unknown-linux-gnu" ]
-    [ "${lines[1]}" = "  install.sh:            aarch64-apple-darwin riscv64gc-unknown-linux-gnu x86_64-apple-darwin" ]
+    [ "${lines[1]}" = "  install.sh:            aarch64-apple-darwin riscv64gc-unknown-linux-gnu" ]
     [[ "${lines[2]}" == "  release-binaries.yml:  "*x86_64-unknown-linux-gnu* ]]
     [ "${lines[3]}" = "  Fix install.sh's os/arch map or the workflow producer declarations so they agree." ]
 }
