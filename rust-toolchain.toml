@@ -4,3 +4,6 @@
 [toolchain]
 channel = "1.96.0"
 components = ["rustfmt", "clippy", "llvm-tools-preview"]
+# The Linux gate cross-builds the Apple silicon release artifact through the
+# production packager (pypi/tests/test_release_artifacts.py).
+targets = ["aarch64-apple-darwin"]

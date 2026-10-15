@@ -15,6 +15,85 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPTS = ROOT / "pypi"
+ZIG = "ziglang==0.13.0"
+# Mach-O header fields for an arm64 executable: 64-bit magic, CPU_TYPE_ARM64,
+# MH_EXECUTE.
+MACHO_ARM64 = (0xFEEDFACF, 0x0100000C, 2)
+
+
+def darwin_job_env():
+    """The `darwin` release job's env block, read from the workflow it runs in."""
+    workflow = (ROOT / ".github/workflows/release-binaries.yml").read_text()
+    job = workflow.split("\n  darwin:\n", 1)[1].split("\n  publish-darwin:\n", 1)[0]
+    block = job.split("\n    env:\n", 1)[1].split("\n    steps:\n", 1)[0]
+    return {
+        key.strip(): value.strip().strip("'")
+        for key, value in (line.split(":", 1) for line in block.splitlines())
+    }
+
+
+def darwin_cross_env(targets, deployment_target):
+    """Point cargo and cc-rs at zig for each Darwin target, on a Linux host.
+
+    The production builder is unchanged; this is the toolchain a macOS runner
+    supplies natively, reached through cargo's and cc-rs's per-target variables.
+    The wrappers sit at a fixed path under `target/` so cargo's fingerprints,
+    which track the linker and `CC_<target>`, stay warm across runs.
+    """
+    work = ROOT / "target/darwin-cross"
+    work.mkdir(parents=True, exist_ok=True)
+    zig = subprocess.check_output(
+        [
+            "uv",
+            "tool",
+            "run",
+            "--from",
+            ZIG,
+            "python",
+            "-c",
+            "import os, ziglang; print(os.path.join(os.path.dirname(ziglang.__file__), 'zig'))",
+        ],
+        text=True,
+    ).strip()
+    env = {
+        **os.environ,
+        "MACOSX_DEPLOYMENT_TARGET": deployment_target,
+        # sccache's compile server cannot run zig; nothing to cache here anyway.
+        "RUSTC_WRAPPER": "",
+    }
+    for target in targets:
+        wrapper = work / f"cc-{target}"
+        # rustc and cc-rs speak Apple clang's flags; zig takes its target from
+        # -target. Without the macOS SDK, system frameworks and libiconv are left
+        # to the dynamic loader: the binary is inspected here, never run. A
+        # preprocess-only call (cc-rs's compiler probe) runs from this directory,
+        # because `zig cc -E` leaves an empty object file in its working directory.
+        wrapper.write_text(
+            "#!/usr/bin/env bash\n"
+            "args=()\nskip=0\n"
+            'for a in "$@"; do\n'
+            '  if [ "$skip" = 1 ]; then skip=0; continue; fi\n'
+            '  case "$a" in\n'
+            "    -arch | -target | -framework) skip=1 ;;\n"
+            "    --target=* | -liconv) ;;\n"
+            f'    -E) cd "{work}"; args+=("$a") ;;\n'
+            '    *) args+=("$a") ;;\n'
+            "  esac\n"
+            "done\n"
+            f'exec "{zig}" cc -target {target.split("-")[0]}-macos.{deployment_target}'
+            ' -Wl,-undefined,dynamic_lookup "${args[@]}"\n'
+        )
+        wrapper.chmod(0o755)
+        env[f"CC_{target.replace('-', '_')}"] = str(wrapper)
+        env[f"CARGO_TARGET_{target.replace('-', '_').upper()}_LINKER"] = str(wrapper)
+    return env
+
+
+def macho_header(binary):
+    magic, cpu, _subtype, filetype = (
+        int.from_bytes(binary[i : i + 4], "little") for i in range(0, 16, 4)
+    )
+    return magic, cpu, filetype
 
 
 class ReleaseArtifacts(unittest.TestCase):
@@ -450,6 +529,190 @@ class ReleaseArtifacts(unittest.TestCase):
         )
         self.assertNotEqual(stage.returncode, 0)
         self.assertIn("unlisted release payload", stage.stderr)
+
+    @unittest.skipUnless(sys.platform == "linux", "cross-links Darwin with zig")
+    def test_production_packaging_builds_stages_and_publishes_only_arm64_macos(self):
+        # Drive the darwin job's own commands — `just pypi-release` per declared
+        # target, then stage — and the real publisher and PyPI-side consumer.
+        # Only GitHub is doubled. The Darwin binary is cross-linked on Linux and
+        # proved at the artifact contract (Mach-O header, wheel tag, names); the
+        # macOS job's smoke step is what executes it natively.
+        job = darwin_job_env()
+        targets = job["TARGETS"].split()
+        self.assertEqual(targets, ["aarch64-apple-darwin"])
+        version = json.loads(
+            subprocess.check_output(
+                ["cargo", "metadata", "--no-deps", "--format-version", "1"],
+                cwd=ROOT,
+                text=True,
+            )
+        )["packages"]
+        version = next(p["version"] for p in version if p["name"] == "onejudge")
+        tag = f"v{version}"
+        subprocess.run(["git", "-C", str(self.repo), "tag", tag], check=True)
+        dist = self.root / "produced"
+        env = darwin_cross_env(targets, job["MACOSX_DEPLOYMENT_TARGET"])
+        for target in targets:
+            build = subprocess.run(
+                [
+                    "just",
+                    "--justfile",
+                    str(ROOT / "justfile"),
+                    "--working-directory",
+                    str(ROOT),
+                    "pypi-release",
+                    target,
+                    str(dist),
+                ],
+                env=env,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(build.returncode, 0, build.stderr)
+        archive = "onejudge-aarch64-apple-darwin.tar.gz"
+        wheel = f"onejudge_cli-{version}-py3-none-macosx_11_0_arm64.whl"
+        self.assertEqual(sorted(p.name for p in dist.iterdir()), [archive, wheel])
+        with zipfile.ZipFile(dist / wheel) as package:
+            binary = package.read(f"onejudge_cli-{version}.data/scripts/onejudge")
+            tags = package.read(f"onejudge_cli-{version}.dist-info/WHEEL").decode()
+            metadata = package.read(
+                f"onejudge_cli-{version}.dist-info/METADATA"
+            ).decode()
+        self.assertEqual(macho_header(binary), MACHO_ARM64)
+        self.assertIn("Tag: py3-none-macosx_11_0_arm64\n", tags)
+        self.assertNotIn("x86_64", tags)
+        self.assertIn("Name: onejudge-cli\n", metadata)
+        self.assertIn(f"Version: {version}\n", metadata)
+        with tarfile.open(dist / archive) as package:
+            self.assertEqual(
+                sorted(package.getnames()),
+                [
+                    "onejudge-aarch64-apple-darwin",
+                    "onejudge-aarch64-apple-darwin/LICENSE",
+                    "onejudge-aarch64-apple-darwin/README.md",
+                    "onejudge-aarch64-apple-darwin/onejudge",
+                ],
+            )
+            exe = package.getmember("onejudge-aarch64-apple-darwin/onejudge")
+            self.assertTrue(exe.mode & 0o111)
+            self.assertEqual(package.extractfile(exe).read(), binary)
+
+        stage = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPTS / "release_artifacts.py"),
+                "stage",
+                "--root",
+                str(dist),
+                "--tag",
+                tag,
+                "--sha",
+                self.sha,
+                "--version",
+                version,
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(stage.returncode, 0, stage.stderr)
+        manifest = json.loads((dist / "release-artifacts.json").read_text())
+        self.assertEqual(
+            (manifest["tag"], manifest["sha"], manifest["version"]),
+            (tag, self.sha, version),
+        )
+        self.assertEqual(
+            [(f["path"], f["target"], f["kind"]) for f in manifest["files"]],
+            [
+                (archive, "aarch64-apple-darwin", "archive"),
+                (wheel, "aarch64-apple-darwin", "cli-wheel"),
+            ],
+        )
+
+        identity = f"onejudge-darwin-{tag}-{self.sha}"
+        transport = {**self.transport("success"), "ARTIFACT": identity}
+        identity_args = ["--tag", tag, "--sha", self.sha, "--version", version]
+        publish = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPTS / "publish_release.py"),
+                "--repo",
+                "nickderobertis/onejudge",
+                *identity_args,
+                "--root",
+                str(dist),
+            ],
+            cwd=self.repo,
+            env=transport,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(publish.returncode, 0, publish.stderr)
+        (upload,) = [
+            json.loads(line)
+            for line in (self.root / "calls").read_text().splitlines()
+            if json.loads(line)[:2] == ["release", "upload"]
+        ]
+        self.assertEqual(
+            [upload[2], *(Path(a).name for a in upload[3:5])],
+            [tag, f"{identity}.zip", archive],
+        )
+        with zipfile.ZipFile(self.root / f"{identity}.zip") as bundle:
+            self.assertEqual(
+                sorted(bundle.namelist()),
+                sorted(["release-artifacts.json", archive, wheel]),
+            )
+
+        # release-pypi's darwin-wheels job: what it hands PyPI is `darwin/*.whl`.
+        consumed = self.root / "darwin"
+        fetch = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPTS / "fetch_release_artifacts.py"),
+                "--repo",
+                "nickderobertis/onejudge",
+                *identity_args,
+                "--root",
+                str(consumed),
+                "--attempts",
+                "1",
+            ],
+            cwd=self.repo,
+            env={**transport, "MODE": "durable"},
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(fetch.returncode, 0, fetch.stderr)
+        self.assertEqual([p.name for p in consumed.glob("*.whl")], [wheel])
+        self.assertEqual((consumed / wheel).read_bytes(), (dist / wheel).read_bytes())
+
+        # Asking the same interface for Intel macOS is refused before any build.
+        intel = self.root / "intel"
+        refused = subprocess.run(
+            [
+                "just",
+                "--justfile",
+                str(ROOT / "justfile"),
+                "--working-directory",
+                str(ROOT),
+                "pypi-release",
+                "x86_64-apple-darwin",
+                str(intel),
+            ],
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertIn(
+            "x86_64-apple-darwin is not released: Intel macOS is no longer supported",
+            refused.stderr,
+        )
+        self.assertFalse(intel.exists())
 
     def test_wrong_run_wrong_artifact_and_expired_outputs_fail_visibly(self):
         for mode, expected in (
