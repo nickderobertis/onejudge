@@ -318,7 +318,11 @@ per-candidate history record are all oneharness's own declarations, so an upstre
 change is a compile error here rather than a silently-null field. **The invocation
 is a library call too**: `oneharness_core::io::run::run`, with `RunControls::events`
 for streaming and `RunControls::cancel` for teardown, and `signal_cancel` left
-`false` because onejudge is an embedder and those handlers are process-global. Two behaviours
+`false` because onejudge is an embedder and those handlers are process-global. Any
+binary here that can drive a controlled Codex turn calls
+`io::app_server::serve_sweeper_if_requested()` first in `main`: the core's shared
+app-server pool re-runs that executable as its sweeper, and without the call an
+idle server outlives the run. Two behaviours
 follow only from reading it typed, and both have tests: under `run_mode =
 "fallback"` the turn is the candidate that **ran** (not `results[0]`, which is the
 one the chain routed around), and a candidate that timed out / could not spawn /
