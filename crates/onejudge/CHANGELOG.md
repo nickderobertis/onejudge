@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.19.5](https://github.com/nickderobertis/onejudge/compare/onejudge-v0.19.4...onejudge-v0.19.5) - 2026-10-15
+
+### Fixed
+
+- *(cli)* host the shared Codex app-server's sweeper ([#177](https://github.com/nickderobertis/onejudge/pull/177))
+
 ## [0.19.4](https://github.com/nickderobertis/onejudge/compare/onejudge-v0.19.3...onejudge-v0.19.4) - 2026-10-15
 
 ### Fixed
