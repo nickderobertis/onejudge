@@ -141,7 +141,10 @@ as instructions to itself:
 
 `addressee` is who the note is *for* (`worker` / `supervisor` / `both`);
 `delivered_to` is which party was handed it, and the two differ whenever a note
-reached whichever party happened to be live. See [notes.md](notes.md).
+reached whichever party happened to be live. A note's `delivery` — whether it may
+interrupt a live turn — is never written here: it is spent once the note has been
+delivered, so the frame stays exactly v8 whatever a note's delivery was. See
+[notes.md](notes.md).
 
 `turn` reports the classified outcome of the worker invocation this decision
 follows. A successful invocation is taken even when its reply text is empty:

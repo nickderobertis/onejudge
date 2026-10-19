@@ -366,8 +366,8 @@ needs a real multi-identity chain costs nothing. It selects the *spawning* seam,
 because oneharness delivers that responder by re-executing its own binary and in
 process that binary is the embedder (`docs/oneharness-library.md`).
 
-**Turn control is an address, not a lever onejudge pulls.** `provider.control:
-true` (default off) adds `--control` to **both** parties' `oneharness run`, and
+**Turn control is an address; onejudge pulls it only for its own notes.**
+`provider.control: true` (default off) adds `--control` to **both** parties' `oneharness run`, and
 `Report::control` / `Report::supervisor_control` report the three values
 `oneharness interrupt` addresses each turn with (`session`, `session_dir`, `cwd`)
 — read back from oneharness's report, so a fallback chain names the candidate that
@@ -392,13 +392,17 @@ attribution.
 socket per party and assert each reported address *redirects that party's live
 turn*, not that it merely exists.
 
-**A note reaches whoever is live, and the other party gets it with the response.**
-`Notes::channel()` / `Engine::with_notes` / `Plan::with_notes` (`note.rs`) deliver a
-correction into a running conversation: to the worker's live turn, or to the judge's
-— whose decision is then *discarded and re-taken with the note in hand*, because a
-decision taken without it is the decision the note exists to change. The worker's
-finished reply is kept instead, and the note is the next thing it is handed, before
-any other party is consulted. When the re-taken judge decision is completion,
+**A note interrupts the live turn it addresses, and the other party gets it with the
+response.** `Notes::channel()` / `Engine::with_notes` / `Plan::with_notes` (`note.rs`)
+deliver a correction into a running conversation. On a turn opened with control, a
+note to the live party redirects that turn in process (`interrupt.rs`, the linked
+core's `control::send`, no new CLI flag) and is answered `Interrupted` only once
+oneharness confirms the replacement turn opened with it; every other note reaches the
+live party when its turn ends (`AtTurnEnd`) — for the judge, the decision is
+*discarded and re-taken with the note in hand*. A note is taken from the inbox only
+when it is about to be presented, so withdrawal and deadlines hold until then. The
+worker's interrupted turn is kept, and the note is the next thing it is handed, before
+any other party is consulted. When the judge decision a note reaches is completion,
 **nothing** reaches the worker: the work was passed with the note in hand. The note
 carries the **role it addresses**, which is what the recipient is told, never who it
 is delivered to — a judge handed an update to the *worker's* task has to know it is
@@ -418,7 +422,8 @@ the contract (`agent.note@1`) and rides it over the `onemessagebus` core's gener
 proposal to the bus (`docs/contract.md`). oneagentgraph and onepipeline import these
 names from `onejudge::note`, so moving one breaks a repository this gate cannot see.
 The command-provider frames' schemas are registered with the bus the same
-way (`docs/protocol.md`), and a frame change is a change to that declaration.
+way (`docs/protocol.md`), and a frame change is a change to that declaration — which
+is why the supervisor frame writes notes through a projection without `delivery`.
 
 **A named session and `--control` must agree about what a turn is.** A mechanism
 that drives the turn over its own protocol builds no argv, so the harness's

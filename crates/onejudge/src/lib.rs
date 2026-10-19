@@ -54,8 +54,9 @@
 //!   [`ControlAddress`] an `oneharness interrupt` process would use — or why the
 //!   ask could not be honored. One per party: [`Provider::control`] for the
 //!   agent's turn and [`Provider::supervisor_control`] for the supervisor's
-//!   decision, on separate sockets and separately refusable. onejudge never
-//!   interrupts anything itself; see `docs/control.md`.
+//!   decision, on separate sockets and separately refusable. onejudge redirects
+//!   a live turn itself only for a note sent into its own conversation; see
+//!   `docs/control.md`.
 //!
 //! # Example
 //!

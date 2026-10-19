@@ -287,7 +287,10 @@ message `agent.note@1`. A client in another language validates against
 [`schemas/note.json`](../schemas/note.json), a `onemessagebus` schema bundle at
 version 1 holding that one id, generated from `Note` itself and held to the type by
 `just check-note-schema`. What onejudge does *not* own is the channel: `Notes` and
-`NoteInbox` are the bus core's generic `Sender` and `Inbox` over these shapes.
+`NoteInbox` are the bus core's generic `Sender` and `Inbox` over these shapes. The
+one field a `supervisor` request leaves out is a note's optional `delivery`, which
+routes it to a live turn and is spent once it is delivered — so that frame stays
+protocol v8.
 
 The example below is a **copy** of that declaration, kept so a reader of this page
 sees the shape; `tests/contract.rs` reads it through the declaration, so a copy that

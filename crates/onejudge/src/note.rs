@@ -46,21 +46,29 @@
 //!
 //! An interrupt has never delivered *into* a running turn — oneharness's own
 //! control channel aborts the turn and reopens the next one on the same session
-//! with the message as its prompt. onejudge's in-process engine keeps that
-//! semantics and its ordering guarantee, at the seam it owns:
+//! with the message as its prompt. onejudge pulls that lever itself, in process,
+//! for a note addressed to the party whose turn is live, when that turn was opened
+//! with control:
 //!
-//! * A note arriving during the **worker's** turn is handed to the worker in a
-//!   reopened turn *before the judge is consulted*, so the judge receives it
-//!   together with the worker's response to it. The worker's finished reply is kept
-//!   rather than discarded — it is real work, and a redirect throws away a turn's
-//!   words, never its commits.
-//! * A note arriving during the **judge's** turn reaches the judge: the decision
-//!   taken without it is discarded and re-taken with the note in hand, which costs
-//!   a second judge invocation. A caller sending notes into a tight loop pays per
-//!   note.
-//! * If that re-taken decision is completion, **nothing is delivered to the
+//! * A note to the **worker** interrupts the worker's live turn: what the turn had
+//!   done stands, and the replacement turn opens with the note
+//!   ([`Accepted::Interrupted`]) — *before the judge is consulted*, so the judge
+//!   receives it together with the worker's response to it.
+//! * A note to the **supervisor** interrupts the judge's live turn, and the
+//!   decision the replacement turn takes is the one taken with the note in hand.
+//! * Every other note that reaches a live turn — [`Delivery::TurnEnd`], a turn
+//!   opened without control, a note addressed to the other party, a redirect
+//!   oneharness refused — is delivered once that turn ends, in the turn that
+//!   follows ([`Accepted::AtTurnEnd`]); for the judge, the decision taken without
+//!   it is discarded and re-taken with it, which costs a second judge invocation.
+//! * If the decision a note reaches is completion, **nothing is delivered to the
 //!   worker** — the judge passed the work with the note in hand
 //!   ([`Accepted::JudgedWith`]).
+//!
+//! A note is taken from the inbox only when it is about to be presented, so a
+//! sender's withdrawal and deadline stay effective until then. `docs/notes.md`
+//! states the whole contract, including the two limits a take-to-read inbox puts
+//! on it.
 //!
 //! # Example
 //!

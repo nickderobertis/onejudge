@@ -2,10 +2,12 @@
 //!
 //! `oneharness run --control` opens a unix socket for the run's lifetime, and a
 //! separate `oneharness interrupt` process redirects the in-flight turn through
-//! it. onejudge's part is deliberately narrow: it can *ask* for a controllable
-//! turn on the agent side (`provider.control: true`, off by default), and it
-//! reports **where the turn it got is addressed**. It never interrupts anything
-//! itself — the lever belongs to whatever is supervising the run.
+//! it. onejudge *asks* for controllable turns (`provider.control: true`, off by
+//! default), reports **where each turn it got is addressed**, and pulls the lever
+//! itself for its own notes: a note sent into the conversation while the party it
+//! addresses is mid-turn redirects that turn, through this same socket, in process
+//! (the crate-internal `interrupt` module). Whatever supervises the run from
+//! outside may pull it too.
 //!
 //! A [`ControlAddress`] is exactly the three values `oneharness interrupt` takes
 //! to reach a turn (`--session`, `--session-dir`, `--cwd`), and nothing else: the

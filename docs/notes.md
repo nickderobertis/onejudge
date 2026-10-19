@@ -40,11 +40,34 @@ onejudge's too.
 
 ## The rules
 
-**The note reaches whoever is live.** Not whoever it is addressed to — the
-addressee is what the *recipient is told*, so a judge handed an update to the
-worker's task knows it is one and does not take the worker's job on. One measured
-run saw a simulated user compose a four-point "manager ruling" in-conversation and
-instruct the worker to post it over the run channel, and the worker complied.
+**A note interrupts the live turn it is addressed to.** When the party a note
+addresses (`Worker`, `Supervisor`, or either for `Both`) is mid-turn, and that turn
+was opened with control ([control.md](control.md)), onejudge redirects the turn in
+process: the turn is aborted and the replacement turn opens with the note
+(`Accepted::Interrupted`). A note may opt out with `Note::with_delivery(
+Delivery::TurnEnd)`; on the wire `"delivery": "turn-end"`, omitted when it is the
+default `"interrupt"`.
+
+**Every other note reaches the live party once its turn ends** — a `TurnEnd` note,
+a note to a turn opened without control, a note addressed to the party that is not
+live, a note whose redirect oneharness refused (`Accepted::AtTurnEnd`). It is
+delivered exactly once, in the turn that follows.
+
+**The recipient is told who the note is for.** The addressee is what the
+*recipient is told*, so a judge handed an update to the worker's task knows it is
+one and does not take the worker's job on. One measured run saw a simulated user
+compose a four-point "manager ruling" in-conversation and instruct the worker to
+post it over the run channel, and the worker complied.
+
+**A note is taken only when it is presented.** onejudge takes a note from its
+inbox (`Inbox::take`) only at the moment it commits to presenting it, so a sender
+that offered it (`Notes::offer`) can still withdraw it, and its `wait_until`
+deadline still applies, until then. A note to an uncontrolled turn stays untaken
+until the turn ends; a note whose redirect is refused is handed back untaken
+(`Delivered::release`) and taken again only once the turn ends — and expires in
+that same moment if its deadline has passed. oneharness never delivers the text of
+a refused redirect later, so the turn that refused it never receives a note that
+has since been withdrawn or has expired.
 
 **The other party receives it with the response.** A note that reached the worker
 is in the next `SupervisorQuery` the judge answers, alongside the worker's response
@@ -71,20 +94,27 @@ completion report that preceded its own subsequent commits.
 
 | the note arrives | the worker | the judge | `Notes::send` answers |
 | --- | --- | --- | --- |
-| **during the worker's turn** | the turn is reopened carrying the note, before the supervisor is consulted | receives it **with** the worker's response: the next `supervise` carries it in `SupervisorQuery::notes`, and a bound criterion in the criterion in force | `Accepted::Interrupted { party: Worker }` |
-| **during the judge's turn**, answering `Continue` | receives it **with** the response: one user turn carrying the note's framing and then the supervisor's own words | its decision is discarded and re-taken with the note in hand; that decision is the one that counts | `Accepted::Interrupted { party: Supervisor }` |
+| **during the worker's turn**, which it interrupts | the live turn is redirected: its words and tool effects so far stand, and the replacement turn opens with the note | receives it **with** the worker's response to it: the next `supervise` carries it in `SupervisorQuery::notes`, and a bound criterion in the criterion in force | `Accepted::Interrupted { party: Worker }` |
+| **during the worker's turn**, reaching it at the end | the next turn opens carrying the note, before the supervisor is consulted | as above | `Accepted::AtTurnEnd { party: Worker }` |
+| **during the judge's turn**, answering `Continue` | receives it **with** the response: one user turn carrying the note's framing and then the supervisor's own words | its live turn is redirected with the note — or, reaching it at the end, its decision is re-taken with the note in hand; either way that decision is the one that counts | `Accepted::Interrupted { party: Supervisor }`, or `Accepted::AtTurnEnd { party: Supervisor }` when it reached the judge at the end |
 | **during the judge's turn**, answering `Completed` | **nothing is delivered** | as above, and the completion was decided with the note in hand | `Accepted::JudgedWith { completion_reason }` |
 | **between turns** | the next turn's prompt carries it | the next `supervise` carries it | `Accepted::Queued` |
 | **after the conversation ended** | — | — | `Err(Undelivered::…)` |
 
-Two costs, stated where an implementer meets them. A redirected judge turn is a
-**second judge invocation**, so a caller sending notes into a tight loop pays per
-note. And **`Notes::send` blocks until a turn takes the note** and its disposition
-is known: for a note sent between turns — *or before the run has started* — until
-the next turn opens; for a live turn until that party has been handed the note (for
-the judge, until its re-taken decision comes back, because that decision is what
-distinguishes the last two rows). A caller that sends and then starts the run on the
-same thread waits forever. Send from a thread other than the one driving the engine.
+`Accepted::Interrupted` is answered only when oneharness confirmed the redirect —
+`Served { redirected: true }`, which it says only once the replacement turn has
+opened with the text.
+
+Two costs, stated where an implementer meets them. A judge decision re-taken at
+the end of its turn is a **second judge invocation**, so a caller sending notes
+into a tight loop pays per note. And **`Notes::send` blocks until a turn takes the
+note** and its disposition is known: for a note sent between turns — *or before the
+run has started* — until the next turn opens; for a live turn until that party has
+been handed the note (for the judge, until the decision it reached comes back,
+because that decision is what distinguishes the `Completed` row). A caller that
+sends and then starts the run on the same thread waits forever. Send from a thread
+other than the one driving the engine. `Notes::offer` returns once the note is
+queued instead, with an `Offer` that waits, waits until a deadline, or withdraws.
 
 **A channel nothing ever read.** An `Engine` holding a note channel that is dropped
 without running, and a `Plan` whose provider could not be built, close the channel
@@ -99,15 +129,42 @@ core, and this crate's `From<onemessagebus::Undelivered>` reads that close as
 An interrupt has never delivered *into* a running turn. oneharness's own control
 channel aborts the turn and reopens the next one on the same session with the
 message as its prompt — "committed with the abort, delivered at the turn boundary",
-because the agent CLIs discard or refuse a mid-turn frame. onejudge's in-process
-engine keeps that semantics and the ordering guarantee it is for, at the seam it
-owns:
+because the agent CLIs discard or refuse a mid-turn frame. onejudge pulls that
+lever itself for a note addressed to the live party, in process through the linked
+core (`oneharness_core::io::control::send`, the same frame `oneharness interrupt`
+sends), so a correction reaches a turn that would otherwise run for hours as soon
+as it is sent, and the work already done is kept:
 
-* the **worker's** finished reply is kept rather than discarded — a redirect throws
-  away a turn's words, never the work it already committed — and the note is the
-  very next thing the worker is handed, before any other party is consulted;
-* the **judge's** decision *is* discarded and re-taken, because a decision taken
-  without the note is exactly the decision the note exists to change.
+* the **worker's** interrupted turn stands — its words and tool effects stay in the
+  transcript as an interrupted turn, followed by the note the replacement turn
+  opened with — and the note is the very next thing the worker is handed, before
+  any other party is consulted;
+* the **judge's** interrupted turn is replaced by one that opens with the note and
+  every criterion it bound, and the decision that turn takes is the one taken with
+  the note in hand. A note that reaches the judge only at the end of its turn has
+  the decision discarded and re-taken, because a decision taken without the note is
+  exactly the decision the note exists to change.
+
+A turn opened without control is never interrupted, and nothing is taken from the
+inbox while it runs: its notes reach it once it ends, as they always did.
+
+**Two limits of the take-to-read inbox.** The `onemessagebus` inbox offers no way
+to read a queued note without taking it, so to learn a note's `delivery` and
+addressee during a controlled live turn onejudge takes the note at the head of the
+queue, and hands it straight back when it cannot present it. Two consequences
+follow, and both apply only during a controlled live turn:
+
+* in the instant onejudge holds a note it is about to hand back, a sender's
+  `Offer::withdraw` is refused (taking and withdrawing never both succeed); the
+  note is then delivered at the end of the turn. A deadline is unaffected: a note
+  handed back past its deadline expires as it is handed back;
+* once a note has been handed back, onejudge stops looking at the queue for the
+  rest of that turn, so a `TurnEnd` note (or any note it could not present) at the
+  head of the queue keeps every note behind it — `Interrupt` notes included — from
+  interrupting that turn. They reach the party when the turn ends.
+
+When every queued note is an `Interrupt` note addressed to the live party, nothing
+is taken and handed back at all.
 
 ## A note that moves the bar
 
