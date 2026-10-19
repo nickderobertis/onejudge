@@ -1728,6 +1728,86 @@ mod tests {
     use crate::{InvocationTelemetry, TelemetryRole};
     use std::cell::RefCell;
 
+    #[test]
+    fn a_turn_redirected_twice_is_kept_as_the_three_turns_it_was() {
+        use crate::interrupt::Observed;
+        use crate::note::Addressee;
+        let tool = |n: usize| ToolEvent {
+            kind: "tool_call".into(),
+            name: Some("bash".into()),
+            input: None,
+            output: None,
+            index: n,
+            tool_call_id: None,
+        };
+        let redirect = |input: &str, tools: usize, texts: &[&str]| Redirect {
+            note: Note::to(Addressee::Worker, input),
+            input: input.to_string(),
+            held: None,
+            at: Observed {
+                tools,
+                texts: texts.iter().map(|t| (*t).to_string()).collect(),
+            },
+        };
+        let mut transcript = Transcript::from_input("task");
+        push_redirected(
+            &mut transcript,
+            &[
+                redirect("first note", 1, &["reading"]),
+                // Cumulative, as the watch records it: the second turn's share is
+                // what came after the first redirect.
+                redirect("second note", 3, &["reading", "editing"]),
+            ],
+            "done".into(),
+            (0..4).map(tool).collect(),
+        );
+        let shape: Vec<(Role, &str, Vec<usize>)> = transcript
+            .messages
+            .iter()
+            .map(|m| {
+                (
+                    m.role,
+                    m.content.as_str(),
+                    m.events.iter().map(|e| e.index).collect(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            shape,
+            [
+                (Role::User, "task", vec![]),
+                (Role::Assistant, "reading", vec![0]),
+                (Role::User, "first note", vec![]),
+                (Role::Assistant, "editing", vec![1, 2]),
+                (Role::User, "second note", vec![]),
+                (Role::Assistant, "done", vec![3]),
+            ]
+        );
+
+        // A count past what the report held is clamped to it, never a panic.
+        let mut transcript = Transcript::from_input("task");
+        push_redirected(
+            &mut transcript,
+            &[redirect("note", 9, &[])],
+            "done".into(),
+            vec![tool(0)],
+        );
+        assert_eq!(transcript.messages[1].content, "");
+        assert_eq!(transcript.messages[1].events.len(), 1);
+        assert!(transcript.messages[3].events.is_empty());
+        // A buffered turn observed nothing before its redirect: the interrupted
+        // turn carries nothing of its own, and every event stays with the reply.
+        let mut transcript = Transcript::from_input("task");
+        push_redirected(
+            &mut transcript,
+            &[redirect("note", 0, &[])],
+            "done".into(),
+            vec![tool(0)],
+        );
+        assert!(transcript.messages[1].events.is_empty());
+        assert_eq!(transcript.messages[3].events.len(), 1);
+    }
+
     /// An in-memory provider scripted with canned turns, so the loop's
     /// orchestration is testable without a subprocess.
     struct Scripted {
