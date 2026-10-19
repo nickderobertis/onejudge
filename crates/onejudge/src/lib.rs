@@ -112,7 +112,7 @@ pub use history_name::{HistoryScope, JudgeSideCall};
 pub use llmlint::{LlmlintProvider, DEFAULT_LLMLINT_BIN, LLMLINT_MIN_VERSION};
 pub use note::{
     supervisor_block, Accepted, Addressee, Criteria, Criterion, CriterionRefused, DeliveredNote,
-    Note, NoteInbox, NoteRefused, NoteText, Notes, Party, Undelivered,
+    Delivery, Note, NoteInbox, NoteRefused, NoteText, Notes, Party, Undelivered,
 };
 pub use oneharness::OneharnessProvider;
 /// oneharness's normalized event, re-exported because it is the payload of

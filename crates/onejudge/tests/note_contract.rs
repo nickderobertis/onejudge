@@ -12,8 +12,8 @@ use std::time::Duration;
 
 use onejudge::note::prelude::*;
 use onejudge::note::{
-    supervisor_block, worker_block, Accepted, Addressee, Criteria, Criterion, DeliveredNote, Note,
-    NoteInbox, NoteRefused, NoteText, Notes, Party, Undelivered,
+    supervisor_block, worker_block, Accepted, Addressee, Criteria, Criterion, DeliveredNote,
+    Delivery, Note, NoteInbox, NoteRefused, NoteText, Notes, Party, Undelivered,
 };
 use onemessagebus::{BackendError, Carry, Closed, Inbox, Spool, Undelivered as InboxUndelivered};
 use serde_json::{json, Value};
@@ -325,6 +325,18 @@ fn a_note_is_onejudges_message_and_its_published_schema_is_what_the_engine_reads
     assert!(registry
         .check(&Note::SCHEMA, &json!({"addressee": "manager", "text": "x"}))
         .is_err());
+    // `delivery` is optional and one of its two spellings, exactly as the engine
+    // reads it.
+    for delivery in ["interrupt", "turn-end"] {
+        let note = json!({"addressee": "worker", "text": "look again", "delivery": delivery});
+        registry
+            .check(&Note::SCHEMA, &note)
+            .unwrap_or_else(|e| panic!("`{delivery}` conforms: {e:?}"));
+        serde_json::from_value::<Note>(note).expect("the engine reads what the schema admits");
+    }
+    let unknown = json!({"addressee": "worker", "text": "x", "delivery": "whenever"});
+    assert!(registry.check(&Note::SCHEMA, &unknown).is_err());
+    assert!(serde_json::from_value::<Note>(unknown).is_err());
 
     // The committed bundle is that schema, at bundle version 1, and nothing else.
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -358,6 +370,18 @@ fn a_notes_answers_cross_the_wire_in_the_spelling_the_spool_mirror_carries() {
             json!({"interrupted": {"party": "supervisor"}}),
         ),
         (
+            Accepted::AtTurnEnd {
+                party: Party::Worker,
+            },
+            json!({"at_turn_end": {"party": "worker"}}),
+        ),
+        (
+            Accepted::AtTurnEnd {
+                party: Party::Supervisor,
+            },
+            json!({"at_turn_end": {"party": "supervisor"}}),
+        ),
+        (
             Accepted::JudgedWith {
                 completion_reason: "passed with the note in hand".into(),
             },
@@ -380,6 +404,44 @@ fn a_notes_answers_cross_the_wire_in_the_spelling_the_spool_mirror_carries() {
 }
 
 #[test]
+fn a_notes_delivery_round_trips_and_is_omitted_when_it_is_the_default() {
+    // The default is the shape every note written before the field existed has,
+    // so it is never written: an older reader sees the bytes it always saw.
+    let plain = Note::to(Addressee::Worker, "look again");
+    assert_eq!(plain.delivery, Delivery::Interrupt);
+    assert!(plain.delivery.is_default());
+    assert_eq!(
+        to_json(&plain),
+        r#"{"addressee":"worker","text":"look again"}"#
+    );
+    assert_eq!(
+        serde_json::from_str::<Note>(r#"{"addressee":"worker","text":"look again"}"#)
+            .expect("reads"),
+        plain
+    );
+
+    let at_end = Note::to(Addressee::Worker, "look again")
+        .binding("the diff is small")
+        .expect("binds")
+        .with_delivery(Delivery::TurnEnd);
+    let written = to_json(&at_end);
+    assert_eq!(
+        written,
+        r#"{"addressee":"worker","text":"look again","criterion":"the diff is small","delivery":"turn-end"}"#
+    );
+    assert_eq!(
+        serde_json::from_str::<Note>(&written).expect("reads back"),
+        at_end
+    );
+    // An explicit default reads as the default, and is then omitted again.
+    let explicit: Note =
+        serde_json::from_str(r#"{"addressee":"both","text":"x","delivery":"interrupt"}"#)
+            .expect("reads");
+    assert_eq!(explicit.delivery, Delivery::Interrupt);
+    assert!(!to_json(&explicit).contains("delivery"));
+}
+
+#[test]
 fn a_note_channel_answers_its_caller_and_records_which_party_each_note_reached() {
     let (notes, inbox): (Notes, NoteInbox) = Notes::channel();
     let answers = [
@@ -389,6 +451,9 @@ fn a_note_channel_answers_its_caller_and_records_which_party_each_note_reached()
         Accepted::Queued,
         Accepted::JudgedWith {
             completion_reason: "done with it in hand".into(),
+        },
+        Accepted::AtTurnEnd {
+            party: Party::Worker,
         },
     ];
     for (index, answer) in answers.iter().enumerate() {
@@ -412,6 +477,7 @@ fn a_note_channel_answers_its_caller_and_records_which_party_each_note_reached()
         [
             ("note 0".to_owned(), Party::Worker),
             ("note 2".to_owned(), Party::Supervisor),
+            ("note 3".to_owned(), Party::Worker),
         ],
         "a queued note has reached no party yet"
     );
