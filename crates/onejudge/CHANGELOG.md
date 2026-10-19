@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.20.0](https://github.com/nickderobertis/onejudge/compare/onejudge-v0.19.5...onejudge-v0.20.0) - 2026-10-19
+
+### Added
+
+- [**breaking**] interrupt the live turn a note is addressed to ([#182](https://github.com/nickderobertis/onejudge/pull/182))
+
 ## [0.19.5](https://github.com/nickderobertis/onejudge/compare/onejudge-v0.19.4...onejudge-v0.19.5) - 2026-10-15
 
 ### Fixed
