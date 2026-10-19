@@ -46,21 +46,29 @@
 //!
 //! An interrupt has never delivered *into* a running turn — oneharness's own
 //! control channel aborts the turn and reopens the next one on the same session
-//! with the message as its prompt. onejudge's in-process engine keeps that
-//! semantics and its ordering guarantee, at the seam it owns:
+//! with the message as its prompt. onejudge pulls that lever itself, in process,
+//! for a note addressed to the party whose turn is live, when that turn was opened
+//! with control:
 //!
-//! * A note arriving during the **worker's** turn is handed to the worker in a
-//!   reopened turn *before the judge is consulted*, so the judge receives it
-//!   together with the worker's response to it. The worker's finished reply is kept
-//!   rather than discarded — it is real work, and a redirect throws away a turn's
-//!   words, never its commits.
-//! * A note arriving during the **judge's** turn reaches the judge: the decision
-//!   taken without it is discarded and re-taken with the note in hand, which costs
-//!   a second judge invocation. A caller sending notes into a tight loop pays per
-//!   note.
-//! * If that re-taken decision is completion, **nothing is delivered to the
+//! * A note to the **worker** interrupts the worker's live turn: what the turn had
+//!   done stands, and the replacement turn opens with the note
+//!   ([`Accepted::Interrupted`]) — *before the judge is consulted*, so the judge
+//!   receives it together with the worker's response to it.
+//! * A note to the **supervisor** interrupts the judge's live turn, and the
+//!   decision the replacement turn takes is the one taken with the note in hand.
+//! * Every other note that reaches a live turn — [`Delivery::TurnEnd`], a turn
+//!   opened without control, a note addressed to the other party, a redirect
+//!   oneharness refused — is delivered once that turn ends, in the turn that
+//!   follows ([`Accepted::AtTurnEnd`]); for the judge, the decision taken without
+//!   it is discarded and re-taken with it, which costs a second judge invocation.
+//! * If the decision a note reaches is completion, **nothing is delivered to the
 //!   worker** — the judge passed the work with the note in hand
 //!   ([`Accepted::JudgedWith`]).
+//!
+//! A note is taken from the inbox only when it is about to be presented, so a
+//! sender's withdrawal and deadline stay effective until then. `docs/notes.md`
+//! states the whole contract, including the two limits a take-to-read inbox puts
+//! on it.
 //!
 //! # Example
 //!
@@ -312,6 +320,39 @@ pub struct Note {
     /// to the judge as context, and it touches no acceptance criterion.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub criterion: Option<Criterion>,
+    /// When the note may reach a live turn: by interrupting it (the default), or
+    /// only once it ends. Omitted on the wire when it is the default, so a note
+    /// written before this field existed reads, and is written, unchanged.
+    #[serde(default, skip_serializing_if = "Delivery::is_default")]
+    pub delivery: Delivery,
+}
+
+/// When a note may reach the party it is addressed to while that party's turn is
+/// live.
+///
+/// On the wire `"interrupt"` or `"turn-end"`. Either way a note that arrives
+/// between turns joins the next turn to open; the two differ only for a turn that
+/// is running when the note arrives.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+#[non_exhaustive]
+pub enum Delivery {
+    /// Redirect the addressed party's live turn with the note, when that turn was
+    /// opened with control; otherwise deliver it once the turn ends.
+    #[default]
+    Interrupt,
+    /// Never interrupt: deliver the note once the live turn ends, in the turn that
+    /// follows it.
+    TurnEnd,
+}
+
+impl Delivery {
+    /// Whether this is [`Delivery::Interrupt`], the shape a caller that says
+    /// nothing gets — and so the one the wire omits.
+    #[must_use]
+    pub fn is_default(&self) -> bool {
+        matches!(self, Delivery::Interrupt)
+    }
 }
 
 /// The wire shape a `Note` is deserialized from, so an arriving note is held to the
@@ -322,6 +363,8 @@ struct NoteWire {
     text: String,
     #[serde(default)]
     criterion: Option<Criterion>,
+    #[serde(default)]
+    delivery: Delivery,
 }
 
 impl TryFrom<NoteWire> for Note {
@@ -332,6 +375,7 @@ impl TryFrom<NoteWire> for Note {
             addressee: wire.addressee,
             text: NoteText::try_from(wire.text)?,
             criterion: wire.criterion,
+            delivery: wire.delivery,
         })
     }
 }
@@ -347,6 +391,7 @@ impl Note {
             addressee,
             text: NoteText::try_from(text.into())?,
             criterion: None,
+            delivery: Delivery::Interrupt,
         })
     }
 
@@ -369,6 +414,14 @@ impl Note {
     pub fn binding(mut self, criterion: impl Into<String>) -> Result<Self, NoteRefused> {
         self.criterion = Some(Criterion::try_from(criterion.into())?);
         Ok(self)
+    }
+
+    /// Say when this note may reach a live turn (builder style). The default is
+    /// [`Delivery::Interrupt`].
+    #[must_use]
+    pub fn with_delivery(mut self, delivery: Delivery) -> Self {
+        self.delivery = delivery;
+        self
     }
 
     /// Whether this note is part of the bar. `criterion.is_some()`.
@@ -402,22 +455,34 @@ pub struct DeliveredNote {
 
 /// What became of one accepted note.
 ///
-/// A [`Disposition`]: on the wire it is `"queued"`, `{"interrupted": {"party": ...}}` or
-/// `{"judged_with": {"completion_reason": ...}}`, the spelling `oneagentgraph`'s spool
-/// mirror already carries.
+/// A [`Disposition`]: on the wire it is `"queued"`, `{"interrupted": {"party": ...}}`,
+/// `{"at_turn_end": {"party": ...}}` or `{"judged_with": {"completion_reason": ...}}`,
+/// the spelling `oneagentgraph`'s spool mirror carries.
+///
+/// Exhaustive on purpose: a consumer matching on it must handle every answer, so a
+/// new one is a breaking change.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Accepted {
-    /// Queued between turns; the next turn to open gets it.
+    /// No turn of the addressed party was live; the next turn to open gets it.
     Queued,
-    /// It reached a live turn, which was redirected to carry it.
+    /// It reached a live turn by interrupting it: the turn was redirected in
+    /// process, and oneharness confirmed the replacement turn opened with the note.
+    /// Never answered unless that redirect was confirmed.
     Interrupted {
         /// The party whose turn it reached.
         party: Party,
     },
-    /// It reached the supervisor's live turn, and that turn's re-taken answer was
-    /// completion — so the work was passed with the note in hand and nothing was
-    /// delivered to the worker. Not a failure, and not an [`Undelivered`].
+    /// It reached a live turn only once that turn ended, in the turn that followed:
+    /// its delivery was [`Delivery::TurnEnd`], the turn was opened without control,
+    /// or oneharness refused the redirect. Delivered exactly once.
+    AtTurnEnd {
+        /// The party whose turn it reached.
+        party: Party,
+    },
+    /// It reached the supervisor, and the decision it reached was completion — so
+    /// the work was passed with the note in hand and nothing was delivered to the
+    /// worker. Not a failure, and not an [`Undelivered`].
     JudgedWith {
         /// The supervisor's completion reason, decided with the note in hand.
         completion_reason: String,
@@ -581,9 +646,10 @@ pub trait NoteInboxExt {
     /// answered — what the judge is shown as context and what [`Criteria`] is
     /// composed from.
     ///
-    /// A note answered [`Accepted::Interrupted`] reached the party it names, and one
-    /// answered [`Accepted::JudgedWith`] reached the supervisor. One answered
-    /// [`Accepted::Queued`] has reached nobody yet, and is not among them.
+    /// A note answered [`Accepted::Interrupted`] or [`Accepted::AtTurnEnd`] reached
+    /// the party it names, and one answered [`Accepted::JudgedWith`] reached the
+    /// supervisor. One answered [`Accepted::Queued`] has reached nobody yet, and is
+    /// not among them.
     fn delivered(&self) -> Vec<DeliveredNote>;
 }
 
@@ -597,7 +663,7 @@ impl NoteInboxExt for NoteInbox {
                      disposition,
                  }| {
                     let party = match disposition {
-                        Accepted::Interrupted { party } => party,
+                        Accepted::Interrupted { party } | Accepted::AtTurnEnd { party } => party,
                         Accepted::JudgedWith { .. } => Party::Supervisor,
                         Accepted::Queued => return None,
                     };

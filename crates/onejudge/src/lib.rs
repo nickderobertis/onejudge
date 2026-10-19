@@ -54,8 +54,9 @@
 //!   [`ControlAddress`] an `oneharness interrupt` process would use — or why the
 //!   ask could not be honored. One per party: [`Provider::control`] for the
 //!   agent's turn and [`Provider::supervisor_control`] for the supervisor's
-//!   decision, on separate sockets and separately refusable. onejudge never
-//!   interrupts anything itself; see `docs/control.md`.
+//!   decision, on separate sockets and separately refusable. onejudge redirects
+//!   a live turn itself only for a note sent into its own conversation; see
+//!   `docs/control.md`.
 //!
 //! # Example
 //!
@@ -84,6 +85,7 @@ mod control;
 mod engine;
 mod error;
 mod history_name;
+mod interrupt;
 mod llmlint;
 pub mod note;
 mod oneharness;
@@ -112,7 +114,7 @@ pub use history_name::{HistoryScope, JudgeSideCall};
 pub use llmlint::{LlmlintProvider, DEFAULT_LLMLINT_BIN, LLMLINT_MIN_VERSION};
 pub use note::{
     supervisor_block, Accepted, Addressee, Criteria, Criterion, CriterionRefused, DeliveredNote,
-    Note, NoteInbox, NoteRefused, NoteText, Notes, Party, Undelivered,
+    Delivery, Note, NoteInbox, NoteRefused, NoteText, Notes, Party, Undelivered,
 };
 pub use oneharness::OneharnessProvider;
 /// oneharness's normalized event, re-exported because it is the payload of

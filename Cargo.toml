@@ -29,6 +29,10 @@ description = "A simulated interaction and evaluation loop over oneharness: driv
 # oneharness's own engine crate. onejudge depends on it for the **wire contract**
 # of the boundary it drives — `RunReport` / `RunResult` / `FailureKind` /
 # `RunStreamEnvelope` — instead of re-declaring shadow serde structs that drift.
+# 0.28.4 answers a redirect `Served { redirected: true }` only once the
+# replacement turn has opened with its text, and on every refusal never writes
+# the text later — the contract the engine answers a note `Interrupted` on when
+# it redirects a live turn through `io::control::send` (`interrupt.rs`).
 # 0.28.1 runs a controlled Codex turn on one `codex app-server --listen` per
 # configuration, shared by every concurrent dispatch with its key, unless a config
 # sets `app_server = "per-dispatch"` — so concurrent in-process Codex turns stop
@@ -50,14 +54,16 @@ description = "A simulated interaction and evaluation loop over oneharness: driv
 # lock cannot resolve it).
 # The spawned CLI floor is gated separately, on the report schema, in
 # `cli/mod.rs`. A published registry version, never a git rev.
-oneharness-core = "0.28.1"
+oneharness-core = "0.28.4"
 # The message bus core, and nothing of any product's vocabulary: what it supplies
 # is generic — the `Sender`/`Inbox` channel notes ride, and the registry the
 # command-provider frames are registered in. A published registry version, never
 # a git rev. Whatever this names is what the crates that link onejudge
 # (oneagentgraph, onepipeline) must link too: they hold one copy of the bus
-# across their seams, so moving it here moves it for them.
-onemessagebus = "0.9.1"
+# across their seams, so moving it here moves it for them. 0.9.2 brought
+# `Delivered::release`, which hands a taken note back untaken — what keeps a note
+# the engine could not present withdrawable and deadline-bound.
+onemessagebus = "0.9.2"
 # Unix only, and for exactly one call: `kill(pid, SIGTERM)` to ask a cancelled
 # `oneharness run` to tear down the harness tree it owns (`oneharness/mod.rs`).
 # A safe wrapper, because this crate forbids `unsafe_code`; already in the tree

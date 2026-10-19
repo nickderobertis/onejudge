@@ -23,6 +23,10 @@
               }
             ],
             "default": null
+          },
+          "delivery": {
+            "$ref": "#/$defs/Delivery",
+            "default": "interrupt"
           }
         },
         "required": [
@@ -56,6 +60,21 @@
           "Criterion": {
             "type": "string",
             "description": "The property a bound note requires of the finished work.\n\nA validated newtype, checked in the conversion that builds it, so a [`Note`]\ncarrying an unusable criterion is unrepresentable rather than\nrepresentable-and-refused-somewhere-later. The rules are the ones an\norchestrator already enforces on authored plan criteria\n(`orchestrator/criteria_guard.py` in `nickderobertis/ai-orchestrator`), ported\nhere so the *seam that accepts the note* refuses at the moment of binding\nrather than at render time — after the turn has been composed — or by the\njudge, which has already lost.\n\nWhat the rules cannot catch, stated plainly: \"this is a mechanism the author\npreferred rather than a property the node owes\" needs the author's intent, and\nno pattern has it. What stands in for it is the rendered framing\n([`Criteria::rendered`]), which instructs the judge to evaluate the property a\nnamed mechanism was serving."
+          },
+          "Delivery": {
+            "oneOf": [
+              {
+                "type": "string",
+                "const": "interrupt",
+                "description": "Redirect the addressed party's live turn with the note, when that turn was\nopened with control; otherwise deliver it once the turn ends."
+              },
+              {
+                "type": "string",
+                "const": "turn-end",
+                "description": "Never interrupt: deliver the note once the live turn ends, in the turn that\nfollows it."
+              }
+            ],
+            "description": "When a note may reach the party it is addressed to while that party's turn is\nlive.\n\nOn the wire `\"interrupt\"` or `\"turn-end\"`. Either way a note that arrives\nbetween turns joins the next turn to open; the two differ only for a turn that\nis running when the note arrives."
           }
         }
       }

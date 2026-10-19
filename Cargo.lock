@@ -947,9 +947,9 @@ checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
 name = "oneharness-core"
-version = "0.28.1"
+version = "0.28.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ca843b7528af3669112528459ab4713e87a62544cc3c66b3f1dc348e99857f3c"
+checksum = "bf6e72a30e3db4ebe6670cfc8b38f9ef5aabb680ea40142ddd3020a960be5a6f"
 dependencies = [
  "fs2",
  "jsonschema 0.33.0",
@@ -1052,12 +1052,13 @@ dependencies = [
 
 [[package]]
 name = "onemessagebus"
-version = "0.9.1"
+version = "0.9.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6ae7dfd47a38b52451c6b00288604d0c4c3f640a0192a302fd00732f805d3729"
+checksum = "e92d9e607e00b9335169fee1a32fc6e544f76eb76ed7e5a8dd90bdc094b0dd9f"
 dependencies = [
  "getrandom 0.3.4",
  "jsonschema 0.56.0",
+ "rustix",
  "rustls",
  "rustls-native-certs",
  "schemars",

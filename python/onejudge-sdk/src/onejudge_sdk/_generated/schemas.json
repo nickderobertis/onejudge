@@ -3371,7 +3371,7 @@
           },
           "control": {
             "default": null,
-            "description": "`oneharness`: ask for **controllable** turns \u2014 both parties' calls add\n`oneharness run --control`, opening an out-of-band socket each that a\nseparate `oneharness interrupt` process can redirect the in-flight turn\nthrough. Default `false`, and `false` changes nothing about the run. The\naddresses land on the report's `control` (agent) and `supervisor_control`\n(judge) blocks \u2014 separate sockets, separately refusable; onejudge never\ninterrupts anything itself. See `docs/control.md`.",
+            "description": "`oneharness`: ask for **controllable** turns \u2014 both parties' calls add\n`oneharness run --control`, opening an out-of-band socket each that a\nseparate `oneharness interrupt` process can redirect the in-flight turn\nthrough. Default `false`, and `false` changes nothing about the run. The\naddresses land on the report's `control` (agent) and `supervisor_control`\n(judge) blocks \u2014 separate sockets, separately refusable. onejudge redirects\na live turn itself only for a note sent into its own conversation. See\n`docs/control.md`.",
             "type": [
               "boolean",
               "null"

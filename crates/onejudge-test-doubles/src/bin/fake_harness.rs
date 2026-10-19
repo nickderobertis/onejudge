@@ -85,6 +85,28 @@
 //! * `[[judge-event:CMD]]` — on a judge-side turn that asked for events, emit one
 //!   `Bash` tool call for `CMD` and its result, in order. Repeatable. Worker turns
 //!   ignore it, which is what lets one task text script both parties.
+//! * `[[worker-dwell:MS:PATH]]` (worker turns) and `[[judge-dwell:MS:PATH]]`
+//!   (judge-side turns) — after the turn's events, touch `PATH` and hold the turn
+//!   open for `MS` milliseconds, or until `PATH.release` exists, so a note can be
+//!   sent while that party's turn is live. A turn that finds `PATH` already there
+//!   does not hold: the first turn held, and the ones after it run straight through.
+//!   On a controlled turn the hold watches stdin, and oneharness's interrupt frame
+//!   **aborts** it: the turn answers an empty `result` at once, reads the
+//!   replacement prompt oneharness writes next, and answers that turn instead.
+//! * `[[worker-log:PATH]]` / `[[judge-log:PATH]]` — append one JSON line per
+//!   happening of that party's turns to `PATH`: `{"event":"prompt","text":…}` for
+//!   every prompt it is handed (the replacement turn's too), `{"event":"aborted"}`
+//!   when an interrupt cut a held turn short, `{"event":"finished"}` when a held
+//!   turn ran its hold out.
+//! * `[[redirect-reply:TEXT]]` — the replacement turn's answer, in place of the
+//!   ordinary reply. `[[decide-on-redirect]]` on a judge-side turn answers the
+//!   replacement turn with a `completion:false` decision that names the first
+//!   numbered criterion (`1. …`) the replacement prompt carried — so a decision
+//!   taken *on* the correction is distinguishable from one taken without it.
+//! * `[[linger-after-result:MS:PATH]]` — on a worker turn, after the final
+//!   `result`, touch `PATH` and stay alive for `MS` milliseconds or until
+//!   `PATH.release` exists: a run whose turn has ended and whose control socket is
+//!   still listening. Skipped when `PATH` already exists.
 
 use std::io::Write as _;
 use std::path::Path;
@@ -251,11 +273,212 @@ fn main() {
         wait_for(Path::new(&path));
     }
 
+    let party = if evaluator { "judge" } else { "worker" };
+    let log = marker(&prompt, &format!("{party}-log"));
+    if let Some(log) = &log {
+        log_event(
+            log,
+            &serde_json::json!({"event": "prompt", "text": handed(&args, &stdin)}),
+        );
+    }
+    let controlled = args
+        .windows(2)
+        .any(|w| w[0] == "--input-format" && w[1] == "stream-json");
+    if let Some(spec) = marker(&prompt, &format!("{party}-dwell")) {
+        if let Some(replacement) = hold(&spec, controlled, log.as_deref()) {
+            // The aborted turn ends first — oneharness writes the replacement
+            // prompt only once it sees this — and then the replacement turn runs.
+            emit(
+                r#"{"type":"result","subtype":"success","is_error":false,"result":"","session_id":"fake-harness-session"}"#,
+            );
+            let Some(next) = replacement.recv_timeout(WAIT_LIMIT).ok() else {
+                // The redirect was taken back: nothing replaces the turn.
+                return;
+            };
+            // `lines()` drops the newline the frame was written with.
+            check_control_frame(&format!("{next}\n"));
+            let text = frame_text(&next);
+            if let Some(log) = &log {
+                log_event(log, &serde_json::json!({"event": "prompt", "text": text}));
+            }
+            reply = if evaluator && prompt.contains("[[decide-on-redirect]]") {
+                decided_on(&text)
+            } else {
+                marker(&prompt, "redirect-reply").unwrap_or(reply)
+            };
+        }
+    }
+
     let terminal = format!(
         r#"{{"type":"result","subtype":"success","is_error":false,"result":{},"session_id":"fake-harness-session"}}"#,
         json_string(&reply)
     );
     emit(&terminal);
+
+    if !evaluator {
+        if let Some(spec) = marker(&prompt, "linger-after-result") {
+            let (millis, path) = dwell_spec(&spec);
+            if !path.exists() {
+                touch(&path);
+                held_until_released(&path, millis);
+            }
+        }
+    }
+}
+
+/// Parse a `MS:PATH` hold marker.
+fn dwell_spec(spec: &str) -> (u64, std::path::PathBuf) {
+    let (millis, path) = spec
+        .split_once(':')
+        .unwrap_or_else(|| fail("a hold marker is `MS:PATH`"));
+    let millis = millis
+        .parse()
+        .unwrap_or_else(|e| fail(&format!("a hold marker's MS is a number: {e}")));
+    (millis, std::path::PathBuf::from(path))
+}
+
+fn touch(path: &Path) {
+    std::fs::write(path, b"live\n")
+        .unwrap_or_else(|e| fail(&format!("could not publish {}: {e}", path.display())));
+}
+
+/// `PATH.release`, the file a journey creates to end a hold early.
+fn release_of(path: &Path) -> std::path::PathBuf {
+    let mut name = path.as_os_str().to_owned();
+    name.push(".release");
+    std::path::PathBuf::from(name)
+}
+
+/// Sleep until `millis` pass or `path`'s release file appears.
+fn held_until_released(path: &Path, millis: u64) {
+    let deadline = Instant::now() + Duration::from_millis(millis);
+    let release = release_of(path);
+    while Instant::now() < deadline && !release.exists() {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+/// Hold the turn open; see `[[worker-dwell:…]]`. Returns the stream the
+/// replacement prompt arrives on when an interrupt aborted the hold, and `None`
+/// when the hold ran out (or was released) with the turn intact.
+fn hold(
+    spec: &str,
+    controlled: bool,
+    log: Option<&str>,
+) -> Option<std::sync::mpsc::Receiver<String>> {
+    let (millis, path) = dwell_spec(spec);
+    if path.exists() {
+        return None;
+    }
+    // The rest of a controlled turn's stdin — oneharness's interrupt frame and
+    // then the replacement prompt — read beside the hold, so the hold can end on
+    // it. An uncontrolled turn's stdin carries nothing more.
+    let lines = controlled.then(|| {
+        let (send, receive) = std::sync::mpsc::channel::<String>();
+        std::thread::spawn(move || {
+            for line in std::io::BufRead::lines(std::io::stdin().lock()) {
+                let Ok(line) = line else { break };
+                if send.send(line).is_err() {
+                    break;
+                }
+            }
+        });
+        receive
+    });
+    touch(&path);
+    let deadline = Instant::now() + Duration::from_millis(millis);
+    let release = release_of(&path);
+    while Instant::now() < deadline && !release.exists() {
+        let read = lines
+            .as_ref()
+            .map(|lines| lines.recv_timeout(Duration::from_millis(10)));
+        match read {
+            Some(Ok(line)) if is_interrupt(&line) => {
+                if let Some(log) = log {
+                    log_event(log, &serde_json::json!({"event": "aborted"}));
+                }
+                return lines;
+            }
+            Some(Ok(other)) => fail(&format!(
+                "an unexpected line on a held turn's stdin: {other:?}"
+            )),
+            Some(Err(std::sync::mpsc::RecvTimeoutError::Timeout)) => {}
+            Some(Err(std::sync::mpsc::RecvTimeoutError::Disconnected)) => break,
+            None => std::thread::sleep(Duration::from_millis(10)),
+        }
+    }
+    if let Some(log) = log {
+        log_event(log, &serde_json::json!({"event": "finished"}));
+    }
+    None
+}
+
+/// Whether `line` is oneharness's interrupt frame for Claude Code's stdin.
+fn is_interrupt(line: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(line).is_ok_and(|frame| {
+        frame.get("type").and_then(serde_json::Value::as_str) == Some("control_request")
+            && frame
+                .pointer("/request/subtype")
+                .and_then(serde_json::Value::as_str)
+                == Some("interrupt")
+    })
+}
+
+/// The prompt a control frame carries.
+fn frame_text(line: &str) -> String {
+    serde_json::from_str::<serde_json::Value>(line)
+        .ok()
+        .and_then(|frame| {
+            frame
+                .pointer("/message/content/0/text")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string)
+        })
+        .unwrap_or_else(|| fail(&format!("a control frame carries no prompt: {line:?}")))
+}
+
+/// The prompt this invocation was handed: the control frame's text, the stdin
+/// blob, or the `-p` positional.
+fn handed(args: &[String], stdin: &str) -> String {
+    if args
+        .windows(2)
+        .any(|w| w[0] == "--input-format" && w[1] == "stream-json")
+    {
+        return frame_text(stdin);
+    }
+    if !stdin.is_empty() {
+        return stdin.to_string();
+    }
+    args.windows(2)
+        .find(|w| w[0] == "-p")
+        .map(|w| w[1].clone())
+        .unwrap_or_default()
+}
+
+/// A `completion:false` decision naming the first numbered criterion `text`
+/// carries; see `[[decide-on-redirect]]`.
+fn decided_on(text: &str) -> String {
+    let criterion = text
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("1. "))
+        .unwrap_or("no criterion reached this turn");
+    serde_json::json!({
+        "completion": false,
+        "message": format!("Meet the criterion delivered into this turn: {criterion}"),
+        "reason": "decided with the correction in hand",
+    })
+    .to_string()
+}
+
+/// Append one JSON line to a turn log, in one write.
+fn log_event(path: &str, event: &serde_json::Value) {
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .unwrap_or_else(|e| fail(&format!("could not open the turn log {path}: {e}")));
+    file.write_all(format!("{event}\n").as_bytes())
+        .unwrap_or_else(|e| fail(&format!("could not write the turn log {path}: {e}")));
 }
 
 /// Script the evidence-aware evaluator journey while leaving ordinary doubles

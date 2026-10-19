@@ -66,8 +66,9 @@
 //! It can also ask for a **controllable** agent turn (`with_control`): the
 //! agent-side call adds `--control`, oneharness opens an out-of-band socket for the
 //! turn, and the address an `oneharness interrupt` process would use is reported on
-//! [`Provider::control`]. onejudge never interrupts anything — it asks, and it
-//! reports where the answer is. A oneharness that refuses the ask does so before
+//! [`Provider::control`]. onejudge redirects that turn itself only for a note sent
+//! into its own conversation ([`Provider::turn_control`] names where). A oneharness
+//! that refuses the ask does so before
 //! spawning a harness, so the call is retried once without the flag and the refusal
 //! becomes a stated reason rather than a failed run. See `docs/control.md`.
 //!
@@ -702,8 +703,8 @@ impl OneharnessProvider {
     /// `oneharness run --control`, which opens an out-of-band unix socket for the
     /// turn's lifetime so a separate `oneharness interrupt` process can redirect
     /// it in flight. The address is reported on [`Provider::control`] and on
-    /// [`Report::control`](crate::Report::control); onejudge itself never
-    /// interrupts anything.
+    /// [`Report::control`](crate::Report::control); onejudge itself redirects it
+    /// only for a note sent into its own conversation.
     ///
     /// **Off by default**, and off changes nothing at all — no flag, no socket,
     /// the same argv. On, the ask is best-effort in exactly one direction: a
@@ -1621,6 +1622,27 @@ impl Provider for OneharnessProvider {
 
     fn supervisor_control(&self) -> ControlOutcome {
         self.supervisor.outcome.borrow().clone()
+    }
+
+    // Both parties ask for control under the one `with_control` switch, each on
+    // its own session name. The store is the one the run binds its socket under —
+    // onejudge passes no `--session-dir`, so it is the linked core's default,
+    // resolved from this process's environment exactly as the run resolves it.
+    fn turn_control(
+        &self,
+        _party: crate::Party,
+        session: &str,
+        cwd: &str,
+    ) -> Option<ControlAddress> {
+        if !self.control || control_platform_reason(cfg!(unix)).is_some() {
+            return None;
+        }
+        let dir = oneharness_core::io::session::resolve_dir(None)?;
+        Some(ControlAddress {
+            session: oneharness_core::domain::history::sanitize_name(session),
+            session_dir: dir.display().to_string(),
+            cwd: cwd.to_string(),
+        })
     }
 
     fn respond(

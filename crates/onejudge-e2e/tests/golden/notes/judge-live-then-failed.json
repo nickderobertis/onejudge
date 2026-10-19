@@ -1,5 +1,5 @@
 {
-  "accepted": "Interrupted { party: Supervisor }",
+  "accepted": "AtTurnEnd { party: Supervisor }",
   "delivered": [
     {
       "delivered_to": "supervisor",

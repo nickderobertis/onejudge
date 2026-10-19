@@ -23,9 +23,9 @@ use std::time::Duration;
 use serde_json::json;
 
 use onejudge::{
-    Accepted, Addressee, CommandProvider, Conversation, Decision, Engine, JudgeEntry, JudgePanel,
-    Note, NoteInbox, Notes, Observation, OneharnessProvider, Party, Role, Settings, SimulatedUser,
-    Skill, SplitProvider, Undelivered,
+    Accepted, Addressee, CommandProvider, Conversation, Decision, Delivery, Engine, JudgeEntry,
+    JudgePanel, Note, NoteInbox, Notes, Observation, OneharnessProvider, Party, Role, Settings,
+    SimulatedUser, Skill, SplitProvider, Undelivered,
 };
 // The plan is the second entry point an embedder has, behind the non-default
 // `cli` feature this crate enables on its `onejudge` dependency.
@@ -474,10 +474,11 @@ fn a_note_arriving_during_the_workers_turn_reaches_the_worker_and_the_judge_with
         .expect("the conversation was live, so the note was accepted");
     assert_eq!(
         accepted,
-        Accepted::Interrupted {
+        Accepted::AtTurnEnd {
             party: Party::Worker
         },
-        "a note arriving during the worker's turn reaches the worker"
+        "a note arriving during the worker's turn reaches the worker once it ends: the echo \
+         provider opens no turn with control, so nothing could interrupt it"
     );
 
     let all = requests(&log);
@@ -554,10 +555,11 @@ fn a_note_arriving_during_the_judges_turn_reaches_the_judge_and_the_worker_with_
         .expect("the conversation was live, so the note was accepted");
     assert_eq!(
         accepted,
-        Accepted::Interrupted {
+        Accepted::AtTurnEnd {
             party: Party::Supervisor
         },
-        "a note arriving during the judge's turn reaches the judge"
+        "a note arriving during the judge's turn reaches the judge once it ends, in the decision \
+         re-taken with it"
     );
 
     let all = requests(&log);
@@ -644,7 +646,7 @@ fn a_note_arriving_during_a_panels_turn_reaches_every_judge_and_re_takes_every_d
         .expect("a note arriving mid-panel-turn does not fail the run");
     assert_eq!(
         sender.join().unwrap().unwrap(),
-        Accepted::Interrupted {
+        Accepted::AtTurnEnd {
             party: Party::Supervisor
         }
     );
@@ -757,6 +759,51 @@ fn a_note_the_judge_completes_on_is_delivered_to_the_judge_and_never_to_the_work
             "delivered": delivered,
             "requests": requests(&log),
         }),
+    );
+}
+
+#[test]
+fn a_command_supervisor_is_handed_every_note_in_the_protocol_v8_shape_whatever_its_delivery() {
+    // A note's `delivery` routes it to a live turn and is spent once it has been
+    // delivered: the frame a command supervisor reads stays protocol v8, member for
+    // member, so a command written against v8 needs no change.
+    let log = scratch_path("notes-v8-delivery.log");
+    let (notes, inbox) = Notes::channel();
+    let sending = queue_before_the_run(
+        &notes,
+        &inbox,
+        Note::to(Addressee::Worker, NOTE)
+            .binding("the diff touches only the parser module")
+            .unwrap()
+            .with_delivery(Delivery::TurnEnd),
+    );
+    let provider = echo();
+    let engine = Engine::new(&provider, Settings::new()).with_notes(inbox);
+    engine
+        .run(&Conversation::multi_turn(
+            Skill::new(
+                "demo",
+                "/skills/demo",
+                format!("[[record:{}]]", log.display()),
+            ),
+            "start the job",
+            SimulatedUser::new(format!("A reviewer. [[record:{}]]", log.display())).max_turns(2),
+        ))
+        .expect("an ordinary run");
+    assert_eq!(sending.join().unwrap(), Ok(Accepted::Queued));
+
+    let supervisors = of_op(&requests(&log), "supervisor");
+    let shown = &supervisors.first().expect("the supervisor was consulted")["notes"];
+    assert_eq!(
+        shown,
+        &json!([{
+            "note": {
+                "addressee": "worker",
+                "text": NOTE,
+                "criterion": "the diff touches only the parser module",
+            },
+            "delivered_to": "worker",
+        }])
     );
 }
 
@@ -1063,7 +1110,7 @@ fn a_bound_criterion_enters_the_acceptance_criteria_whichever_side_of_the_first_
         (Arrival::BeforeTheFirstTurn, Accepted::Queued),
         (
             Arrival::DuringTheFirstTurn,
-            Accepted::Interrupted {
+            Accepted::AtTurnEnd {
                 party: Party::Worker,
             },
         ),
@@ -1368,7 +1415,7 @@ fn a_note_handed_to_the_judges_live_turn_is_answered_as_delivered_when_the_run_t
         .expect("the note reached the judge before the run failed, so it was accepted");
     assert_eq!(
         accepted,
-        Accepted::Interrupted {
+        Accepted::AtTurnEnd {
             party: Party::Supervisor
         },
         "a note handed to a party reports that party, whatever became of the run afterwards"

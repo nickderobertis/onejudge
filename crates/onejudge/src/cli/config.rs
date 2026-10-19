@@ -168,8 +168,9 @@ pub struct ProviderConfig {
     /// separate `oneharness interrupt` process can redirect the in-flight turn
     /// through. Default `false`, and `false` changes nothing about the run. The
     /// addresses land on the report's `control` (agent) and `supervisor_control`
-    /// (judge) blocks — separate sockets, separately refusable; onejudge never
-    /// interrupts anything itself. See `docs/control.md`.
+    /// (judge) blocks — separate sockets, separately refusable. onejudge redirects
+    /// a live turn itself only for a note sent into its own conversation. See
+    /// `docs/control.md`.
     #[serde(default)]
     pub control: Option<bool>,
     /// `oneharness`: harness ids to run against **oneharness's own deterministic

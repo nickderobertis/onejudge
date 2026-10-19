@@ -15,13 +15,16 @@ the judge's own config), and it writes the report schema the pinned
 `oneharness-core` parses. The two crates version
 independently; never read one number off the other.
 
-onejudge's part is deliberately narrow, and it is all of this page:
+onejudge's part is all of this page:
 
 1. **Ask** for controllable turns.
 2. **Report the address** of each one you got — one per party.
+3. **Redirect a live turn for its own notes**: a note sent into the conversation
+   while the party it addresses is mid-turn interrupts that turn, through the same
+   socket ([below](#onejudge-redirects-a-live-turn-for-its-own-notes)).
 
-onejudge never interrupts anything itself. The lever belongs to whatever is
-supervising the run.
+External supervisors may still pull the lever too: the address is theirs as much
+as it is onejudge's.
 
 ## Asking
 
@@ -217,6 +220,40 @@ judge harness that declares no control mechanism: the supervisor turn is retried
 without the flag, the run reaches its cap, and the agent's address survives a
 refusal that was never about the agent.
 
+## onejudge redirects a live turn for its own notes
+
+A note ([notes.md](notes.md)) that arrives while the party it addresses is
+mid-turn, on a turn opened with control, **interrupts that turn**: onejudge calls
+the linked core's `oneharness_core::io::control::send` against the turn's address
+with the note's framed text as the redirect `input` — in process, the same frame
+`oneharness interrupt` would send. No new oneharness flag is passed and the
+spawning seam's argv is unchanged, so the oneharness CLI a host pins needs to
+accept nothing new.
+
+The address is the one the provider says the turn will have
+(`Provider::turn_control`): for `OneharnessProvider`, the session name the engine
+minted for that party and the store the run binds its socket under. onejudge dials
+it only once a socket is listening there, so a turn whose control ask was refused —
+a harness with no control mechanism, a platform with no unix sockets — is reached
+at its end rather than interrupted.
+
+Only `Served { redirected: true }` counts. oneharness answers that only once the
+replacement turn has opened with the text, and on every refusal it never writes the
+text later — so onejudge answers the note's sender `Interrupted` exactly when the
+turn really was redirected, and a refused redirect hands the note back to the
+inbox, untaken, to reach the party once its turn ends (`AtTurnEnd`).
+
+A worker turn that was redirected is kept in the transcript as the turns it was:
+the interrupted turn's own words and tool events (what onejudge observed of them
+before the redirect was confirmed, on a streaming provider) stand as an assistant
+message, then the note as the user message the replacement turn opened with, then
+the reply. A supervisor turn that was redirected decides on the note: the decision
+it takes is the one taken with the note in hand, and an answer of its that does
+not parse is re-asked as below.
+
+`tests/interrupting_notes.rs` drives both parties through the real in-process
+engine, with only the harness doubled.
+
 ## A redirected supervisor turn is asked again, naming the redirect
 
 A redirect has never delivered *into* a running turn. It aborts the turn and
@@ -244,9 +281,9 @@ drive the pair.
 
 ## Scope
 
-This is the bottom of the fix, not the whole of it. onejudge does not interrupt,
-does not decide when a turn has gone wrong, and does not publish the address
-before the run ends — the report is where it appears. A supervisor that needs the
-lever mid-run already knows the session name and working directory it configured;
-what it could not know until now is the store the socket lives in, and whether it
-got a controllable turn at all.
+onejudge redirects a live turn only for a note sent into its own conversation. It
+does not decide on its own when a turn has gone wrong, and it does not publish the
+address before the run ends — the report is where it appears. A supervisor that
+needs the lever mid-run already knows the session name and working directory it
+configured; what it could not know until now is the store the socket lives in, and
+whether it got a controllable turn at all.
