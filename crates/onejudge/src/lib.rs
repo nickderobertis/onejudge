@@ -84,6 +84,7 @@ mod control;
 mod engine;
 mod error;
 mod history_name;
+mod interrupt;
 mod llmlint;
 pub mod note;
 mod oneharness;

@@ -116,6 +116,18 @@ impl<S: Provider, J: Provider> Provider for SplitProvider<S, J> {
         self.judge.supervisor_control()
     }
 
+    fn turn_control(
+        &self,
+        party: crate::Party,
+        session: &str,
+        cwd: &str,
+    ) -> Option<crate::ControlAddress> {
+        match party {
+            crate::Party::Worker => self.skill.turn_control(party, session, cwd),
+            crate::Party::Supervisor => self.judge.turn_control(party, session, cwd),
+        }
+    }
+
     // Only the judge side decides, so only it can have recorded a decision.
     fn take_judge_decisions(&self) -> Vec<crate::JudgeDecision> {
         self.judge.take_judge_decisions()

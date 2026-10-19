@@ -1,5 +1,5 @@
 {
-  "accepted": "Interrupted { party: Worker }",
+  "accepted": "AtTurnEnd { party: Worker }",
   "delivered": [
     {
       "delivered_to": "worker",

@@ -698,6 +698,21 @@ impl<J: Provider + Send> Provider for JudgePanel<J> {
         self.judges[0].with(Provider::supervisor_control)
     }
 
+    // A panel of one is its judge. A panel of several runs one turn per judge at
+    // once, and a note redirecting one of them would leave the others deciding
+    // without it — so none is redirected, and the note reaches them all at the end.
+    fn turn_control(
+        &self,
+        party: crate::Party,
+        session: &str,
+        cwd: &str,
+    ) -> Option<crate::ControlAddress> {
+        match self.judges.as_slice() {
+            [judge] => judge.with(|provider| provider.turn_control(party, session, cwd)),
+            _ => None,
+        }
+    }
+
     fn take_judge_decisions(&self) -> Vec<JudgeDecision> {
         std::mem::take(&mut *self.decisions.borrow_mut())
     }

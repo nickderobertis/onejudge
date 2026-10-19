@@ -1623,6 +1623,27 @@ impl Provider for OneharnessProvider {
         self.supervisor.outcome.borrow().clone()
     }
 
+    // Both parties ask for control under the one `with_control` switch, each on
+    // its own session name. The store is the one the run binds its socket under —
+    // onejudge passes no `--session-dir`, so it is the linked core's default,
+    // resolved from this process's environment exactly as the run resolves it.
+    fn turn_control(
+        &self,
+        _party: crate::Party,
+        session: &str,
+        cwd: &str,
+    ) -> Option<ControlAddress> {
+        if !self.control || control_platform_reason(cfg!(unix)).is_some() {
+            return None;
+        }
+        let dir = oneharness_core::io::session::resolve_dir(None)?;
+        Some(ControlAddress {
+            session: oneharness_core::domain::history::sanitize_name(session),
+            session_dir: dir.display().to_string(),
+            cwd: cwd.to_string(),
+        })
+    }
+
     fn respond(
         &self,
         skill: &SkillRef<'_>,

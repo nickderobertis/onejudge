@@ -445,6 +445,26 @@ pub trait Provider {
         crate::ControlOutcome::NotRequested
     }
 
+    /// Where `party`'s next turn, run on `session` in `cwd`, can be redirected
+    /// in process while it is live — or `None` when this provider will not open
+    /// that turn with control.
+    ///
+    /// The engine asks before each turn, and only a turn with an address here has
+    /// a note interrupt it ([`Accepted::Interrupted`](crate::Accepted)); every
+    /// other note reaches it once it ends. It is a *prospective* address: the
+    /// engine dials it only once a socket is listening there, so a turn that was
+    /// refused control after all is reached at its end rather than interrupted.
+    ///
+    /// Defaulted to `None`, which is the truth for a backend that opens no socket.
+    fn turn_control(
+        &self,
+        _party: crate::Party,
+        _session: &str,
+        _cwd: &str,
+    ) -> Option<crate::ControlAddress> {
+        None
+    }
+
     /// Take every per-judge decision recorded since the last take.
     ///
     /// A [`JudgePanel`](crate::JudgePanel) records one [`JudgeDecision`](crate::JudgeDecision) per judge

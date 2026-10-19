@@ -277,6 +277,23 @@ impl Provider for AnyProvider {
         }
     }
 
+    fn turn_control(
+        &self,
+        party: crate::Party,
+        session: &str,
+        cwd: &str,
+    ) -> Option<crate::ControlAddress> {
+        match self {
+            AnyProvider::Oneharness(p) => p.turn_control(party, session, cwd),
+            AnyProvider::Command(p) => p.turn_control(party, session, cwd),
+            AnyProvider::Llmlint(p) => p.turn_control(party, session, cwd),
+            AnyProvider::Split { skill, judges } => match party {
+                crate::Party::Worker => skill.turn_control(party, session, cwd),
+                crate::Party::Supervisor => judges.turn_control(party, session, cwd),
+            },
+        }
+    }
+
     // The skill side owns the controllable turn, exactly as
     // [`crate::SplitProvider`] decides it.
     fn control(&self) -> crate::ControlOutcome {

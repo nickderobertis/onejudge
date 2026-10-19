@@ -97,12 +97,61 @@ struct SupervisorFrame<'a> {
     history_name: &'a str,
     /// Every note delivered into this run so far (protocol v5). Omitted when
     /// none has been, so a v4 double sees a byte-identical request.
-    #[serde(default, skip_serializing_if = "<[_]>::is_empty")]
-    notes: &'a [crate::note::DeliveredNote],
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    notes: Vec<FrameDeliveredNote<'a>>,
     turn: &'a TurnOutcome,
     messages: &'a [Message],
     #[serde(default, skip_serializing_if = "Option::is_none")]
     session: Option<&'a str>,
+}
+
+// The frame's own projection of `note::DeliveredNote`, so protocol v8 stays
+// byte-identical while the typed note grows: a note's `delivery` decides how the
+// engine routes it to a live turn, and means nothing to a command once the note
+// has been delivered, so it is not written here. Named and documented as the
+// types it projects, which is what keeps the registered schema unchanged.
+/// One note as it was handed to a party, with the party it reached.
+#[derive(Serialize)]
+#[cfg_attr(feature = "sdk-schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "sdk-schema", schemars(rename = "DeliveredNote"))]
+struct FrameDeliveredNote<'a> {
+    /// The note itself, addressee included.
+    note: FrameNote<'a>,
+    /// The party that was handed it — **not** the same thing as its addressee: a
+    /// note is delivered to whoever is live, and the addressee is what the
+    /// recipient is told the note is *for*.
+    delivered_to: crate::note::Party,
+}
+
+/// One note: what the worker reads, who it is for, and the property it binds.
+///
+/// Built through [`Note::new`] / [`Note::to`] / [`Note::binding`] and in no other
+/// way — `non_exhaustive` closes the struct literal, and deserialization goes
+/// through the same conversion — so a note whose text nobody can read, or whose
+/// criterion is unusable, is unrepresentable rather than representable and refused
+/// somewhere later.
+#[derive(Serialize)]
+#[cfg_attr(feature = "sdk-schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "sdk-schema", schemars(rename = "Note"))]
+struct FrameNote<'a> {
+    addressee: crate::note::Addressee,
+    text: &'a str,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "sdk-schema", schemars(extend("default" = null)))]
+    criterion: Option<&'a crate::note::Criterion>,
+}
+
+impl<'a> From<&'a crate::note::DeliveredNote> for FrameDeliveredNote<'a> {
+    fn from(delivered: &'a crate::note::DeliveredNote) -> Self {
+        Self {
+            note: FrameNote {
+                addressee: delivered.note.addressee,
+                text: delivered.note.text.as_str(),
+                criterion: delivered.note.criterion.as_ref(),
+            },
+            delivered_to: delivered.delivered_to,
+        }
+    }
 }
 
 /// `judge`: score a criterion against the transcript. A numeric score carries its
@@ -514,7 +563,7 @@ impl Provider for CommandProvider {
                     done_when: query.done_when,
                     worktree: query.worktree,
                     history_name: query.history_name,
-                    notes: query.notes,
+                    notes: query.notes.iter().map(FrameDeliveredNote::from).collect(),
                     turn: &query.turn,
                     messages,
                     session,
@@ -635,6 +684,35 @@ mod tests {
         // Protocol v2: no harness/model selection on the wire.
         assert!(!json.contains("platform"));
         assert!(!json.contains("model"));
+    }
+
+    #[test]
+    fn a_supervisor_frame_writes_every_note_as_protocol_v8_whatever_its_delivery() {
+        use crate::note::{Addressee, DeliveredNote, Delivery, Note, Party};
+        // `delivery` routes a note to a live turn and is spent once it has been
+        // delivered, so the v8 frame a command reads is the same bytes either way.
+        let v8 = r#"{"op":"supervisor","task":"t","persona":"p","worktree":"/w","history_name":"h","notes":[{"note":{"addressee":"worker","text":"look again","criterion":"the diff is small"},"delivered_to":"worker"}],"turn":{"outcome":"taken"},"messages":[]}"#;
+        for delivery in [Delivery::Interrupt, Delivery::TurnEnd] {
+            let notes = [DeliveredNote {
+                note: Note::to(Addressee::Worker, "look again")
+                    .binding("the diff is small")
+                    .unwrap()
+                    .with_delivery(delivery),
+                delivered_to: Party::Worker,
+            }];
+            let frame = Request::Supervisor(SupervisorFrame {
+                task: "t",
+                persona: "p",
+                done_when: None,
+                worktree: "/w",
+                history_name: "h",
+                notes: notes.iter().map(FrameDeliveredNote::from).collect(),
+                turn: &TurnOutcome::Taken,
+                messages: &[],
+                session: None,
+            });
+            assert_eq!(serde_json::to_string(&frame).unwrap(), v8, "{delivery:?}");
+        }
     }
 
     #[test]

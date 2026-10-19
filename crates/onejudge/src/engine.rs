@@ -13,6 +13,7 @@ use onemessagebus::{Closed, Delivered};
 use crate::control::ControlOutcome;
 use crate::error::Result;
 use crate::history_name::{HistoryScope, JudgeSideCall};
+use crate::interrupt::{Framing, Redirect, Watch};
 use crate::note::{Accepted, Criteria, DeliveredNote, Note, NoteInbox, Party, Undelivered};
 use crate::provider::{
     Assessment, AssistantTurn, EvidenceContext, JudgeKind, JudgeQuery, JudgeVerdict, Provider,
@@ -418,30 +419,118 @@ pub struct Engine<'a> {
     judge_decisions: RefCell<Vec<JudgedTurn>>,
 }
 
-/// Notes handed to the judge's live turn, whose senders cannot be answered until
-/// the re-taken decision says whether it was completion.
+/// Notes handed to the judge, whose senders cannot be answered until the decision
+/// they reached says whether it was completion — each with the answer it gets if
+/// it was not: [`Accepted::Interrupted`] for one that redirected the judge's live
+/// turn, [`Accepted::AtTurnEnd`] for one the decision was re-taken with.
 ///
 /// Dropped unsettled — a run that fails, or is short-circuited, before the decision
 /// comes back — each is answered as the delivery it really was, whatever became of
 /// the run afterwards.
-struct AwaitingDecision(Vec<Delivered<Note, Accepted>>);
+#[derive(Default)]
+struct AwaitingDecision(Vec<(Delivered<Note, Accepted>, Accepted)>);
 
 impl AwaitingDecision {
-    fn settle(mut self, accepted: &Accepted) {
-        for delivered in self.0.drain(..) {
-            delivered.answer(accepted.clone());
+    fn redirected(&mut self, delivered: Delivered<Note, Accepted>) {
+        self.0.push((
+            delivered,
+            Accepted::Interrupted {
+                party: Party::Supervisor,
+            },
+        ));
+    }
+
+    fn at_turn_end(&mut self, delivered: Delivered<Note, Accepted>) {
+        self.0.push((
+            delivered,
+            Accepted::AtTurnEnd {
+                party: Party::Supervisor,
+            },
+        ));
+    }
+
+    /// Answer every sender: `completion_reason` when the decision completed the
+    /// conversation, and otherwise the delivery each note was.
+    fn settle(mut self, completion_reason: Option<&str>) {
+        for (delivered, otherwise) in self.0.drain(..) {
+            delivered.answer(match completion_reason {
+                Some(reason) => Accepted::JudgedWith {
+                    completion_reason: reason.to_string(),
+                },
+                None => otherwise,
+            });
         }
     }
 }
 
 impl Drop for AwaitingDecision {
     fn drop(&mut self) {
-        for delivered in self.0.drain(..) {
-            delivered.answer(Accepted::Interrupted {
-                party: Party::Supervisor,
-            });
+        for (delivered, otherwise) in self.0.drain(..) {
+            delivered.answer(otherwise);
         }
     }
+}
+
+/// The text a correction redirecting the judge's live turn opens its replacement
+/// turn with: the notes, framed by the role each is for, every criterion they
+/// bound, and the question again — because what a redirected turn answers is its
+/// prompt, and a decision is what the conversation needs back.
+fn supervisor_redirect(presented: &[DeliveredNote]) -> String {
+    let mut out = String::from(
+        "## A correction delivered into your turn\n\n\
+         The turn you were taking was interrupted to hand you the following. Take your decision \
+         again with it in hand.\n\n",
+    );
+    if let Some(block) = crate::note::supervisor_block(presented) {
+        out.push_str(&block);
+    }
+    if let Some(criteria) = Criteria::compose(None, presented).rendered() {
+        out.push('\n');
+        out.push_str(&criteria);
+        out.push('\n');
+    }
+    out.push_str(
+        "\nJudge the work against the completion criterion you were given and every criterion \
+         above, and answer in exactly one of the two shapes: `completion:true` with a `reason`, \
+         or `completion:false` with a concrete, actionable next instruction in `message`.",
+    );
+    out
+}
+
+/// Append one worker turn to `transcript`, as the turns it really was.
+///
+/// Without a redirect that is the reply and its events. With one, the provider
+/// call held more than one turn: each turn a note interrupted is kept as an
+/// assistant message — the agent's own text and the tool events observed before
+/// the redirect was confirmed, which stand, because a redirect throws away a turn's
+/// remaining words, never its effects — followed by the user message the
+/// replacement turn opened with, exactly as the worker was handed it, and the call's
+/// reply closes the run of turns with the events that came after. A buffered turn
+/// observes nothing while it runs, so its interrupted turns carry nothing of their
+/// own and every event stays with the reply.
+fn push_redirected(
+    transcript: &mut Transcript,
+    redirects: &[Redirect],
+    message: String,
+    mut events: Vec<ToolEvent>,
+) {
+    let mut tools = 0;
+    let mut texts = 0;
+    for redirect in redirects {
+        let upto = redirect.at.tools.clamp(tools, events.len());
+        let interrupted: Vec<ToolEvent> = events.drain(..upto - tools).collect();
+        tools = upto;
+        let said = redirect
+            .at
+            .texts
+            .get(texts..)
+            .unwrap_or_default()
+            .join("\n");
+        texts = redirect.at.texts.len().max(texts);
+        transcript.push(Message::assistant(said).with_events(interrupted));
+        transcript.push(Message::user(redirect.input.clone()));
+    }
+    transcript.push(Message::assistant(message).with_events(events));
 }
 
 /// Close a note channel no conversation ever read, so a note sent to it is refused
@@ -549,6 +638,41 @@ impl<'a> Engine<'a> {
                 handed
             })
             .collect()
+    }
+
+    /// A watch over `party`'s next turn on `session` in `cwd`, when a note can
+    /// arrive and the provider opens that turn with control — `None` otherwise, and
+    /// then nothing is taken from the inbox until the turn ends.
+    fn watch(
+        &self,
+        party: Party,
+        session: &str,
+        cwd: &str,
+        framing: Framing<'a>,
+    ) -> Option<Watch<'_>>
+    where
+        Self: 'a,
+    {
+        let inbox = self.notes.as_ref()?;
+        let address = self.provider.turn_control(party, session, cwd)?;
+        Watch::new(inbox, party, &address, framing)
+    }
+
+    /// Run `call` as one live turn under `watch`, and hand back its result with
+    /// every redirect the watch confirmed while it ran.
+    fn live<T>(&self, watch: Option<&Watch<'_>>, call: impl FnOnce() -> T) -> (T, Vec<Redirect>) {
+        let Some(watch) = watch else {
+            return (call(), Vec::new());
+        };
+        std::thread::scope(|scope| {
+            let watching = scope.spawn(|| watch.run());
+            let result = call();
+            watch.end();
+            let redirects = watching
+                .join()
+                .unwrap_or_else(|panic| std::panic::resume_unwind(panic));
+            (result, redirects)
+        })
     }
 
     /// Record that `note` was handed to `party`.
@@ -721,37 +845,61 @@ impl<'a> Engine<'a> {
             }
             let mut broke = false;
             let invoked = self.worker_invocations();
-            let turn = if streaming {
-                self.provider.respond_observing(
-                    &skill,
-                    &transcript.messages,
-                    Some(skill_session.as_str()),
-                    &mut |action| {
-                        // Tool activity first, exactly as it always reached a
-                        // streaming sink — a sink that stops on it is handed
-                        // nothing after — then the whole event for a reader.
-                        if let Some(event) = crate::oneharness::tool_event(action) {
-                            let flow = on_observation(&Observation::Tool(StreamEvent {
-                                turn: turn_index,
-                                event: &event,
-                            }));
-                            if flow.is_break() {
-                                broke = true;
-                                return flow;
+            // A note addressed to the worker that arrives while this turn is live
+            // redirects it, when the turn is controlled: the replacement turn opens
+            // with the note alone, framed as the worker's.
+            let watch = self.watch(
+                Party::Worker,
+                &skill_session,
+                &conversation.skill.dir,
+                Box::new(|presented: &[DeliveredNote]| {
+                    crate::note::worker_block(&presented[presented.len() - 1..])
+                }),
+            );
+            let (turn, redirects) = self.live(watch.as_ref(), || {
+                if streaming {
+                    self.provider.respond_observing(
+                        &skill,
+                        &transcript.messages,
+                        Some(skill_session.as_str()),
+                        &mut |action| {
+                            if let Some(watch) = &watch {
+                                watch.observe(action);
                             }
-                        }
-                        let flow = on_observation(&Observation::Action(TurnAction {
-                            turn: turn_index,
-                            event: action,
-                        }));
-                        broke |= flow.is_break();
-                        flow
-                    },
-                )
-            } else {
-                self.provider
-                    .respond(&skill, &transcript.messages, Some(skill_session.as_str()))
-            };
+                            // Tool activity first, exactly as it always reached a
+                            // streaming sink — a sink that stops on it is handed
+                            // nothing after — then the whole event for a reader.
+                            if let Some(event) = crate::oneharness::tool_event(action) {
+                                let flow = on_observation(&Observation::Tool(StreamEvent {
+                                    turn: turn_index,
+                                    event: &event,
+                                }));
+                                if flow.is_break() {
+                                    broke = true;
+                                    return flow;
+                                }
+                            }
+                            let flow = on_observation(&Observation::Action(TurnAction {
+                                turn: turn_index,
+                                event: action,
+                            }));
+                            broke |= flow.is_break();
+                            flow
+                        },
+                    )
+                } else {
+                    self.provider.respond(
+                        &skill,
+                        &transcript.messages,
+                        Some(skill_session.as_str()),
+                    )
+                }
+            });
+            // A redirected note reached the worker whatever became of the turn
+            // after, and its sender was answered when oneharness confirmed it.
+            for redirect in &redirects {
+                self.record(redirect.note.clone(), Party::Worker);
+            }
             let turn = match turn {
                 Ok(turn) => turn,
                 Err(error) => {
@@ -848,7 +996,7 @@ impl<'a> Engine<'a> {
                 }))
                 .is_break();
             }
-            transcript.push(Message::assistant(message).with_events(events));
+            push_redirected(&mut transcript, &redirects, message, events);
 
             if broke {
                 return Ok(self.finish(transcript, totals, true, None, None));
@@ -875,18 +1023,17 @@ impl<'a> Engine<'a> {
                 ));
                 break;
             }
-            // A note that arrived while the worker's turn was live reaches the worker
-            // first: the turn is reopened carrying it, before the supervisor is
-            // consulted, so the judge receives it *together with* the worker's
-            // response to it rather than ahead of one. The finished reply is kept
-            // rather than discarded — a redirect throws away a turn's words, never
-            // the work it already committed.
+            // A note that arrived while the worker's turn was live and did not
+            // redirect it reaches the worker now that the turn has ended: the next
+            // turn opens carrying it, before the supervisor is consulted, so the
+            // judge receives it *together with* the worker's response to it rather
+            // than ahead of one. The finished reply is kept — it is real work.
             let arrived = self.take_notes();
             if !arrived.is_empty() {
                 let delivered = self.deliver(
                     arrived,
                     Party::Worker,
-                    &Accepted::Interrupted {
+                    &Accepted::AtTurnEnd {
                         party: Party::Worker,
                     },
                 );
@@ -910,36 +1057,56 @@ impl<'a> Engine<'a> {
             if opened.is_break() {
                 return Ok(self.finish(transcript, totals, true, None, None));
             }
-            // The supervisor's decision, re-taken for as long as notes keep arriving
-            // while it is live: a decision taken without the note is exactly the
-            // decision the note exists to change. Each round is a real judge
-            // invocation, so a caller sending notes into a tight loop pays per note.
-            let mut redirected = AwaitingDecision(Vec::new());
+            // The supervisor's decision. A note addressed to it that arrives while
+            // its turn is live redirects that turn, when the turn is controlled, and
+            // the decision the redirected turn takes is the one taken with the note.
+            // Every other note that arrives meanwhile has the decision re-taken once
+            // the turn ends, for as long as they keep arriving: a decision taken
+            // without the note is exactly the decision the note exists to change.
+            // Each round is a real judge invocation, so a caller sending notes into
+            // a tight loop pays per note.
+            let mut awaiting = AwaitingDecision::default();
             let mut turn_usage: Option<Usage> = None;
             let decision = loop {
                 let delivered = self.delivered_notes();
                 let criteria = Criteria::compose(user.done_when.as_deref(), &delivered);
                 let rendered = criteria.rendered();
                 let history_files = self.history_files();
-                let attempt = self.provider.supervise_with_evidence(
-                    &SupervisorQuery {
-                        task: &conversation.input,
-                        persona: &user.persona,
-                        done_when: rendered.as_deref(),
-                        worktree: &conversation.skill.dir,
-                        history_name: &skill_session,
-                        notes: &delivered,
-                        turn: TurnOutcome::Taken,
-                        turn_index,
-                    },
-                    &transcript.messages,
-                    Some(user_session.as_str()),
-                    EvidenceContext {
-                        worktree: Some(&conversation.skill.dir),
-                        history_files: &history_files,
-                        artifacts: &user.artifacts,
-                    },
+                let watch = self.watch(
+                    Party::Supervisor,
+                    &user_session,
+                    &conversation.skill.dir,
+                    Box::new(supervisor_redirect),
                 );
+                let (attempt, redirects) = self.live(watch.as_ref(), || {
+                    self.provider.supervise_with_evidence(
+                        &SupervisorQuery {
+                            task: &conversation.input,
+                            persona: &user.persona,
+                            done_when: rendered.as_deref(),
+                            worktree: &conversation.skill.dir,
+                            history_name: &skill_session,
+                            notes: &delivered,
+                            turn: TurnOutcome::Taken,
+                            turn_index,
+                        },
+                        &transcript.messages,
+                        Some(user_session.as_str()),
+                        EvidenceContext {
+                            worktree: Some(&conversation.skill.dir),
+                            history_files: &history_files,
+                            artifacts: &user.artifacts,
+                        },
+                    )
+                });
+                // Handed to the judge by its redirected turn, and to the worker with
+                // the judge's response; answered once the decision says which.
+                for redirect in redirects {
+                    for_worker.push(self.record(redirect.note, Party::Supervisor));
+                    if let Some(held) = redirect.held {
+                        awaiting.redirected(held);
+                    }
+                }
                 // What each judge of a panel said, drained whichever way the call
                 // ended: recorded on the engine first, so a failed run still reports
                 // it, and observed before the error propagates, so a supervisor
@@ -1009,7 +1176,7 @@ impl<'a> Engine<'a> {
                 // answered only once that decision says which answer it is.
                 for delivered in arrived {
                     for_worker.push(self.record(delivered.message().clone(), Party::Supervisor));
-                    redirected.0.push(delivered);
+                    awaiting.at_turn_end(delivered);
                 }
             };
             let usage = turn_usage;
@@ -1017,15 +1184,10 @@ impl<'a> Engine<'a> {
             // here rather than at the bottom of the loop because an observation that
             // breaks returns before that, and a delivered note whose sender is never
             // answered is the silence this seam exists to refuse.
-            let accepted = match &decision.outcome {
-                SupervisorOutcome::Completed { reason } => Accepted::JudgedWith {
-                    completion_reason: reason.clone(),
-                },
-                _ => Accepted::Interrupted {
-                    party: Party::Supervisor,
-                },
-            };
-            redirected.settle(&accepted);
+            awaiting.settle(match &decision.outcome {
+                SupervisorOutcome::Completed { reason } => Some(reason.as_str()),
+                _ => None,
+            });
             let finished_at = observed_at();
             // The supervisor's own words are the next instruction, when it gave one.
             // A completion or a settled decision appends nothing to the transcript,
