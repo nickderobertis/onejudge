@@ -1782,9 +1782,13 @@ mod engine {
     use std::io::Read as _;
     use std::path::{Path, PathBuf};
 
+    use oneharness_core::domain::events::ActionEvent;
     use oneharness_core::domain::mode::PermissionMode;
+    use oneharness_core::domain::report::RunStreamEnvelope;
     use oneharness_core::io::cancel::CancelToken;
-    use oneharness_core::io::run::{run as run_engine, RunControls, RunRequest};
+    use oneharness_core::io::run::{
+        run as run_engine, EventSink, RunBegun, RunControls, RunRequest, SinkStep,
+    };
 
     use super::emit_error;
 
@@ -1887,14 +1891,12 @@ mod engine {
             }
             i += 1;
         }
-        if stream {
-            emit_error("the engine mode runs buffered turns only; `--stream` is scripted-mode");
-        }
-        request.stream = Some(false);
+        request.stream = Some(stream);
+        let mut sink = Stream;
         let outcome = run_engine(
             &request,
             RunControls {
-                events: None,
+                events: if stream { Some(&mut sink) } else { None },
                 cancel: CancelToken::new(),
                 signal_cancel: false,
                 version: None,
@@ -1904,10 +1906,38 @@ mod engine {
             eprintln!("{e}");
             std::process::exit(2);
         });
-        let report = serde_json::to_string(&outcome.report)
-            .unwrap_or_else(|e| emit_error(&format!("could not serialize the report: {e}")));
-        println!("{report}");
+        if stream {
+            publish(RunStreamEnvelope::Result {
+                report: outcome.report,
+            });
+        } else {
+            let report = serde_json::to_string(&outcome.report)
+                .unwrap_or_else(|e| emit_error(&format!("could not serialize the report: {e}")));
+            println!("{report}");
+        }
         std::process::exit(outcome.exit_code);
+    }
+
+    struct Stream;
+
+    impl EventSink for Stream {
+        fn run_began(&mut self, begun: &RunBegun) -> SinkStep {
+            publish(RunStreamEnvelope::RunStarted(begun.clone()));
+            SinkStep::Continue
+        }
+
+        fn event(&mut self, _harness_id: &str, event: &ActionEvent) -> SinkStep {
+            publish(RunStreamEnvelope::Event {
+                event: event.clone(),
+            });
+            SinkStep::Continue
+        }
+    }
+
+    fn publish(envelope: RunStreamEnvelope) {
+        let value = serde_json::to_value(envelope)
+            .unwrap_or_else(|e| emit_error(&format!("could not serialize the stream: {e}")));
+        super::write_line(&value);
     }
 
     /// `oneharness config`: the layered configuration with every value's source,

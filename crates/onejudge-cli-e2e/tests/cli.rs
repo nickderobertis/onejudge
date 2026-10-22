@@ -2200,6 +2200,8 @@ user:
     let mut seen: Vec<String> = Vec::new();
     let summary = run_plan_observing_reporting_failure(plan, &mut |observation| {
         seen.push(match observation {
+            // History addresses have their own real-loop journeys in history.rs.
+            Observation::HistoryBegun(_) => return ControlFlow::Continue(()),
             Observation::TurnOpened(o) => format!("opened/{:?}/{}", o.role, o.instruction),
             Observation::Tool(e) => format!("tool/{}", e.event.summary()),
             Observation::Action(a) => format!("action/{}", a.event.kind),
@@ -2620,6 +2622,8 @@ fn an_observing_plan_run_delivers_each_judges_decision_inside_the_supervisor_tur
     let mut seen: Vec<String> = Vec::new();
     let summary = run_plan_observing_reporting_failure(plan, &mut |observation| {
         seen.push(match observation {
+            // History addresses have their own real-loop journeys in history.rs.
+            Observation::HistoryBegun(_) => return ControlFlow::Continue(()),
             Observation::TurnOpened(o) => format!("opened/{:?}", o.role),
             Observation::Tool(e) => format!("tool/{}", e.event.summary()),
             Observation::Action(a) => format!("action/{}", a.event.kind),
@@ -2670,6 +2674,8 @@ fn an_observing_plan_run_delivers_each_judges_decision_inside_the_supervisor_tur
     let mut seen: Vec<String> = Vec::new();
     let Err(failure) = run_plan_observing_reporting_failure(plan, &mut |observation| {
         seen.push(match observation {
+            // History addresses have their own real-loop journeys in history.rs.
+            Observation::HistoryBegun(_) => return ControlFlow::Continue(()),
             Observation::TurnOpened(o) => format!("opened/{:?}", o.role),
             Observation::JudgeDecided(d) => format!("judged/{}/{}", d.judge, d.decision.as_str()),
             Observation::Message(m) => format!("said/{:?}", m.role),
@@ -5285,6 +5291,8 @@ fn an_observed_run_delivers_a_judges_tool_events_after_its_turn_opens_and_before
         let mut seen: Vec<String> = Vec::new();
         let summary = run_plan_observing_reporting_failure(plan, &mut |observation| {
             seen.push(match observation {
+                // History addresses have their own real-loop journeys in history.rs.
+                Observation::HistoryBegun(_) => return ControlFlow::Continue(()),
                 Observation::TurnOpened(o) => format!("opened/{:?}/{}", o.role, o.turn),
                 Observation::Tool(e) => format!("tool/{}", e.turn),
                 Observation::Action(a) => format!("action/{}", a.turn),
