@@ -86,7 +86,8 @@ command and llmlint judges. These openings do not add lines to the outward
 
 A history-enabled spawned candidate first writes a `run-started` envelope with
 `harness_id`, `history_id`, `history_dir`, `history_project` and `history_session`.
-`HistoryBegun` requires oneharness CLI 0.26.0 or newer (the advertised floor).
+`HistoryBegun` requires a oneharness CLI at or above the
+[advertised floor](oneharness-library.md).
 The reader validates the opening with oneharness's typed stream grammar and delivers it
 before reading the candidate's events. A stream from an older CLI without this
 opening remains accepted; no history opening is invented from its final report.
