@@ -36,7 +36,7 @@ fn project(name: &str, history: Option<bool>, fallback: bool) -> PathBuf {
         )
     };
     std::fs::write(dir.join("oneharness.toml"), config(fallback)).unwrap();
-    std::fs::write(dir.join("judge.toml"), config(false)).unwrap();
+    std::fs::write(dir.join("judge.toml"), config(fallback)).unwrap();
     dir
 }
 
@@ -149,7 +149,7 @@ fn journey(spawned: bool, fallback: bool) {
         .iter()
         .filter(|v| v["type"] == "history_begun")
         .collect();
-    assert_eq!(histories.len(), if fallback { 6 } else { 4 });
+    assert_eq!(histories.len(), if fallback { 8 } else { 4 });
     let ids: std::collections::BTreeSet<_> = histories
         .iter()
         .map(|v| v["history_id"].as_str().unwrap())

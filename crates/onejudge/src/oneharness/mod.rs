@@ -1007,7 +1007,8 @@ impl OneharnessProvider {
 
     #[allow(
         clippy::too_many_arguments,
-        reason = "the judge call axes plus its live history sink"
+        reason = "the retry ladder rebuilds independent judge-call axes per rung, plus an optional \
+                  live history sink; a context struct would only rename those existing parameters"
     )]
     fn run_judge_side_observing(
         &self,
