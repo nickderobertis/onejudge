@@ -203,6 +203,49 @@ fn released_cli_history_begins_for_each_fallback_candidate() {
 }
 
 #[test]
+fn existing_provider_callbacks_keep_their_payloads_and_can_stop_a_turn() {
+    for spawned in [false, true] {
+        let dir = project(&format!("history-legacy-callbacks-{spawned}"), None, false);
+        let provider = provider(&dir, spawned).with_streaming(true);
+        let skill = onejudge::SkillRef {
+            name: "legacy",
+            dir: dir.to_str().unwrap(),
+            instructions: "[[reply:finished]][[say:working]][[event:legacy tool]]",
+        };
+        let mut tools = Vec::new();
+        let reply = provider
+            .respond_streaming(&skill, &[], None, &mut |event| {
+                tools.push(event.clone());
+                ControlFlow::Continue(())
+            })
+            .unwrap();
+        assert_eq!(reply.message, "finished");
+        assert_eq!(tools, reply.events);
+        assert_eq!(tools.len(), 1);
+
+        let mut actions = Vec::new();
+        let reply = provider
+            .respond_observing(&skill, &[], None, &mut |event| {
+                actions.push(event.clone());
+                ControlFlow::Continue(())
+            })
+            .unwrap();
+        assert_eq!(reply.message, "finished");
+        assert!(actions.iter().any(|event| event.kind == "tool_call"));
+
+        let mut calls = 0;
+        let stopped = provider
+            .respond_streaming(&skill, &[], None, &mut |_| {
+                calls += 1;
+                ControlFlow::Break(())
+            })
+            .unwrap();
+        assert_eq!(calls, 1);
+        assert!(stopped.message.is_empty());
+    }
+}
+
+#[test]
 fn history_disabled_sides_emit_no_openings_on_either_path() {
     for spawned in [false, true] {
         let dir = project(&format!("history-off-{spawned}"), Some(false), false);
