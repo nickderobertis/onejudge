@@ -164,6 +164,29 @@ impl<S: Provider, J: Provider> Provider for SplitProvider<S, J> {
             .respond_observing(skill, messages, session, on_event)
     }
 
+    fn respond_with_history(
+        &self,
+        skill: &SkillRef<'_>,
+        messages: &[Message],
+        session: Option<&str>,
+        on_event: &mut dyn FnMut(crate::HarnessEvent<'_>) -> ControlFlow<()>,
+    ) -> crate::Result<AssistantTurn> {
+        self.skill
+            .respond_with_history(skill, messages, session, on_event)
+    }
+
+    fn supervise_observing(
+        &self,
+        query: &SupervisorQuery<'_>,
+        messages: &[Message],
+        session: Option<&str>,
+        evidence: EvidenceContext<'_>,
+        on_history: &mut dyn FnMut(&oneharness_core::io::run::RunBegun) -> ControlFlow<()>,
+    ) -> crate::Result<SupervisorTurn> {
+        self.judge
+            .supervise_observing(query, messages, session, evidence, on_history)
+    }
+
     fn simulate_user(
         &self,
         persona: &str,

@@ -39,6 +39,9 @@
 //!   instead, which this binary also plays (`support/codex_app_server.rs`, with
 //!   markers of its own), after answering the `--version` probe that keys it.
 //!
+//! `ONEJUDGE_FAKE_HARNESS_QUOTA=1` makes a configured candidate emit a refusal
+//! message and then report a quota failure, so a real fallback chain is observable.
+//!
 //! # Markers
 //!
 //! Behaviour is steered by `[[marker:arg]]` tokens in the prompt (which for this
@@ -172,6 +175,19 @@ fn main() {
     let stream = matches!(invoked, Invocation::ClaudeCode { stream: true });
     let opencode = matches!(invoked, Invocation::OpenCode);
     let codex = matches!(invoked, Invocation::Codex);
+
+    if std::env::var_os("ONEJUDGE_FAKE_HARNESS_QUOTA").is_some() {
+        if stream {
+            emit(
+                r#"{"type":"assistant","message":{"content":[{"type":"text","text":"Rate limit reached: quota exhausted"}]}}"#,
+            );
+        }
+        emit(
+            r#"{"type":"result","subtype":"error_during_execution","is_error":true,"result":"Rate limit reached: quota exhausted","session_id":"quota-session"}"#,
+        );
+        eprintln!("Rate limit reached: quota exhausted");
+        std::process::exit(1);
+    }
 
     let mut reply = restrictive_evaluator_reply(&prompt, &args)
         .or_else(|| artifact_evaluator_reply(&prompt, &args))

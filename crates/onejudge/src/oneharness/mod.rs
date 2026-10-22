@@ -87,6 +87,7 @@ mod posture;
 mod report;
 mod turn;
 
+use crate::HarnessEvent;
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
 use std::io::{Read as _, Write};
@@ -149,6 +150,10 @@ pub(crate) fn evaluator_posture(
     let configs = posture::evaluator_configs(judge_config, worktree)?;
     posture::resolve(&configs, worktree)
 }
+
+/// A borrowed live-history callback shared by the two invocation paths.
+type HistorySink<'a> =
+    &'a mut (dyn FnMut(&oneharness_core::io::run::RunBegun) -> ControlFlow<()> + 'a);
 
 /// The stable substring in oneharness's error when a harness cannot bind a
 /// `--session` name (its `OneharnessError::SessionUnsupported`). Matching it lets
@@ -784,12 +789,14 @@ impl OneharnessProvider {
     /// harness can do.
     fn run_respond(
         &self,
-        instructions: &str,
-        worktree: &str,
+        skill: &SkillRef<'_>,
         messages: &[Message],
         session: Option<&str>,
-        on_event: &mut dyn FnMut(&ActionEvent) -> ControlFlow<()>,
+        on_event: &mut dyn FnMut(HarnessEvent<'_>) -> ControlFlow<()>,
+        history: bool,
     ) -> Result<AssistantTurn> {
+        let instructions = skill.instructions;
+        let worktree = skill.dir;
         // The turn this reply will be: one past the assistant turns already there.
         let turn = assistant_turns(messages) + 1;
         let labels = self.history_labels(LabelledRole::Worker, turn);
@@ -807,7 +814,7 @@ impl OneharnessProvider {
                     worktree,
                     Some(name),
                     Some(name),
-                    self.stream,
+                    self.stream || history,
                     true,
                     &prompt,
                 )));
@@ -840,7 +847,7 @@ impl OneharnessProvider {
                     worktree,
                     Some(name),
                     Some(name),
-                    self.stream,
+                    self.stream || history,
                     false,
                     &prompt,
                 )));
@@ -863,7 +870,7 @@ impl OneharnessProvider {
             worktree,
             None,
             session,
-            self.stream,
+            self.stream || history,
             false,
             &prompt,
         )));
@@ -893,14 +900,14 @@ impl OneharnessProvider {
     fn respond_once(
         &self,
         spec: &TurnSpec,
-        on_event: &mut dyn FnMut(&ActionEvent) -> ControlFlow<()>,
+        on_event: &mut dyn FnMut(HarnessEvent<'_>) -> ControlFlow<()>,
     ) -> Result<AssistantTurn> {
-        if self.stream {
+        if spec.stream {
             return self.run_streamed("respond", spec, on_event);
         }
         let invocation = self.run("respond", spec)?;
         for action in invocation.actions() {
-            if on_event(action).is_break() {
+            if on_event(HarnessEvent::Action(action)).is_break() {
                 break;
             }
         }
@@ -1010,8 +1017,28 @@ impl OneharnessProvider {
         control: bool,
         evaluator: Option<&Evaluator>,
     ) -> Result<Invocation> {
+        self.run_judge_side_observing(op, call, prompt, session, cwd, control, evaluator, None)
+    }
+
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the judge call axes plus its live history sink"
+    )]
+    fn run_judge_side_observing(
+        &self,
+        op: &str,
+        call: JudgeSideCall,
+        prompt: &str,
+        session: Option<&str>,
+        cwd: Option<&str>,
+        control: bool,
+        evaluator: Option<&Evaluator>,
+        on_history: Option<HistorySink<'_>>,
+    ) -> Result<Invocation> {
         *self.evaluating.borrow_mut() = evaluator.and_then(|e| e.posture.clone());
-        let result = self.judge_side_ladder(op, call, prompt, session, cwd, control, evaluator);
+        let result = self.judge_side_ladder(
+            op, call, prompt, session, cwd, control, evaluator, on_history,
+        );
         *self.evaluating.borrow_mut() = None;
         let invocation = result?;
         if op == "supervisor" {
@@ -1040,6 +1067,9 @@ impl OneharnessProvider {
         cwd: Option<&str>,
         control: bool,
         evaluator: Option<&Evaluator>,
+        mut on_history: Option<
+            &mut dyn FnMut(&oneharness_core::io::run::RunBegun) -> ControlFlow<()>,
+        >,
     ) -> Result<Invocation> {
         // Named once, before the ladder, so every rung — including the retry that
         // drops `--session` — records under the same name.
@@ -1069,7 +1099,7 @@ impl OneharnessProvider {
         let mut session = session;
         if let Some(name) = session {
             if control && self.wants_control(&self.supervisor) {
-                match self.run(op, &spec(Some(name), true)) {
+                match self.run_with_history(op, &spec(Some(name), true), &mut on_history) {
                     Ok(result) => {
                         // The address is keyed on the directory the turn ran under,
                         // the same string oneharness slugged to key the store.
@@ -1091,7 +1121,7 @@ impl OneharnessProvider {
                 }
             }
             if let Some(name) = session {
-                match self.run(op, &spec(Some(name), false)) {
+                match self.run_with_history(op, &spec(Some(name), false), &mut on_history) {
                     Ok(result) => return Ok(result),
                     Err(e) if is_session_unsupported(&e) => {
                         eprintln!(
@@ -1103,7 +1133,39 @@ impl OneharnessProvider {
                 }
             }
         }
-        self.run(op, &spec(None, false))
+        self.run_with_history(op, &spec(None, false), &mut on_history)
+    }
+
+    /// Layer history under the side's own configuration, never over it.
+    fn history_spec(&self, spec: &TurnSpec) -> Result<TurnSpec> {
+        let mut spec = spec.clone();
+        spec.config =
+            posture::history_configs(&spec.config, Path::new(spec.cwd.as_deref().unwrap_or(".")))?;
+        Ok(spec)
+    }
+
+    fn run_with_history(
+        &self,
+        op: &str,
+        spec: &TurnSpec,
+        on_history: &mut Option<
+            &mut dyn FnMut(&oneharness_core::io::run::RunBegun) -> ControlFlow<()>,
+        >,
+    ) -> Result<Invocation> {
+        let Some(on_history) = on_history else {
+            return self.run(op, spec);
+        };
+        let mut spec = spec.clone();
+        spec.stream = true;
+        match self.run_streamed_invocation(op, &spec, &mut |event| match event {
+            HarnessEvent::HistoryBegun(begun) => on_history(begun),
+            HarnessEvent::Action(_) => ControlFlow::Continue(()),
+        })? {
+            library::Streamed::Finished(invocation) => Ok(*invocation),
+            library::Streamed::Aborted(_) => {
+                Err(Error::provider(op, "history observer stopped the turn"))
+            }
+        }
     }
 
     /// Run one buffered turn and return its parsed single-result report.
@@ -1112,6 +1174,8 @@ impl OneharnessProvider {
     /// spawning seam the prompt goes over stdin (`--prompt-file -`), so an
     /// arbitrarily long transcript never trips the OS argv limit.
     fn run(&self, op: &str, spec: &TurnSpec) -> Result<Invocation> {
+        let spec = self.history_spec(spec)?;
+        let spec = &spec;
         let Execution::Process(bin) = &self.execution else {
             let invocation = library::run_buffered(op, spec)?;
             // Recorded before the failure is surfaced, exactly as the spawning
@@ -1146,19 +1210,35 @@ impl OneharnessProvider {
         &self,
         op: &str,
         spec: &TurnSpec,
-        on_event: &mut dyn FnMut(&ActionEvent) -> ControlFlow<()>,
+        on_event: &mut dyn FnMut(HarnessEvent<'_>) -> ControlFlow<()>,
     ) -> Result<AssistantTurn> {
+        match self.run_streamed_invocation(op, spec, on_event)? {
+            library::Streamed::Aborted(events) => Ok(AssistantTurn {
+                events,
+                ..AssistantTurn::default()
+            }),
+            library::Streamed::Finished(invocation) => Ok(assistant_turn(&invocation)),
+        }
+    }
+
+    fn run_streamed_invocation(
+        &self,
+        op: &str,
+        spec: &TurnSpec,
+        on_event: &mut dyn FnMut(HarnessEvent<'_>) -> ControlFlow<()>,
+    ) -> Result<library::Streamed> {
+        let spec = self.history_spec(spec)?;
+        let spec = &spec;
         let Execution::Process(bin) = &self.execution else {
-            return match library::run_streaming(op, spec, on_event)? {
-                // The sink asked to stop mid-turn: return what the stream produced.
-                library::Streamed::Aborted(events) => Ok(AssistantTurn {
-                    events,
-                    ..AssistantTurn::default()
-                }),
-                library::Streamed::Finished(invocation) => {
-                    self.record(op, &invocation);
-                    Ok(assistant_turn(&(*invocation).into_ok()?))
-                }
+            let result = library::run_streaming(op, spec, on_event)?;
+            if let library::Streamed::Finished(invocation) = &result {
+                self.record(op, invocation);
+            }
+            return match result {
+                library::Streamed::Finished(invocation) => Ok(library::Streamed::Finished(
+                    Box::new((*invocation).into_ok()?),
+                )),
+                aborted => Ok(aborted),
             };
         };
         let mut child = self.spawn(op, bin, &turn::argv(spec))?;
@@ -1201,10 +1281,7 @@ impl OneharnessProvider {
 
         match outcome {
             // The sink asked to stop mid-turn: return what the stream produced.
-            Ok(StreamOutcome::Aborted) => Ok(AssistantTurn {
-                events,
-                ..AssistantTurn::default()
-            }),
+            Ok(StreamOutcome::Aborted) => Ok(library::Streamed::Aborted(events)),
             Ok(StreamOutcome::Report(report)) => {
                 // The terminal report is read exactly as a buffered one is, so a
                 // streamed run and a buffered run classify a failure identically —
@@ -1218,7 +1295,7 @@ impl OneharnessProvider {
                         if !status.success() {
                             return Err(exit_error(op, &status, &stderr));
                         }
-                        Ok(assistant_turn(&invocation))
+                        Ok(library::Streamed::Finished(Box::new(invocation)))
                     }
                     Err(unreadable) if status.success() => Err(unreadable),
                     Err(_) => Err(exit_error(op, &status, &stderr)),
@@ -1559,6 +1636,84 @@ impl OneharnessProvider {
     }
 }
 
+impl OneharnessProvider {
+    fn supervise_evidence_observing(
+        &self,
+        query: &SupervisorQuery<'_>,
+        messages: &[Message],
+        session: Option<&str>,
+        evidence: EvidenceContext<'_>,
+        observe_history: bool,
+        on_history: &mut dyn FnMut(&oneharness_core::io::run::RunBegun) -> ControlFlow<()>,
+    ) -> Result<SupervisorTurn> {
+        self.labelled_turn.set(query.turn_index);
+        let evaluator = evidence
+            .worktree
+            .map(|worktree| self.evaluator(worktree))
+            .transpose()?;
+        let framing = evaluator
+            .as_ref()
+            .map_or_else(JudgeFraming::default, |_| self.framing());
+        let base = supervisor_prompt(query, messages, evidence, framing);
+        supervise_with_reask(|ask| {
+            let mut prompt = format!("{base}{}", self.supervisor_reask_note(ask));
+            let mut usage = Usage::default();
+            for tool_attempt in 0..=crate::provider::EVIDENCE_TOOL_RETRY_LIMIT {
+                let result = self.run_judge_side_observing(
+                    "supervisor",
+                    JudgeSideCall::User,
+                    &prompt,
+                    session,
+                    evidence.worktree,
+                    true,
+                    evaluator.as_ref(),
+                    if observe_history {
+                        Some(on_history)
+                    } else {
+                        None
+                    },
+                )?;
+                if let Some(value) = result.usage() {
+                    usage.add(&value);
+                }
+                let reply = result.reply();
+                let final_line = reply
+                    .lines()
+                    .rev()
+                    .find(|line| !line.trim().is_empty())
+                    .unwrap_or("");
+                match resolve_evidence_request(final_line, evidence) {
+                    Err(refused) => {
+                        if tool_attempt == crate::provider::EVIDENCE_TOOL_RETRY_LIMIT {
+                            return Err(refused);
+                        }
+                        prompt.push_str(&format!("\n\nEvidence tool request refused: {refused}\nUse only an exact allowed request, or return the final decision."));
+                        continue;
+                    }
+                    Ok(Some(tool_result)) => {
+                        if tool_attempt == crate::provider::EVIDENCE_TOOL_RETRY_LIMIT {
+                            return Err(Error::provider_classified(
+                                "oneharness:supervisor",
+                                "evidence tool retry limit exhausted",
+                                crate::ProviderErrorKind::Protocol,
+                            ));
+                        }
+                        prompt.push_str(&evidence_result_follow_up(&tool_result, "a decision"));
+                        continue;
+                    }
+                    Ok(None) => {}
+                }
+                let outcome = self.supervisor_outcome(ask, &reply);
+                return Ok(SupervisorTurn {
+                    outcome,
+                    usage: (!usage.is_empty()).then_some(usage),
+                });
+            }
+            unreachable!()
+        })
+    }
+}
+
 impl Provider for OneharnessProvider {
     fn reset_telemetry(&self) {
         self.telemetry.borrow_mut().clear();
@@ -1652,11 +1807,11 @@ impl Provider for OneharnessProvider {
         session: Option<&str>,
     ) -> Result<AssistantTurn> {
         self.run_respond(
-            skill.instructions,
-            skill.dir,
+            skill,
             messages,
             session,
             &mut |_| ControlFlow::Continue(()),
+            false,
         )
     }
 
@@ -1668,14 +1823,17 @@ impl Provider for OneharnessProvider {
         on_event: &mut dyn FnMut(&ToolEvent) -> ControlFlow<()>,
     ) -> Result<AssistantTurn> {
         self.run_respond(
-            skill.instructions,
-            skill.dir,
+            skill,
             messages,
             session,
-            &mut |action| match tool_event(action) {
-                Some(event) => on_event(&event),
-                None => ControlFlow::Continue(()),
+            &mut |event| match event {
+                HarnessEvent::Action(action) => match tool_event(action) {
+                    Some(event) => on_event(&event),
+                    None => ControlFlow::Continue(()),
+                },
+                HarnessEvent::HistoryBegun(_) => ControlFlow::Continue(()),
             },
+            false,
         )
     }
 
@@ -1686,7 +1844,26 @@ impl Provider for OneharnessProvider {
         session: Option<&str>,
         on_event: &mut dyn FnMut(&ActionEvent) -> ControlFlow<()>,
     ) -> Result<AssistantTurn> {
-        self.run_respond(skill.instructions, skill.dir, messages, session, on_event)
+        self.run_respond(
+            skill,
+            messages,
+            session,
+            &mut |event| match event {
+                HarnessEvent::Action(action) => on_event(action),
+                HarnessEvent::HistoryBegun(_) => ControlFlow::Continue(()),
+            },
+            false,
+        )
+    }
+
+    fn respond_with_history(
+        &self,
+        skill: &SkillRef<'_>,
+        messages: &[Message],
+        session: Option<&str>,
+        on_event: &mut dyn FnMut(HarnessEvent<'_>) -> ControlFlow<()>,
+    ) -> Result<AssistantTurn> {
+        self.run_respond(skill, messages, session, on_event, true)
     }
 
     fn simulate_user(
@@ -1759,66 +1936,20 @@ impl Provider for OneharnessProvider {
         session: Option<&str>,
         evidence: EvidenceContext<'_>,
     ) -> Result<SupervisorTurn> {
-        self.labelled_turn.set(query.turn_index);
-        let evaluator = evidence
-            .worktree
-            .map(|worktree| self.evaluator(worktree))
-            .transpose()?;
-        let framing = evaluator
-            .as_ref()
-            .map_or_else(JudgeFraming::default, |_| self.framing());
-        let base = supervisor_prompt(query, messages, evidence, framing);
-        supervise_with_reask(|ask| {
-            let mut prompt = format!("{base}{}", self.supervisor_reask_note(ask));
-            let mut usage = Usage::default();
-            for tool_attempt in 0..=crate::provider::EVIDENCE_TOOL_RETRY_LIMIT {
-                let result = self.run_judge_side(
-                    "supervisor",
-                    JudgeSideCall::User,
-                    &prompt,
-                    session,
-                    evidence.worktree,
-                    true,
-                    evaluator.as_ref(),
-                )?;
-                if let Some(value) = result.usage() {
-                    usage.add(&value);
-                }
-                let reply = result.reply();
-                let final_line = reply
-                    .lines()
-                    .rev()
-                    .find(|line| !line.trim().is_empty())
-                    .unwrap_or("");
-                match resolve_evidence_request(final_line, evidence) {
-                    Err(refused) => {
-                        if tool_attempt == crate::provider::EVIDENCE_TOOL_RETRY_LIMIT {
-                            return Err(refused);
-                        }
-                        prompt.push_str(&format!("\n\nEvidence tool request refused: {refused}\nUse only an exact allowed request, or return the final decision."));
-                        continue;
-                    }
-                    Ok(Some(tool_result)) => {
-                        if tool_attempt == crate::provider::EVIDENCE_TOOL_RETRY_LIMIT {
-                            return Err(Error::provider_classified(
-                                "oneharness:supervisor",
-                                "evidence tool retry limit exhausted",
-                                crate::ProviderErrorKind::Protocol,
-                            ));
-                        }
-                        prompt.push_str(&evidence_result_follow_up(&tool_result, "a decision"));
-                        continue;
-                    }
-                    Ok(None) => {}
-                }
-                let outcome = self.supervisor_outcome(ask, &reply);
-                return Ok(SupervisorTurn {
-                    outcome,
-                    usage: (!usage.is_empty()).then_some(usage),
-                });
-            }
-            unreachable!()
+        self.supervise_evidence_observing(query, messages, session, evidence, false, &mut |_| {
+            ControlFlow::Continue(())
         })
+    }
+
+    fn supervise_observing(
+        &self,
+        query: &SupervisorQuery<'_>,
+        messages: &[Message],
+        session: Option<&str>,
+        evidence: EvidenceContext<'_>,
+        on_history: &mut dyn FnMut(&oneharness_core::io::run::RunBegun) -> ControlFlow<()>,
+    ) -> Result<SupervisorTurn> {
+        self.supervise_evidence_observing(query, messages, session, evidence, true, on_history)
     }
 
     fn judge(&self, query: &JudgeQuery<'_>, messages: &[Message]) -> Result<JudgeVerdict> {

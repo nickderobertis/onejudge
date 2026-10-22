@@ -353,6 +353,47 @@ impl Provider for AnyProvider {
         }
     }
 
+    fn respond_with_history(
+        &self,
+        skill: &SkillRef<'_>,
+        messages: &[Message],
+        session: Option<&str>,
+        on_event: &mut dyn FnMut(crate::HarnessEvent<'_>) -> ControlFlow<()>,
+    ) -> crate::Result<AssistantTurn> {
+        match self {
+            Self::Oneharness(p) => p.respond_with_history(skill, messages, session, on_event),
+            Self::Command(p) => p.respond_with_history(skill, messages, session, on_event),
+            Self::Llmlint(p) => p.respond_with_history(skill, messages, session, on_event),
+            Self::Split { skill: p, .. } => {
+                p.respond_with_history(skill, messages, session, on_event)
+            }
+        }
+    }
+
+    fn supervise_observing(
+        &self,
+        query: &SupervisorQuery<'_>,
+        messages: &[Message],
+        session: Option<&str>,
+        evidence: EvidenceContext<'_>,
+        on_history: &mut dyn FnMut(&oneharness_core::io::run::RunBegun) -> ControlFlow<()>,
+    ) -> crate::Result<SupervisorTurn> {
+        match self {
+            Self::Oneharness(p) => {
+                p.supervise_observing(query, messages, session, evidence, on_history)
+            }
+            Self::Command(p) => {
+                p.supervise_observing(query, messages, session, evidence, on_history)
+            }
+            Self::Llmlint(p) => {
+                p.supervise_observing(query, messages, session, evidence, on_history)
+            }
+            Self::Split { judges: p, .. } => {
+                p.supervise_observing(query, messages, session, evidence, on_history)
+            }
+        }
+    }
+
     fn simulate_user(
         &self,
         persona: &str,

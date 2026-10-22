@@ -33,6 +33,7 @@
 //! cancelled through neither leaves a paid harness running, which is the failure
 //! this seam exists to not have.
 
+use crate::HarnessEvent;
 use std::ops::ControlFlow;
 
 use oneharness_core::domain::events::ActionEvent;
@@ -83,7 +84,7 @@ pub(crate) fn run_buffered(op: &str, spec: &TurnSpec) -> Result<Invocation> {
 pub(crate) fn run_streaming(
     op: &str,
     spec: &TurnSpec,
-    on_event: &mut dyn FnMut(&ActionEvent) -> ControlFlow<()>,
+    on_event: &mut dyn FnMut(HarnessEvent<'_>) -> ControlFlow<()>,
 ) -> Result<Streamed> {
     let mut request = turn::request(spec);
     request.stream = Some(true);
@@ -121,7 +122,7 @@ pub(crate) fn run_streaming(
 /// [`ActionEvent`]s to the caller before the turn ends, and keeps the tool
 /// activity among them lifted into the engine's [`ToolEvent`].
 struct TurnEvents<'a> {
-    on_event: &'a mut dyn FnMut(&ActionEvent) -> ControlFlow<()>,
+    on_event: &'a mut dyn FnMut(HarnessEvent<'_>) -> ControlFlow<()>,
     /// Every tool event delivered so far, so an aborted turn can still report what
     /// it observed — which is the whole of what a short-circuiting caller gets.
     seen: Vec<ToolEvent>,
@@ -130,8 +131,18 @@ struct TurnEvents<'a> {
 }
 
 impl EventSink for TurnEvents<'_> {
+    fn run_began(&mut self, begun: &oneharness_core::io::run::RunBegun) -> SinkStep {
+        if (self.on_event)(HarnessEvent::HistoryBegun(begun)).is_break() {
+            self.aborted = true;
+            self.cancel.cancel();
+            SinkStep::Stop
+        } else {
+            SinkStep::Continue
+        }
+    }
+
     fn event(&mut self, _harness_id: &str, event: &ActionEvent) -> SinkStep {
-        let step = (self.on_event)(event);
+        let step = (self.on_event)(HarnessEvent::Action(event));
         self.seen.extend(tool_event(event));
         if step.is_break() {
             self.aborted = true;

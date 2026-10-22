@@ -78,12 +78,11 @@ field fails the build), and both columns against the rows below.
 | argv | `RunRequest` field |
 | --- | --- |
 | `--events` | `events: bool` |
-| `--history` | `history: Option<bool>` |
 | `--history-name` | `history_name: Option<String>` |
 | `--history-label` | `history_label: Vec<String>` — repeatable, one `KEY=VALUE` per label: `session=<session>`, `turn=<n>`, `role=worker\|supervisor\|judge`, and `judge=<label>` on a judge-side run, so `oneharness history watch --label session=<session>` selects one onejudge run's harness activity |
 | `--system` | `system: Option<String>` |
 | `--cwd` | `cwd: Option<PathBuf>` |
-| `--config` | `config: Vec<PathBuf>` — repeatable, one flag per file in layering order (later files override earlier ones); empty is discovery |
+| `--config` | `config: Vec<PathBuf>` — repeatable, one flag per file in layering order (later files override earlier ones); onejudge layers its `history = true` defaults first, then the side's explicit or discovered config, so `history = false` remains effective |
 | `--mock-harness` | `mock_harness: Vec<String>` — repeatable; runs the named harness against oneharness's own deterministic `MOCK_*` responder instead of a paid model. Rendered on both seams so the mapping stays total, but reachable only on the spawning one (see below) |
 | `--session` | `session: Option<String>` |
 | `--stream` | `stream: Option<bool>` |

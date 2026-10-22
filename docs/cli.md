@@ -94,7 +94,7 @@ env) implies a simulated user even if the config had none.
 
 ## Finding each party's turns
 
-Every `oneharness` call a run makes is recorded in oneharness's history store
+By default, every `oneharness` call a run makes is recorded in oneharness's history store
 under a name derived from the run's session — `--session`, default `onejudge`,
 written *base* below — so one run's turns of one party are found by name rather
 than by the prompt's first words:
@@ -117,9 +117,11 @@ oneharness history show <base>-user-reviewer --project <worktree> --all
 `--all` because the name recurs across the run's turns (and across runs sharing
 a session); `--project` is the skill's working directory, which every judge-side
 call runs in. From oneharness 0.21.1 the lookup reads the last 7 UTC days by
-default; add `--since <YYYY-MM-DD>` or `--all-time` for an older run. Only the names changed: onejudge still asks oneharness to record
-every call, both parties', because that record is where the report's
-`history_id` comes from. [judges.md](judges.md#sessions-and-history-names) is
+default; add `--since <YYYY-MM-DD>` or `--all-time` for an older run.
+onejudge defaults history on for both parties, because that record is where the
+report's `history_id` comes from. A side's own oneharness config can set
+`history = false` to disable it; the normal `ONEHARNESS_HISTORY` environment
+override also applies. [judges.md](judges.md#sessions-and-history-names) is
 the contract.
 
 ## Output and exit code
@@ -278,6 +280,11 @@ then the project file) behind onejudge's read-only defaults — which replaces
 what was an error in 0.15.0, where the missing default file was passed anyway and
 oneharness refused it. When the default file exists it is passed exactly as
 before.
+
+History follows the same config layering on both sides: onejudge layers
+`history = true` first, then the side's explicit config or discovered files.
+A side that sets `history = false` writes no history and emits no
+`Observation::HistoryBegun`. When the config says nothing, history stays on.
 
 The judge's **permission mode** is its config's too: an evaluator call layers
 onejudge's defaults (`mode = "read-only"`) *under* `judge_config`, so a `mode` set
