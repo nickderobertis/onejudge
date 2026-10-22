@@ -12,25 +12,10 @@
 //! separately-configured harness/model — again without `--harness`/`--model`.
 //! Scaffold both with `onejudge init` (which shells out to `oneharness init`).
 //!
-//! It targets **oneharness v0.25.1+** — the first release that accepts the
-//! repeated `run --config` an evaluator judge's call passes (onejudge's judge-side
-//! defaults, then the judge's own config), and writes the report schema the
-//! `oneharness-core` this crate compiles against (pinned in the workspace
-//! manifest) parses. v0.14.0 was the first to accept the `run --format json` the
-//! spawning seam passes on every turn; v0.6.9 was the
-//! first whose `run` verb answers a cancellation signal by tearing its harness
-//! tree down instead of dying and orphaning it, v0.6.14 added the
-//! `run --control` / `interrupt` pair it reports the address of, and v0.11.0 is
-//! the first that either resumes a named session on a turn-driving control
-//! mechanism or refuses the continuation outright. The CLI and the engine crate
-//! version independently, so the advertised floor is not the pin — see
-//! `MIN_ONEHARNESS_CORE`. It always threads the uniform `--session
-//! <name>` handle (the engine's caller-owned name, mapped to the harness's native
-//! session in oneharness's on-disk store), and if a run fails because the harness
-//! does not support `--session`, it retries the same call once **without**
-//! `--session`, re-inlining the transcript — the graceful degradation that
-//! replaces the old up-front capability table. It also depends on `oneharness init`
-//! for scaffolding.
+//! It targets **oneharness v0.26.0+**, whose `run-started` stream line announces
+//! each candidate's history before its events. Older streams remain readable,
+//! but emit no history opening. The CLI also accepts the repeated `run --config`
+//! that layers onejudge's defaults beneath each side's own configuration.
 //!
 //! It can also drive a **streamed** provider (`with_streaming`): the turn asks
 //! `run` to publish incrementally and hands it an `EventSink`, so each tool event
