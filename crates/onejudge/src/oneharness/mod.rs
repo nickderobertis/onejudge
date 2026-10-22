@@ -1067,9 +1067,7 @@ impl OneharnessProvider {
         cwd: Option<&str>,
         control: bool,
         evaluator: Option<&Evaluator>,
-        mut on_history: Option<
-            &mut dyn FnMut(&oneharness_core::io::run::RunBegun) -> ControlFlow<()>,
-        >,
+        mut on_history: Option<HistorySink<'_>>,
     ) -> Result<Invocation> {
         // Named once, before the ladder, so every rung — including the retry that
         // drops `--session` — records under the same name.
@@ -1148,9 +1146,7 @@ impl OneharnessProvider {
         &self,
         op: &str,
         spec: &TurnSpec,
-        on_history: &mut Option<
-            &mut dyn FnMut(&oneharness_core::io::run::RunBegun) -> ControlFlow<()>,
-        >,
+        on_history: &mut Option<HistorySink<'_>>,
     ) -> Result<Invocation> {
         let Some(on_history) = on_history else {
             return self.run(op, spec);

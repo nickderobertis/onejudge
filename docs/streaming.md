@@ -6,7 +6,7 @@ UI has nothing to render. The streamed protocol makes the turn's tool activity a
 first-class, incremental signal — **inbound** from a provider that publishes it,
 and **outbound** from onejudge to its SDK consumers.
 
-Both directions speak the same two NDJSON envelopes, one JSON object per line:
+Both directions share these NDJSON envelopes, one JSON object per line:
 
 ```jsonl
 {"type":"event", …}
@@ -14,11 +14,10 @@ Both directions speak the same two NDJSON envelopes, one JSON object per line:
 {"type":"result", "report":{…}}
 ```
 
-The grammar is exactly:
-
-```
-event* result EOF
-```
+The inbound grammar is `(run-started | event)* result EOF`: a history-enabled
+candidate announces its address before its events. The outward grammar is
+`(event | judge_tool)* result EOF`; history openings are delivered through the
+library's observations, while outward `judge_tool` lines describe judge activity.
 
 `event` lines carry live activity; the single `result` line ends the exchange and
 carries the same document a buffered run produces. Every line names its own type,

@@ -267,16 +267,19 @@ fn llmlint_judge_emits_no_history_opening() {
 #[test]
 fn panel_relays_live_history_on_the_observers_thread() {
     let dir = project("history-panel", None, false);
-    let judge = JudgePanel::new(vec![JudgeEntry::new(
-        "review",
-        "oneharness",
-        provider(&dir, false),
-    )])
+    let judge = JudgePanel::new(vec![
+        JudgeEntry::new("first", "oneharness", provider(&dir, false)),
+        JudgeEntry::new("second", "oneharness", provider(&dir, false)),
+    ])
     .unwrap();
     let provider = SplitProvider::new(provider(&dir, false), judge);
     let mut roles = Vec::new();
+    let observer_thread = std::thread::current().id();
+    let mut task = conversation(&dir);
+    task.input = "do it [[evaluate]][[judge-event:review]]".into();
     let result = Engine::new(&provider, Settings::new())
-        .run_observing(&conversation(&dir), &mut |observation| {
+        .run_observing(&task, &mut |observation| {
+            assert_eq!(std::thread::current().id(), observer_thread);
             if let Observation::HistoryBegun(begun) = observation {
                 roles.push(begun.role);
                 std::fs::write(dir.join("release"), b"go").unwrap();
@@ -290,7 +293,6 @@ fn panel_relays_live_history_on_the_observers_thread() {
         [
             onejudge::Role::Assistant,
             onejudge::Role::User,
-            onejudge::Role::Assistant,
             onejudge::Role::User
         ]
     );
@@ -320,4 +322,37 @@ fn breaking_a_history_opening_stops_either_side_without_further_observations() {
             assert_eq!(last["role"], serde_json::to_value(role).unwrap());
         }
     }
+}
+
+#[test]
+fn breaking_a_panel_history_opening_stops_all_history_delivery() {
+    let dir = project("history-panel-stop", None, false);
+    let judges = JudgePanel::new(vec![
+        JudgeEntry::new("first", "oneharness", provider(&dir, false)),
+        JudgeEntry::new("second", "oneharness", provider(&dir, false)),
+    ])
+    .unwrap();
+    let provider = SplitProvider::new(provider(&dir, false), judges);
+    let mut stopped = false;
+    let mut worker_openings = 0;
+    let result = Engine::new(&provider, Settings::new())
+        .run_observing(&conversation(&dir), &mut |observation| {
+            assert!(
+                !stopped,
+                "no observation may follow the one that stopped the run"
+            );
+            if let Observation::HistoryBegun(begun) = observation {
+                if begun.role == onejudge::Role::User {
+                    stopped = true;
+                    return ControlFlow::Break(());
+                }
+                worker_openings += 1;
+                std::fs::write(dir.join("release"), b"go").unwrap();
+            }
+            ControlFlow::Continue(())
+        })
+        .unwrap();
+    assert_eq!(worker_openings, 1);
+    assert!(stopped);
+    assert!(result.stopped_early);
 }
