@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.21.0](https://github.com/nickderobertis/onejudge/compare/onejudge-v0.20.0...onejudge-v0.21.0) - 2026-10-22
+
+### Added
+
+- [**breaking**] tell embedders where each side's history is as its run begins ([#186](https://github.com/nickderobertis/onejudge/pull/186))
+
 ## [0.20.0](https://github.com/nickderobertis/onejudge/compare/onejudge-v0.19.5...onejudge-v0.20.0) - 2026-10-19
 
 ### Added
