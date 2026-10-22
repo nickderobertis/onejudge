@@ -51,9 +51,13 @@ const DEFAULTS_FILE: &str = "judge-defaults-v1.toml";
 /// reader never sees it half-written, and an existing file is rewritten only if
 /// its content is not exactly the defaults.
 pub(crate) fn defaults_file() -> Result<PathBuf> {
+    write_defaults(DEFAULTS_FILE, JUDGE_DEFAULTS)
+}
+
+fn write_defaults(file: &str, content: &str) -> Result<PathBuf> {
     let dir = defaults_dir().join("onejudge");
-    let path = dir.join(DEFAULTS_FILE);
-    if std::fs::read_to_string(&path).is_ok_and(|text| text == JUDGE_DEFAULTS) {
+    let path = dir.join(file);
+    if std::fs::read_to_string(&path).is_ok_and(|text| text == content) {
         return Ok(path);
     }
     let unwritable = |e: std::io::Error| {
@@ -67,8 +71,8 @@ pub(crate) fn defaults_file() -> Result<PathBuf> {
         )
     };
     std::fs::create_dir_all(&dir).map_err(unwritable)?;
-    let staging = dir.join(format!("{DEFAULTS_FILE}.{}.partial", std::process::id()));
-    std::fs::write(&staging, JUDGE_DEFAULTS).map_err(unwritable)?;
+    let staging = dir.join(format!("{file}.{}.partial", std::process::id()));
+    std::fs::write(&staging, content).map_err(unwritable)?;
     std::fs::rename(&staging, &path).map_err(unwritable)?;
     Ok(path)
 }
@@ -101,6 +105,20 @@ pub(crate) fn evaluator_configs(
         None => configs.extend(discovered(worktree)?),
     }
     Ok(configs)
+}
+
+/// History is enabled by default, beneath each side's configured preference.
+pub(crate) fn history_configs(configs: &[PathBuf], worktree: &Path) -> Result<Vec<PathBuf>> {
+    let mut layered = vec![write_defaults(
+        "history-defaults-v1.toml",
+        "history = true\n",
+    )?];
+    if configs.is_empty() {
+        layered.extend(discovered(worktree)?);
+    } else {
+        layered.extend_from_slice(configs);
+    }
+    Ok(layered)
 }
 
 /// The files oneharness's own discovery loads from `worktree`: the user file,

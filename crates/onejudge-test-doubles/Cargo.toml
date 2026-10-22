@@ -19,6 +19,8 @@ publish = false
 # consumer of the library, never the reverse.
 onejudge = { path = "../onejudge" }
 oneharness-core = { workspace = true }
+# Exercise the spawning seam through the released CLI parser and dispatcher.
+oneharness = "=0.26.0"
 serde = { workspace = true }
 serde_json = { workspace = true }
 
@@ -49,4 +51,9 @@ test = false
 [[bin]]
 name = "onejudge-fake-llmlint"
 path = "src/bin/fake_llmlint.rs"
+test = false
+
+[[bin]]
+name = "onejudge-oneharness-cli"
+path = "src/bin/oneharness_cli.rs"
 test = false

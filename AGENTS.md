@@ -351,9 +351,9 @@ per rung.
 
 [//]: # "llmlint: ignore-block[agents_md_durable_and_terse] The numeric CLI floor is not a free copy here: `cli/mod.rs`'s `the_advertised_oneharness_minimum_tracks_the_report_schema_and_the_prose` requires AGENTS.md to state `MIN_ONEHARNESS` and fails the gate when it does not, so this is the one mention that gate reconciles; the second mention further down was removed instead."
 The `oneharness-core` pin lives in the workspace manifest and nowhere
-else; the **CLI** floor an operator installs is a different number (**0.25.1+**,
-the first release accepting the repeated `run --config` the judge side passes,
-and writing the report schema the linked core parses) because the two crates version independently. Never infer
+else; the **CLI** floor an operator installs is a different number (**0.26.0+**,
+the first release carrying the `run-started` history opening, also accepting
+repeated `run --config` and writing the report schema the linked core parses) because the two crates version independently. Never infer
 one from the other — `cli/mod.rs` gates each. See `docs/oneharness-library.md`
 before touching either.
 

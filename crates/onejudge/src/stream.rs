@@ -9,7 +9,7 @@
 //! from the `spawn + wait` shell in [`oneharness`](crate::OneharnessProvider), so
 //! every protocol decision below is unit-tested directly.
 //!
-//! The grammar is exactly `event* result EOF`. Loudness is the point: a provider
+//! The grammar is exactly `(run-started | event)* result EOF`. Loudness is the point: a provider
 //! that declared streaming and then departs from it — bad JSON, a `type` this
 //! build has no rule for, a stream that stops before its terminal line, or *any*
 //! content after that line — fails with a classified
@@ -26,6 +26,7 @@
 //! reads. What stays here is what is onejudge's own: the line framing, the
 //! untagged-bare-report tolerance, the sink's short-circuit, and the `EOF` rule.
 
+use crate::HarnessEvent;
 use std::io::BufRead;
 use std::ops::ControlFlow;
 
@@ -51,6 +52,7 @@ pub(crate) enum StreamOutcome {
 enum StreamLine {
     /// A live normalized event, exactly as oneharness declared it.
     Event(ActionEvent),
+    HistoryBegun(oneharness_core::io::run::RunBegun),
     /// The terminal report.
     Report(Value),
 }
@@ -74,7 +76,7 @@ pub(crate) fn read_stream(
     op: &str,
     reader: &mut dyn BufRead,
     events: &mut Vec<ToolEvent>,
-    on_event: &mut dyn FnMut(&ActionEvent) -> ControlFlow<()>,
+    on_event: &mut dyn FnMut(HarnessEvent<'_>) -> ControlFlow<()>,
 ) -> Result<StreamOutcome> {
     let mut line = String::new();
     loop {
@@ -94,15 +96,20 @@ pub(crate) fn read_stream(
             continue;
         }
         match parse_line(op, trimmed)? {
+            StreamLine::HistoryBegun(begun) => {
+                if on_event(HarnessEvent::HistoryBegun(&begun)).is_break() {
+                    return Ok(StreamOutcome::Aborted);
+                }
+            }
             StreamLine::Event(event) => {
-                let flow = on_event(&event);
+                let flow = on_event(HarnessEvent::Action(&event));
                 events.extend(tool_event(&event));
                 if flow.is_break() {
                     return Ok(StreamOutcome::Aborted);
                 }
             }
             StreamLine::Report(report) => {
-                // The grammar is `event* result EOF`. Keep reading so EOF is
+                // The grammar is `(run-started | event)* result EOF`. Keep reading so EOF is
                 // actually checked — that both proves nothing followed the terminal
                 // line and drains the pipe, so a child that keeps writing can still
                 // exit rather than block on a full one.
@@ -176,6 +183,7 @@ fn parse_line(op: &str, line: &str) -> Result<StreamLine> {
         )
     })?;
     match envelope {
+        RunStreamEnvelope::RunStarted(begun) => Ok(StreamLine::HistoryBegun(begun)),
         RunStreamEnvelope::Event { event } => Ok(StreamLine::Event(event)),
         // Re-take the report from the raw line: the envelope has already proven it
         // is a well-formed report, and the report reader owns which candidate in it
@@ -198,7 +206,7 @@ mod tests {
             "respond",
             &mut bytes,
             &mut events,
-            &mut |_event: &ActionEvent| {
+            &mut |_event: HarnessEvent<'_>| {
                 seen += 1;
                 ControlFlow::Continue(())
             },
@@ -263,7 +271,9 @@ mod tests {
         let mut events = Vec::new();
         let mut kinds = Vec::new();
         read_stream("respond", &mut bytes, &mut events, &mut |event| {
-            kinds.push(event.kind.clone());
+            if let HarnessEvent::Action(event) = event {
+                kinds.push(event.kind.clone());
+            }
             ControlFlow::Continue(())
         })
         .unwrap();
@@ -275,7 +285,7 @@ mod tests {
 
     #[test]
     fn anything_after_the_terminal_result_is_rejected() {
-        // `event* result EOF`: once the result has landed the exchange is over, so
+        // `(run-started | event)* result EOF`: once the result has landed the exchange is over, so
         // a further event, a second result, and an unmodelled envelope are all the
         // same violation — a provider that is not speaking this protocol.
         let result = result_line("done");

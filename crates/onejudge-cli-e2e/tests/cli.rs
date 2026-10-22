@@ -2200,6 +2200,8 @@ user:
     let mut seen: Vec<String> = Vec::new();
     let summary = run_plan_observing_reporting_failure(plan, &mut |observation| {
         seen.push(match observation {
+            // History addresses have their own real-loop journeys in history.rs.
+            Observation::HistoryBegun(_) => return ControlFlow::Continue(()),
             Observation::TurnOpened(o) => format!("opened/{:?}/{}", o.role, o.instruction),
             Observation::Tool(e) => format!("tool/{}", e.event.summary()),
             Observation::Action(a) => format!("action/{}", a.event.kind),
@@ -2620,6 +2622,8 @@ fn an_observing_plan_run_delivers_each_judges_decision_inside_the_supervisor_tur
     let mut seen: Vec<String> = Vec::new();
     let summary = run_plan_observing_reporting_failure(plan, &mut |observation| {
         seen.push(match observation {
+            // History addresses have their own real-loop journeys in history.rs.
+            Observation::HistoryBegun(_) => return ControlFlow::Continue(()),
             Observation::TurnOpened(o) => format!("opened/{:?}", o.role),
             Observation::Tool(e) => format!("tool/{}", e.event.summary()),
             Observation::Action(a) => format!("action/{}", a.event.kind),
@@ -2670,6 +2674,8 @@ fn an_observing_plan_run_delivers_each_judges_decision_inside_the_supervisor_tur
     let mut seen: Vec<String> = Vec::new();
     let Err(failure) = run_plan_observing_reporting_failure(plan, &mut |observation| {
         seen.push(match observation {
+            // History addresses have their own real-loop journeys in history.rs.
+            Observation::HistoryBegun(_) => return ControlFlow::Continue(()),
             Observation::TurnOpened(o) => format!("opened/{:?}", o.role),
             Observation::JudgeDecided(d) => format!("judged/{}/{}", d.judge, d.decision.as_str()),
             Observation::Message(m) => format!("said/{:?}", m.role),
@@ -4264,7 +4270,11 @@ impl PostureOutcome {
     fn evaluator_argv(&self) -> Vec<&Vec<String>> {
         self.oneharness
             .iter()
-            .filter(|argv| argv.iter().any(|arg| arg == "--config"))
+            .filter(|argv| {
+                argv.windows(2).any(|args| {
+                    args[0] == "--config" && args[1].ends_with("judge-defaults-v1.toml")
+                })
+            })
             .collect()
     }
 }
@@ -4612,8 +4622,8 @@ fn default_posture_run(seam: Seam, bin: &str) -> (PostureRun, PostureOutcome) {
     (run, outcome)
 }
 
-/// Every history record under `dir` — oneharness's own JSONL, one record per
-/// harness run — as JSON.
+/// Completed run records under `dir`, excluding the live `run-started`
+/// openings that carry a history ID but no final labels.
 fn history_records(dir: &Path) -> Vec<serde_json::Value> {
     let mut records = Vec::new();
     let mut pending = vec![dir.to_path_buf()];
@@ -4625,7 +4635,7 @@ fn history_records(dir: &Path) -> Vec<serde_json::Value> {
             } else if path.extension().is_some_and(|ext| ext == "jsonl") {
                 for line in std::fs::read_to_string(&path).unwrap().lines() {
                     let record: serde_json::Value = serde_json::from_str(line).unwrap();
-                    if record.get("history_id").is_some() {
+                    if record["type"] == "run" {
                         records.push(record);
                     }
                 }
@@ -4850,33 +4860,51 @@ fn a_read_only_judge_and_a_default_judge_are_handed_the_same_evidence_contract()
 
 #[test]
 fn a_judge_with_no_mode_differs_from_0_15_0_by_the_defaults_config_no_mode_and_run_labels() {
-    // The intended changes to what onejudge asks oneharness for: an evaluator
-    // call leads with onejudge's defaults file and carries no `--mode`, and every
-    // run carries the `--history-label`s that say which run, turn, role and judge
-    // it is. The agent's turn and everything else about the call are 0.15.0's
-    // argv.
+    // Replay the released argv with the deliberate changes: overridable history
+    // defaults, streamed conversational turns, evaluator posture defaults instead
+    // of `--mode`, and labels identifying each run, turn, role and judge.
     let baseline = posture_baseline(Seam::Spawned);
     let (run, outcome) = default_posture_run(Seam::Spawned, onejudge_bin());
     let decision = outcome.decision("oneharness");
     let defaults = decision["posture"]["config_files"][0].clone();
     assert_defaults_file(&defaults);
+    let history_defaults = Path::new(defaults.as_str().unwrap())
+        .with_file_name("history-defaults-v1.toml")
+        .display()
+        .to_string();
+    assert_eq!(
+        std::fs::read_to_string(&history_defaults).unwrap(),
+        "history = true\n"
+    );
     let expected: Vec<Vec<String>> = baseline["oneharness"]
         .as_array()
         .unwrap()
         .iter()
-        .map(|argv| {
+        .enumerate()
+        .map(|(index, argv)| {
             let argv: Vec<String> = serde_json::from_value(argv.clone()).unwrap();
-            if !argv.iter().any(|arg| arg == "--mode") {
-                return argv;
-            }
             let mut out = Vec::new();
             let mut args = argv.into_iter();
             while let Some(arg) = args.next() {
                 match arg.as_str() {
+                    "--history" => {}
+                    "--cwd" if index == 0 => {
+                        out.extend([
+                            "--config".to_string(),
+                            history_defaults.clone(),
+                            "--config".to_string(),
+                            "{{RUN}}/oneharness.toml".to_string(),
+                            arg,
+                        ]);
+                    }
+                    "--history-name" if index < 2 => {
+                        out.extend(["--stream".to_string(), arg]);
+                    }
                     "--mode" => {
                         assert_eq!(args.next().as_deref(), Some("read-only"));
                     }
                     "--config" => {
+                        out.extend(["--config".to_string(), history_defaults.clone()]);
                         out.push("--config".to_string());
                         out.push(defaults.as_str().unwrap().to_string());
                         out.push(arg);
@@ -5040,7 +5068,18 @@ fn an_auto_judge_config_grants_the_judge_a_shell_and_records_what_it_did() {
                     .filter(|w| w[0] == "--config")
                     .map(|w| &w[1])
                     .collect();
-                assert_eq!(configs, [files[0].as_str().unwrap(), "{{RUN}}/judge.toml"]);
+                let history_defaults = Path::new(files[0].as_str().unwrap())
+                    .with_file_name("history-defaults-v1.toml")
+                    .display()
+                    .to_string();
+                assert_eq!(
+                    configs,
+                    [
+                        history_defaults.as_str(),
+                        files[0].as_str().unwrap(),
+                        "{{RUN}}/judge.toml",
+                    ]
+                );
                 assert!(!argv.iter().any(|arg| arg == "--mode"), "{argv:?}");
                 assert!(argv.iter().any(|arg| arg == "--events"), "{argv:?}");
             }
@@ -5115,9 +5154,14 @@ fn with_no_judge_config_the_discovered_files_follow_the_defaults() {
                     .filter(|w| w[0] == "--config")
                     .map(|w| &w[1])
                     .collect();
+                let history_defaults = Path::new(files[0].as_str().unwrap())
+                    .with_file_name("history-defaults-v1.toml")
+                    .display()
+                    .to_string();
                 assert_eq!(
                     configs,
                     [
+                        history_defaults.as_str(),
                         files[0].as_str().unwrap(),
                         "{{RUN}}/user.toml",
                         "{{RUN}}/oneharness.toml"
@@ -5285,6 +5329,8 @@ fn an_observed_run_delivers_a_judges_tool_events_after_its_turn_opens_and_before
         let mut seen: Vec<String> = Vec::new();
         let summary = run_plan_observing_reporting_failure(plan, &mut |observation| {
             seen.push(match observation {
+                // History addresses have their own real-loop journeys in history.rs.
+                Observation::HistoryBegun(_) => return ControlFlow::Continue(()),
                 Observation::TurnOpened(o) => format!("opened/{:?}/{}", o.role, o.turn),
                 Observation::Tool(e) => format!("tool/{}", e.turn),
                 Observation::Action(a) => format!("action/{}", a.turn),

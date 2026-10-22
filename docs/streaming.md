@@ -6,7 +6,7 @@ UI has nothing to render. The streamed protocol makes the turn's tool activity a
 first-class, incremental signal — **inbound** from a provider that publishes it,
 and **outbound** from onejudge to its SDK consumers.
 
-Both directions speak the same two NDJSON envelopes, one JSON object per line:
+Both directions share these NDJSON envelopes, one JSON object per line:
 
 ```jsonl
 {"type":"event", …}
@@ -14,11 +14,10 @@ Both directions speak the same two NDJSON envelopes, one JSON object per line:
 {"type":"result", "report":{…}}
 ```
 
-The grammar is exactly:
-
-```
-event* result EOF
-```
+The inbound grammar is `(run-started | event)* result EOF`: a history-enabled
+candidate announces its address before its events. The outward grammar is
+`(event | judge_tool)* result EOF`; history openings are delivered through the
+library's observations, while outward `judge_tool` lines describe judge activity.
 
 `event` lines carry live activity; the single `result` line ends the exchange and
 carries the same document a buffered run produces. Every line names its own type,
@@ -57,7 +56,7 @@ and then writes a line onejudge cannot model fails the run with a classified
 vacuously empty turn:
 
 - a line that is not valid JSON, or is JSON but not an object;
-- a `type` other than `event` / `result`, or a non-string `type`;
+- a `type` other than `run-started` / `event` / `result`, or a non-string `type`;
 - an `event` line with no `event` object, or one that is not a tool event;
 - a `result` line with no `report` object;
 - a stream that ends before its `result` line;
@@ -75,8 +74,23 @@ same terms: nothing may follow it either.
 
 A provider that never streams needs no changes at all: leave `stream` unset and
 onejudge parses one report document, exactly as before. Streaming is only ever
-declared for the agent side; the judge / simulated-user calls stay buffered,
-because they are short and single-shot.
+configured for the agent side. When an embedder uses `Engine::run_observing`,
+onejudge also streams the harness invocations internally on both sides to learn
+history addresses at their start. `Observation::HistoryBegun` carries the side's
+`role` and `turn`, and oneharness's `harness_id`, `history_id`, `history_dir`,
+`history_project` and `history_session`. It follows `TurnOpened` and precedes
+that candidate's tool, action and message observations, once per candidate,
+including fallback candidates. A side with history disabled emits none, as do
+command and llmlint judges. These openings do not add lines to the outward
+`onejudge run --stream` protocol.
+
+A history-enabled spawned candidate first writes a `run-started` envelope with
+`harness_id`, `history_id`, `history_dir`, `history_project` and `history_session`.
+`HistoryBegun` requires a oneharness CLI at or above the
+[advertised floor](oneharness-library.md).
+The reader validates the opening with oneharness's typed stream grammar and delivers it
+before reading the candidate's events. A stream from an older CLI without this
+opening remains accepted; no history opening is invented from its final report.
 
 ## Outbound: `onejudge run --stream`
 

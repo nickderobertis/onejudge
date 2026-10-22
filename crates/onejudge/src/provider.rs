@@ -19,6 +19,14 @@ use crate::telemetry::InvocationTelemetry;
 use crate::transcript::{Message, ToolEvent};
 use crate::usage::Usage;
 
+/// A live harness signal, before the invocation returns.
+pub enum HarnessEvent<'a> {
+    /// A history-enabled candidate opened its history, before its first action.
+    HistoryBegun(&'a oneharness_core::io::run::RunBegun),
+    /// A normalized action, with the same ordering as `respond_observing`.
+    Action(&'a ActionEvent),
+}
+
 /// Producer-supplied artifact handles an evaluator may inspect.
 ///
 /// Paths are copied from the skill configuration and typed oneharness reports;
@@ -599,6 +607,39 @@ pub trait Provider {
         self.respond_streaming(skill, messages, session, &mut |event| {
             on_event(&crate::oneharness::action_event(event))
         })
+    }
+
+    /// Observe a worker's history openings as well as its normalized actions.
+    /// Providers without harness history retain their existing event stream.
+    ///
+    /// # Errors
+    /// As [`Provider::respond`].
+    fn respond_with_history(
+        &self,
+        skill: &SkillRef<'_>,
+        messages: &[Message],
+        session: Option<&str>,
+        on_event: &mut dyn FnMut(HarnessEvent<'_>) -> ControlFlow<()>,
+    ) -> Result<AssistantTurn> {
+        self.respond_observing(skill, messages, session, &mut |event| {
+            on_event(HarnessEvent::Action(event))
+        })
+    }
+
+    /// Observe history openings while the supervisor is deciding.
+    /// A provider which writes no harness history delivers no openings.
+    ///
+    /// # Errors
+    /// As [`Provider::supervise_with_evidence`].
+    fn supervise_observing(
+        &self,
+        query: &SupervisorQuery<'_>,
+        messages: &[Message],
+        session: Option<&str>,
+        evidence: EvidenceContext<'_>,
+        _on_history: &mut dyn FnMut(&oneharness_core::io::run::RunBegun) -> ControlFlow<()>,
+    ) -> Result<SupervisorTurn> {
+        self.supervise_with_evidence(query, messages, session, evidence)
     }
 
     /// Produce one simulated-user turn. `session` is the simulated user's own

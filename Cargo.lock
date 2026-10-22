@@ -946,10 +946,24 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
-name = "oneharness-core"
-version = "0.28.4"
+name = "oneharness"
+version = "0.26.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bf6e72a30e3db4ebe6670cfc8b38f9ef5aabb680ea40142ddd3020a960be5a6f"
+checksum = "a99c603d96d9b8b63278fc8c3d0cfe3ada5ede38810a2854a1c231123072fd48"
+dependencies = [
+ "clap",
+ "libc",
+ "oneharness-core",
+ "serde",
+ "serde_json",
+ "toml",
+]
+
+[[package]]
+name = "oneharness-core"
+version = "0.29.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "53c8414fb530a6337b795b0346660f463927e264af8b75fc71e4946aa7e195d2"
 dependencies = [
  "fs2",
  "jsonschema 0.33.0",
@@ -1042,6 +1056,7 @@ dependencies = [
 name = "onejudge-test-doubles"
 version = "0.20.0"
 dependencies = [
+ "oneharness",
  "oneharness-core",
  "onejudge",
  "rustix",
@@ -1317,9 +1332,9 @@ dependencies = [
 
 [[package]]
 name = "rustls-webpki"
-version = "0.103.15"
+version = "0.103.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f3c3cf1d8b1e7d4927e2d154c3fcb02979afb9939629c62cd9048d4f07b60ac2"
+checksum = "4443b1b6d39d7c663139942cc4558262562d2c84123bb6282ef177009ca8b281"
 dependencies = [
  "ring",
  "rustls-pki-types",

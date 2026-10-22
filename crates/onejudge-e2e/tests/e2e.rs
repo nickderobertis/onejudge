@@ -4253,6 +4253,7 @@ fn installing_a_spawn_hook_moves_a_default_provider_onto_the_seam_that_has_a_pro
 /// the whole sequence once the run has finished.
 #[derive(Debug, Clone, PartialEq)]
 enum Seen {
+    History,
     Opened {
         turn: usize,
         role: Role,
@@ -4296,6 +4297,7 @@ enum Seen {
 
 fn observed(observation: &Observation<'_>) -> Seen {
     match observation {
+        Observation::HistoryBegun(_) => Seen::History,
         Observation::TurnOpened(opened) => Seen::Opened {
             turn: opened.turn,
             role: opened.role,
@@ -4388,7 +4390,11 @@ fn an_observing_turn_reports_its_instruction_reply_identity_and_bounds() {
         .run_observing(
             &Conversation::single_turn(skill, "commit the fix"),
             &mut |observation| {
-                seen.push(observed(observation));
+                // History openings are covered in history.rs; this assertion
+                // keeps the pre-existing observations' fields and order pinned.
+                if !matches!(observation, Observation::HistoryBegun(_)) {
+                    seen.push(observed(observation));
+                }
                 ControlFlow::Continue(())
             },
         )
@@ -4478,7 +4484,9 @@ fn an_observing_multi_turn_run_reports_both_parties_without_disturbing_the_strea
     let mut seen = Vec::new();
     engine
         .run_observing(&conversation(), &mut |observation| {
-            seen.push(observed(observation));
+            if !matches!(observation, Observation::HistoryBegun(_)) {
+                seen.push(observed(observation));
+            }
             ControlFlow::Continue(())
         })
         .unwrap();
@@ -4493,6 +4501,7 @@ fn an_observing_multi_turn_run_reports_both_parties_without_disturbing_the_strea
             Seen::Closed { turn, role, .. } => ("closed", *turn, Some(*role)),
             Seen::Judged { turn, .. } => ("judged", *turn, None),
             Seen::JudgeTool { turn, .. } => ("judge-tool", *turn, None),
+            Seen::History => ("history", 0, None),
         })
         .collect();
     assert_eq!(
@@ -4600,7 +4609,9 @@ fn breaking_an_observation_stops_the_run_and_delivers_nothing_after_it() {
     let mut seen = Vec::new();
     let outcome = engine
         .run_observing(&conversation(), &mut |observation| {
-            seen.push(observed(observation));
+            if !matches!(observation, Observation::HistoryBegun(_)) {
+                seen.push(observed(observation));
+            }
             ControlFlow::Break(())
         })
         .unwrap();

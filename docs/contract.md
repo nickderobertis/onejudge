@@ -266,8 +266,8 @@ named JSON Schema roots:
 - `run_config`: the YAML config object accepted by `onejudge run`;
 - `report`: the versioned JSON output emitted by `--format json`;
 - `stream_event`: the `{ turn, event }` envelope delivered by streaming runs;
-- `observation`: one live observation of a run in progress — a turn opening, a
-  tool event, a party's reply, a judge of a panel deciding (`judge_decided`), or
+- `observation`: one live observation of a run in progress — a turn opening,
+  a candidate's history opening (`history_begun`), a tool event, a party's reply, a judge of a panel deciding (`judge_decided`), or
   a turn closing — as an in-process embedder receives it
   (`Engine::run_observing`);
 - `failure_report`: the document `--format json` writes **instead of** a report
@@ -277,6 +277,19 @@ named JSON Schema roots:
   `user`, `supervisor`, `judge` and `assess`. They are the declaration of the
   frames, and `sdk_schema::register_frames` registers them in a `onemessagebus`
   registry.
+
+`Observation::HistoryBegun(HistoryBegun<'a>)` carries `role` and `turn` exactly
+as `TurnOpened` does, plus `harness_id`, `history_id`, `history_dir`,
+`history_project` and `history_session` from oneharness's opening signal. The
+history file is `<history_dir>/<history_project>/<history_session>.jsonl`;
+`history_id` selects the candidate within it. The engine delivers one opening
+per history-enabled harness candidate, after that side's `TurnOpened` and before
+any of that candidate's `Tool`, `Action`, `Message` or `JudgeTool` observations.
+Fallback candidates each receive their own opening and distinct history id.
+Both the spawned CLI (`run-started`) and the in-process library (`run_began`)
+deliver it while the turn is live. History-disabled sides, command judges and
+llmlint judges emit none. Existing observations keep their fields and relative
+order. The lost-turn recovery supervisor remains unobserved, including history.
 
 ## Note shapes are onejudge's
 

@@ -106,8 +106,9 @@ mod yaml;
 pub use command::CommandProvider;
 pub use control::{ControlAddress, ControlOutcome};
 pub use engine::{
-    Conversation, Engine, JudgeDecided, JudgeTool, Observation, Outcome, Settings, SimulatedUser,
-    Skill, StreamEvent, TurnAction, TurnClosed, TurnMessage, TurnOpened, NOOP_SETTLE_LIMIT,
+    Conversation, Engine, HistoryBegun, JudgeDecided, JudgeTool, Observation, Outcome, Settings,
+    SimulatedUser, Skill, StreamEvent, TurnAction, TurnClosed, TurnMessage, TurnOpened,
+    NOOP_SETTLE_LIMIT,
 };
 pub use error::{Error, ProviderErrorKind, Result};
 pub use history_name::{HistoryScope, JudgeSideCall};
@@ -126,11 +127,11 @@ pub use provider::{
     build_judge_prompt_with_evidence, build_respond_prompt, build_supervisor_prompt,
     build_supervisor_prompt_with_evidence, build_user_prompt, latest_or_inline,
     latest_user_message, parse_supervisor, parse_verdict, render_transcript, supervise_with_reask,
-    Ask, Assessment, AssistantTurn, EvidenceContext, JudgeKind, JudgeLink, JudgeQuery, JudgeTools,
-    JudgeValue, JudgeVerdict, Provider, Reask, SkillRef, SupervisorOutcome, SupervisorQuery,
-    SupervisorTurn, TurnOutcome, UserTurn, ARTIFACT_LISTING_LIMIT, EVIDENCE_PROMPT_MARKER,
-    EVIDENCE_TOOL_RETRY_LIMIT, SUPERVISOR_REASK_LIMIT, SUPERVISOR_REASK_NOTE,
-    SUPERVISOR_REDIRECT_NOTE, SUPERVISOR_UNPARSED_NOTE,
+    Ask, Assessment, AssistantTurn, EvidenceContext, HarnessEvent, JudgeKind, JudgeLink,
+    JudgeQuery, JudgeTools, JudgeValue, JudgeVerdict, Provider, Reask, SkillRef, SupervisorOutcome,
+    SupervisorQuery, SupervisorTurn, TurnOutcome, UserTurn, ARTIFACT_LISTING_LIMIT,
+    EVIDENCE_PROMPT_MARKER, EVIDENCE_TOOL_RETRY_LIMIT, SUPERVISOR_REASK_LIMIT,
+    SUPERVISOR_REASK_NOTE, SUPERVISOR_REDIRECT_NOTE, SUPERVISOR_UNPARSED_NOTE,
 };
 pub use report::{Decision, JudgeDecision, JudgedTurn, NamedVerdict, Report, SCHEMA_VERSION};
 #[cfg(feature = "sdk-schema")]

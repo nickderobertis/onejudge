@@ -69,10 +69,6 @@ pub(crate) fn request(spec: &TurnSpec) -> RunRequest {
     RunRequest {
         events: spec.events,
         mock_harness: spec.mock_harness.clone(),
-        // Always on, exactly as `--history` is: the per-candidate record is where
-        // `history_id` comes from, and it is the one signal the report has no
-        // counterpart for.
-        history: Some(true),
         history_name: spec.history_name.clone(),
         history_label: history_labels(spec).collect(),
         system: spec.system.clone(),
@@ -110,7 +106,6 @@ pub(crate) fn argv(spec: &TurnSpec) -> Vec<String> {
     if spec.events {
         args.push("--events".into());
     }
-    args.push("--history".into());
     if let Some(system) = &spec.system {
         args.push("--system".into());
         args.push(system.clone());
@@ -192,7 +187,6 @@ mod tests {
         ("--format", None),
         ("--compact", None),
         ("--events", Some(("events", |r| r.events))),
-        ("--history", Some(("history", |r| r.history == Some(true)))),
         (
             "--history-name",
             Some(("history_name", |r| r.history_name.is_some())),
@@ -281,12 +275,9 @@ mod tests {
         let request = request(&TurnSpec::default());
         let argv = argv(&TurnSpec::default());
         for (flag, field) in MAPPED_FLAGS {
-            // `--format`, `--compact`, `--history` and `--prompt-file` ride every
+            // `--format`, `--compact` and `--prompt-file` ride every
             // turn; the rest are opt-in on both renderings or on neither.
-            if matches!(
-                *flag,
-                "--format" | "--compact" | "--history" | "--prompt-file"
-            ) {
+            if matches!(*flag, "--format" | "--compact" | "--prompt-file") {
                 continue;
             }
             assert!(

@@ -1871,6 +1871,66 @@
           }
         ]
       },
+      "HistoryBegun": {
+        "description": "A candidate's history address, available while its turn is still running.\nHistory-disabled sides and providers without harness history emit none.",
+        "properties": {
+          "harness_id": {
+            "description": "The harness candidate which opened this history.",
+            "type": "string"
+          },
+          "history_dir": {
+            "description": "Absolute root of the history store.",
+            "not": {
+              "pattern": "[\\u0000-\\u001F\\u007F-\\u009F]"
+            },
+            "pattern": "^(/|[A-Za-z]:[\\\\/]|\\\\\\\\[^\\\\/]+[\\\\/][^\\\\/]+)",
+            "type": "string"
+          },
+          "history_id": {
+            "description": "The candidate's unique run identifier, including on fallback.",
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$",
+            "type": "string"
+          },
+          "history_project": {
+            "description": "Project component beneath the store root.",
+            "minLength": 1,
+            "not": {
+              "pattern": "(^\\.\\.?$|[^A-Za-z0-9._-])"
+            },
+            "type": "string"
+          },
+          "history_session": {
+            "description": "Session component; the file is `<history_dir>/<history_project>/<history_session>.jsonl`.",
+            "minLength": 1,
+            "not": {
+              "pattern": "(^\\.\\.?$|[^A-Za-z0-9._-])"
+            },
+            "type": "string"
+          },
+          "role": {
+            "$ref": "#/$defs/Role",
+            "description": "The side, spelled exactly as on [`TurnOpened::role`]."
+          },
+          "turn": {
+            "description": "The 1-based turn index from [`TurnOpened::turn`].",
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "role",
+          "turn",
+          "harness_id",
+          "history_id",
+          "history_dir",
+          "history_project",
+          "history_session"
+        ],
+        "type": "object"
+      },
       "JudgeDecided": {
         "description": "One judge's decision on a supervisor turn, as its panel recorded it.\n\nThe observed form of [`JudgeDecision`](crate::JudgeDecision), stamped with the\nturn it belongs to. Only a [`JudgePanel`](crate::JudgePanel) produces these; a\nrun judged by a bare provider is observed exactly as before.",
         "properties": {
@@ -2237,6 +2297,20 @@
         "properties": {
           "type": {
             "const": "turn_opened",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "type": "object"
+      },
+      {
+        "$ref": "#/$defs/HistoryBegun",
+        "description": "A harness candidate opened its history. Delivered once per candidate,\nafter its turn opens and before any of its actions, tools or messages.",
+        "properties": {
+          "type": {
+            "const": "history_begun",
             "type": "string"
           }
         },

@@ -791,6 +791,78 @@ impl<J: Provider + Send> Provider for JudgePanel<J> {
         self.combine_supervision(results)
     }
 
+    fn supervise_observing(
+        &self,
+        query: &SupervisorQuery<'_>,
+        messages: &[Message],
+        session: Option<&str>,
+        evidence: EvidenceContext<'_>,
+        on_history: &mut dyn FnMut(&oneharness_core::io::run::RunBegun) -> ControlFlow<()>,
+    ) -> Result<SupervisorTurn> {
+        let sessions: Vec<_> = (0..self.judges.len())
+            .map(|i| self.session_for(i, session))
+            .collect();
+        // Receive on the caller's thread: its observer need not be Send. Each
+        // candidate waits for acknowledgement before it can publish any events.
+        let results = std::thread::scope(|scope| {
+            let (sender, receiver) = std::sync::mpsc::channel();
+            let handles: Vec<_> = self
+                .judges
+                .iter()
+                .enumerate()
+                .map(|(i, judge)| {
+                    let sender = sender.clone();
+                    let session = &sessions[i];
+                    (
+                        i,
+                        scope.spawn(move || {
+                            judge.with(|provider| {
+                                provider.set_judge_label(&judge.label);
+                                let result = provider.supervise_observing(
+                                    query,
+                                    messages,
+                                    session.as_deref(),
+                                    evidence,
+                                    &mut |begun| {
+                                        let (reply, answer) = std::sync::mpsc::sync_channel(0);
+                                        if sender.send((begun.clone(), reply)).is_err() {
+                                            return ControlFlow::Break(());
+                                        }
+                                        answer.recv().unwrap_or(ControlFlow::Break(()))
+                                    },
+                                );
+                                (result, provider.take_judge_link())
+                            })
+                        }),
+                    )
+                })
+                .collect();
+            drop(sender);
+            let mut stopped = false;
+            for (begun, reply) in receiver {
+                let flow = if stopped {
+                    ControlFlow::Break(())
+                } else {
+                    on_history(&begun)
+                };
+                stopped |= flow.is_break();
+                let _ = reply.send(flow);
+            }
+            handles
+                .into_iter()
+                .map(|(i, handle)| {
+                    (
+                        i,
+                        handle
+                            .join()
+                            .unwrap_or_else(|panic| std::panic::resume_unwind(panic)),
+                    )
+                })
+                .collect()
+        });
+        self.combine_supervision(results)
+    }
+
     fn judge(&self, query: &JudgeQuery<'_>, messages: &[Message]) -> Result<JudgeVerdict> {
         self.judge_across(query, |provider| provider.judge(query, messages))
     }

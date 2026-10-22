@@ -47,6 +47,11 @@ pub fn fake_harness() -> &'static str {
     double("onejudge-fake-harness")
 }
 
+/// The released oneharness CLI, built beside the deterministic doubles.
+pub fn oneharness_cli() -> &'static str {
+    double("onejudge-oneharness-cli")
+}
+
 /// `onejudge-fake-llmlint`: stands in for the `llmlint` CLI.
 pub fn fake_llmlint() -> &'static str {
     double("onejudge-fake-llmlint")

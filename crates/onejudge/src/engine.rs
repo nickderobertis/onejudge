@@ -858,11 +858,21 @@ impl<'a> Engine<'a> {
             );
             let (turn, redirects) = self.live(watch.as_ref(), || {
                 if streaming {
-                    self.provider.respond_observing(
+                    self.provider.respond_with_history(
                         &skill,
                         &transcript.messages,
                         Some(skill_session.as_str()),
-                        &mut |action| {
+                        &mut |event| {
+                            let action = match event {
+                                crate::HarnessEvent::HistoryBegun(begun) => {
+                                    let flow = on_observation(&Observation::HistoryBegun(
+                                        HistoryBegun::new(Role::Assistant, turn_index, begun),
+                                    ));
+                                    broke |= flow.is_break();
+                                    return flow;
+                                }
+                                crate::HarnessEvent::Action(action) => action,
+                            };
                             if let Some(watch) = &watch {
                                 watch.observe(action);
                             }
@@ -1078,27 +1088,48 @@ impl<'a> Engine<'a> {
                     &conversation.skill.dir,
                     Box::new(supervisor_redirect),
                 );
+                let mut history_stopped = false;
                 let (attempt, redirects) = self.live(watch.as_ref(), || {
-                    self.provider.supervise_with_evidence(
-                        &SupervisorQuery {
-                            task: &conversation.input,
-                            persona: &user.persona,
-                            done_when: rendered.as_deref(),
-                            worktree: &conversation.skill.dir,
-                            history_name: &skill_session,
-                            notes: &delivered,
-                            turn: TurnOutcome::Taken,
-                            turn_index,
-                        },
+                    let query = SupervisorQuery {
+                        task: &conversation.input,
+                        persona: &user.persona,
+                        done_when: rendered.as_deref(),
+                        worktree: &conversation.skill.dir,
+                        history_name: &skill_session,
+                        notes: &delivered,
+                        turn: TurnOutcome::Taken,
+                        turn_index,
+                    };
+                    let evidence = EvidenceContext {
+                        worktree: Some(&conversation.skill.dir),
+                        history_files: &history_files,
+                        artifacts: &user.artifacts,
+                    };
+                    if !streaming {
+                        return self.provider.supervise_with_evidence(
+                            &query,
+                            &transcript.messages,
+                            Some(user_session.as_str()),
+                            evidence,
+                        );
+                    }
+                    self.provider.supervise_observing(
+                        &query,
                         &transcript.messages,
                         Some(user_session.as_str()),
-                        EvidenceContext {
-                            worktree: Some(&conversation.skill.dir),
-                            history_files: &history_files,
-                            artifacts: &user.artifacts,
+                        evidence,
+                        &mut |begun| {
+                            let flow = on_observation(&Observation::HistoryBegun(
+                                HistoryBegun::new(Role::User, turn_index, begun),
+                            ));
+                            history_stopped |= flow.is_break();
+                            flow
                         },
                     )
                 });
+                if history_stopped {
+                    return Ok(self.finish(transcript, totals, true, None, None));
+                }
                 // Handed to the judge by its redirected turn, and to the worker with
                 // the judge's response; answered once the decision says which.
                 for redirect in redirects {
@@ -1556,6 +1587,9 @@ pub struct StreamEvent<'a> {
 pub enum Observation<'a> {
     /// A turn began, naming the message it is answering.
     TurnOpened(TurnOpened<'a>),
+    /// A harness candidate opened its history. Delivered once per candidate,
+    /// after its turn opens and before any of its actions, tools or messages.
+    HistoryBegun(HistoryBegun<'a>),
     /// A tool event, exactly as [`Engine::run_streaming`] delivers it.
     Tool(StreamEvent<'a>),
     /// Every normalized event the worker's harness reported, as oneharness
@@ -1662,6 +1696,41 @@ pub struct TurnOpened<'a> {
     pub instruction: &'a str,
     /// When the turn began, RFC 3339 with millisecond precision in UTC.
     pub started_at: String,
+}
+
+/// A candidate's history address, available while its turn is still running.
+/// History-disabled sides and providers without harness history emit none.
+#[derive(serde::Serialize)]
+#[cfg_attr(feature = "sdk-schema", derive(schemars::JsonSchema))]
+pub struct HistoryBegun<'a> {
+    /// The side, spelled exactly as on [`TurnOpened::role`].
+    pub role: Role,
+    /// The 1-based turn index from [`TurnOpened::turn`].
+    pub turn: usize,
+    /// The harness candidate which opened this history.
+    pub harness_id: &'a str,
+    /// The candidate's unique run identifier, including on fallback.
+    pub history_id: &'a oneharness_core::domain::history::HistoryId,
+    /// Absolute root of the history store.
+    pub history_dir: &'a oneharness_core::domain::history::AbsoluteHistoryDir,
+    /// Project component beneath the store root.
+    pub history_project: &'a oneharness_core::domain::history::HistoryPathComponent,
+    /// Session component; the file is `<history_dir>/<history_project>/<history_session>.jsonl`.
+    pub history_session: &'a oneharness_core::domain::history::HistoryPathComponent,
+}
+
+impl<'a> HistoryBegun<'a> {
+    fn new(role: Role, turn: usize, begun: &'a oneharness_core::io::run::RunBegun) -> Self {
+        Self {
+            role,
+            turn,
+            harness_id: begun.harness_id.as_str(),
+            history_id: &begun.history_id,
+            history_dir: &begun.history_dir,
+            history_project: &begun.history_project,
+            history_session: &begun.history_session,
+        }
+    }
 }
 
 /// A party's own words for one turn, observed as they are appended to the
@@ -2685,6 +2754,7 @@ mod tests {
                         Observation::TurnClosed(c) => (format!("closed/{:?}", c.role), false),
                         Observation::Tool(_) => ("tool".into(), false),
                         Observation::Action(_) => ("action".into(), false),
+                        Observation::HistoryBegun(_) => ("history".into(), false),
                     };
                     seen.push(kind);
                     if stop {
@@ -2793,6 +2863,7 @@ mod tests {
                         Observation::TurnClosed(c) => format!("closed/{:?}", c.role),
                         Observation::Tool(_) => "tool".into(),
                         Observation::Action(_) => "action".into(),
+                        Observation::HistoryBegun(_) => "history".into(),
                     });
                     ControlFlow::Continue(())
                 },

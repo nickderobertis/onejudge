@@ -7,9 +7,9 @@ expressed as a typed call — **including the invocation itself**. A turn is
 
 The pin is in the workspace manifest; everything below is verified against it.
 The **CLI** floor an operator installs is a different number — currently
-**0.25.1+**, the first release that accepts the repeated `run --config` the
-judge side passes (onejudge's defaults, then the judge's config), and writes the
-report schema the pinned core parses — because
+**0.26.0+**, the first release carrying the `run-started` history opening. It
+also accepts the repeated `run --config` that layers onejudge's defaults beneath
+the side's own config and writes the report schema the pinned core parses — because
 the two crates version independently: the pin may be newer than the core that
 CLI embeds so long as the report is the same, and `cli/mod.rs` gates the floor
 on the schema, not on the two numbers. Never read one off the other.
@@ -78,12 +78,11 @@ field fails the build), and both columns against the rows below.
 | argv | `RunRequest` field |
 | --- | --- |
 | `--events` | `events: bool` |
-| `--history` | `history: Option<bool>` |
 | `--history-name` | `history_name: Option<String>` |
 | `--history-label` | `history_label: Vec<String>` — repeatable, one `KEY=VALUE` per label: `session=<session>`, `turn=<n>`, `role=worker\|supervisor\|judge`, and `judge=<label>` on a judge-side run, so `oneharness history watch --label session=<session>` selects one onejudge run's harness activity |
 | `--system` | `system: Option<String>` |
 | `--cwd` | `cwd: Option<PathBuf>` |
-| `--config` | `config: Vec<PathBuf>` — repeatable, one flag per file in layering order (later files override earlier ones); empty is discovery |
+| `--config` | `config: Vec<PathBuf>` — repeatable, one flag per file in layering order (later files override earlier ones); onejudge layers its `history = true` defaults first, then the side's explicit or discovered config, so `history = false` remains effective |
 | `--mock-harness` | `mock_harness: Vec<String>` — repeatable; runs the named harness against oneharness's own deterministic `MOCK_*` responder instead of a paid model. Rendered on both seams so the mapping stays total, but reachable only on the spawning one (see below) |
 | `--session` | `session: Option<String>` |
 | `--stream` | `stream: Option<bool>` |
