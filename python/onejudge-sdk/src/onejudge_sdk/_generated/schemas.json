@@ -3545,6 +3545,14 @@
               "boolean",
               "null"
             ]
+          },
+          "worker_config": {
+            "default": null,
+            "description": "`oneharness`, on the provider that runs the worker side (the top-level\nprovider or a split's `skill:`): the oneharness config file the worker runs\nunder, passed as `oneharness run --config <path>` as given. Set, the worker\nside layers onejudge's history default beneath exactly this file and\ndiscovers nothing from its working directory. Unset, it layers the history\ndefault beneath oneharness's own discovery (the user file, then the project\nfile). Overridden by `--worker-config` / `ONEJUDGE_WORKER_CONFIG`.",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "type": "object"

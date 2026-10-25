@@ -108,6 +108,11 @@ pub struct Cli {
 
 /// The `onejudge` subcommands.
 #[derive(Debug, Subcommand)]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "parsed once per process, so `Run`'s size costs nothing; boxing it would change \
+              the public `Command::Run(RunArgs)` shape an embedder matches on"
+)]
 pub enum Command {
     /// Drive one task to completion via a simulated-user loop.
     Run(RunArgs),
@@ -131,6 +136,11 @@ pub struct RunArgs {
     /// <path>`); default `oneharness.judge.toml`.
     #[arg(long)]
     pub judge_config: Option<String>,
+    /// The worker-side oneharness config file (`oneharness run --config <path>`),
+    /// run under exactly as given instead of the files oneharness discovers from
+    /// the worktree. Lands on the provider that runs the worker side.
+    #[arg(long)]
+    pub worker_config: Option<String>,
     /// A skill directory (containing `SKILL.md`) whose body seeds the system
     /// prompt. Resolved relative to the working directory.
     #[arg(long)]
@@ -268,6 +278,7 @@ fn run_task(args: RunArgs) -> Result<i32, CliError> {
     let RunArgs {
         config,
         judge_config,
+        worker_config,
         skill,
         system_prompt,
         task,
@@ -307,6 +318,7 @@ fn run_task(args: RunArgs) -> Result<i32, CliError> {
     cfg.apply(Overrides::from_env(|key| std::env::var(key).ok())?);
     cfg.apply(Overrides {
         judge_config,
+        worker_config,
         skill,
         system_prompt,
         task,

@@ -429,6 +429,8 @@ fn assistant_turns(messages: &[Message]) -> usize {
 /// The default [`Provider`]: runs each turn through the `oneharness` engine.
 pub struct OneharnessProvider {
     execution: Execution,
+    /// The worker side's own oneharness config; `None` is discovery.
+    worker_config: Option<PathBuf>,
     /// The judge side's own oneharness config; `None` is discovery.
     judge_config: Option<PathBuf>,
     /// Appended to every evaluator prompt this provider's judge side is handed.
@@ -481,6 +483,7 @@ impl OneharnessProvider {
     pub fn new() -> Self {
         Self {
             execution: Execution::Library,
+            worker_config: None,
             judge_config: Some(PathBuf::from(DEFAULT_JUDGE_CONFIG)),
             judge_instructions: None,
             judge_events: None,
@@ -579,6 +582,32 @@ impl OneharnessProvider {
     fn mocked(&self, mut spec: TurnSpec) -> TurnSpec {
         spec.mock_harness.clone_from(&self.mock_harness);
         spec
+    }
+
+    /// Run the **worker** side under exactly this oneharness config file, passed as
+    /// `oneharness run --config <path>` on every worker turn, instead of the user
+    /// and project files oneharness would discover from the worktree. The worker's
+    /// counterpart of [`with_judge_config`](Self::with_judge_config); the path is
+    /// taken as given.
+    ///
+    /// onejudge's history default is layered beneath it and nothing else is, so a
+    /// `history = false` here is honoured and an unrelated `oneharness.toml` sitting
+    /// in the worktree never reaches the worker's routing. The harness still runs
+    /// in the worktree. Unset — the default — the worker side layers the history
+    /// default under the discovered user file, then the discovered project file.
+    #[must_use]
+    pub fn with_worker_config(mut self, config: impl Into<PathBuf>) -> Self {
+        self.worker_config = Some(config.into());
+        self
+    }
+
+    /// The config list a worker turn names: the worker config alone, or none —
+    /// oneharness's discovery — when no worker config was given.
+    fn pinned(&self, spec: TurnSpec) -> TurnSpec {
+        TurnSpec {
+            config: self.worker_config.iter().cloned().collect(),
+            ..spec
+        }
     }
 
     /// Override the oneharness config file the judge and simulated user run under
@@ -785,9 +814,10 @@ impl OneharnessProvider {
         // The turn this reply will be: one past the assistant turns already there.
         let turn = assistant_turns(messages) + 1;
         let labels = self.history_labels(LabelledRole::Worker, turn);
+        // Every rung of the ladder below names the same worker config.
         let labelled = |spec: TurnSpec| TurnSpec {
             labels: labels.clone(),
-            ..spec
+            ..self.pinned(spec)
         };
         let mut session = session;
         if let Some(name) = session {
@@ -1501,8 +1531,9 @@ fn assistant_turn(invocation: &Invocation) -> AssistantTurn {
 
 /// Describe a skill turn. Pure and total, so it is unit-tested directly.
 ///
-/// No harness/model selection: the agent side relies on oneharness's own
-/// discovered config (`oneharness.toml`) for it.
+/// No harness/model selection: the worker side relies on its oneharness config
+/// for it — the worker config, folded in by `OneharnessProvider::pinned`, or
+/// oneharness's own discovery when there is none.
 #[must_use]
 fn respond_spec(
     instructions: &str,
@@ -1516,6 +1547,7 @@ fn respond_spec(
     TurnSpec {
         system: Some(instructions.to_string()),
         cwd: Some(worktree.to_string()),
+        // Folded in by `OneharnessProvider::pinned`, which knows the worker config.
         config: Vec::new(),
         // Folded in by `OneharnessProvider::mocked`, which is the one place that
         // knows whether this run is mocked at all.
@@ -2273,6 +2305,53 @@ mod tests {
             "do x", "/work", None, None, false, false, "p",
         ));
         assert!(!none.iter().any(|a| a == "--session"));
+    }
+
+    #[test]
+    fn a_worker_config_is_the_only_file_a_worker_turn_layers_over_history() {
+        let worker = std::env::temp_dir().join("onejudge-unit-worker.toml");
+        let spec = |provider: &OneharnessProvider| {
+            provider
+                .history_spec(&provider.pinned(respond_spec(
+                    "do x",
+                    "/nonexistent/worktree",
+                    Some("s"),
+                    Some("s"),
+                    false,
+                    true,
+                    "p",
+                )))
+                .unwrap()
+        };
+        let pinned = spec(&OneharnessProvider::new().with_worker_config(&worker));
+        // History beneath, the worker config above it, and nothing discovered.
+        assert_eq!(pinned.config.len(), 2);
+        assert!(pinned.config[0].ends_with("history-defaults-v1.toml"));
+        assert_eq!(pinned.config[1], worker);
+        // The same list on both seams: the in-process request and the argv.
+        assert_eq!(turn::request(&pinned).config, pinned.config);
+        let configs: Vec<String> = argv_of(&pinned)
+            .windows(2)
+            .filter(|w| w[0] == "--config")
+            .map(|w| w[1].clone())
+            .collect();
+        assert_eq!(
+            configs,
+            pinned
+                .config
+                .iter()
+                .map(|c| c.display().to_string())
+                .collect::<Vec<_>>()
+        );
+        // The worktree is still where the harness runs.
+        assert_eq!(pinned.cwd.as_deref(), Some("/nonexistent/worktree"));
+
+        // Unset, the worker side names no config of its own.
+        let provider = OneharnessProvider::new();
+        assert!(provider
+            .pinned(respond_spec("do x", "/w", None, None, false, false, "p"))
+            .config
+            .is_empty());
     }
 
     #[test]

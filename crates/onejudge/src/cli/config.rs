@@ -139,6 +139,15 @@ pub struct ProviderConfig {
     /// the same defaults — which in 0.15.0 was an error.
     #[serde(default)]
     pub judge_config: Option<String>,
+    /// `oneharness`, on the provider that runs the worker side (the top-level
+    /// provider or a split's `skill:`): the oneharness config file the worker runs
+    /// under, passed as `oneharness run --config <path>` as given. Set, the worker
+    /// side layers onejudge's history default beneath exactly this file and
+    /// discovers nothing from its working directory. Unset, it layers the history
+    /// default beneath oneharness's own discovery (the user file, then the project
+    /// file). Overridden by `--worker-config` / `ONEJUDGE_WORKER_CONFIG`.
+    #[serde(default)]
+    pub worker_config: Option<String>,
     /// `oneharness`: instructions appended to every evaluator prompt this
     /// provider's judge side is handed — what a judge that can act should verify,
     /// and how. The answer format each prompt ends with is unchanged.
@@ -260,6 +269,10 @@ pub struct Overrides {
     /// `--judge-config` / `ONEJUDGE_JUDGE_CONFIG` (the judge-side oneharness
     /// config path).
     pub judge_config: Option<String>,
+    /// `--worker-config` / `ONEJUDGE_WORKER_CONFIG` (the worker-side oneharness
+    /// config path). Lands on the provider that runs the worker side: the
+    /// top-level provider, or a `split`'s `skill:`.
+    pub worker_config: Option<String>,
     /// `--skill` / `ONEJUDGE_SKILL` (a skill directory; resolved relative to the
     /// working dir).
     pub skill: Option<PathBuf>,
@@ -324,6 +337,7 @@ impl Overrides {
 
         Ok(Self {
             judge_config: get("ONEJUDGE_JUDGE_CONFIG"),
+            worker_config: get("ONEJUDGE_WORKER_CONFIG"),
             skill: get("ONEJUDGE_SKILL").map(PathBuf::from),
             system_prompt: get("ONEJUDGE_SYSTEM_PROMPT"),
             task: get("ONEJUDGE_TASK"),
@@ -358,6 +372,7 @@ impl Config {
     pub fn apply(&mut self, overrides: Overrides) {
         let Overrides {
             judge_config,
+            worker_config,
             skill,
             system_prompt,
             task,
@@ -385,6 +400,21 @@ impl Config {
         }
         if let Some(kind) = provider_kind {
             self.provider.kind = kind;
+        }
+        // After the kind, so the override lands on whichever provider runs the
+        // worker side as this layer leaves it: a split's `skill:`, else the
+        // top-level provider. A provider of any other kind refuses it when the
+        // plan is resolved, naming the flag.
+        if let Some(config) = worker_config {
+            let split_skill = if self.provider.kind == ProviderKind::Split {
+                self.provider.skill.as_deref_mut()
+            } else {
+                None
+            };
+            match split_skill {
+                Some(skill) => skill.worker_config = Some(config),
+                None => self.provider.worker_config = Some(config),
+            }
         }
         // The user-facing overrides imply a simulated user even if the file had
         // none — supplying `--persona` / `--done-when` / `--max-turns` /
@@ -565,6 +595,7 @@ impl ProviderConfig {
             kind,
             bin,
             judge_config,
+            worker_config,
             instructions,
             events,
             allow_writable_judges,
@@ -587,6 +618,17 @@ impl ProviderConfig {
         if label.is_some() && place != Place::Judge {
             return Err(CliError::Config(
                 "`label` is only valid on a judge entry (under `provider.judges:` or                  `provider.judge:`)"
+                    .into(),
+            ));
+        }
+
+        // A worker config names the config the worker side runs under, so a judge
+        // entry has no worker side for it to configure.
+        if worker_config.is_some() && place == Place::Judge {
+            return Err(CliError::Config(
+                "`worker_config` is not valid on a judge entry: it names the oneharness config \
+                 the worker side runs under, so it belongs on the top-level `kind: oneharness` \
+                 provider or on a split's `skill:`; a judge's own config is `judge_config`"
                     .into(),
             ));
         }
@@ -621,6 +663,22 @@ impl ProviderConfig {
                 Ok(())
             }
         };
+        // The same refusal for `worker_config`, also naming the override that can
+        // put it there — the flag or variable may be how it arrived.
+        let reject_worker_config = || -> Result<(), CliError> {
+            if worker_config.is_some() {
+                Err(CliError::Config(format!(
+                    "`worker_config` is not valid under provider kind `{}`: it names the \
+                     oneharness config the worker side runs under, so it (and \
+                     `--worker-config` / `ONEJUDGE_WORKER_CONFIG`) belongs on a \
+                     `kind: oneharness` provider that runs the worker side — the top-level \
+                     provider or a split's `skill:`",
+                    kind.as_str()
+                )))
+            } else {
+                Ok(())
+            }
+        };
 
         match kind {
             ProviderKind::Oneharness => {
@@ -638,6 +696,7 @@ impl ProviderConfig {
                     // spawning it — see `OneharnessProvider::with_bin`.
                     bin,
                     judge_config: judge_config.map(PathBuf::from),
+                    worker_config: worker_config.map(PathBuf::from),
                     instructions: instructions.filter(|text| !text.trim().is_empty()),
                     events,
                     stream: stream.unwrap_or(false),
@@ -648,6 +707,7 @@ impl ProviderConfig {
             ProviderKind::Command => {
                 reject(bin.is_some(), "bin")?;
                 reject(judge_config.is_some(), "judge_config")?;
+                reject_worker_config()?;
                 reject(instructions.is_some(), "instructions")?;
                 reject(events.is_some(), "events")?;
                 reject(allow_writable_judges.is_some(), "allow_writable_judges")?;
@@ -668,6 +728,8 @@ impl ProviderConfig {
             ProviderKind::Split => {
                 reject(bin.is_some(), "bin")?;
                 reject(judge_config.is_some(), "judge_config")?;
+                // The worker side of a split is its `skill:`, which takes it.
+                reject_worker_config()?;
                 // A judge's own settings, set on the judge entry they belong to.
                 reject(instructions.is_some(), "instructions")?;
                 reject(events.is_some(), "events")?;
@@ -720,6 +782,7 @@ impl ProviderConfig {
             }
             ProviderKind::Llmlint => {
                 reject(judge_config.is_some(), "judge_config")?;
+                reject_worker_config()?;
                 reject(instructions.is_some(), "instructions")?;
                 reject(events.is_some(), "events")?;
                 reject(allow_writable_judges.is_some(), "allow_writable_judges")?;
@@ -849,6 +912,10 @@ pub enum ProviderSpec {
         /// `None` leaves the provider's own default (`oneharness.judge.toml`), or
         /// oneharness's discovery when that file is not in the working directory.
         judge_config: Option<PathBuf>,
+        /// The worker-side oneharness config file (`--config <path>`), taken as
+        /// given; `None` leaves the worker side to oneharness's discovery from its
+        /// working directory.
+        worker_config: Option<PathBuf>,
         /// Instructions appended to every evaluator prompt the judge side is
         /// handed.
         instructions: Option<String>,
@@ -1610,6 +1677,157 @@ user:
         // The persona flag implies a multi-turn conversation.
         assert!(plan.conversation.user.is_some());
         assert_eq!(plan.conversation.user.unwrap().persona, "a reviewer");
+    }
+
+    /// The worker config a plan's worker side runs under: the top-level
+    /// oneharness provider's, or a split's `skill:`'s.
+    fn worker_config_of(plan: &Plan) -> Option<&std::path::Path> {
+        let worker = match &plan.provider {
+            ProviderSpec::Split { skill, .. } => skill.as_ref(),
+            top => top,
+        };
+        match worker {
+            ProviderSpec::Oneharness { worker_config, .. } => worker_config.as_deref(),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn worker_config_resolves_onto_the_provider_that_runs_the_worker_side() {
+        let top = Config::from_yaml(
+            "task: x
+provider:
+  kind: oneharness
+  worker_config: w.toml
+",
+        )
+        .unwrap()
+        .into_plan()
+        .unwrap();
+        // Taken as given: never rebased, exactly like `judge_config`.
+        assert_eq!(worker_config_of(&top), Some(std::path::Path::new("w.toml")));
+
+        let split = Config::from_yaml(
+            "task: x\nprovider:\n  kind: split\n  skill:\n    kind: oneharness\n    \
+             worker_config: w.toml\n  judge:\n    kind: oneharness\n",
+        )
+        .unwrap()
+        .into_plan()
+        .unwrap();
+        assert_eq!(
+            worker_config_of(&split),
+            Some(std::path::Path::new("w.toml"))
+        );
+
+        // Unset is discovery, today's behaviour.
+        let unset = Config::from_yaml("task: x\n").unwrap().into_plan().unwrap();
+        assert_eq!(worker_config_of(&unset), None);
+    }
+
+    #[test]
+    fn a_misplaced_worker_config_is_refused_naming_it_and_its_override() {
+        for (yaml, place) in [
+            (
+                "provider:\n  kind: command\n  command: [p]\n  worker_config: w.toml\n",
+                "provider kind `command`",
+            ),
+            (
+                "provider:\n  kind: split\n  worker_config: w.toml\n  skill:\n    \
+                 kind: oneharness\n  judge:\n    kind: oneharness\n",
+                "provider kind `split`",
+            ),
+            (
+                "provider:\n  kind: split\n  skill:\n    kind: command\n    command: [p]\n    \
+                 worker_config: w.toml\n  judge:\n    kind: oneharness\n",
+                "provider kind `command`",
+            ),
+            (
+                "provider:\n  kind: split\n  skill:\n    kind: oneharness\n  judges:\n    \
+                 - kind: llmlint\n      bin: x\n      worker_config: w.toml\n",
+                "a judge entry",
+            ),
+            (
+                "provider:\n  kind: split\n  skill:\n    kind: oneharness\n  judge:\n    \
+                 kind: oneharness\n    worker_config: w.toml\n",
+                "a judge entry",
+            ),
+        ] {
+            let err = Config::from_yaml(&format!("task: x\n{yaml}"))
+                .unwrap()
+                .into_plan()
+                .unwrap_err();
+            let CliError::Config(message) = err else {
+                panic!("expected a config error for {yaml}");
+            };
+            assert!(message.contains("`worker_config`"), "{message}");
+            assert!(message.contains(place), "{place} not in {message}");
+        }
+        // Under a kind, the refusal also names the override that can put it there.
+        let err = Config::from_yaml("task: x\nprovider:\n  kind: command\n  command: [p]\n")
+            .map(|mut cfg| {
+                cfg.apply(Overrides {
+                    worker_config: Some("w.toml".into()),
+                    ..Overrides::default()
+                });
+                cfg
+            })
+            .unwrap()
+            .into_plan()
+            .unwrap_err();
+        assert!(
+            matches!(err, CliError::Config(m) if m.contains("--worker-config") && m.contains("ONEJUDGE_WORKER_CONFIG"))
+        );
+    }
+
+    #[test]
+    fn the_worker_config_override_lands_on_the_worker_side_flag_over_env_over_file() {
+        let env = Overrides::from_env(|k| {
+            (k == "ONEJUDGE_WORKER_CONFIG").then(|| "env.toml".to_string())
+        })
+        .unwrap();
+        assert_eq!(env.worker_config.as_deref(), Some("env.toml"));
+        let flag = || Overrides {
+            worker_config: Some("flag.toml".into()),
+            ..Overrides::default()
+        };
+        let plan = |yaml: &str, layers: Vec<Overrides>| {
+            let mut cfg = Config::from_yaml(yaml).unwrap();
+            for layer in layers {
+                cfg.apply(layer);
+            }
+            cfg.into_plan().unwrap()
+        };
+        let file = "task: x\nprovider:\n  kind: oneharness\n  worker_config: file.toml\n";
+        let path = std::path::Path::new;
+        assert_eq!(
+            worker_config_of(&plan(file, vec![])),
+            Some(path("file.toml"))
+        );
+        assert_eq!(
+            worker_config_of(&plan(file, vec![env.clone()])),
+            Some(path("env.toml"))
+        );
+        assert_eq!(
+            worker_config_of(&plan(file, vec![env.clone(), flag()])),
+            Some(path("flag.toml"))
+        );
+
+        // Under a split it lands on the oneharness `skill:`, and leaves every judge
+        // entry untouched.
+        let split = "task: x\nprovider:\n  kind: split\n  skill:\n    kind: oneharness\n  \
+                     judge:\n    kind: oneharness\n";
+        let resolved = plan(split, vec![env, flag()]);
+        assert_eq!(worker_config_of(&resolved), Some(path("flag.toml")));
+        let ProviderSpec::Split { judges, .. } = &resolved.provider else {
+            panic!("a split resolves to a split");
+        };
+        assert!(matches!(
+            &judges[0].provider,
+            ProviderSpec::Oneharness {
+                worker_config: None,
+                ..
+            }
+        ));
     }
 
     #[test]
