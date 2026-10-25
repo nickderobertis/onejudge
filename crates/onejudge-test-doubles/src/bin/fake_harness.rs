@@ -110,6 +110,9 @@
 //!   `result`, touch `PATH` and stay alive for `MS` milliseconds or until
 //!   `PATH.release` exists: a run whose turn has ended and whose control socket is
 //!   still listening. Skipped when `PATH` already exists.
+//! * `[[report-env:NAME,NAME,…]]` — reply `NAME=<value>` for each variable, in
+//!   order and space-separated, `unset` for one this process was not given: what
+//!   the oneharness config it ran under put in a variant's environment.
 
 use std::io::Write as _;
 use std::path::Path;
@@ -196,6 +199,16 @@ fn main() {
         .unwrap_or_else(|| "ok".to_string());
     if prompt.contains("[[echo-resume]]") {
         reply = resumed_on(&args).unwrap_or_else(|| "none".to_string());
+    }
+    if let Some(names) = marker(&prompt, "report-env") {
+        reply = names
+            .split(',')
+            .map(|name| {
+                let value = std::env::var(name).unwrap_or_else(|_| "unset".to_string());
+                format!("{name}={value}")
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
     }
     // A judge-side turn plays only its own script: the worker's `[[event:…]]`
     // markers reach it inlined in the transcript it is judging.
