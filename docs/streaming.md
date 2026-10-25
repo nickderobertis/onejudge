@@ -1,7 +1,7 @@
 # The streamed protocol
 
 A onejudge turn can take 600–2000 seconds. Buffered, none of that is visible until
-it ends: a supervising process cannot tell a working agent from a dead one, and a
+it ends: a supervising process cannot tell a working worker from a dead one, and a
 UI has nothing to render. The streamed protocol makes the turn's tool activity a
 first-class, incremental signal — **inbound** from a provider that publishes it,
 and **outbound** from onejudge to its SDK consumers.
@@ -27,7 +27,7 @@ so a consumer never has to guess a line's meaning from its position — but the
 ## Inbound: a streamed provider
 
 Set `provider.stream: true` under `kind: oneharness` (or
-[`OneharnessProvider::with_streaming`] in Rust). The agent-side call then adds
+[`OneharnessProvider::with_streaming`] in Rust). The worker-side call then adds
 `RunRequest::stream`, and onejudge receives each event on its `EventSink` as
 oneharness observes it (on the spawning seam, `oneharness run --stream`, whose
 stdout onejudge reads line by line)
@@ -74,7 +74,7 @@ same terms: nothing may follow it either.
 
 A provider that never streams needs no changes at all: leave `stream` unset and
 onejudge parses one report document, exactly as before. Streaming is only ever
-configured for the agent side. When an embedder uses `Engine::run_observing`,
+configured for the worker side. When an embedder uses `Engine::run_observing`,
 onejudge also streams the harness invocations internally on both sides to learn
 history addresses at their start. `Observation::HistoryBegun` carries the side's
 `role` and `turn`, and oneharness's `harness_id`, `history_id`, `history_dir`,

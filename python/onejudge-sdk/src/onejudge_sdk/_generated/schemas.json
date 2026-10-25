@@ -2,7 +2,7 @@
   "failure_report": {
     "$defs": {
       "CandidateAttempt": {
-        "description": "One candidate identity oneharness attempted for a single invocation \u2014 the\nharness (and variant/model) it tried, and what came of it.\n\nUnder `run_mode = \"fallback\"` oneharness attempts candidates in priority order\nand stops at the first that runs the task, so an invocation can have several of\nthese: the ones it fell through, then the one that ran. This is the typed form\nof oneharness's per-candidate record \u2014 the thing that lets a consumer attribute\na failure to a *side* (agent vs judge) and an *identity* (which harness, which\naccount) instead of grepping a message.",
+        "description": "One candidate identity oneharness attempted for a single invocation \u2014 the\nharness (and variant/model) it tried, and what came of it.\n\nUnder `run_mode = \"fallback\"` oneharness attempts candidates in priority order\nand stops at the first that runs the task, so an invocation can have several of\nthese: the ones it fell through, then the one that ran. This is the typed form\nof oneharness's per-candidate record \u2014 the thing that lets a consumer attribute\na failure to a *side* (the worker, recorded as `agent`, vs the judge) and an *identity* (which harness, which\naccount) instead of grepping a message.",
         "properties": {
           "available": {
             "description": "Whether oneharness found the harness binary.",
@@ -223,7 +223,7 @@
                 "type": "null"
               }
             ],
-            "description": "The permission posture this invocation ran under, for an evaluator\njudge-side call; absent for the agent's turns and for a judge-side call\nwith no worktree, whose mode onejudge does not set."
+            "description": "The permission posture this invocation ran under, for an evaluator\njudge-side call; absent for the worker's turns and for a judge-side call\nwith no worktree, whose mode onejudge does not set."
           },
           "ran": {
             "description": "The candidate that ran the turn, by composed id; `null` when none could.",
@@ -562,11 +562,11 @@
         "type": "object"
       },
       "Telemetry": {
-        "description": "Timing, usage, and native linkage for the complete agent+judge run.",
+        "description": "Timing, usage, and native linkage for the complete worker+judge run.",
         "properties": {
           "agent": {
             "$ref": "#/$defs/PartyTelemetry",
-            "description": "Agent-side measurements."
+            "description": "Worker-side measurements, under the `agent` key, which denotes the worker\nside."
           },
           "attribution": {
             "description": "Which harness identities each invocation attempted, in invocation order.\nEmpty when the provider reports no candidate identities.",
@@ -614,7 +614,7 @@
         "oneOf": [
           {
             "const": "agent",
-            "description": "The skill/agent under evaluation.",
+            "description": "The worker side: the skill under evaluation. Serialized `agent`, a name\nkept for the consumers that already read it.",
             "type": "string"
           },
           {
@@ -2211,7 +2211,7 @@
         "description": "A turn beginning, and the message it was given to answer.\n\nThe conversation's opening input is never a [`TurnMessage`] \u2014 it is already in\nthe transcript before the loop runs \u2014 so it reaches an observer here, as the\n`instruction` of the first assistant turn.",
         "properties": {
           "instruction": {
-            "description": "The message this turn answers, whole and unbounded \u2014 the original task on\nthe first assistant turn, the supervisor's last instruction afterwards, and\nthe agent's last reply for a user turn.",
+            "description": "The message this turn answers, whole and unbounded \u2014 the original task on\nthe first assistant turn, the supervisor's last instruction afterwards, and\nthe worker's last reply for a user turn.",
             "type": "string"
           },
           "role": {
@@ -2335,7 +2335,7 @@
       },
       {
         "$ref": "#/$defs/TurnAction",
-        "description": "Every normalized event the worker's harness reported, as oneharness\nreported it: its own `message` and `reasoning` items as well as its tool\nactivity. A tool event is delivered as [`Tool`](Observation::Tool) first\nand then as this; the agent's words are delivered only as this, and never\nbecome a [`ToolEvent`] \u2014 they are rendered for a reader, not summarized for\na judge.",
+        "description": "Every normalized event the worker's harness reported, as oneharness\nreported it: its own `message` and `reasoning` items as well as its tool\nactivity. A tool event is delivered as [`Tool`](Observation::Tool) first\nand then as this; the worker's words are delivered only as this, and never\nbecome a [`ToolEvent`] \u2014 they are rendered for a reader, not summarized for\na judge.",
         "properties": {
           "type": {
             "const": "action",
@@ -2409,7 +2409,7 @@
   "report": {
     "$defs": {
       "CandidateAttempt": {
-        "description": "One candidate identity oneharness attempted for a single invocation \u2014 the\nharness (and variant/model) it tried, and what came of it.\n\nUnder `run_mode = \"fallback\"` oneharness attempts candidates in priority order\nand stops at the first that runs the task, so an invocation can have several of\nthese: the ones it fell through, then the one that ran. This is the typed form\nof oneharness's per-candidate record \u2014 the thing that lets a consumer attribute\na failure to a *side* (agent vs judge) and an *identity* (which harness, which\naccount) instead of grepping a message.",
+        "description": "One candidate identity oneharness attempted for a single invocation \u2014 the\nharness (and variant/model) it tried, and what came of it.\n\nUnder `run_mode = \"fallback\"` oneharness attempts candidates in priority order\nand stops at the first that runs the task, so an invocation can have several of\nthese: the ones it fell through, then the one that ran. This is the typed form\nof oneharness's per-candidate record \u2014 the thing that lets a consumer attribute\na failure to a *side* (the worker, recorded as `agent`, vs the judge) and an *identity* (which harness, which\naccount) instead of grepping a message.",
         "properties": {
           "available": {
             "description": "Whether oneharness found the harness binary.",
@@ -2519,7 +2519,7 @@
         "type": "object"
       },
       "ControlAddress": {
-        "description": "Where an `oneharness interrupt` process addresses the controllable turn\nonejudge's agent side opened.\n\nThe three fields are the whole of `interrupt`'s addressing:\n\n```text\noneharness interrupt --session <session> --session-dir <session_dir> \\\n                     --cwd <cwd> --input \"<what to do instead>\"\n```\n\nThey are read back from the oneharness run report rather than re-derived from\nwhat onejudge asked for, so the address names the session the run actually\nbound \u2014 including in a fallback chain, where the handle is bound to the\ncandidate that *ran*, not the first one tried.",
+        "description": "Where an `oneharness interrupt` process addresses the controllable turn\nonejudge's worker side opened.\n\nThe three fields are the whole of `interrupt`'s addressing:\n\n```text\noneharness interrupt --session <session> --session-dir <session_dir> \\\n                     --cwd <cwd> --input \"<what to do instead>\"\n```\n\nThey are read back from the oneharness run report rather than re-derived from\nwhat onejudge asked for, so the address names the session the run actually\nbound \u2014 including in a fallback chain, where the handle is bound to the\ncandidate that *ran*, not the first one tried.",
         "properties": {
           "cwd": {
             "description": "The working directory the turn runs in, which is how `interrupt` resolves\n*which project's* session the handle belongs to (`interrupt --cwd`). It is\nthe same string onejudge passed as `oneharness run --cwd`, because\noneharness slugs that string to key the store.",
@@ -2629,7 +2629,7 @@
                 "type": "null"
               }
             ],
-            "description": "The permission posture this invocation ran under, for an evaluator\njudge-side call; absent for the agent's turns and for a judge-side call\nwith no worktree, whose mode onejudge does not set."
+            "description": "The permission posture this invocation ran under, for an evaluator\njudge-side call; absent for the worker's turns and for a judge-side call\nwith no worktree, whose mode onejudge does not set."
           },
           "ran": {
             "description": "The candidate that ran the turn, by composed id; `null` when none could.",
@@ -3040,11 +3040,11 @@
         "type": "object"
       },
       "Telemetry": {
-        "description": "Timing, usage, and native linkage for the complete agent+judge run.",
+        "description": "Timing, usage, and native linkage for the complete worker+judge run.",
         "properties": {
           "agent": {
             "$ref": "#/$defs/PartyTelemetry",
-            "description": "Agent-side measurements."
+            "description": "Worker-side measurements, under the `agent` key, which denotes the worker\nside."
           },
           "attribution": {
             "description": "Which harness identities each invocation attempted, in invocation order.\nEmpty when the provider reports no candidate identities.",
@@ -3092,7 +3092,7 @@
         "oneOf": [
           {
             "const": "agent",
-            "description": "The skill/agent under evaluation.",
+            "description": "The worker side: the skill under evaluation. Serialized `agent`, a name\nkept for the consumers that already read it.",
             "type": "string"
           },
           {
@@ -3241,7 +3241,7 @@
           }
         ],
         "default": null,
-        "description": "Where an `oneharness interrupt` process addresses the controllable turn\nthis run's agent side opened (`provider.control: true`), or `null` when\ncontrol was not asked for.\n\nSerialized even when null \u2014 unlike the optional fields above \u2014 because a\nsupervisor keys on its presence to decide whether it has a lever at all,\nand an absent key would make \"no control\" indistinguishable from a report\nwritten before this field existed. `null` with a `control_unavailable`\nreason beside it is the third case: asked for, and refused.\n\nAlways *written*, but deliberately not *required* by the generated schema:\na reader must keep accepting the reports older onejudge versions wrote, and\nproducing more than the contract demands is what makes an additive field\nadditive. [`never`] is how those two are said at once \u2014 it is the skip\npredicate that never skips, and its presence is what tells serde's schema\nderive the key may be absent from a document."
+        "description": "Where an `oneharness interrupt` process addresses the controllable turn\nthis run's worker side opened (`provider.control: true`), or `null` when\ncontrol was not asked for.\n\nSerialized even when null \u2014 unlike the optional fields above \u2014 because a\nsupervisor keys on its presence to decide whether it has a lever at all,\nand an absent key would make \"no control\" indistinguishable from a report\nwritten before this field existed. `null` with a `control_unavailable`\nreason beside it is the third case: asked for, and refused.\n\nAlways *written*, but deliberately not *required* by the generated schema:\na reader must keep accepting the reports older onejudge versions wrote, and\nproducing more than the contract demands is what makes an additive field\nadditive. [`never`] is how those two are said at once \u2014 it is the skip\npredicate that never skips, and its presence is what tells serde's schema\nderive the key may be absent from a document."
       },
       "control_unavailable": {
         "description": "Why an *asked-for* control channel is missing, when one is. Absent unless\n`provider.control` was on and the run could not be given a socket \u2014 which\nis what keeps a refused ask from reading as an ask never made.",
@@ -3271,7 +3271,7 @@
         "type": "integer"
       },
       "settled_reason": {
-        "description": "Why the run ended *without* a completion decision, when it ended because the\nsupervisor judged the work incomplete and then named no next instruction \u2014\neven asked again.\n\nAbsent on every other run, so its presence is the one signal that separates\n\"the agent could not do it\" from \"the supervisor had nothing to say\". The\ntranscript, verdicts, and usage beside it are the work the run really did:\nthis settles a run, it does not fail one.",
+        "description": "Why the run ended *without* a completion decision, when it ended because the\nsupervisor judged the work incomplete and then named no next instruction \u2014\neven asked again.\n\nAbsent on every other run, so its presence is the one signal that separates\n\"the worker could not do it\" from \"the supervisor had nothing to say\". The\ntranscript, verdicts, and usage beside it are the work the run really did:\nthis settles a run, it does not fail one.",
         "type": [
           "string",
           "null"
@@ -3445,7 +3445,7 @@
           },
           "control": {
             "default": null,
-            "description": "`oneharness`: ask for **controllable** turns \u2014 both parties' calls add\n`oneharness run --control`, opening an out-of-band socket each that a\nseparate `oneharness interrupt` process can redirect the in-flight turn\nthrough. Default `false`, and `false` changes nothing about the run. The\naddresses land on the report's `control` (agent) and `supervisor_control`\n(judge) blocks \u2014 separate sockets, separately refusable. onejudge redirects\na live turn itself only for a note sent into its own conversation. See\n`docs/control.md`.",
+            "description": "`oneharness`: ask for **controllable** turns \u2014 both parties' calls add\n`oneharness run --control`, opening an out-of-band socket each that a\nseparate `oneharness interrupt` process can redirect the in-flight turn\nthrough. Default `false`, and `false` changes nothing about the run. The\naddresses land on the report's `control` (worker) and `supervisor_control`\n(judge) blocks \u2014 separate sockets, separately refusable. onejudge redirects\na live turn itself only for a note sent into its own conversation. See\n`docs/control.md`.",
             "type": [
               "boolean",
               "null"
@@ -3518,7 +3518,7 @@
           },
           "mock_harness": {
             "default": null,
-            "description": "`oneharness`: harness ids to run against **oneharness's own deterministic\n`MOCK_*` responder** instead of a paid model (`oneharness run --mock-harness\n<id>`, repeatable). Empty \u2014 the default \u2014 bills the real model.\n\nThis is how an acceptance proof that needs a real multi-turn chain runs for\nfree: only the model is scripted, everything else is the real oneharness. It\napplies to the agent side *and* the judge side, so each id must be one the\nconfig for that side selects (use `kind: split` when the two sides need\ndifferent ids), and it makes the run **spawn** `oneharness` \u2014 the responder is\noneharness's own binary re-executed, which an in-process run cannot be. See\n`docs/cli.md`.",
+            "description": "`oneharness`: harness ids to run against **oneharness's own deterministic\n`MOCK_*` responder** instead of a paid model (`oneharness run --mock-harness\n<id>`, repeatable). Empty \u2014 the default \u2014 bills the real model.\n\nThis is how an acceptance proof that needs a real multi-turn chain runs for\nfree: only the model is scripted, everything else is the real oneharness. It\napplies to the worker side *and* the judge side, so each id must be one the\nconfig for that side selects (use `kind: split` when the two sides need\ndifferent ids), and it makes the run **spawn** `oneharness` \u2014 the responder is\noneharness's own binary re-executed, which an in-process run cannot be. See\n`docs/cli.md`.",
             "items": {
               "type": "string"
             },
@@ -3536,13 +3536,21 @@
                 "type": "null"
               }
             ],
-            "description": "`split`: the backend that runs the agent's turns."
+            "description": "`split`: the backend that runs the worker's turns."
           },
           "stream": {
             "default": null,
-            "description": "`oneharness`: the agent-side binary speaks the **streamed provider\nprotocol** (`docs/streaming.md`) \u2014 NDJSON tool events as they occur, then a\nterminal report line. Default `false` (one buffered report document).",
+            "description": "`oneharness`: the worker-side binary speaks the **streamed provider\nprotocol** (`docs/streaming.md`) \u2014 NDJSON tool events as they occur, then a\nterminal report line. Default `false` (one buffered report document).",
             "type": [
               "boolean",
+              "null"
+            ]
+          },
+          "worker_config": {
+            "default": null,
+            "description": "`oneharness`, on the provider that runs the worker side (the top-level\nprovider or a split's `skill:`): the oneharness config file the worker runs\nunder, passed as `oneharness run --config <path>` as given. Set, the worker\nside layers onejudge's history default beneath exactly this file and\ndiscovers nothing from its working directory. Unset, it layers the history\ndefault beneath oneharness's own discovery (the user file, then the project\nfile). Overridden by `--worker-config` / `ONEJUDGE_WORKER_CONFIG`.",
+            "type": [
+              "string",
               "null"
             ]
           }
@@ -3576,7 +3584,7 @@
       },
       "UserConfig": {
         "additionalProperties": false,
-        "description": "The simulated user that supervises the agent and drives the loop.",
+        "description": "The simulated user that supervises the worker and drives the loop.",
         "properties": {
           "artifacts": {
             "default": [],
@@ -3588,7 +3596,7 @@
           },
           "done_when": {
             "default": null,
-            "description": "A plain-English completion condition; when the judge decides it holds, the\nloop ends. Without it the loop ends at `max_turns` or when the agent\ndeclares itself done.",
+            "description": "A plain-English completion condition; when the judge decides it holds, the\nloop ends. Without it the loop ends at `max_turns` or when the worker\ndeclares itself done.",
             "type": [
               "string",
               "null"
@@ -3642,7 +3650,7 @@
       },
       "provider": {
         "$ref": "#/$defs/ProviderConfig",
-        "description": "Which backend runs the harness (and judges / plays the user).\n\nHarness/model **selection** is no longer a onejudge concern: the agent side\nuses oneharness's discovered `oneharness.toml`, and the judge side uses the\n`provider.judge_config` file (default `oneharness.judge.toml`). Scaffold both\nwith `onejudge init`."
+        "description": "Which backend runs the harness (and judges / plays the user).\n\nHarness/model **selection** is no longer a onejudge concern: the worker\nside uses oneharness's discovered `oneharness.toml`, or exactly the\n`provider.worker_config` file when one is named, and the judge side uses\nthe `provider.judge_config` file (default `oneharness.judge.toml`).\nScaffold both with `onejudge init`."
       },
       "session": {
         "default": null,
@@ -3685,7 +3693,7 @@
             "type": "null"
           }
         ],
-        "description": "The simulated user / supervisor that drives the loop. Omit for a\nsingle-turn run (the agent answers once)."
+        "description": "The simulated user / supervisor that drives the loop. Omit for a\nsingle-turn run (the worker answers once)."
       }
     },
     "title": "Config",

@@ -121,7 +121,7 @@ impl Invocation {
     }
 
     /// Every normalized event the turn reported, exactly as oneharness reported it
-    /// — the agent's own `message` and `reasoning` items beside its tool activity.
+    /// — the worker's own `message` and `reasoning` items beside its tool activity.
     pub(crate) fn actions(&self) -> &[ActionEvent] {
         self.result()
             .and_then(|result| result.events.as_deref())
@@ -198,7 +198,7 @@ pub(crate) fn millis(value: Option<u128>) -> Option<u64> {
 /// Lift one of oneharness's normalized actions into onejudge's transcript event,
 /// or `None` for one that is not tool activity.
 ///
-/// Only `tool_call` / `tool_result` become a [`ToolEvent`]: the agent's own
+/// Only `tool_call` / `tool_result` become a [`ToolEvent`]: the worker's own
 /// `message` and `reasoning` items are its words, not what it did, and a
 /// [`ToolEvent`] is what a judge prompt summarizes as `[tool]` lines and what a
 /// `did` assertion counts. Those items reach a reader through the text view
@@ -670,7 +670,7 @@ mod tests {
         // The result says the turn completed and carries no text: it said nothing,
         // and empty is the truthful answer. The harness process's raw output is
         // protocol exhaust — substituting it here is what published a megabyte of
-        // JSON-RPC framing as the agent's own words.
+        // JSON-RPC framing as the worker's own words.
         for text in [None, Some(String::new())] {
             let mut result = fixture::result("codex", "");
             result.text = text.clone();

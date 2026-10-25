@@ -34,7 +34,7 @@ use crate::usage::Usage;
 /// `settled_reason` — why a run ended without a completion decision because its
 /// supervisor gave no next instruction; `11` added `supervisor_control` and
 /// `supervisor_control_unavailable` — the same pair for the **supervisor** turn,
-/// which is separately addressable and separately refusable from the agent's;
+/// which is separately addressable and separately refusable from the worker's;
 /// `12` added `judge_decisions` — what each judge of a [`JudgePanel`] decided on
 /// each supervisor turn — and the `judge` label on `telemetry.attribution`,
 /// `telemetry.sessions` and `processes` that says which judge of a panel an
@@ -202,7 +202,7 @@ pub struct Report {
     /// even asked again.
     ///
     /// Absent on every other run, so its presence is the one signal that separates
-    /// "the agent could not do it" from "the supervisor had nothing to say". The
+    /// "the worker could not do it" from "the supervisor had nothing to say". The
     /// transcript, verdicts, and usage beside it are the work the run really did:
     /// this settles a run, it does not fail one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -229,7 +229,7 @@ pub struct Report {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub processes: Vec<SpawnedProcess>,
     /// Where an `oneharness interrupt` process addresses the controllable turn
-    /// this run's agent side opened (`provider.control: true`), or `null` when
+    /// this run's worker side opened (`provider.control: true`), or `null` when
     /// control was not asked for.
     ///
     /// Serialized even when null — unlike the optional fields above — because a
@@ -308,7 +308,7 @@ impl Report {
         self
     }
 
-    /// Record what the run's agent side could say about out-of-band turn control.
+    /// Record what the run's worker side could say about out-of-band turn control.
     ///
     /// One method rather than two settable fields, so the report cannot hold the
     /// contradiction of an address *and* a reason it has none.
@@ -411,7 +411,7 @@ mod tests {
 
     #[test]
     fn the_two_parties_control_answers_ride_the_wire_apart() {
-        // The v11 addition, and the state one field could not hold: an agent turn
+        // The v11 addition, and the state one field could not hold: a worker turn
         // that got a lever and a judge ask that was refused, in one document.
         let report = Report::new(Transcript::from_input("hi"), vec![], None, false)
             .with_control(&ControlOutcome::Open(ControlAddress {

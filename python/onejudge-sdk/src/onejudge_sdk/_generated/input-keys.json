@@ -30,6 +30,7 @@
     "stream": "stream",
     "system_prompt": "system_prompt",
     "task": "task",
-    "user": "user"
+    "user": "user",
+    "worker_config": "worker_config"
   }
 }

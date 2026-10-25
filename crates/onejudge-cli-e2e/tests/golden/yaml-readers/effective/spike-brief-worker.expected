@@ -7,6 +7,7 @@ Config {
         judge_config: Some(
             "/home/user/.local/state/oneagentgraph/runs/spike-brief-1791914000361-3763018/members/worker/oneharness.judge.toml",
         ),
+        worker_config: None,
         instructions: None,
         events: None,
         allow_writable_judges: None,

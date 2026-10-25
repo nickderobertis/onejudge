@@ -9,7 +9,7 @@
 //! onejudge went on to spawn inherited the group. Driving onejudge as a *library*
 //! silently removes that — the harness processes are now spawned by the embedder's
 //! own process, inside whatever group it happens to be in, and a cancel that
-//! terminates "the run" can no longer name a tree to terminate. An agent harness
+//! terminates "the run" can no longer name a tree to terminate. A harness
 //! that survives a cancellation keeps calling the model and keeps billing, so this
 //! is not a tidiness problem.
 //!
@@ -80,7 +80,7 @@ use crate::telemetry::TelemetryRole;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct SpawnContext<'a> {
-    /// Whether this process serves the agent under evaluation or the
+    /// Whether this process serves the worker under evaluation or the
     /// judge/simulated-user side.
     pub role: TelemetryRole,
     /// The provider operation asking for the process (`respond`, `user`,
@@ -294,7 +294,7 @@ fn hook_error(context: &SpawnContext<'_>, stage: &str, error: &io::Error) -> Err
     )
 }
 
-/// The role a provider operation belongs to: `respond` is the agent under
+/// The role a provider operation belongs to: `respond` is the worker under
 /// evaluation, everything else is the judge/simulated-user side.
 pub(crate) fn role_of(op: &str) -> TelemetryRole {
     if op == "respond" {

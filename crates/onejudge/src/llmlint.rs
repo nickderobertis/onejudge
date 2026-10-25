@@ -24,7 +24,7 @@
 //!
 //! The provider answers only the two judge-side operations a lint run *can*
 //! answer — the per-turn `supervise` decision and a boolean `judge` — and refuses
-//! every other with [`Error::Invalid`]: it runs no agent turn, plays no user,
+//! every other with [`Error::Invalid`]: it runs no worker turn, plays no user,
 //! scores no number and writes no prose. Composed into a
 //! [`JudgePanel`](crate::JudgePanel) with the matching
 //! [`JudgeAbilities`](crate::JudgeAbilities), the panel simply leaves it out of

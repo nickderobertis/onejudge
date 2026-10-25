@@ -11,7 +11,7 @@ unparseable/wrong-shaped output is a loud error (a classified
 All five operations are distinguished by the request's `op` field.
 
 This is not the only provider protocol: an `oneharness`-kind provider can instead
-publish its agent turn incrementally, as NDJSON tool events followed by a terminal
+publish its worker turn incrementally, as NDJSON tool events followed by a terminal
 report line. See [streaming.md](streaming.md). The two are independent — a
 `CommandProvider` exchange is unchanged by it.
 
@@ -50,6 +50,10 @@ writes it with:
 | `supervisor` | `agent.onejudge-frame.supervisor@8` |
 | `judge` | `agent.onejudge-frame.judge@8` |
 | `assess` | `agent.onejudge-frame.assess@8` |
+
+The `agent.` prefix of each id is the message-bus namespace, kept for
+compatibility; it does not name the worker party, and frames for every party
+carry it.
 
 `onejudge::sdk_schema::frame_schemas()` answers them, `register_frames` registers
 them in a `onemessagebus` registry, and the SDK schema bundle carries them under
@@ -120,7 +124,7 @@ Response:
 
 ## `supervisor` — decide completion or produce the next user turn
 
-The engine sends exactly one request after each ordinary nonterminal agent turn:
+The engine sends exactly one request after each ordinary nonterminal worker turn:
 
 ```json
 {"op":"supervisor","task":"fix it","persona":"A strict reviewer.","done_when":"tests pass","worktree":"/repo","history_name":"run-42-skill","turn":{"outcome":"taken"},"messages":[...],"session":"run-42-user"}
@@ -177,7 +181,7 @@ forbids `message`; continue requires the exact non-empty next user message:
 {"completion":false,"message":"Run the integration suite too.","reason":"unit tests alone are insufficient","usage":{...}}
 ```
 
-`message` reaches the agent **verbatim** as its next user turn and is the only
+`message` reaches the worker **verbatim** as its next user turn and is the only
 thing it receives, so `completion:false` obliges you to name a concrete, actionable
 next instruction. A continue with an absent or blank `message` is not a protocol
 error — onejudge repeats the identical request up to `SUPERVISOR_REASK_LIMIT`
@@ -187,7 +191,7 @@ failing. A `message` that is *present* but keeps asking for nothing settles the 
 too: `NOOP_SETTLE_LIMIT` consecutive exchanges that record no tool activity and
 return the same tiny answer to the same tiny instruction end the loop on the work
 it has, rather than re-prompting a finished task to the turn cap. What onejudge
-never does is hand the agent an empty user turn. A malformed
+never does is hand the worker an empty user turn. A malformed
 response — not one JSON object, a missing `completion`, or a `completed` one
 without a `reason` or carrying a `message` — is still a hard protocol error *on
 this seam*: the party answering here is a program speaking this protocol, and a
@@ -222,6 +226,8 @@ Request:
 ```json
 { "op": "judge", "kind": "boolean", "criterion": "the reply was polite", "messages": [ ... ], "evidence": { "worktree": "/repo", "history_files": ["/state/history/agent.jsonl"] } }
 ```
+
+(`agent.jsonl` there is the worker side's history file.)
 
 - `kind` is `boolean` or `numeric`; a numeric query also carries `min` and `max`.
 - `evidence` is omitted without context. Its paths are producer-supplied artifact

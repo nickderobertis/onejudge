@@ -47,7 +47,7 @@ use crate::note::{Accepted, Addressee, DeliveredNote, Delivery, Note, NoteInbox,
 const POLL: Duration = Duration::from_millis(20);
 
 /// How much of the live turn the engine's own sink had observed: the tool events
-/// and the agent's own message text, in order.
+/// and the worker's own message text, in order.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct Observed {
     pub(crate) tools: usize,

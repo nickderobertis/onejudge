@@ -20,21 +20,23 @@ use oneharness_core::io::run::RunRequest;
 
 /// Everything one `oneharness run` invocation needs, independent of *how* it runs.
 ///
-/// The agent side and the judge/simulated-user side are the same shape with
-/// different fields set — the agent carries `system` and asks for `events`, the
-/// judge side carries `config` — so one type describes both and neither can grow a
-/// flag the other's rendering has never seen.
+/// The worker side and the judge/simulated-user side are the same shape with
+/// different fields set — the worker carries `system` and asks for `events`, each
+/// side carries its own `config` — so one type describes both and neither can
+/// grow a flag the other's rendering has never seen.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct TurnSpec {
-    /// The system prompt (the skill's instructions). Agent side only.
+    /// The system prompt (the skill's instructions). Worker side only.
     pub(crate) system: Option<String>,
     /// The working directory the harness runs in, and where oneharness starts its
     /// own project-config discovery.
     pub(crate) cwd: Option<String>,
     /// The oneharness config files this turn layers, earliest first: each later
     /// file overrides the ones before it, field by field, and an empty list is
-    /// oneharness's own discovery. Judge side only — the agent side uses
-    /// oneharness's discovered default.
+    /// oneharness's own discovery. Both sides: the judge side's config list, and
+    /// on the worker side the worker config alone — or nothing, leaving the
+    /// worker to discovery, when none was given. onejudge's history default is
+    /// layered beneath either when the turn runs.
     pub(crate) config: Vec<PathBuf>,
     /// Harness ids whose provider process oneharness replaces with its own
     /// deterministic `MOCK_*`-scripted responder. Empty for an ordinary turn; see
@@ -48,7 +50,7 @@ pub(crate) struct TurnSpec {
     /// turn, role and judge it belongs to — so `oneharness history watch --label
     /// session=<session>` selects one onejudge run's harness activity.
     pub(crate) labels: BTreeMap<String, String>,
-    /// Ask for normalized tool events. Agent side only.
+    /// Ask for normalized tool events. Worker side only.
     pub(crate) events: bool,
     /// Publish those events as they occur rather than only on the finished report.
     pub(crate) stream: bool,

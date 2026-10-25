@@ -4,13 +4,13 @@ The same engine that *tests* a skill can *drive real work*: point it at a harnes
 hand it a task, and let an LLM-driven **simulated user act as a supervisor** that
 keeps the harness going — pushing back, asking for verification, re-prompting —
 until a `done_when` condition holds or `max_turns` is hit. One supervisor harness
-invocation after each ordinary nonterminal agent turn decides completion and, if
+invocation after each ordinary nonterminal worker turn decides completion and, if
 needed, returns the exact next user message. Its prompt contains compact
-normalized tool summaries rather than raw dumps. Agent-side calls are recorded;
+normalized tool summaries rather than raw dumps. Worker-side calls are recorded;
 the worktree-inheriting judge may inspect full events on demand with `oneharness
 history show <session>-skill --project <worktree> --format text`. Stateless final
 boolean/numeric eval calls remain separate. The simulated reviewer
-catches "I'm done" claims that aren't and steers the agent to finish, which is a
+catches "I'm done" claims that aren't and steers the worker to finish, which is a
 practical way to complete longer tasks and get higher accuracy on harder ones than
 a single-shot prompt.
 
@@ -49,8 +49,9 @@ onejudge schema                          # print the annotated config
 onejudge --help
 ```
 
-**Harness/model selection lives in oneharness's config, not onejudge.** The agent
-side runs under oneharness's discovered `oneharness.toml`, and the judge /
+**Harness/model selection lives in oneharness's config, not onejudge.** The worker
+side runs under oneharness's discovered `oneharness.toml` — or, when
+`provider.worker_config` names one, under exactly that file — and the judge /
 simulated-user side runs under a separately-named config (`provider.judge_config`,
 default `oneharness.judge.toml`, passed as `oneharness run --config <path>`).
 `onejudge init` scaffolds all three by shelling out to `oneharness init` (needs
@@ -67,6 +68,7 @@ file, which beats the built-in default**:
 | flag | `ONEJUDGE_*` env | overrides |
 |------|------------------|-----------|
 | `--judge-config` | `ONEJUDGE_JUDGE_CONFIG` | the judge/simulated-user oneharness `--config` file |
+| `--worker-config` | `ONEJUDGE_WORKER_CONFIG` | `worker_config` on the provider that runs the worker side — the top-level `oneharness` provider or a `split`'s `oneharness` `skill:`; refused, naming the flag, on any other |
 | `--skill` | `ONEJUDGE_SKILL` | a skill directory (with `SKILL.md`) whose body seeds the system prompt |
 | `--system-prompt` | `ONEJUDGE_SYSTEM_PROMPT` | extra system-prompt text (prepended to the skill body) |
 | `--task` (`-` = stdin) | `ONEJUDGE_TASK` | the task (the env value is always literal — no stdin) |
@@ -101,7 +103,7 @@ than by the prompt's first words:
 
 | party | history name | a panel of more than one judge |
 |---|---|---|
-| the agent | `<base>-skill` | — |
+| the worker | `<base>-skill` | — |
 | the supervisor (each per-turn decision) | `<base>-user` | `<base>-user-<label>` |
 | an eval verdict (boolean or numeric) | `<base>-judge` | `<base>-judge-<label>` |
 | the assessment | `<base>-assess` | `<base>-assess-<label>` |
@@ -133,7 +135,7 @@ the contract.
   (completed / hit the turn cap / settled — see below), completion check, usage,
   eval verdicts and assessment. The worker's events are drawn by oneharness's own
   renderer (`oneharness_core::domain::render::render_event`), so a command, a
-  file change, the agent's text (`› …`) and its reasoning (`(thinking) …`) read
+  file change, the worker's text (`› …`) and its reasoning (`(thinking) …`) read
   exactly as `oneharness run --stream --format text` prints them; each call is
   drawn once. A judge's tool events go through the same renderer, prefixed with
   its label. For example:
@@ -208,7 +210,7 @@ so `oneharness history watch --label session=<session>` selects one run's
 harness activity without onejudge.
 
 Every judged run reports, under `telemetry.attribution`, which harness identities
-each invocation attempted, on which **side** (agent vs judge), which one ran, and
+each invocation attempted, on which **side** (the worker, recorded as `agent`, vs the judge), which one ran, and
 which a fallback chain routed around and why — so a failure is attributable to a
 side and an identity without parsing a message.
 
@@ -230,7 +232,7 @@ exits `2`.
 Completion is decided by **re-judging `done_when` against the final transcript**
 (the loop's own mid-run check can be preempted by the turn cap), so the exit code
 reflects whether the task actually finished. Without a `done_when`, a run is
-"completed" when the loop ended before the cap (the agent declared done, the user
+"completed" when the loop ended before the cap (the worker declared done, the user
 stopped, or a single-turn run answered once) — with one exception: a **settled**
 run. That is a run whose loop ended on the work it already had: because the
 supervisor judged the work incomplete and then named no next instruction to act on
@@ -251,7 +253,7 @@ Top-level keys:
 
 | key | purpose |
 |-----|---------|
-| `provider` | which backend runs the harness: `kind` is `oneharness` (`bin`, `judge_config`, `instructions`, `events`, `stream`, `control`, `mock_harness`), `command` (`command: [...]`), or `split` (a `skill:` **sub-provider** — distinct from the top-level `skill:` below — plus the judge side as a **list**: `judges: [..]`, one or more entries each with an optional `label`, or `judge:` as the one-element shorthand, and `allow_writable_judges`; see [judges.md](judges.md)). A judge entry may also be `llmlint` (`bin`, `config`, `diff_base`, `args`) — a judge that is one `llmlint` run over the worker's tree, valid nowhere but a judge entry |
+| `provider` | which backend runs the harness: `kind` is `oneharness` (`bin`, `judge_config`, `worker_config`, `instructions`, `events`, `stream`, `control`, `mock_harness`), `command` (`command: [...]`), or `split` (a `skill:` **sub-provider** — distinct from the top-level `skill:` below — plus the judge side as a **list**: `judges: [..]`, one or more entries each with an optional `label`, or `judge:` as the one-element shorthand, and `allow_writable_judges`; see [judges.md](judges.md)). A judge entry may also be `llmlint` (`bin`, `config`, `diff_base`, `args`) — a judge that is one `llmlint` run over the worker's tree, valid nowhere but a judge entry |
 | `skill` | a skill directory (containing `SKILL.md`) whose body seeds the system prompt, resolved relative to the config file; optional |
 | `system_prompt` | extra system-prompt text; used alone, or prepended before a `skill` body when both are set; optional |
 | `task` | the task to drive to completion (or supply via `--task`) |
@@ -272,7 +274,7 @@ default) leaves every prompt unchanged; the read-only tool allowlist and the
 | `assessment` | optional prompt for one free-text judgement over the finished transcript and its tool actions |
 
 There is no `harness` / `model` / `judge_model` key: harness and model selection
-moved into oneharness's own config files (`oneharness.toml` for the agent,
+moved into oneharness's own config files (`oneharness.toml` for the worker,
 `provider.judge_config` — default `oneharness.judge.toml` — for the judge side).
 With `judge_config` unset and no `oneharness.judge.toml` in the working
 directory, the judge side runs under oneharness's own discovery (the user file,
@@ -281,10 +283,22 @@ what was an error in 0.15.0, where the missing default file was passed anyway an
 oneharness refused it. When the default file exists it is passed exactly as
 before.
 
+**`provider.worker_config`** pins the worker side the way `judge_config` pins the
+judge side: set, every worker turn runs under exactly that file, taken as given
+(not rebased onto the config file's directory), and nothing is discovered from
+the worktree — no user file and no project `oneharness.toml`, so an unrelated
+repository's config can neither join the worker's routing nor refuse its turn.
+The harness still runs in the worktree. It is valid only on the `kind:
+oneharness` provider that runs the worker side — the top-level provider or a
+`split`'s `skill:` — and refused like any misplaced key under `command`,
+`llmlint`, a top-level `split`, or a judge entry. Unset, the worker side keeps
+oneharness's discovery: the user file, then the project file above it.
+
 History follows the same config layering on both sides: onejudge layers
-`history = true` first, then the side's explicit config or discovered files.
-A side that sets `history = false` writes no history and emits no
-`Observation::HistoryBegun`. When the config says nothing, history stays on.
+`history = true` first, then the side's explicit config (`worker_config` or
+`judge_config`) or discovered files. A side that sets `history = false` writes
+no history and emits no `Observation::HistoryBegun`. When the config says
+nothing, history stays on.
 
 The judge's **permission mode** is its config's too: an evaluator call layers
 onejudge's defaults (`mode = "read-only"`) *under* `judge_config`, so a `mode` set
@@ -298,7 +312,8 @@ is the contract.
 
 The config is validated strictly at the boundary (`deny_unknown_fields`): a typo'd
 key, a missing task, a provider field that does not belong to the chosen `kind`
-(e.g. `bin` or `judge_config` under `kind: command`), a `label` outside a judge
+(e.g. `bin`, `judge_config` or `worker_config` under `kind: command`), a
+`worker_config` on a judge entry, a `label` outside a judge
 entry or one that is malformed or repeated, a panel of several judges with a
 writable one and no `allow_writable_judges`, `judge:` beside `judges:` or an empty
 `judges:`, `kind: llmlint` anywhere but a judge entry, a numeric eval or an
@@ -314,12 +329,13 @@ The CLI can build any of onejudge's backends from `provider.kind`. Every model
 call goes through oneharness:
 
 - **`oneharness`** (default) — shell out to the `oneharness` CLI (0.26.0+) to drive
-  a real harness (Claude Code, Codex, …). The agent side uses the discovered
-  `oneharness.toml`; the judge side uses `judge_config` (`--config`). Set
-  `stream: true` when that binary publishes its agent turn as the
+  a real harness (Claude Code, Codex, …). The worker side uses `worker_config`
+  when set, else the discovered `oneharness.toml`; the judge side uses
+  `judge_config` (`--config`). Set
+  `stream: true` when that binary publishes its worker turn as the
   [streamed protocol](streaming.md), and `control: true` to open the out-of-band
   [turn-control socket](control.md) an `oneharness interrupt` can redirect the
-  agent turn through. See [live-tier.md](live-tier.md).
+  worker turn through. See [live-tier.md](live-tier.md).
 
   `mock_harness: [<id>, …]` runs those harness ids against **oneharness's own
   deterministic `MOCK_*` responder** instead of a paid model — the free way to
@@ -344,7 +360,7 @@ call goes through oneharness:
   and as `--provider`; left out of numeric evals and assessments.
   [judges.md](judges.md#the-llmlint-judge) is the contract.
 - **`split`** — compose a skill-runner with a separate judge side (e.g. drive
-  the agent on one harness, judge on another). The judge side is a **list of
+  the worker on one harness, judge on another). The judge side is a **list of
   judges** — `judges:` — every one run concurrently against each worker turn and
   combined into one attributed answer, each judge's decision recorded on the
   report's `judge_decisions` and printed under its turn in the text format;

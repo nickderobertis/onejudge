@@ -19,7 +19,7 @@
       ]
     },
     "control": {
-      "description": "Where an `oneharness interrupt` process addresses the controllable turn\nthis run's agent side opened (`provider.control: true`), or `null` when\ncontrol was not asked for.\n\nSerialized even when null — unlike the optional fields above — because a\nsupervisor keys on its presence to decide whether it has a lever at all,\nand an absent key would make \"no control\" indistinguishable from a report\nwritten before this field existed. `null` with a `control_unavailable`\nreason beside it is the third case: asked for, and refused.\n\nAlways *written*, but deliberately not *required* by the generated schema:\na reader must keep accepting the reports older onejudge versions wrote, and\nproducing more than the contract demands is what makes an additive field\nadditive. [`never`] is how those two are said at once — it is the skip\npredicate that never skips, and its presence is what tells serde's schema\nderive the key may be absent from a document.",
+      "description": "Where an `oneharness interrupt` process addresses the controllable turn\nthis run's worker side opened (`provider.control: true`), or `null` when\ncontrol was not asked for.\n\nSerialized even when null — unlike the optional fields above — because a\nsupervisor keys on its presence to decide whether it has a lever at all,\nand an absent key would make \"no control\" indistinguishable from a report\nwritten before this field existed. `null` with a `control_unavailable`\nreason beside it is the third case: asked for, and refused.\n\nAlways *written*, but deliberately not *required* by the generated schema:\na reader must keep accepting the reports older onejudge versions wrote, and\nproducing more than the contract demands is what makes an additive field\nadditive. [`never`] is how those two are said at once — it is the skip\npredicate that never skips, and its presence is what tells serde's schema\nderive the key may be absent from a document.",
       "anyOf": [
         {
           "$ref": "#/$defs/ControlAddress"
@@ -58,7 +58,7 @@
       "minimum": 0
     },
     "settled_reason": {
-      "description": "Why the run ended *without* a completion decision, when it ended because the\nsupervisor judged the work incomplete and then named no next instruction —\neven asked again.\n\nAbsent on every other run, so its presence is the one signal that separates\n\"the agent could not do it\" from \"the supervisor had nothing to say\". The\ntranscript, verdicts, and usage beside it are the work the run really did:\nthis settles a run, it does not fail one.",
+      "description": "Why the run ended *without* a completion decision, when it ended because the\nsupervisor judged the work incomplete and then named no next instruction —\neven asked again.\n\nAbsent on every other run, so its presence is the one signal that separates\n\"the worker could not do it\" from \"the supervisor had nothing to say\". The\ntranscript, verdicts, and usage beside it are the work the run really did:\nthis settles a run, it does not fail one.",
       "type": [
         "string",
         "null"
@@ -129,7 +129,7 @@
   ],
   "$defs": {
     "CandidateAttempt": {
-      "description": "One candidate identity oneharness attempted for a single invocation — the\nharness (and variant/model) it tried, and what came of it.\n\nUnder `run_mode = \"fallback\"` oneharness attempts candidates in priority order\nand stops at the first that runs the task, so an invocation can have several of\nthese: the ones it fell through, then the one that ran. This is the typed form\nof oneharness's per-candidate record — the thing that lets a consumer attribute\na failure to a *side* (agent vs judge) and an *identity* (which harness, which\naccount) instead of grepping a message.",
+      "description": "One candidate identity oneharness attempted for a single invocation — the\nharness (and variant/model) it tried, and what came of it.\n\nUnder `run_mode = \"fallback\"` oneharness attempts candidates in priority order\nand stops at the first that runs the task, so an invocation can have several of\nthese: the ones it fell through, then the one that ran. This is the typed form\nof oneharness's per-candidate record — the thing that lets a consumer attribute\na failure to a *side* (the worker, recorded as `agent`, vs the judge) and an *identity* (which harness, which\naccount) instead of grepping a message.",
       "type": "object",
       "properties": {
         "available": {
@@ -239,7 +239,7 @@
       ]
     },
     "ControlAddress": {
-      "description": "Where an `oneharness interrupt` process addresses the controllable turn\nonejudge's agent side opened.\n\nThe three fields are the whole of `interrupt`'s addressing:\n\n```text\noneharness interrupt --session <session> --session-dir <session_dir> \\\n                     --cwd <cwd> --input \"<what to do instead>\"\n```\n\nThey are read back from the oneharness run report rather than re-derived from\nwhat onejudge asked for, so the address names the session the run actually\nbound — including in a fallback chain, where the handle is bound to the\ncandidate that *ran*, not the first one tried.",
+      "description": "Where an `oneharness interrupt` process addresses the controllable turn\nonejudge's worker side opened.\n\nThe three fields are the whole of `interrupt`'s addressing:\n\n```text\noneharness interrupt --session <session> --session-dir <session_dir> \\\n                     --cwd <cwd> --input \"<what to do instead>\"\n```\n\nThey are read back from the oneharness run report rather than re-derived from\nwhat onejudge asked for, so the address names the session the run actually\nbound — including in a fallback chain, where the handle is bound to the\ncandidate that *ran*, not the first one tried.",
       "type": "object",
       "properties": {
         "cwd": {
@@ -359,7 +359,7 @@
           "minimum": 0
         },
         "posture": {
-          "description": "The permission posture this invocation ran under, for an evaluator\njudge-side call; absent for the agent's turns and for a judge-side call\nwith no worktree, whose mode onejudge does not set.",
+          "description": "The permission posture this invocation ran under, for an evaluator\njudge-side call; absent for the worker's turns and for a judge-side call\nwith no worktree, whose mode onejudge does not set.",
           "anyOf": [
             {
               "$ref": "#/$defs/JudgePosture"
@@ -734,11 +734,11 @@
       ]
     },
     "Telemetry": {
-      "description": "Timing, usage, and native linkage for the complete agent+judge run.",
+      "description": "Timing, usage, and native linkage for the complete worker+judge run.",
       "type": "object",
       "properties": {
         "agent": {
-          "description": "Agent-side measurements.",
+          "description": "Worker-side measurements, under the `agent` key, which denotes the worker\nside.",
           "$ref": "#/$defs/PartyTelemetry"
         },
         "attribution": {
@@ -785,7 +785,7 @@
       "description": "The side of the evaluated conversation that owns an invocation.",
       "oneOf": [
         {
-          "description": "The skill/agent under evaluation.",
+          "description": "The worker side: the skill under evaluation. Serialized `agent`, a name\nkept for the consumers that already read it.",
           "type": "string",
           "const": "agent"
         },

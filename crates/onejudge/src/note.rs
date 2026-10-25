@@ -22,7 +22,8 @@
 //!
 //! # Where the shapes are declared
 //!
-//! Here. onejudge owns the note contract — the message `agent.note@1`, published
+//! Here. onejudge owns the note contract — the message `agent.note@1` (its
+//! `agent.` prefix is the message-bus namespace, not the worker party), published
 //! as the schema bundle `schemas/note.json` so a client in another language
 //! validates against it — and every item below is this crate's own declaration.
 //! What it does *not* own is the channel: [`Notes`] and [`NoteInbox`] are the
@@ -141,6 +142,9 @@ impl Addressee {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum Party {
+    // The doc line below reads "agent" for the worker because it is published
+    // verbatim in the protocol-8 judge-seat frame bundle, which changes only with
+    // a protocol version bump.
     /// The agent under test.
     Worker,
     /// The simulated user / completion supervisor.

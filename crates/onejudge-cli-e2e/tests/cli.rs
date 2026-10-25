@@ -120,7 +120,7 @@ fn plan_from(body: &str) -> onejudge::cli::RunSummary {
 
 #[test]
 fn completed_run_with_passing_evals_exits_zero() {
-    // The agent commits on turn 1; the echo judge sees the `git commit` event in
+    // The worker commits on turn 1; the echo judge sees the `git commit` event in
     // the transcript, so `done_when` holds and the loop ends after one turn.
     let body = "\
 task: please commit
@@ -338,7 +338,7 @@ system_prompt: Be warm.
 #[test]
 fn oneharness_provider_kind_drives_the_loop() {
     // The `oneharness` provider kind, pointed at the fake-oneharness double, driven
-    // in Text format so the observing dispatch arm runs. The agent's reply
+    // in Text format so the observing dispatch arm runs. The worker's reply
     // satisfies `done_when` on turn one.
     let bin = serde_json::to_string(&fake_oneharness_bin()).unwrap();
     let yaml = format!(
@@ -377,7 +377,7 @@ fn mock_harness_config_reaches_the_spawned_oneharness() {
 
 #[test]
 fn split_provider_kind_composes_two_backends() {
-    // `split`: the agent runs on the fake oneharness, the judge / simulated user on
+    // `split`: the worker runs on the fake oneharness, the judge / simulated user on
     // the echo command double. No `done_when`, so the loop runs to the cap — which
     // exercises the split's respond (skill) + simulate_user (judge) dispatch.
     let oh = serde_json::to_string(&fake_oneharness_bin()).unwrap();
@@ -1715,7 +1715,7 @@ fn binary_stream_reports_a_failure_as_json_on_stderr_leaving_the_protocol_intact
 
 // A plan's spawn hook has to reach both children of a `split` (`docs/spawn-hook.md`).
 
-/// A two-party plan: the agent's turns and the judge's each run on their own
+/// A two-party plan: the worker's turns and the judge's each run on their own
 /// `oneharness` backend (the fake double), which is the shape that leaks — one
 /// hook has to reach BOTH sides.
 fn split_plan_yaml(body: &str) -> String {
@@ -1871,7 +1871,7 @@ fn a_plan_driven_embedders_group_reaps_the_whole_two_party_harness_tree_on_a_kil
 
     let hook = std::sync::Arc::new(OwnedProcessGroups::default());
     let installed: onejudge::SharedSpawnHook = hook.clone();
-    // The agent side leaks a stand-in whose `oneharness` then exits; the judge
+    // The worker side leaks a stand-in whose `oneharness` then exits; the judge
     // side (steered through the task, which the supervisor prompt inlines) leaks
     // its own and then holds, so the run is still in flight when the embedder
     // cancels.
@@ -2047,7 +2047,7 @@ fn an_oneharness_config_that_names_no_bin_runs_the_turn_in_process() {
     assert_eq!(exit_code(&summary), 0);
 }
 
-/// The agent side's `oneharness.toml` written two ways over the same fake-harness
+/// The worker side's `oneharness.toml` written two ways over the same fake-harness
 /// double: `flat` states the harness selection itself, while the other states only
 /// `extends` and its history directory, leaving the harness list and the pinned
 /// `bin` to a parent file it names.
@@ -2082,7 +2082,7 @@ fn agent_config_project(name: &str, flat: bool) -> std::path::PathBuf {
 }
 
 /// Spawn the built binary over an in-process, streaming `oneharness` provider whose
-/// agent side runs from `dir`, returning its `--stream` event lines and report.
+/// worker side runs from `dir`, returning its `--stream` event lines and report.
 fn stream_agent_config_project(dir: &Path) -> (Vec<serde_json::Value>, onejudge::Report) {
     let config = dir.join("onejudge.yaml");
     std::fs::write(
@@ -2128,7 +2128,7 @@ fn stream_agent_config_project(dir: &Path) -> (Vec<serde_json::Value>, onejudge:
 
 #[test]
 fn an_agent_config_that_extends_a_parent_runs_under_the_harness_only_the_parent_names() {
-    // The linked `oneharness-core` resolves `extends` itself, so the agent's turn
+    // The linked `oneharness-core` resolves `extends` itself, so the worker's turn
     // runs under the fake harness pinned only in the parent — no harness list, no
     // `bin` in the file onejudge's run discovers. Against a core that predates
     // `extends` the child is an unknown-key config error and the run fails.
@@ -2319,7 +2319,7 @@ user:
 fn binary_run_json_reports_each_judges_decision_and_labels_the_judge_side() {
     // The report a real run writes: `judge_decisions` one entry per supervisor
     // turn with each judge attributed, and the panel label riding every judge-side
-    // process record — absent from the agent side's.
+    // process record — absent from the worker side's.
     let config = Path::new(env!("CARGO_TARGET_TMPDIR")).join("panel.yaml");
     std::fs::write(&config, reviewer_and_lint(TWO_TURN_BODY)).unwrap();
     let output = Command::new(onejudge_bin())
@@ -2590,7 +2590,7 @@ fn a_plans_spawn_hook_reaches_every_judge_of_the_panel() {
     let mut sink = |_: &str| {};
     let summary = run_plan(plan, Format::Json, &mut sink).unwrap();
     let seen = hook.seen.lock().unwrap().clone();
-    // Every process of the run — the agent's and each judge's — was offered and
+    // Every process of the run — the worker's and each judge's — was offered and
     // grouped, and the report names each judge's beside its group.
     assert_eq!(summary.report.processes.len(), seen.len());
     // Records are collected judge by judge (each judge keeps its own spawner), so
@@ -2807,7 +2807,7 @@ fn llmlint_labels(turn: usize) -> std::collections::BTreeMap<String, String> {
 /// The argv the contract spells for one `lint` run deciding on `turn`, with
 /// every field of the `lint` entry above rendered exactly where the contract
 /// puts it: the labels after `-c` / `--diff` and before the entry's own `args`.
-/// The worktree is `.`: a config with no `skill:` runs the agent in the working
+/// The worktree is `.`: a config with no `skill:` runs the worker in the working
 /// directory.
 fn llmlint_lint_argv(turn: usize) -> Vec<String> {
     let session = format!("session={LLMLINT_SESSION}");
@@ -3424,7 +3424,7 @@ fn a_single_judge_config_runs_exactly_as_the_released_0_8_1_did() {
 fn a_single_judge_controlled_config_runs_as_0_8_1_did_except_the_supervisor_address_it_omitted() {
     // The controlled baseline: the same one-`judge:` split with `control: true` on
     // both sides, captured from 0.8.1. Everything but `supervisor_control` /
-    // `supervisor_control_unavailable` is identical — transcript, usage, the agent's
+    // `supervisor_control_unavailable` is identical — transcript, usage, the worker's
     // `control` address, the judge prompts. Those two now carry the first judge's
     // answer (Contract B); 0.8.1's CLI wrote `null` for every config because
     // `AnyProvider` never forwarded the judge side's answer — a defect against
@@ -3701,7 +3701,7 @@ fn history_names(store: &Path) -> std::collections::BTreeSet<String> {
     .collect()
 }
 
-/// Run the built binary over a project whose agent and judge configs both pin the
+/// Run the built binary over a project whose worker and judge configs both pin the
 /// fake-harness double, under `--session <session>`, recording into a fresh
 /// history store. Returns the names the store holds afterwards.
 fn run_with_judge_history(
@@ -4205,7 +4205,7 @@ fn without_verbatim_prefix(path: std::path::PathBuf) -> std::path::PathBuf {
     }
 }
 
-/// One posture journey's working directory — the run's cwd and so the agent's
+/// One posture journey's working directory — the run's cwd and so the worker's
 /// worktree — and what it ran.
 struct PostureRun {
     dir: std::path::PathBuf,
@@ -4339,7 +4339,7 @@ fn assert_defaults_file(path: &serde_json::Value) {
 }
 
 impl PostureRun {
-    /// A fresh run directory named for `name` and `seam`, holding the agent's
+    /// A fresh run directory named for `name` and `seam`, holding the worker's
     /// own discovered `oneharness.toml` and an empty user-config home.
     fn new(name: &str, seam: Seam) -> Self {
         let dir =
@@ -5577,7 +5577,7 @@ fn text_output_draws_the_workers_events_and_each_judges_through_oneharnesss_rend
         assert!(!stdout.contains('{'), "{seam:?}: no raw JSON:\n{stdout}");
 
         // Only tool activity became a `ToolEvent`: every judge prompt lists the
-        // command alone, never the agent's words or its reasoning.
+        // command alone, never the worker's words or its reasoning.
         for call in outcome.judge_side() {
             let prompt = prompt_of(call);
             let tools: Vec<&str> = prompt
@@ -6026,4 +6026,250 @@ fn binary_started_as_a_sweeper_exits_without_running_its_own_commands() {
         "{stderr}"
     );
     assert!(output.stdout.is_empty());
+}
+
+// --- The worker side's oneharness config ----------------------------------
+
+/// A worktree whose root `oneharness.toml` and whose sandboxed user file each
+/// carry the incident's shape — a variant whose `env_from` names a variable no
+/// process here has, which oneharness refuses — plus a value naming the file,
+/// and a worker config outside it that names itself. The fake harness replies
+/// with what its variant environment held, so the reply says which files the
+/// worker turn ran under. Over both seams: in process, and the released
+/// oneharness CLI shell spawned.
+struct WorkerConfigRun {
+    root: std::path::PathBuf,
+    worktree: std::path::PathBuf,
+}
+
+const WC_VARS: &str = "ONEJUDGE_WC_SHARED,ONEJUDGE_WC_OWN,ONEJUDGE_WC_INDIRECT";
+const WC_UNSET: &str = "ONEJUDGE_WC_NEVER_SET";
+
+impl WorkerConfigRun {
+    fn new(name: &str) -> Self {
+        let root = scratch_path(name);
+        let _ = std::fs::remove_dir_all(&root);
+        let worktree = root.join("worktree");
+        std::fs::create_dir_all(&worktree).unwrap();
+        std::fs::write(
+            worktree.join("SKILL.md"),
+            format!("[[report-env:{WC_VARS}]]"),
+        )
+        .unwrap();
+        let run = Self { root, worktree };
+        run.harness_file(&run.worktree.join("oneharness.toml"), "project", true);
+        run.harness_file(
+            &run.root.join("config-home/oneharness/config.toml"),
+            "user",
+            true,
+        );
+        run
+    }
+
+    /// One config selecting the fake harness's `pinned` variant, which names
+    /// `name`, and maps an unset parent variable when `poisoned`.
+    fn harness_file(&self, path: &Path, name: &str, poisoned: bool) -> std::path::PathBuf {
+        let mut text = format!(
+            "harnesses = [\"claude-code:pinned\"]\nhistory_dir = {:?}\n\n\
+             [harness.claude-code]\nbin = {:?}\n\
+             [harness.claude-code.variant.pinned.env]\n\
+             ONEJUDGE_WC_SHARED = \"{name}\"\nONEJUDGE_WC_OWN = \"{name}\"\n",
+            self.root.join("history").display().to_string(),
+            doubles::fake_harness(),
+        );
+        if poisoned {
+            text.push_str(&format!(
+                "[harness.claude-code.variant.pinned.env_from]\nONEJUDGE_WC_INDIRECT = \"{WC_UNSET}\"\n"
+            ));
+        }
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+        path.to_path_buf()
+    }
+
+    /// A worker config outside the worktree, naming itself `name`.
+    fn worker_config(&self, name: &str) -> std::path::PathBuf {
+        self.harness_file(&self.root.join(format!("{name}.toml")), name, false)
+    }
+
+    /// A single-turn `onejudge.yaml` over the worktree's skill, its provider
+    /// `kind: oneharness` with `provider` lines appended.
+    fn config(&self, spawned: bool, provider: &[String]) -> std::path::PathBuf {
+        let mut yaml = String::from("provider:\n  kind: oneharness\n");
+        if spawned {
+            yaml.push_str(&format!(
+                "  bin: {}\n",
+                serde_json::to_string(doubles::oneharness_cli()).unwrap()
+            ));
+        }
+        for line in provider {
+            yaml.push_str(&format!("  {line}\n"));
+        }
+        yaml.push_str(&format!(
+            "skill: {}\ntask: report\n",
+            serde_json::to_string(&self.worktree.display().to_string()).unwrap()
+        ));
+        let path = self.root.join(format!("onejudge-{spawned}.yaml"));
+        std::fs::write(&path, yaml).unwrap();
+        path
+    }
+
+    /// `onejudge run <config> --format json <args>` with `env`, the host's
+    /// oneharness overrides removed and its user file sandboxed away.
+    fn run(&self, config: &Path, args: &[&str], env: &[(&str, &Path)]) -> std::process::Output {
+        let mut command = Command::new(onejudge_bin());
+        command
+            .args(["run", config.to_str().unwrap(), "--format", "json"])
+            .args(args)
+            .current_dir(&self.root)
+            .env("XDG_CONFIG_HOME", self.root.join("config-home"))
+            .env("APPDATA", self.root.join("config-home"))
+            .env("HOME", self.root.join("home"))
+            .env_remove(WC_UNSET);
+        for (key, _) in std::env::vars()
+            .filter(|(key, _)| key.starts_with("ONEHARNESS_") || key.starts_with("ONEJUDGE_"))
+        {
+            command.env_remove(key);
+        }
+        for (key, value) in env {
+            command.env(key, value);
+        }
+        command.output().unwrap()
+    }
+
+    /// The worker's reply from a run that must have completed.
+    fn reply(output: &std::process::Output) -> String {
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        report["transcript"]["messages"][1]["content"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    }
+}
+
+fn wc_reply(name: &str) -> String {
+    format!("ONEJUDGE_WC_SHARED={name} ONEJUDGE_WC_OWN={name} ONEJUDGE_WC_INDIRECT=unset")
+}
+
+#[test]
+fn binary_runs_the_worker_side_under_provider_worker_config_on_both_seams() {
+    for spawned in [false, true] {
+        let run = WorkerConfigRun::new(&format!("cli-wc-yaml-{spawned}"));
+        let worker = run.worker_config("worker");
+        let config = run.config(
+            spawned,
+            &[format!(
+                "worker_config: {}",
+                serde_json::to_string(&worker.display().to_string()).unwrap()
+            )],
+        );
+        // The worker config alone: neither the worktree's file nor the user file,
+        // either of which would have refused the turn over its indirection.
+        assert_eq!(
+            WorkerConfigRun::reply(&run.run(&config, &[], &[])),
+            wc_reply("worker"),
+            "spawned: {spawned}"
+        );
+
+        // And without it, the discovered files are what refuses the turn.
+        let bare = run.config(spawned, &[]);
+        let output = run.run(&bare, &[], &[]);
+        assert_ne!(output.status.code(), Some(0), "spawned: {spawned}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains(WC_UNSET), "spawned: {spawned}: {stderr}");
+    }
+}
+
+#[test]
+fn binary_worker_config_flag_and_env_pin_the_worker_side_flag_over_env_over_file() {
+    for spawned in [false, true] {
+        let run = WorkerConfigRun::new(&format!("cli-wc-override-{spawned}"));
+        let file = run.worker_config("file");
+        let env = run.worker_config("env");
+        let flag = run.worker_config("flag");
+        let bare = run.config(spawned, &[]);
+        let flag_arg = flag.to_str().unwrap();
+
+        let by_flag = run.run(&bare, &["--worker-config", flag_arg], &[]);
+        assert_eq!(WorkerConfigRun::reply(&by_flag), wc_reply("flag"));
+        let by_env = run.run(&bare, &[], &[("ONEJUDGE_WORKER_CONFIG", &env)]);
+        assert_eq!(WorkerConfigRun::reply(&by_env), wc_reply("env"));
+
+        // The variable beats the file, and the flag beats them both.
+        let filed = run.config(
+            spawned,
+            &[format!(
+                "worker_config: {}",
+                serde_json::to_string(&file.display().to_string()).unwrap()
+            )],
+        );
+        let over_file = run.run(&filed, &[], &[("ONEJUDGE_WORKER_CONFIG", &env)]);
+        assert_eq!(WorkerConfigRun::reply(&over_file), wc_reply("env"));
+        let over_env = run.run(
+            &filed,
+            &["--worker-config", flag_arg],
+            &[("ONEJUDGE_WORKER_CONFIG", &env)],
+        );
+        assert_eq!(
+            WorkerConfigRun::reply(&over_env),
+            wc_reply("flag"),
+            "spawned: {spawned}"
+        );
+    }
+}
+
+#[test]
+fn binary_refuses_a_misplaced_worker_config_before_any_turn() {
+    let run = WorkerConfigRun::new("cli-wc-misplaced");
+    let worker = run.worker_config("worker");
+    // The command provider records every turn it is handed; none may reach it.
+    let record = run.root.join("turns.jsonl");
+    let command = |extra: &str| {
+        let path = run.root.join("command.yaml");
+        std::fs::write(
+            &path,
+            format!(
+                "provider:\n  kind: command\n  command: [{}]\n{extra}task: {}\n",
+                serde_json::to_string(&echo_bin()).unwrap(),
+                serde_json::to_string(&format!("report [[record:{}]]", record.display())).unwrap(),
+            ),
+        )
+        .unwrap();
+        path
+    };
+    let in_yaml = command(&format!(
+        "  worker_config: {}\n",
+        serde_json::to_string(&worker.display().to_string()).unwrap()
+    ));
+    let output = run.run(&in_yaml, &[], &[]);
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("`worker_config` is not valid under provider kind `command`"),
+        "{stderr}"
+    );
+
+    // Through the flag or the variable it is refused the same way, naming them.
+    let bare = command("");
+    for output in [
+        run.run(&bare, &["--worker-config", worker.to_str().unwrap()], &[]),
+        run.run(&bare, &[], &[("ONEJUDGE_WORKER_CONFIG", &worker)]),
+    ] {
+        assert_eq!(output.status.code(), Some(2));
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("--worker-config") && stderr.contains("ONEJUDGE_WORKER_CONFIG"),
+            "{stderr}"
+        );
+    }
+    assert!(!record.exists(), "no turn reached the provider");
+    // The same config with nothing misplaced does reach it.
+    assert_eq!(run.run(&bare, &[], &[]).status.code(), Some(0));
+    assert!(record.exists(), "the record is how a turn would show");
 }

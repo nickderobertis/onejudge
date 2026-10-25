@@ -5,6 +5,7 @@ Config {
             "/home/user/.onevcs/workspaces/github.com-nickderobertis-onejudge-d92c2bbfcde5/pool/1/worktree/target/debug/onejudge-fake-oneharness",
         ),
         judge_config: None,
+        worker_config: None,
         instructions: None,
         events: None,
         allow_writable_judges: None,

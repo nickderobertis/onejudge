@@ -106,7 +106,7 @@ fn unified_supervisor_is_one_subprocess_invocation_per_nonterminal_turn() {
 fn a_no_op_supervisor_loop_settles_the_run_on_the_work_it_has() {
     // The no-op half of the supervisor-loop defect, and the one that cost whole
     // turn budgets: the supervisor's answer is a perfectly valid `continue` every
-    // time, so nothing here is malformed — but it asks for nothing, the agent does
+    // time, so nothing here is malformed — but it asks for nothing, the worker does
     // nothing, and the pair repeats. One measured dispatch was re-prompted 137
     // times to its cap this way, delivering nothing after the work was already
     // done.
@@ -231,7 +231,7 @@ fn a_supervisor_with_no_next_instruction_settles_the_run_instead_of_killing_it()
         onejudge::SUPERVISOR_REASK_LIMIT + 1,
         "the supervisor is re-asked a bounded number of times"
     );
-    // A blank `message` never reaches the agent as a user turn.
+    // A blank `message` never reaches the worker as a user turn.
     assert!(outcome
         .transcript
         .messages
@@ -2469,7 +2469,7 @@ fn outcome_bundles_into_a_versioned_report() {
 // onejudge reads oneharness's report through oneharness's own types: every one of
 // them is a report whose *first* result is not the turn.
 
-/// The attribution the agent side recorded for its first turn.
+/// The attribution the worker side recorded for its first turn.
 fn agent_attribution(outcome: &onejudge::Outcome) -> onejudge::HarnessAttribution {
     outcome
         .telemetry
@@ -2802,7 +2802,7 @@ impl onejudge::SpawnHook for RecordingHook {
     }
 }
 
-/// The two-party conversation both hook journeys drive: one agent turn on the
+/// The two-party conversation both hook journeys drive: one worker turn on the
 /// fake oneharness, then one supervisor turn on the echo command provider.
 fn two_party_conversation() -> Conversation {
     Conversation::multi_turn(
@@ -2815,7 +2815,7 @@ fn two_party_conversation() -> Conversation {
 #[test]
 fn a_spawn_hook_is_offered_every_process_both_parties_spawn() {
     // One embedder-owned group has to span BOTH backends of a split run, so the
-    // same hook is installed on each and every spawn — agent and judge, oneharness
+    // same hook is installed on each and every spawn — worker and judge, oneharness
     // and command provider — passes through it.
     let hook = std::sync::Arc::new(RecordingHook {
         label: Some("job:run-1"),
@@ -2907,7 +2907,7 @@ fn an_embedder_group_reaps_the_whole_two_party_harness_tree_on_a_kill_cancel() {
     // the only available `killpg` would take the test process with it. That is why
     // this cannot be written against a build without the seam.
     //
-    // The agent's harness stand-in is orphaned deliberately (its `oneharness` has
+    // The worker's harness stand-in is orphaned deliberately (its `oneharness` has
     // already exited and been reaped) and the judge's `oneharness` is still in
     // flight, so the kill has to reach both a live child and a descendant whose
     // parent is gone.
@@ -3218,10 +3218,10 @@ fn a_control_ask_a_harness_cannot_honor_degrades_instead_of_failing_the_run() {
 }
 
 /// A two-turn run under `--control`, with each party's control markers on the text
-/// that party steers by: the agent's on `--system` (the skill instructions), the
+/// that party steers by: the worker's on `--system` (the skill instructions), the
 /// supervisor's on the persona the judge prompt inlines. That separation is what
 /// lets one run drive both sockets — and what makes a judge-side answer a judge-side
-/// answer rather than the agent's read twice.
+/// answer rather than the worker's read twice.
 #[cfg(unix)]
 fn two_party_controlled_run(
     agent_markers: &str,
@@ -3247,7 +3247,7 @@ fn two_party_controlled_run(
 fn the_reported_supervisor_address_redirects_the_judges_live_turn() {
     // The judge side's own socket, proven the only way an address can be: dial it
     // with oneharness's own `interrupt` code and watch the correction land on the
-    // stdin the judge harness is reading. A build that reported the agent's address
+    // stdin the judge harness is reading. A build that reported the worker's address
     // here would redirect the wrong party's turn.
     let agent_store = support::control_store("ctl-two-party-agent");
     let judge_store = support::control_store("ctl-two-party-judge");
@@ -3268,7 +3268,7 @@ fn the_reported_supervisor_address_redirects_the_judges_live_turn() {
         .clone()
         .expect("a controlled run reports where its SUPERVISOR turn is addressed");
     assert!(report.supervisor_control_unavailable.is_none());
-    // The engine mints `<base>-user` for the judge and `<base>-skill` for the agent,
+    // The engine mints `<base>-user` for the judge and `<base>-skill` for the worker,
     // so the two are different sockets under different stores — which is the whole
     // answer to "giving the judge a socket would put two runs on one address".
     assert_eq!(address.session, "run-42-user");
@@ -3320,8 +3320,8 @@ fn the_reported_supervisor_address_redirects_the_judges_live_turn() {
 fn a_judge_side_control_refusal_degrades_and_leaves_the_agents_lever_alone() {
     // The judge harness declares no control mechanism, so oneharness refuses the
     // flag before spawning anything. The supervisor turn is retried without it and
-    // the run goes on — and, the point of two fields rather than one: the agent's
-    // address survives a refusal that was never about the agent.
+    // the run goes on — and, the point of two fields rather than one: the worker's
+    // address survives a refusal that was never about the worker.
     let agent_store = support::control_store("ctl-judge-refused-agent");
     let judge_store = support::control_store("ctl-judge-refused-judge");
 
@@ -4524,7 +4524,7 @@ fn an_observing_multi_turn_run_reports_both_parties_without_disturbing_the_strea
         "{seen:#?}"
     );
 
-    // The supervisor answers the agent's reply, and its own words become the next
+    // The supervisor answers the worker's reply, and its own words become the next
     // assistant turn's instruction — the chain an operator reads the dispatch by.
     let Seen::Said { text: reply, .. } = &seen[3] else {
         unreachable!()
@@ -4648,9 +4648,9 @@ fn breaking_an_observation_stops_the_run_and_delivers_nothing_after_it() {
 #[test]
 fn breaking_a_supervisor_observation_keeps_its_instruction_out_of_the_transcript() {
     // The supervisor's half of the same contract, and the half an operator reaches
-    // first: they read the agent's reply, decide the dispatch has gone wrong, and
+    // first: they read the worker's reply, decide the dispatch has gone wrong, and
     // stop it — which lands on one of the supervisor's own three observations, not
-    // the agent's. Each case below counts the supervisor *processes* the run
+    // the worker's. Each case below counts the supervisor *processes* the run
     // actually spawned, so "never asked" is measured at the subprocess boundary
     // rather than inferred.
     let engine_provider = echo();
@@ -4678,7 +4678,7 @@ fn breaking_a_supervisor_observation_keeps_its_instruction_out_of_the_transcript
             })
             .unwrap();
         assert!(outcome.stopped_early);
-        // Whichever observation stopped it, the agent's one finished turn is kept
+        // Whichever observation stopped it, the worker's one finished turn is kept
         // and the supervisor's next instruction never joins the transcript — so the
         // run settles on the work already done, never on a half-delivered ask.
         assert_eq!(outcome.transcript.assistant_turns(), 1);
@@ -4693,7 +4693,7 @@ fn breaking_a_supervisor_observation_keeps_its_instruction_out_of_the_transcript
     };
 
     // Breaking on the supervisor's *opening* stops before it is ever asked, so the
-    // run costs nothing beyond the agent turn already paid for.
+    // run costs nothing beyond the worker turn already paid for.
     let opening = scratch_path("observing-break-supervisor-opening");
     let (seen, outcome, calls) = run_until(
         |s| {

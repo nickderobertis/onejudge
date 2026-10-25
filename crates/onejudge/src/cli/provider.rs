@@ -32,13 +32,13 @@ pub enum AnyProvider {
     /// A custom JSON-lines command backend.
     Command(CommandProvider),
     /// A judge whose verdict is one `llmlint` run over the worker's tree. Only
-    /// ever built as a judge of a [`AnyProvider::Split`] panel; every agent-side
+    /// ever built as a judge of a [`AnyProvider::Split`] panel; every worker-side
     /// call on it is [`crate::Error::Invalid`].
     Llmlint(LlmlintProvider),
     /// A composed skill-runner + judge-panel backend, dispatched like
     /// [`crate::SplitProvider`].
     Split {
-        /// Runs the agent's turns.
+        /// Runs the worker's turns.
         skill: Box<AnyProvider>,
         /// The judges — one or more, run concurrently and combined — that judge
         /// and play the simulated user.
@@ -56,6 +56,7 @@ impl AnyProvider {
             ProviderSpec::Oneharness {
                 bin,
                 judge_config,
+                worker_config,
                 instructions,
                 events,
                 stream,
@@ -74,6 +75,9 @@ impl AnyProvider {
                 // (naming a mock harness only falls back to `oneharness` on PATH).
                 for id in mock_harness {
                     provider = provider.with_mock_harness(id);
+                }
+                if let Some(config) = worker_config {
+                    provider = provider.with_worker_config(config);
                 }
                 provider = match crate::oneharness::cli_judge_config(judge_config.as_deref()) {
                     Some(config) => provider.with_judge_config(config),
@@ -502,6 +506,7 @@ mod tests {
         let oh = AnyProvider::build(&ProviderSpec::Oneharness {
             bin: Some("oneharness".into()),
             judge_config: Some("oneharness.judge.toml".into()),
+            worker_config: None,
             instructions: None,
             events: None,
             stream: false,
@@ -530,6 +535,7 @@ mod tests {
             skill: Box::new(ProviderSpec::Oneharness {
                 bin: Some("oneharness".into()),
                 judge_config: None,
+                worker_config: None,
                 instructions: None,
                 events: None,
                 stream: true,
@@ -548,6 +554,7 @@ mod tests {
                     provider: ProviderSpec::Oneharness {
                         bin: None,
                         judge_config: None,
+                        worker_config: None,
                         instructions: None,
                         events: None,
                         stream: false,

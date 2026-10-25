@@ -7,6 +7,7 @@ Config {
         judge_config: Some(
             "/home/user/.local/state/oneagentgraph/runs/design-doc-1791914083609-3915989/members/worker/oneharness.judge.toml",
         ),
+        worker_config: None,
         instructions: None,
         events: None,
         allow_writable_judges: None,

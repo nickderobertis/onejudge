@@ -1,6 +1,6 @@
 # Out-of-band turn control
 
-A dispatched agent turn runs for many minutes. Until now the only lever anything
+A dispatched worker turn runs for many minutes. Until now the only lever anything
 above onejudge had over one that went the wrong way was to kill it — losing the
 turn, its session, and everything it had learned. A correction written at the
 right moment had to wait for the next dispatch, by which point the worker had
@@ -38,10 +38,10 @@ Or, from the library: `OneharnessProvider::new().with_control(true)`.
 
 The default is `false`, and `false` changes nothing at all — no flag on the argv,
 no socket, no extra process. `true` adds `--control` to **both** parties'
-`oneharness run`: the agent's turn and the supervisor's decision.
+`oneharness run`: the worker's turn and the supervisor's decision.
 
 They are two addresses, not one, because the engine mints two session handles —
-`<base>-skill` for the agent and `<base>-user` for the supervisor — and oneharness
+`<base>-skill` for the worker and `<base>-user` for the supervisor — and oneharness
 derives the socket from the session name, so `<dir>/control/<name>.sock` differs
 per party. That is the answer to the reason the judge side used to be excluded
 ("giving it a socket would put two runs on one address"): it does not, for a caller
@@ -75,7 +75,7 @@ The report gains one nullable block **per party**:
 }
 ```
 
-`control` addresses the **agent's** turn; `supervisor_control` addresses the
+`control` addresses the **worker's** turn; `supervisor_control` addresses the
 **supervisor's** decision. Read the one for the party you mean to redirect: they
 are separately opened and separately refused, so a caller that has one and assumes
 the other holds a lever it does not have.
@@ -124,7 +124,7 @@ A control ask that **could not be honored** is a different fact, and it is
 reported as a different thing: `control` is `null` *and* `control_unavailable`
 carries the reason. `supervisor_control` / `supervisor_control_unavailable` is the
 same pair for the supervisor turn, answered independently — a judge harness with no
-control mechanism leaves the agent's address open and standing. The reason is quoted from oneharness's own refusal wherever
+control mechanism leaves the worker's address open and standing. The reason is quoted from oneharness's own refusal wherever
 there is one, because it names the harness, the run shape, or the control-capable
 alternatives a supervisor would use to route around it:
 
@@ -217,8 +217,8 @@ the supervisor's socket, and additionally asserts the two parties' addresses are
 different sockets under different stores.
 `a_judge_side_control_refusal_degrades_and_leaves_the_agents_lever_alone` drives a
 judge harness that declares no control mechanism: the supervisor turn is retried
-without the flag, the run reaches its cap, and the agent's address survives a
-refusal that was never about the agent.
+without the flag, the run reaches its cap, and the worker's address survives a
+refusal that was never about the worker.
 
 ## onejudge redirects a live turn for its own notes
 
@@ -258,7 +258,7 @@ engine, with only the harness doubled.
 
 A redirect has never delivered *into* a running turn. It aborts the turn and
 reopens the next one on the same session with the message as its prompt. On the
-agent side that is invisible — the worker simply answers the correction. On the
+worker side that is invisible — the worker simply answers the correction. On the
 supervisor side it is load-bearing, because that reopened turn's reply is the one
 `parse_supervisor` reads against a two-shape JSON contract, and what comes back
 answers the correction in prose.

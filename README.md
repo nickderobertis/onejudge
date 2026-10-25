@@ -45,16 +45,16 @@ onejudge run                            # reads ./onejudge.yaml, drives to compl
 ```
 
 `init` shells out to `oneharness init` (needs oneharness **0.26.0+**) to scaffold
-`oneharness.toml` (the agent side) and `oneharness.judge.toml` (the judge side),
+`oneharness.toml` (the worker side) and `oneharness.judge.toml` (the judge side),
 then writes a fully-commented loop-only `onejudge.yaml`. The fields that make a run
 yours are `task` (what to do), the system framing — a `skill` (a `SKILL.md`
 directory) and/or a `system_prompt`, both optional — and the `user` block
 (`persona` / `done_when` / `max_turns` — omit it for a single-turn run). After
-each nonterminal agent turn, one unified supervisor call either completes with a
+each nonterminal worker turn, one unified supervisor call either completes with a
 reason or supplies the exact next user message. It sees compact normalized tool
-summaries by default, never raw dumps; when needed it may inspect the agent-side
+summaries by default, never raw dumps; when needed it may inspect the worker-side
 recording with `oneharness history show <session>-skill --project <worktree>
---format text`. Agent and judge harnesses run in that worktree, but only agent
+--format text`. Worker and judge harnesses run in that worktree, but only worker
 runs are automatically history-recorded. From oneharness 0.21.1, `history show` and
 `history list` read only the last 7 UTC days by default; reach an older run with
 `--since <YYYY-MM-DD>` or `--all-time`. **Harness
@@ -91,7 +91,7 @@ assessment: Identify useful follow-up work left out of scope.
 ```
 
 The harness and model come from oneharness's own config (`oneharness.toml` for the
-agent, `oneharness.judge.toml` for the judge side) — `onejudge init` scaffolds
+worker, `oneharness.judge.toml` for the judge side) — `onejudge init` scaffolds
 them. More keys — `provider` (`oneharness` / `command` / `split`, with the
 oneharness `judge_config` path, and under `split` the judge side as a `judges:`
 list — an `llmlint` entry there makes a judge of one `llmlint` run over the
@@ -116,9 +116,9 @@ to publish tool events on stdout as they occur, ahead of that same report
   model call goes through `oneharness`, and harness/model *selection* lives in
   oneharness's config files, not onejudge.
   - **`OneharnessProvider`** (default) shells out to the `oneharness` CLI
-    (v0.26.0+): the agent side uses the discovered `oneharness.toml`, and the judge
+    (v0.26.0+): the worker side uses the discovered `oneharness.toml`, and the judge
     side uses a separate `--config` file (default `oneharness.judge.toml`). With
-    `stream: true` it consumes the agent turn as it happens — NDJSON tool events,
+    `stream: true` it consumes the worker turn as it happens — NDJSON tool events,
     then a terminal report — instead of only when it ends
     ([docs/streaming.md](docs/streaming.md)).
   - **`CommandProvider`** speaks a small [JSON-lines protocol](docs/protocol.md),
@@ -163,7 +163,8 @@ to publish tool events on stdout as they occur, ahead of that same report
   conversation completed raises `Undelivered` rather than being silently accepted.
   Open it with `Notes::channel()` and install the inbox on an `Engine`
   (`with_notes`) or a `Plan`. onejudge **declares** these shapes (the message
-  `agent.note@1`); a client in another language validates against
+  `agent.note@1`, whose `agent.` prefix is the message-bus namespace rather than
+  the worker party); a client in another language validates against
   [`schemas/note.json`](schemas/note.json). See [docs/notes.md](docs/notes.md).
 
 Two things it improves over the in-skilltest engine:

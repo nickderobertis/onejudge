@@ -6,11 +6,16 @@
 //! call and [`Execution`] for the one seam that still spawns.
 //!
 //! **Harness/model selection lives in oneharness's config, not onejudge.** The
-//! agent side passes no `--harness`/`--model`, so it uses oneharness's discovered
-//! default config (`oneharness.toml`). The judge / simulated-user side passes
-//! `--config <judge_config>` (default `oneharness.judge.toml`) so it can run on a
-//! separately-configured harness/model — again without `--harness`/`--model`.
-//! Scaffold both with `onejudge init` (which shells out to `oneharness init`).
+//! worker side passes no `--harness`/`--model`. Without a worker config it uses
+//! oneharness's discovered config — the user file, then the project
+//! `oneharness.toml` found from the worktree; with one
+//! ([`OneharnessProvider::with_worker_config`]) it passes `--config
+//! <worker_config>` and that file alone, so nothing in the worktree reaches its
+//! routing. The judge / simulated-user side passes `--config <judge_config>`
+//! (default `oneharness.judge.toml`) so it can run on a separately-configured
+//! harness/model — again without `--harness`/`--model`. Either side's list has
+//! onejudge's history default layered beneath it. Scaffold both with `onejudge
+//! init` (which shells out to `oneharness init`).
 //!
 //! It targets **oneharness v0.26.0+**, whose `run-started` stream line announces
 //! each candidate's history before its events. Older streams remain readable,
@@ -48,8 +53,8 @@
 //! reached only by naming a binary or installing such a hook. The gap is written
 //! up, with a proposal against oneharness, in `docs/oneharness-library.md`.
 //!
-//! It can also ask for a **controllable** agent turn (`with_control`): the
-//! agent-side call adds `--control`, oneharness opens an out-of-band socket for the
+//! It can also ask for a **controllable** worker turn (`with_control`): the
+//! worker-side call adds `--control`, oneharness opens an out-of-band socket for the
 //! turn, and the address an `oneharness interrupt` process would use is reported on
 //! [`Provider::control`]. onejudge redirects that turn itself only for a note sent
 //! into its own conversation ([`Provider::turn_control`] names where). A oneharness
@@ -334,11 +339,11 @@ enum Execution {
 /// What **one party** of a run can say about out-of-band turn control.
 ///
 /// Two of these, one per party, because the two sides are separately addressable
-/// and separately refusable: the agent and the supervisor run under different
+/// and separately refusable: the worker and the supervisor run under different
 /// configs, on different session names — `<base>-skill` and `<base>-user`, so
 /// different sockets — and a harness that can be interrupted on one side is not
 /// thereby interruptible on the other. Collapsing them into one field would make
-/// a judge-side refusal read as an agent-side one.
+/// a judge-side refusal read as a worker-side one.
 struct PartyControl {
     /// Which party this is, for the warning a degraded ask prints.
     party: &'static str,
@@ -399,7 +404,7 @@ struct JudgeRecord {
 /// Which party a oneharness run is made for, as its `role=` history label says.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LabelledRole {
-    /// The agent's own turn.
+    /// The worker's own turn.
     Worker,
     /// A supervisor decision or a simulated-user turn.
     Supervisor,
@@ -429,6 +434,8 @@ fn assistant_turns(messages: &[Message]) -> usize {
 /// The default [`Provider`]: runs each turn through the `oneharness` engine.
 pub struct OneharnessProvider {
     execution: Execution,
+    /// The worker side's own oneharness config; `None` is discovery.
+    worker_config: Option<PathBuf>,
     /// The judge side's own oneharness config; `None` is discovery.
     judge_config: Option<PathBuf>,
     /// Appended to every evaluator prompt this provider's judge side is handed.
@@ -447,7 +454,7 @@ pub struct OneharnessProvider {
     mock_harness: Vec<String>,
     stream: bool,
     control: bool,
-    /// The agent side's control state, reported on [`Provider::control`].
+    /// The worker side's control state, reported on [`Provider::control`].
     agent: PartyControl,
     /// The supervisor side's, reported on [`Provider::supervisor_control`].
     supervisor: PartyControl,
@@ -481,6 +488,7 @@ impl OneharnessProvider {
     pub fn new() -> Self {
         Self {
             execution: Execution::Library,
+            worker_config: None,
             judge_config: Some(PathBuf::from(DEFAULT_JUDGE_CONFIG)),
             judge_instructions: None,
             judge_events: None,
@@ -490,6 +498,7 @@ impl OneharnessProvider {
             mock_harness: Vec::new(),
             stream: false,
             control: false,
+            // `agent` is the worker side's label, kept for what already reads it.
             agent: PartyControl::new("agent"),
             supervisor: PartyControl::new("judge"),
             telemetry: RefCell::new(Vec::new()),
@@ -558,7 +567,7 @@ impl OneharnessProvider {
     /// a mock harness therefore runs `oneharness` from `PATH` unless
     /// [`with_bin`](Self::with_bin) named one.
     ///
-    /// It applies to **both sides** of the conversation — the agent turn and the
+    /// It applies to **both sides** of the conversation — the worker turn and the
     /// judge / simulated-user turn — since either one otherwise bills a model. The
     /// two sides run under different oneharness configs, so an id one config selects
     /// and the other does not is oneharness's own loud `--mock-harness` error rather
@@ -579,6 +588,32 @@ impl OneharnessProvider {
     fn mocked(&self, mut spec: TurnSpec) -> TurnSpec {
         spec.mock_harness.clone_from(&self.mock_harness);
         spec
+    }
+
+    /// Run the **worker** side under exactly this oneharness config file, passed as
+    /// `oneharness run --config <path>` on every worker turn, instead of the user
+    /// and project files oneharness would discover from the worktree. The worker's
+    /// counterpart of [`with_judge_config`](Self::with_judge_config); the path is
+    /// taken as given.
+    ///
+    /// onejudge's history default is layered beneath it and nothing else is, so a
+    /// `history = false` here is honoured and an unrelated `oneharness.toml` sitting
+    /// in the worktree never reaches the worker's routing. The harness still runs
+    /// in the worktree. Unset — the default — the worker side layers the history
+    /// default under the discovered user file, then the discovered project file.
+    #[must_use]
+    pub fn with_worker_config(mut self, config: impl Into<PathBuf>) -> Self {
+        self.worker_config = Some(config.into());
+        self
+    }
+
+    /// The config list a worker turn names: the worker config alone, or none —
+    /// oneharness's discovery — when no worker config was given.
+    fn pinned(&self, spec: TurnSpec) -> TurnSpec {
+        TurnSpec {
+            config: self.worker_config.iter().cloned().collect(),
+            ..spec
+        }
     }
 
     /// Override the oneharness config file the judge and simulated user run under
@@ -612,7 +647,7 @@ impl OneharnessProvider {
 
     /// Append `instructions` to every evaluator prompt this provider's judge
     /// side is handed — what to verify and how, for a judge whose posture lets it
-    /// act — the way a system prompt frames the agent. The answer format each
+    /// act — the way a system prompt frames the worker. The answer format each
     /// prompt ends with is unchanged: it is the protocol.
     #[must_use]
     pub fn with_judge_instructions(mut self, instructions: impl Into<String>) -> Self {
@@ -671,7 +706,7 @@ impl OneharnessProvider {
         }
     }
 
-    /// Declare that the agent side **streams**: the turn asks oneharness to
+    /// Declare that the worker side **streams**: the turn asks oneharness to
     /// publish incrementally, so a tool event reaches the caller's sink the
     /// instant it is observed and the finished report is read exactly as a
     /// buffered one is. On the spawning seam the same contract arrives as the
@@ -689,7 +724,7 @@ impl OneharnessProvider {
         self
     }
 
-    /// Ask for a **controllable** agent turn: the agent-side call adds
+    /// Ask for a **controllable** worker turn: the worker-side call adds
     /// `oneharness run --control`, which opens an out-of-band unix socket for the
     /// turn's lifetime so a separate `oneharness interrupt` process can redirect
     /// it in flight. The address is reported on [`Provider::control`] and on
@@ -704,7 +739,7 @@ impl OneharnessProvider {
     /// refusal is reported as [`ControlOutcome::Unavailable`] rather than failing
     /// a run the caller asked to have judged.
     ///
-    /// **Both parties are controlled**, on separate addresses: the agent's turn
+    /// **Both parties are controlled**, on separate addresses: the worker's turn
     /// under `<base>-skill` and the supervisor's decision under `<base>-user`. The
     /// two are reported apart, on [`Provider::control`] and
     /// [`Provider::supervisor_control`], because a harness that can be interrupted
@@ -785,9 +820,10 @@ impl OneharnessProvider {
         // The turn this reply will be: one past the assistant turns already there.
         let turn = assistant_turns(messages) + 1;
         let labels = self.history_labels(LabelledRole::Worker, turn);
+        // Every rung of the ladder below names the same worker config.
         let labelled = |spec: TurnSpec| TurnSpec {
             labels: labels.clone(),
-            ..spec
+            ..self.pinned(spec)
         };
         let mut session = session;
         if let Some(name) = session {
@@ -880,7 +916,7 @@ impl OneharnessProvider {
         }
     }
 
-    /// One agent-side invocation: streamed when the provider declared streaming,
+    /// One worker-side invocation: streamed when the provider declared streaming,
     /// otherwise the buffered call with the finished turn's events replayed.
     fn respond_once(
         &self,
@@ -979,7 +1015,7 @@ impl OneharnessProvider {
     /// alone, exactly as it always has.
     ///
     /// `control` asks for a **controllable supervisor turn**, and rides exactly the
-    /// ladder the agent side does: the most capable call first, and each retry
+    /// ladder the worker side does: the most capable call first, and each retry
     /// drops the one thing the previous attempt was refused for. Both refusals cost
     /// no model tokens — oneharness validates the flags before it spawns a harness
     /// — so retrying is cheaper than making the caller pre-declare what its judge
@@ -1321,7 +1357,7 @@ impl OneharnessProvider {
     }
 
     /// Record one invocation's telemetry and per-candidate attribution against the
-    /// party that made the call — and, on the agent side, the control socket the
+    /// party that made the call — and, on the worker side, the control socket the
     /// report named.
     fn record(&self, op: &str, invocation: &Invocation) {
         let role = if op == "respond" {
@@ -1501,8 +1537,9 @@ fn assistant_turn(invocation: &Invocation) -> AssistantTurn {
 
 /// Describe a skill turn. Pure and total, so it is unit-tested directly.
 ///
-/// No harness/model selection: the agent side relies on oneharness's own
-/// discovered config (`oneharness.toml`) for it.
+/// No harness/model selection: the worker side relies on its oneharness config
+/// for it — the worker config, folded in by `OneharnessProvider::pinned`, or
+/// oneharness's own discovery when there is none.
 #[must_use]
 fn respond_spec(
     instructions: &str,
@@ -1516,6 +1553,7 @@ fn respond_spec(
     TurnSpec {
         system: Some(instructions.to_string()),
         cwd: Some(worktree.to_string()),
+        // Folded in by `OneharnessProvider::pinned`, which knows the worker config.
         config: Vec::new(),
         // Folded in by `OneharnessProvider::mocked`, which is the one place that
         // knows whether this run is mocked at all.
@@ -1557,17 +1595,17 @@ fn judge_side_spec(
         system: None,
         cwd: cwd.map(str::to_string),
         config: configs,
-        // As on the agent side: `OneharnessProvider::mocked` folds it in.
+        // As on the worker side: `OneharnessProvider::mocked` folds it in.
         mock_harness: Vec::new(),
         session: session.map(str::to_string),
         history_name: history_name.map(str::to_string),
         // Set by the caller, which knows the run, turn and role this is.
         labels: BTreeMap::new(),
         events,
-        // Streaming is about the long agent turn, not the short judgement calls:
+        // Streaming is about the long worker turn, not the short judgement calls:
         // a judge's events arrive on its finished report.
         stream: false,
-        // The same expression the agent side uses, for the same reason: turn
+        // The same expression the worker side uses, for the same reason: turn
         // control is addressed by the `--session` name, so it only ever rides
         // alongside one and is dropped when the session is.
         control: control && session.is_some(),
@@ -2276,6 +2314,53 @@ mod tests {
     }
 
     #[test]
+    fn a_worker_config_is_the_only_file_a_worker_turn_layers_over_history() {
+        let worker = std::env::temp_dir().join("onejudge-unit-worker.toml");
+        let spec = |provider: &OneharnessProvider| {
+            provider
+                .history_spec(&provider.pinned(respond_spec(
+                    "do x",
+                    "/nonexistent/worktree",
+                    Some("s"),
+                    Some("s"),
+                    false,
+                    true,
+                    "p",
+                )))
+                .unwrap()
+        };
+        let pinned = spec(&OneharnessProvider::new().with_worker_config(&worker));
+        // History beneath, the worker config above it, and nothing discovered.
+        assert_eq!(pinned.config.len(), 2);
+        assert!(pinned.config[0].ends_with("history-defaults-v1.toml"));
+        assert_eq!(pinned.config[1], worker);
+        // The same list on both seams: the in-process request and the argv.
+        assert_eq!(turn::request(&pinned).config, pinned.config);
+        let configs: Vec<String> = argv_of(&pinned)
+            .windows(2)
+            .filter(|w| w[0] == "--config")
+            .map(|w| w[1].clone())
+            .collect();
+        assert_eq!(
+            configs,
+            pinned
+                .config
+                .iter()
+                .map(|c| c.display().to_string())
+                .collect::<Vec<_>>()
+        );
+        // The worktree is still where the harness runs.
+        assert_eq!(pinned.cwd.as_deref(), Some("/nonexistent/worktree"));
+
+        // Unset, the worker side names no config of its own.
+        let provider = OneharnessProvider::new();
+        assert!(provider
+            .pinned(respond_spec("do x", "/w", None, None, false, false, "p"))
+            .config
+            .is_empty());
+    }
+
+    #[test]
     fn control_needs_a_session_to_be_addressed_by() {
         // Asked for without one, the spec drops it rather than asking for a socket
         // nothing can address.
@@ -2301,7 +2386,7 @@ mod tests {
         assert!(agent.stream);
         assert!(argv_of(&agent).iter().any(|a| a == "--stream"));
         // The judge / simulated-user side stays buffered: streaming is about the
-        // long agent turn, not the short judgement calls.
+        // long worker turn, not the short judgement calls.
         let judge = judge_side_spec(Vec::new(), Some("s"), None, None, false, false, "p");
         assert!(!judge.stream);
         assert!(!argv_of(&judge).iter().any(|a| a == "--stream"));
@@ -2679,7 +2764,7 @@ mod tests {
         .iter()
         .any(|a| a == "--control"));
         // Asked for, but with no session to be addressed by: dropped, exactly as it
-        // is on the agent side, because the socket is keyed on the session name.
+        // is on the worker side, because the socket is keyed on the session name.
         assert!(!judge_side_spec(Vec::new(), None, None, None, true, false, "p").control);
         assert!(!argv_of(&judge_side_spec(
             Vec::new(),

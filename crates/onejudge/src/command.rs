@@ -31,7 +31,8 @@ use crate::usage::Usage;
 // --- Wire types (the JSON-lines protocol) ---------------------------------
 //
 // Each request frame is its own type, so under `sdk-schema` it generates the schema
-// it is registered under (`frame_schemas`): `agent.onejudge-frame.<op>@8`, the
+// it is registered under (`frame_schemas`): `agent.onejudge-frame.<op>@8` (the
+// `agent.` prefix is the message-bus namespace, not the worker party), the
 // declaration `docs/protocol.md` names. `deny_unknown_fields` and `default` change
 // nothing onejudge writes; they state what a frame admits.
 

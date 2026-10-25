@@ -22,7 +22,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Where an `oneharness interrupt` process addresses the controllable turn
-/// onejudge's agent side opened.
+/// onejudge's worker side opened.
 ///
 /// The three fields are the whole of `interrupt`'s addressing:
 ///

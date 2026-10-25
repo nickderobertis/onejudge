@@ -108,6 +108,11 @@ pub struct Cli {
 
 /// The `onejudge` subcommands.
 #[derive(Debug, Subcommand)]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "parsed once per process, so `Run`'s size costs nothing; boxing it would change \
+              the public `Command::Run(RunArgs)` shape an embedder matches on"
+)]
 pub enum Command {
     /// Drive one task to completion via a simulated-user loop.
     Run(RunArgs),
@@ -131,6 +136,11 @@ pub struct RunArgs {
     /// <path>`); default `oneharness.judge.toml`.
     #[arg(long)]
     pub judge_config: Option<String>,
+    /// The worker-side oneharness config file (`oneharness run --config <path>`),
+    /// run under exactly as given instead of the files oneharness discovers from
+    /// the worktree. Lands on the provider that runs the worker side.
+    #[arg(long)]
+    pub worker_config: Option<String>,
     /// A skill directory (containing `SKILL.md`) whose body seeds the system
     /// prompt. Resolved relative to the working directory.
     #[arg(long)]
@@ -157,7 +167,7 @@ pub struct RunArgs {
     pub artifacts: Vec<String>,
     /// The caller-owned session name threaded across turns (default
     /// `onejudge`). Every party's oneharness history is named after it: the
-    /// agent's `<session>-skill`, the supervisor's `<session>-user`, eval verdicts
+    /// worker's `<session>-skill`, the supervisor's `<session>-user`, eval verdicts
     /// `<session>-judge` and the assessment `<session>-assess`, each suffixed
     /// `-<label>` in a panel of more than one judge — so `oneharness history show
     /// <session>-user-<label> --project <worktree> --all` finds one judge's turns
@@ -268,6 +278,7 @@ fn run_task(args: RunArgs) -> Result<i32, CliError> {
     let RunArgs {
         config,
         judge_config,
+        worker_config,
         skill,
         system_prompt,
         task,
@@ -307,6 +318,7 @@ fn run_task(args: RunArgs) -> Result<i32, CliError> {
     cfg.apply(Overrides::from_env(|key| std::env::var(key).ok())?);
     cfg.apply(Overrides {
         judge_config,
+        worker_config,
         skill,
         system_prompt,
         task,
@@ -699,7 +711,7 @@ fn init(args: InitArgs) -> Result<i32, CliError> {
 
     // Harness/model selection lives in oneharness's own config files now, so
     // scaffold them by shelling out to `oneharness init` (see [`MIN_ONEHARNESS`]):
-    // the discovered `oneharness.toml` drives the agent side, and
+    // the discovered `oneharness.toml` drives the worker side, and
     // `oneharness.judge.toml` drives the judge / simulated-user side
     // (`provider.judge_config`).
     oneharness_init(&args.oneharness_bin, "oneharness.toml", args.force)?;
@@ -1554,7 +1566,7 @@ mod tests {
 
     #[test]
     fn human_render_says_why_a_settled_run_is_incomplete() {
-        // "incomplete" alone reads as "the agent could not do it". A run the
+        // "incomplete" alone reads as "the worker could not do it". A run the
         // supervisor left without a next instruction has to say so.
         let mut s = summary(false, true, vec![]);
         s.report.settled_reason = Some("the supervisor gave no next instruction".into());

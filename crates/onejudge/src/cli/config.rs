@@ -5,6 +5,12 @@
 //! wins over file, file wins over defaults), and the result is validated into a
 //! [`Plan`] the run driver executes. A malformed config — or an invalid env
 //! override — is a loud, actionable error, never a silent default.
+//!
+//! Each side's oneharness configuration is named here: `provider.judge_config`
+//! for the judge side, and `provider.worker_config` for the worker side, valid
+//! only on the `kind: oneharness` provider that runs the worker (the top-level
+//! provider or a split's `skill:`). `--worker-config` / `ONEJUDGE_WORKER_CONFIG`
+//! land on that same provider, and anywhere else either key is refused.
 
 use std::path::PathBuf;
 
@@ -23,10 +29,11 @@ use super::CliError;
 pub struct Config {
     /// Which backend runs the harness (and judges / plays the user).
     ///
-    /// Harness/model **selection** is no longer a onejudge concern: the agent side
-    /// uses oneharness's discovered `oneharness.toml`, and the judge side uses the
-    /// `provider.judge_config` file (default `oneharness.judge.toml`). Scaffold both
-    /// with `onejudge init`.
+    /// Harness/model **selection** is no longer a onejudge concern: the worker
+    /// side uses oneharness's discovered `oneharness.toml`, or exactly the
+    /// `provider.worker_config` file when one is named, and the judge side uses
+    /// the `provider.judge_config` file (default `oneharness.judge.toml`).
+    /// Scaffold both with `onejudge init`.
     #[serde(default)]
     pub provider: ProviderConfig,
     /// Path to a **skill** directory (containing a `SKILL.md`) whose instruction
@@ -44,7 +51,7 @@ pub struct Config {
     #[serde(default)]
     pub task: Option<String>,
     /// The simulated user / supervisor that drives the loop. Omit for a
-    /// single-turn run (the agent answers once).
+    /// single-turn run (the worker answers once).
     #[serde(default)]
     pub user: Option<UserConfig>,
     /// The caller-owned session name threaded across turns; defaults to
@@ -59,7 +66,7 @@ pub struct Config {
     pub assessment: Option<String>,
 }
 
-/// The simulated user that supervises the agent and drives the loop.
+/// The simulated user that supervises the worker and drives the loop.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[cfg_attr(feature = "sdk-schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
@@ -68,7 +75,7 @@ pub struct UserConfig {
     #[serde(default)]
     pub persona: String,
     /// A plain-English completion condition; when the judge decides it holds, the
-    /// loop ends. Without it the loop ends at `max_turns` or when the agent
+    /// loop ends. Without it the loop ends at `max_turns` or when the worker
     /// declares itself done.
     #[serde(default)]
     pub done_when: Option<String>,
@@ -139,6 +146,15 @@ pub struct ProviderConfig {
     /// the same defaults — which in 0.15.0 was an error.
     #[serde(default)]
     pub judge_config: Option<String>,
+    /// `oneharness`, on the provider that runs the worker side (the top-level
+    /// provider or a split's `skill:`): the oneharness config file the worker runs
+    /// under, passed as `oneharness run --config <path>` as given. Set, the worker
+    /// side layers onejudge's history default beneath exactly this file and
+    /// discovers nothing from its working directory. Unset, it layers the history
+    /// default beneath oneharness's own discovery (the user file, then the project
+    /// file). Overridden by `--worker-config` / `ONEJUDGE_WORKER_CONFIG`.
+    #[serde(default)]
+    pub worker_config: Option<String>,
     /// `oneharness`: instructions appended to every evaluator prompt this
     /// provider's judge side is handed — what a judge that can act should verify,
     /// and how. The answer format each prompt ends with is unchanged.
@@ -158,7 +174,7 @@ pub struct ProviderConfig {
     /// the worker continues from. A single writable judge needs no permission.
     #[serde(default)]
     pub allow_writable_judges: Option<bool>,
-    /// `oneharness`: the agent-side binary speaks the **streamed provider
+    /// `oneharness`: the worker-side binary speaks the **streamed provider
     /// protocol** (`docs/streaming.md`) — NDJSON tool events as they occur, then a
     /// terminal report line. Default `false` (one buffered report document).
     #[serde(default)]
@@ -167,7 +183,7 @@ pub struct ProviderConfig {
     /// `oneharness run --control`, opening an out-of-band socket each that a
     /// separate `oneharness interrupt` process can redirect the in-flight turn
     /// through. Default `false`, and `false` changes nothing about the run. The
-    /// addresses land on the report's `control` (agent) and `supervisor_control`
+    /// addresses land on the report's `control` (worker) and `supervisor_control`
     /// (judge) blocks — separate sockets, separately refusable. onejudge redirects
     /// a live turn itself only for a note sent into its own conversation. See
     /// `docs/control.md`.
@@ -179,7 +195,7 @@ pub struct ProviderConfig {
     ///
     /// This is how an acceptance proof that needs a real multi-turn chain runs for
     /// free: only the model is scripted, everything else is the real oneharness. It
-    /// applies to the agent side *and* the judge side, so each id must be one the
+    /// applies to the worker side *and* the judge side, so each id must be one the
     /// config for that side selects (use `kind: split` when the two sides need
     /// different ids), and it makes the run **spawn** `oneharness` — the responder is
     /// oneharness's own binary re-executed, which an in-process run cannot be. See
@@ -204,7 +220,7 @@ pub struct ProviderConfig {
     /// after the ones onejudge composes (`--rule NAME`, `--agent NAME`, …).
     #[serde(default)]
     pub args: Option<Vec<String>>,
-    /// `split`: the backend that runs the agent's turns.
+    /// `split`: the backend that runs the worker's turns.
     #[serde(default)]
     pub skill: Option<Box<ProviderConfig>>,
     /// `split`: the one judge that judges and plays the simulated user — the
@@ -260,6 +276,10 @@ pub struct Overrides {
     /// `--judge-config` / `ONEJUDGE_JUDGE_CONFIG` (the judge-side oneharness
     /// config path).
     pub judge_config: Option<String>,
+    /// `--worker-config` / `ONEJUDGE_WORKER_CONFIG` (the worker-side oneharness
+    /// config path). Lands on the provider that runs the worker side: the
+    /// top-level provider, or a `split`'s `skill:`.
+    pub worker_config: Option<String>,
     /// `--skill` / `ONEJUDGE_SKILL` (a skill directory; resolved relative to the
     /// working dir).
     pub skill: Option<PathBuf>,
@@ -324,6 +344,7 @@ impl Overrides {
 
         Ok(Self {
             judge_config: get("ONEJUDGE_JUDGE_CONFIG"),
+            worker_config: get("ONEJUDGE_WORKER_CONFIG"),
             skill: get("ONEJUDGE_SKILL").map(PathBuf::from),
             system_prompt: get("ONEJUDGE_SYSTEM_PROMPT"),
             task: get("ONEJUDGE_TASK"),
@@ -358,6 +379,7 @@ impl Config {
     pub fn apply(&mut self, overrides: Overrides) {
         let Overrides {
             judge_config,
+            worker_config,
             skill,
             system_prompt,
             task,
@@ -385,6 +407,21 @@ impl Config {
         }
         if let Some(kind) = provider_kind {
             self.provider.kind = kind;
+        }
+        // After the kind, so the override lands on whichever provider runs the
+        // worker side as this layer leaves it: a split's `skill:`, else the
+        // top-level provider. A provider of any other kind refuses it when the
+        // plan is resolved, naming the flag.
+        if let Some(config) = worker_config {
+            let split_skill = if self.provider.kind == ProviderKind::Split {
+                self.provider.skill.as_deref_mut()
+            } else {
+                None
+            };
+            match split_skill {
+                Some(skill) => skill.worker_config = Some(config),
+                None => self.provider.worker_config = Some(config),
+            }
         }
         // The user-facing overrides imply a simulated user even if the file had
         // none — supplying `--persona` / `--done-when` / `--max-turns` /
@@ -565,6 +602,7 @@ impl ProviderConfig {
             kind,
             bin,
             judge_config,
+            worker_config,
             instructions,
             events,
             allow_writable_judges,
@@ -591,7 +629,41 @@ impl ProviderConfig {
             ));
         }
 
-        // An llmlint judge decides; it cannot run the agent's turns. So it is a
+        // A worker config names the config the worker side runs under, so a judge
+        // entry has no worker side for it to configure.
+        if worker_config.is_some() && place == Place::Judge {
+            return Err(CliError::Config(
+                "`worker_config` is not valid on a judge entry: it names the oneharness config \
+                 the worker side runs under, so it belongs on the top-level `kind: oneharness` \
+                 provider or on a split's `skill:`; a judge's own config is `judge_config`"
+                    .into(),
+            ));
+        }
+
+        // The same refusal for `worker_config`, also naming the override that can
+        // put it there — the flag or variable may be how it arrived.
+        let reject_worker_config = || -> Result<(), CliError> {
+            if worker_config.is_some() {
+                Err(CliError::Config(format!(
+                    "`worker_config` is not valid under provider kind `{}`: it names the \
+                     oneharness config the worker side runs under, so it (and \
+                     `--worker-config` / `ONEJUDGE_WORKER_CONFIG`) belongs on a \
+                     `kind: oneharness` provider that runs the worker side — the top-level \
+                     provider or a split's `skill:`",
+                    kind.as_str()
+                )))
+            } else {
+                Ok(())
+            }
+        };
+
+        // A worker position holding an llmlint provider is refused for its worker
+        // config first: the flag or variable that put it there has to be named.
+        if kind == ProviderKind::Llmlint && place != Place::Judge {
+            reject_worker_config()?;
+        }
+
+        // An llmlint judge decides; it cannot run the worker's turns. So it is a
         // judge entry and nothing else: refused at the top level (which is also
         // where `--provider llmlint` / `ONEJUDGE_PROVIDER=llmlint` land) and under
         // a split's `skill:`, each naming where it belongs.
@@ -604,7 +676,7 @@ impl ProviderConfig {
                 Place::Judge => unreachable!("a judge entry admits `llmlint`"),
             };
             return Err(CliError::Config(format!(
-                "provider kind `llmlint` is a judge and cannot run the agent's turns: it is \
+                "provider kind `llmlint` is a judge and cannot run the worker's turns: it is \
                  not valid as {where_}; put it under `provider.judges:` (or `provider.judge:`) \
                  of a `kind: split` provider"
             )));
@@ -621,7 +693,6 @@ impl ProviderConfig {
                 Ok(())
             }
         };
-
         match kind {
             ProviderKind::Oneharness => {
                 reject(command.is_some(), "command")?;
@@ -638,6 +709,7 @@ impl ProviderConfig {
                     // spawning it — see `OneharnessProvider::with_bin`.
                     bin,
                     judge_config: judge_config.map(PathBuf::from),
+                    worker_config: worker_config.map(PathBuf::from),
                     instructions: instructions.filter(|text| !text.trim().is_empty()),
                     events,
                     stream: stream.unwrap_or(false),
@@ -648,6 +720,7 @@ impl ProviderConfig {
             ProviderKind::Command => {
                 reject(bin.is_some(), "bin")?;
                 reject(judge_config.is_some(), "judge_config")?;
+                reject_worker_config()?;
                 reject(instructions.is_some(), "instructions")?;
                 reject(events.is_some(), "events")?;
                 reject(allow_writable_judges.is_some(), "allow_writable_judges")?;
@@ -668,6 +741,8 @@ impl ProviderConfig {
             ProviderKind::Split => {
                 reject(bin.is_some(), "bin")?;
                 reject(judge_config.is_some(), "judge_config")?;
+                // The worker side of a split is its `skill:`, which takes it.
+                reject_worker_config()?;
                 // A judge's own settings, set on the judge entry they belong to.
                 reject(instructions.is_some(), "instructions")?;
                 reject(events.is_some(), "events")?;
@@ -720,6 +795,7 @@ impl ProviderConfig {
             }
             ProviderKind::Llmlint => {
                 reject(judge_config.is_some(), "judge_config")?;
+                reject_worker_config()?;
                 reject(instructions.is_some(), "instructions")?;
                 reject(events.is_some(), "events")?;
                 reject(allow_writable_judges.is_some(), "allow_writable_judges")?;
@@ -849,15 +925,19 @@ pub enum ProviderSpec {
         /// `None` leaves the provider's own default (`oneharness.judge.toml`), or
         /// oneharness's discovery when that file is not in the working directory.
         judge_config: Option<PathBuf>,
+        /// The worker-side oneharness config file (`--config <path>`), taken as
+        /// given; `None` leaves the worker side to oneharness's discovery from its
+        /// working directory.
+        worker_config: Option<PathBuf>,
         /// Instructions appended to every evaluator prompt the judge side is
         /// handed.
         instructions: Option<String>,
         /// Whether the judge side asks for tool events; `None` asks exactly when
         /// its posture is writable.
         events: Option<bool>,
-        /// The agent-side binary speaks the streamed provider protocol.
+        /// The worker-side binary speaks the streamed provider protocol.
         stream: bool,
-        /// Ask for a controllable agent turn (`oneharness run --control`).
+        /// Ask for a controllable worker turn (`oneharness run --control`).
         control: bool,
         /// Harness ids run against oneharness's deterministic responder
         /// (`oneharness run --mock-harness <id>`) instead of a paid model. Empty
@@ -871,7 +951,7 @@ pub enum ProviderSpec {
     },
     /// A composed skill-runner + judge-panel backend.
     Split {
-        /// Runs the agent's turns.
+        /// Runs the worker's turns.
         skill: Box<ProviderSpec>,
         /// The judges, in list order — one or more, every one run concurrently
         /// against each worker turn. A single `judge:` resolves to a list of one.
@@ -1059,6 +1139,7 @@ fn build_skill(skill: Option<PathBuf>, system_prompt: String) -> Result<Skill, C
                 CliError::Config(format!("could not load skill `{}`: {e}", dir.display()))
             }),
         // No skill: the system prompt (possibly empty) is the whole framing.
+        // `agent` names the worker side's skill; the label is kept for consumers.
         None => Ok(Skill::new("agent", ".", system_prompt.trim())),
     }
 }
@@ -1267,9 +1348,9 @@ mod tests {
 
     #[test]
     fn stream_is_rejected_under_a_kind_that_cannot_honor_it() {
-        // `stream` describes the oneharness agent-side call. A `command` backend
+        // `stream` describes the oneharness worker-side call. A `command` backend
         // speaks the request/response protocol, and a `split` declares it on the
-        // child that actually runs the agent.
+        // child that actually runs the worker.
         for yaml in [
             "task: x\nprovider:\n  kind: command\n  command: [p]\n  stream: true\n",
             "task: x\nprovider:\n  kind: split\n  stream: true\n  skill:\n    kind: oneharness\n  judge:\n    kind: oneharness\n",
@@ -1372,7 +1453,7 @@ mod tests {
 
     #[test]
     fn control_is_rejected_under_a_kind_that_cannot_honor_it() {
-        // `control` describes the oneharness agent-side call. A `command` backend
+        // `control` describes the oneharness worker-side call. A `command` backend
         // has no oneharness socket, and a `split` has two backends — so it declares
         // it on the child that runs the controllable turn.
         for yaml in [
@@ -1610,6 +1691,210 @@ user:
         // The persona flag implies a multi-turn conversation.
         assert!(plan.conversation.user.is_some());
         assert_eq!(plan.conversation.user.unwrap().persona, "a reviewer");
+    }
+
+    /// The worker config a plan's worker side runs under: the top-level
+    /// oneharness provider's, or a split's `skill:`'s.
+    fn worker_config_of(plan: &Plan) -> Option<&std::path::Path> {
+        let worker = match &plan.provider {
+            ProviderSpec::Split { skill, .. } => skill.as_ref(),
+            top => top,
+        };
+        match worker {
+            ProviderSpec::Oneharness { worker_config, .. } => worker_config.as_deref(),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn worker_config_resolves_onto_the_provider_that_runs_the_worker_side() {
+        let top = Config::from_yaml(
+            "task: x
+provider:
+  kind: oneharness
+  worker_config: w.toml
+",
+        )
+        .unwrap()
+        .into_plan()
+        .unwrap();
+        // Taken as given: never rebased, exactly like `judge_config`.
+        assert_eq!(worker_config_of(&top), Some(std::path::Path::new("w.toml")));
+
+        let split = Config::from_yaml(
+            "task: x\nprovider:\n  kind: split\n  skill:\n    kind: oneharness\n    \
+             worker_config: w.toml\n  judge:\n    kind: oneharness\n",
+        )
+        .unwrap()
+        .into_plan()
+        .unwrap();
+        assert_eq!(
+            worker_config_of(&split),
+            Some(std::path::Path::new("w.toml"))
+        );
+
+        // Unset is discovery, today's behaviour.
+        let unset = Config::from_yaml("task: x\n").unwrap().into_plan().unwrap();
+        assert_eq!(worker_config_of(&unset), None);
+    }
+
+    #[test]
+    fn a_misplaced_worker_config_is_refused_naming_it_and_its_override() {
+        for (yaml, place) in [
+            (
+                "provider:\n  kind: command\n  command: [p]\n  worker_config: w.toml\n",
+                "provider kind `command`",
+            ),
+            (
+                "provider:\n  kind: split\n  worker_config: w.toml\n  skill:\n    \
+                 kind: oneharness\n  judge:\n    kind: oneharness\n",
+                "provider kind `split`",
+            ),
+            (
+                "provider:\n  kind: split\n  skill:\n    kind: command\n    command: [p]\n    \
+                 worker_config: w.toml\n  judge:\n    kind: oneharness\n",
+                "provider kind `command`",
+            ),
+            (
+                "provider:\n  kind: split\n  skill:\n    kind: oneharness\n  judges:\n    \
+                 - kind: llmlint\n      bin: x\n      worker_config: w.toml\n",
+                "a judge entry",
+            ),
+            (
+                "provider:\n  kind: split\n  skill:\n    kind: oneharness\n  judge:\n    \
+                 kind: oneharness\n    worker_config: w.toml\n",
+                "a judge entry",
+            ),
+        ] {
+            let err = Config::from_yaml(&format!("task: x\n{yaml}"))
+                .unwrap()
+                .into_plan()
+                .unwrap_err();
+            let CliError::Config(message) = err else {
+                panic!("expected a config error for {yaml}");
+            };
+            assert!(message.contains("`worker_config`"), "{message}");
+            assert!(message.contains(place), "{place} not in {message}");
+        }
+        // Under a kind, the refusal also names the override that can put it there.
+        let err = Config::from_yaml("task: x\nprovider:\n  kind: command\n  command: [p]\n")
+            .map(|mut cfg| {
+                cfg.apply(Overrides {
+                    worker_config: Some("w.toml".into()),
+                    ..Overrides::default()
+                });
+                cfg
+            })
+            .unwrap()
+            .into_plan()
+            .unwrap_err();
+        assert!(
+            matches!(err, CliError::Config(m) if m.contains("--worker-config") && m.contains("ONEJUDGE_WORKER_CONFIG"))
+        );
+    }
+
+    #[test]
+    fn a_worker_config_on_an_llmlint_worker_position_is_refused_naming_its_override() {
+        // An llmlint provider cannot run the worker, but a worker config put on it —
+        // through the file or `--worker-config` / `ONEJUDGE_WORKER_CONFIG` — is
+        // refused for that first, so the error names what the caller passed.
+        let top = "task: x\nprovider:\n  kind: llmlint\n";
+        let skill = "task: x\nprovider:\n  kind: split\n  skill:\n    kind: llmlint\n  \
+                     judge:\n    kind: oneharness\n";
+        let cases = [
+            (
+                "top-level, in the file",
+                format!("{top}  worker_config: w.toml\n"),
+                false,
+            ),
+            ("top-level, by override", top.to_string(), true),
+            (
+                "split skill, in the file",
+                skill.replace(
+                    "kind: llmlint\n",
+                    "kind: llmlint\n    worker_config: w.toml\n",
+                ),
+                false,
+            ),
+            ("split skill, by override", skill.to_string(), true),
+        ];
+        for (case, yaml, by_override) in cases {
+            let mut cfg = Config::from_yaml(&yaml).unwrap();
+            if by_override {
+                cfg.apply(Overrides {
+                    worker_config: Some("w.toml".into()),
+                    ..Overrides::default()
+                });
+            }
+            let CliError::Config(message) = cfg.into_plan().unwrap_err() else {
+                panic!("{case}: expected a config error");
+            };
+            assert!(
+                message.contains("`worker_config` is not valid under provider kind `llmlint`")
+                    && message.contains("--worker-config")
+                    && message.contains("ONEJUDGE_WORKER_CONFIG"),
+                "{case}: {message}"
+            );
+        }
+        // With no worker config, the same positions keep the llmlint placement error.
+        for yaml in [top, skill] {
+            let err = Config::from_yaml(yaml).unwrap().into_plan().unwrap_err();
+            assert!(
+                matches!(&err, CliError::Config(m) if m.contains("provider kind `llmlint` is a judge")),
+                "{err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_worker_config_override_lands_on_the_worker_side_flag_over_env_over_file() {
+        let env = Overrides::from_env(|k| {
+            (k == "ONEJUDGE_WORKER_CONFIG").then(|| "env.toml".to_string())
+        })
+        .unwrap();
+        assert_eq!(env.worker_config.as_deref(), Some("env.toml"));
+        let flag = || Overrides {
+            worker_config: Some("flag.toml".into()),
+            ..Overrides::default()
+        };
+        let plan = |yaml: &str, layers: Vec<Overrides>| {
+            let mut cfg = Config::from_yaml(yaml).unwrap();
+            for layer in layers {
+                cfg.apply(layer);
+            }
+            cfg.into_plan().unwrap()
+        };
+        let file = "task: x\nprovider:\n  kind: oneharness\n  worker_config: file.toml\n";
+        let path = std::path::Path::new;
+        assert_eq!(
+            worker_config_of(&plan(file, vec![])),
+            Some(path("file.toml"))
+        );
+        assert_eq!(
+            worker_config_of(&plan(file, vec![env.clone()])),
+            Some(path("env.toml"))
+        );
+        assert_eq!(
+            worker_config_of(&plan(file, vec![env.clone(), flag()])),
+            Some(path("flag.toml"))
+        );
+
+        // Under a split it lands on the oneharness `skill:`, and leaves every judge
+        // entry untouched.
+        let split = "task: x\nprovider:\n  kind: split\n  skill:\n    kind: oneharness\n  \
+                     judge:\n    kind: oneharness\n";
+        let resolved = plan(split, vec![env, flag()]);
+        assert_eq!(worker_config_of(&resolved), Some(path("flag.toml")));
+        let ProviderSpec::Split { judges, .. } = &resolved.provider else {
+            panic!("a split resolves to a split");
+        };
+        assert!(matches!(
+            &judges[0].provider,
+            ProviderSpec::Oneharness {
+                worker_config: None,
+                ..
+            }
+        ));
     }
 
     #[test]

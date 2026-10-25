@@ -3,7 +3,8 @@
 # override any field here (flags > env > file > defaults). See `onejudge schema`.
 #
 # Harness/model SELECTION lives in oneharness's own config files, not here:
-#   - the agent side uses the discovered `oneharness.toml`;
+#   - the worker side uses the discovered `oneharness.toml`, or exactly
+#     `provider.worker_config` when that names one;
 #   - the judge / simulated user use `provider.judge_config` (default
 #     `oneharness.judge.toml`).
 # `onejudge init` scaffolds all three (it shells out to `oneharness init`).
@@ -17,10 +18,13 @@ provider:
   #                                      # calls layer onejudge's read-only defaults
   #                                      # UNDER it, so `mode = "auto"` there lets the
   #                                      # judge run a shell (docs/judges.md)
+  # worker_config: oneharness.worker.toml  # oneharness: run the worker side under exactly
+  #                                      # this `--config` file, discovering nothing from
+  #                                      # the worktree (default: discovery)
   # instructions: "Run the tests yourself."  # oneharness: appended to this judge's prompts
   # events: true                         # oneharness: record the judge's tool events
   #                                      # (default: on for a writable mode)
-  # stream: true                         # oneharness: the agent binary publishes
+  # stream: true                         # oneharness: the worker binary publishes
   #                                      # NDJSON tool events as they happen, then a
   #                                      # terminal report (see docs/streaming.md)
   # control: true                        # oneharness: open an out-of-band turn-control

@@ -28,7 +28,7 @@ use crate::transcript::{Message, ToolEvent};
 /// A [`Provider`] that dispatches each operation to one of two backends.
 ///
 /// - [`Provider::respond`] / [`Provider::respond_streaming`] and session
-///   continuation go to the **skill** provider (the one running the agent under
+///   continuation go to the **skill** provider (the one running the worker under
 ///   test).
 /// - [`Provider::judge`] and [`Provider::simulate_user`] go to the **judge**
 ///   provider (the one scoring the transcript and playing the user).

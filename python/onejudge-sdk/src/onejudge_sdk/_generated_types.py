@@ -29,6 +29,7 @@ class ProviderConfig(TypedDict, total=False):
     kind: ProviderKind
     bin: Optional[str]
     judge_config: Optional[str]
+    worker_config: Optional[str]
     instructions: Optional[str]
     events: Optional[bool]
     allow_writable_judges: Optional[bool]

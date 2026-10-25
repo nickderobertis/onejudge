@@ -13,7 +13,7 @@ removes that. The `oneharness` processes are now created by the embedder's own
 process, inside whatever group it happens to be in, and a cancel can no longer
 name a tree to terminate.
 
-The consequence is not cosmetic. An agent harness that survives a cancellation
+The consequence is not cosmetic. A harness that survives a cancellation
 keeps calling the model and keeps billing tokens for a run nobody is watching. On
 Windows in particular, `cancel --kill` cannot reap a two-party (worker + judge)
 harness tree at all, because the processes are in no job object the canceller
@@ -53,6 +53,20 @@ write: `oneharness run --prompt-file -` on the oneharness backend, and the singl
 request object of the JSON-lines protocol on a `CommandProvider`
 ([protocol.md](protocol.md)). So a child observed in `spawned` has not run a
 harness and has not created a descendant that could escape the assignment.
+
+### Group the process; never reconfigure it
+
+`spawning` hands you the whole `Command`, but a hook is for placing the process,
+not for changing what it runs. In particular a hook **must not add `--config`**:
+oneharness layers *every* `--config` it receives, in order, so an appended file
+does not replace the configuration onejudge passed — it lands on top of the
+history defaults and whatever user and project files onejudge resolved for that
+side, and any of those can still refuse the turn or reroute it. To run the
+worker side under exactly one file, set `worker_config`
+(`OneharnessProvider::with_worker_config`, or `provider.worker_config` /
+`--worker-config` on the CLI): onejudge then passes that file alone above its
+history default, on both execution seams and every retry, and discovers nothing
+from the worktree. The judge side's counterpart is `judge_config`.
 
 ## Installing one
 
@@ -118,6 +132,9 @@ instead ([contract.md](contract.md)):
   { "role": "judge", "op": "judge", "program": "oneharness", "pid": 41244 }
 ]
 ```
+
+`role` is the side that spawned the process: `agent` denotes the worker side, and
+`judge` the judge side.
 
 `Engine::spawned_processes()` returns the same records mid-run and after a
 *failed* run, so a caller that has to clean up knows what was created.
