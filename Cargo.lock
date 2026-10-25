@@ -982,7 +982,7 @@ dependencies = [
 
 [[package]]
 name = "onejudge"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "clap",
  "oneharness-core",
@@ -997,7 +997,7 @@ dependencies = [
 
 [[package]]
 name = "onejudge-cli-e2e"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "oneharness-core",
  "onejudge",
@@ -1008,7 +1008,7 @@ dependencies = [
 
 [[package]]
 name = "onejudge-e2e"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "oneharness-core",
  "onejudge",
@@ -1020,14 +1020,14 @@ dependencies = [
 
 [[package]]
 name = "onejudge-live"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "onejudge",
 ]
 
 [[package]]
 name = "onejudge-llmlint-real"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "onejudge",
  "onejudge-test-doubles",
@@ -1037,14 +1037,14 @@ dependencies = [
 
 [[package]]
 name = "onejudge-release-targets"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "onejudge-repo",
 ]
 
 [[package]]
 name = "onejudge-repo"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "serde",
  "serde-saphyr",
@@ -1054,7 +1054,7 @@ dependencies = [
 
 [[package]]
 name = "onejudge-test-doubles"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "oneharness",
  "oneharness-core",

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.22.0](https://github.com/nickderobertis/onejudge/compare/onejudge-v0.21.0...onejudge-v0.22.0) - 2026-10-25
+
+### Added
+
+- [**breaking**] let the oneharness provider pin its worker side to one config ([#199](https://github.com/nickderobertis/onejudge/pull/199))
+
 ## [0.21.0](https://github.com/nickderobertis/onejudge/compare/onejudge-v0.20.0...onejudge-v0.21.0) - 2026-10-22
 
 ### Added
