@@ -640,6 +640,29 @@ impl ProviderConfig {
             ));
         }
 
+        // The same refusal for `worker_config`, also naming the override that can
+        // put it there — the flag or variable may be how it arrived.
+        let reject_worker_config = || -> Result<(), CliError> {
+            if worker_config.is_some() {
+                Err(CliError::Config(format!(
+                    "`worker_config` is not valid under provider kind `{}`: it names the \
+                     oneharness config the worker side runs under, so it (and \
+                     `--worker-config` / `ONEJUDGE_WORKER_CONFIG`) belongs on a \
+                     `kind: oneharness` provider that runs the worker side — the top-level \
+                     provider or a split's `skill:`",
+                    kind.as_str()
+                )))
+            } else {
+                Ok(())
+            }
+        };
+
+        // A worker position holding an llmlint provider is refused for its worker
+        // config first: the flag or variable that put it there has to be named.
+        if kind == ProviderKind::Llmlint && place != Place::Judge {
+            reject_worker_config()?;
+        }
+
         // An llmlint judge decides; it cannot run the worker's turns. So it is a
         // judge entry and nothing else: refused at the top level (which is also
         // where `--provider llmlint` / `ONEJUDGE_PROVIDER=llmlint` land) and under
@@ -670,23 +693,6 @@ impl ProviderConfig {
                 Ok(())
             }
         };
-        // The same refusal for `worker_config`, also naming the override that can
-        // put it there — the flag or variable may be how it arrived.
-        let reject_worker_config = || -> Result<(), CliError> {
-            if worker_config.is_some() {
-                Err(CliError::Config(format!(
-                    "`worker_config` is not valid under provider kind `{}`: it names the \
-                     oneharness config the worker side runs under, so it (and \
-                     `--worker-config` / `ONEJUDGE_WORKER_CONFIG`) belongs on a \
-                     `kind: oneharness` provider that runs the worker side — the top-level \
-                     provider or a split's `skill:`",
-                    kind.as_str()
-                )))
-            } else {
-                Ok(())
-            }
-        };
-
         match kind {
             ProviderKind::Oneharness => {
                 reject(command.is_some(), "command")?;
@@ -1785,6 +1791,59 @@ provider:
         assert!(
             matches!(err, CliError::Config(m) if m.contains("--worker-config") && m.contains("ONEJUDGE_WORKER_CONFIG"))
         );
+    }
+
+    #[test]
+    fn a_worker_config_on_an_llmlint_worker_position_is_refused_naming_its_override() {
+        // An llmlint provider cannot run the worker, but a worker config put on it —
+        // through the file or `--worker-config` / `ONEJUDGE_WORKER_CONFIG` — is
+        // refused for that first, so the error names what the caller passed.
+        let top = "task: x\nprovider:\n  kind: llmlint\n";
+        let skill = "task: x\nprovider:\n  kind: split\n  skill:\n    kind: llmlint\n  \
+                     judge:\n    kind: oneharness\n";
+        let cases = [
+            (
+                "top-level, in the file",
+                format!("{top}  worker_config: w.toml\n"),
+                false,
+            ),
+            ("top-level, by override", top.to_string(), true),
+            (
+                "split skill, in the file",
+                skill.replace(
+                    "kind: llmlint\n",
+                    "kind: llmlint\n    worker_config: w.toml\n",
+                ),
+                false,
+            ),
+            ("split skill, by override", skill.to_string(), true),
+        ];
+        for (case, yaml, by_override) in cases {
+            let mut cfg = Config::from_yaml(&yaml).unwrap();
+            if by_override {
+                cfg.apply(Overrides {
+                    worker_config: Some("w.toml".into()),
+                    ..Overrides::default()
+                });
+            }
+            let CliError::Config(message) = cfg.into_plan().unwrap_err() else {
+                panic!("{case}: expected a config error");
+            };
+            assert!(
+                message.contains("`worker_config` is not valid under provider kind `llmlint`")
+                    && message.contains("--worker-config")
+                    && message.contains("ONEJUDGE_WORKER_CONFIG"),
+                "{case}: {message}"
+            );
+        }
+        // With no worker config, the same positions keep the llmlint placement error.
+        for yaml in [top, skill] {
+            let err = Config::from_yaml(yaml).unwrap().into_plan().unwrap_err();
+            assert!(
+                matches!(&err, CliError::Config(m) if m.contains("provider kind `llmlint` is a judge")),
+                "{err:?}"
+            );
+        }
     }
 
     #[test]
