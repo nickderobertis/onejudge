@@ -51,7 +51,7 @@
 //! * `[[event:CMD]]` — emit one `Bash` tool call for `CMD`. Repeatable, and
 //!   emitted in order, so a streamed run has more than one event to observe.
 //! * `[[say:TEXT]]` / `[[think:TEXT]]` — emit a `text` / `thinking` content
-//!   block, which oneharness normalizes into the agent's own `message` /
+//!   block, which oneharness normalizes into the worker's own `message` /
 //!   `reasoning` event. Repeatable, and interleaved with `[[event:…]]` in the
 //!   order the markers appear.
 //! * `[[stream-wait:PATH]]` — after the events, block until `PATH` exists. A

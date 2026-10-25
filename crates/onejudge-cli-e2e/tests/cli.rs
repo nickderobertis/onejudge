@@ -120,7 +120,7 @@ fn plan_from(body: &str) -> onejudge::cli::RunSummary {
 
 #[test]
 fn completed_run_with_passing_evals_exits_zero() {
-    // The agent commits on turn 1; the echo judge sees the `git commit` event in
+    // The worker commits on turn 1; the echo judge sees the `git commit` event in
     // the transcript, so `done_when` holds and the loop ends after one turn.
     let body = "\
 task: please commit
@@ -338,7 +338,7 @@ system_prompt: Be warm.
 #[test]
 fn oneharness_provider_kind_drives_the_loop() {
     // The `oneharness` provider kind, pointed at the fake-oneharness double, driven
-    // in Text format so the observing dispatch arm runs. The agent's reply
+    // in Text format so the observing dispatch arm runs. The worker's reply
     // satisfies `done_when` on turn one.
     let bin = serde_json::to_string(&fake_oneharness_bin()).unwrap();
     let yaml = format!(
@@ -377,7 +377,7 @@ fn mock_harness_config_reaches_the_spawned_oneharness() {
 
 #[test]
 fn split_provider_kind_composes_two_backends() {
-    // `split`: the agent runs on the fake oneharness, the judge / simulated user on
+    // `split`: the worker runs on the fake oneharness, the judge / simulated user on
     // the echo command double. No `done_when`, so the loop runs to the cap — which
     // exercises the split's respond (skill) + simulate_user (judge) dispatch.
     let oh = serde_json::to_string(&fake_oneharness_bin()).unwrap();
@@ -1715,7 +1715,7 @@ fn binary_stream_reports_a_failure_as_json_on_stderr_leaving_the_protocol_intact
 
 // A plan's spawn hook has to reach both children of a `split` (`docs/spawn-hook.md`).
 
-/// A two-party plan: the agent's turns and the judge's each run on their own
+/// A two-party plan: the worker's turns and the judge's each run on their own
 /// `oneharness` backend (the fake double), which is the shape that leaks — one
 /// hook has to reach BOTH sides.
 fn split_plan_yaml(body: &str) -> String {
@@ -1871,7 +1871,7 @@ fn a_plan_driven_embedders_group_reaps_the_whole_two_party_harness_tree_on_a_kil
 
     let hook = std::sync::Arc::new(OwnedProcessGroups::default());
     let installed: onejudge::SharedSpawnHook = hook.clone();
-    // The agent side leaks a stand-in whose `oneharness` then exits; the judge
+    // The worker side leaks a stand-in whose `oneharness` then exits; the judge
     // side (steered through the task, which the supervisor prompt inlines) leaks
     // its own and then holds, so the run is still in flight when the embedder
     // cancels.
@@ -2047,7 +2047,7 @@ fn an_oneharness_config_that_names_no_bin_runs_the_turn_in_process() {
     assert_eq!(exit_code(&summary), 0);
 }
 
-/// The agent side's `oneharness.toml` written two ways over the same fake-harness
+/// The worker side's `oneharness.toml` written two ways over the same fake-harness
 /// double: `flat` states the harness selection itself, while the other states only
 /// `extends` and its history directory, leaving the harness list and the pinned
 /// `bin` to a parent file it names.
@@ -2082,7 +2082,7 @@ fn agent_config_project(name: &str, flat: bool) -> std::path::PathBuf {
 }
 
 /// Spawn the built binary over an in-process, streaming `oneharness` provider whose
-/// agent side runs from `dir`, returning its `--stream` event lines and report.
+/// worker side runs from `dir`, returning its `--stream` event lines and report.
 fn stream_agent_config_project(dir: &Path) -> (Vec<serde_json::Value>, onejudge::Report) {
     let config = dir.join("onejudge.yaml");
     std::fs::write(
@@ -2128,7 +2128,7 @@ fn stream_agent_config_project(dir: &Path) -> (Vec<serde_json::Value>, onejudge:
 
 #[test]
 fn an_agent_config_that_extends_a_parent_runs_under_the_harness_only_the_parent_names() {
-    // The linked `oneharness-core` resolves `extends` itself, so the agent's turn
+    // The linked `oneharness-core` resolves `extends` itself, so the worker's turn
     // runs under the fake harness pinned only in the parent — no harness list, no
     // `bin` in the file onejudge's run discovers. Against a core that predates
     // `extends` the child is an unknown-key config error and the run fails.
@@ -2319,7 +2319,7 @@ user:
 fn binary_run_json_reports_each_judges_decision_and_labels_the_judge_side() {
     // The report a real run writes: `judge_decisions` one entry per supervisor
     // turn with each judge attributed, and the panel label riding every judge-side
-    // process record — absent from the agent side's.
+    // process record — absent from the worker side's.
     let config = Path::new(env!("CARGO_TARGET_TMPDIR")).join("panel.yaml");
     std::fs::write(&config, reviewer_and_lint(TWO_TURN_BODY)).unwrap();
     let output = Command::new(onejudge_bin())
@@ -2590,7 +2590,7 @@ fn a_plans_spawn_hook_reaches_every_judge_of_the_panel() {
     let mut sink = |_: &str| {};
     let summary = run_plan(plan, Format::Json, &mut sink).unwrap();
     let seen = hook.seen.lock().unwrap().clone();
-    // Every process of the run — the agent's and each judge's — was offered and
+    // Every process of the run — the worker's and each judge's — was offered and
     // grouped, and the report names each judge's beside its group.
     assert_eq!(summary.report.processes.len(), seen.len());
     // Records are collected judge by judge (each judge keeps its own spawner), so
@@ -2807,7 +2807,7 @@ fn llmlint_labels(turn: usize) -> std::collections::BTreeMap<String, String> {
 /// The argv the contract spells for one `lint` run deciding on `turn`, with
 /// every field of the `lint` entry above rendered exactly where the contract
 /// puts it: the labels after `-c` / `--diff` and before the entry's own `args`.
-/// The worktree is `.`: a config with no `skill:` runs the agent in the working
+/// The worktree is `.`: a config with no `skill:` runs the worker in the working
 /// directory.
 fn llmlint_lint_argv(turn: usize) -> Vec<String> {
     let session = format!("session={LLMLINT_SESSION}");
@@ -3424,7 +3424,7 @@ fn a_single_judge_config_runs_exactly_as_the_released_0_8_1_did() {
 fn a_single_judge_controlled_config_runs_as_0_8_1_did_except_the_supervisor_address_it_omitted() {
     // The controlled baseline: the same one-`judge:` split with `control: true` on
     // both sides, captured from 0.8.1. Everything but `supervisor_control` /
-    // `supervisor_control_unavailable` is identical — transcript, usage, the agent's
+    // `supervisor_control_unavailable` is identical — transcript, usage, the worker's
     // `control` address, the judge prompts. Those two now carry the first judge's
     // answer (Contract B); 0.8.1's CLI wrote `null` for every config because
     // `AnyProvider` never forwarded the judge side's answer — a defect against
@@ -3701,7 +3701,7 @@ fn history_names(store: &Path) -> std::collections::BTreeSet<String> {
     .collect()
 }
 
-/// Run the built binary over a project whose agent and judge configs both pin the
+/// Run the built binary over a project whose worker and judge configs both pin the
 /// fake-harness double, under `--session <session>`, recording into a fresh
 /// history store. Returns the names the store holds afterwards.
 fn run_with_judge_history(
@@ -4205,7 +4205,7 @@ fn without_verbatim_prefix(path: std::path::PathBuf) -> std::path::PathBuf {
     }
 }
 
-/// One posture journey's working directory — the run's cwd and so the agent's
+/// One posture journey's working directory — the run's cwd and so the worker's
 /// worktree — and what it ran.
 struct PostureRun {
     dir: std::path::PathBuf,
@@ -4339,7 +4339,7 @@ fn assert_defaults_file(path: &serde_json::Value) {
 }
 
 impl PostureRun {
-    /// A fresh run directory named for `name` and `seam`, holding the agent's
+    /// A fresh run directory named for `name` and `seam`, holding the worker's
     /// own discovered `oneharness.toml` and an empty user-config home.
     fn new(name: &str, seam: Seam) -> Self {
         let dir =
@@ -5577,7 +5577,7 @@ fn text_output_draws_the_workers_events_and_each_judges_through_oneharnesss_rend
         assert!(!stdout.contains('{'), "{seam:?}: no raw JSON:\n{stdout}");
 
         // Only tool activity became a `ToolEvent`: every judge prompt lists the
-        // command alone, never the agent's words or its reasoning.
+        // command alone, never the worker's words or its reasoning.
         for call in outcome.judge_side() {
             let prompt = prompt_of(call);
             let tools: Vec<&str> = prompt

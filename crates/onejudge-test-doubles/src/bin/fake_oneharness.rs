@@ -16,11 +16,11 @@
 //! live-path arg bug and `onejudge init` are caught/covered here. Markers in
 //! `--system` steer the skill turn: `[[reply:TEXT]]` sets the reply,
 //! `[[event:CMD]]` adds a `bash` tool event, `[[say:TEXT]]` and `[[think:TEXT]]`
-//! add the agent's own `message` and `reasoning` events (all three repeatable,
+//! add the worker's own `message` and `reasoning` events (all three repeatable,
 //! reported in the order they appear), `[[fail:KIND]]` returns a classified
 //! `failure_kind`, `[[status:TOKEN]]` returns a terminal status that carries no
 //! `failure_kind` at all (`timeout`, `spawn-error`, `skipped`), and
-//! `[[reject-session]]` (in `--system` on the agent side, in the prompt on the
+//! `[[reject-session]]` (in `--system` on the worker side, in the prompt on the
 //! judge side) makes a `--session` run exit non-zero with oneharness's
 //! `does not support --session` text (the graceful-retry path).
 //! `[[echo-mock-harness]]` replies with the `--mock-harness` ids the run was
@@ -32,7 +32,7 @@
 //! `stdout` — the shape a codex app-server turn produced on every one of 26
 //! consecutive turns. onejudge must report that turn as an *empty* reply and never
 //! publish the raw output as the model's words. Unlike most markers it is read
-//! from `--system` on the agent side and from the prompt on the judge side, so one
+//! from `--system` on the worker side and from the prompt on the judge side, so one
 //! run can drive either party.
 //!
 //! **Fallback chains.** `[[fallback:ID|REASON,…]]` reports the run the way
@@ -87,7 +87,7 @@
 //! HANDLE, and then reports normally. `[[hold:PATH]]` blocks until PATH exists (it
 //! never does, in the grouping journey), so the run is still in flight when the
 //! embedder cancels. Unlike every other marker these two are read from `--system`
-//! on the **agent** side and from the **prompt** on the judge side — the supervisor
+//! on the **worker** side and from the **prompt** on the judge side — the supervisor
 //! prompt inlines the task, so one run can steer both parties. See
 //! `docs/spawn-hook.md`.
 //!
@@ -112,7 +112,7 @@
 //! and never recovers, so the bounded re-ask is spent and the run settles.
 //!
 //! **What a party was actually given.** `[[record-prompt:PATH]]` — read from
-//! `--system` on the agent side and from the prompt on the judge side — appends the
+//! `--system` on the worker side and from the prompt on the judge side — appends the
 //! whole prompt to `PATH`, so a test can assert on the framing onejudge composed
 //! rather than on a re-derivation of it. `[[record-argv:PATH]]`, read the same
 //! way, appends the argv the run was spawned with, so a test can assert on what
@@ -254,7 +254,7 @@ fn main() {
         || prompt.contains("Assessment request:")
         || prompt.contains("Criterion:") && prompt.contains(onejudge::EVIDENCE_PROMPT_MARKER));
     // The process-grouping and control journeys (`docs/spawn-hook.md`,
-    // `docs/control.md`). Read from `--system` on the agent side and from the
+    // `docs/control.md`). Read from `--system` on the worker side and from the
     // prompt on the judge side, because those are the two texts a caller controls
     // per party — which is what lets ONE run drive both halves of a two-party tree,
     // and what makes the judge side's own socket reachable now that it has one.
@@ -345,7 +345,7 @@ fn main() {
     };
     // A turn that completed while reporting no reply text, with the harness
     // process's raw output left on the result — protocol exhaust, not the model's
-    // words. Applied to whichever party the steering text names, so the agent side
+    // words. Applied to whichever party the steering text names, so the worker side
     // and the judge side are both reachable.
     if steering.contains("[[no-text]]") {
         ran.text = None;
@@ -1249,7 +1249,7 @@ fn respond_result(
 }
 
 /// The events the `[[event:CMD]]`, `[[say:TEXT]]` and `[[think:TEXT]]` markers in
-/// `system` script, in the order they appear: a `bash` tool call, the agent's own
+/// `system` script, in the order they appear: a `bash` tool call, the worker's own
 /// `message`, and its `reasoning`, each indexed by its position in the run as
 /// oneharness indexes every kind.
 fn activity(system: &str) -> Vec<ActionEvent> {
@@ -1293,7 +1293,7 @@ fn activity(system: &str) -> Vec<ActionEvent> {
 enum Activity {
     /// `[[event:CMD]]`: a `bash` tool call.
     Event,
-    /// `[[say:TEXT]]`: the agent's own message.
+    /// `[[say:TEXT]]`: the worker's own message.
     Say,
     /// `[[think:TEXT]]`: its reasoning.
     Think,

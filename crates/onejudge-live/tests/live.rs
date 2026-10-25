@@ -12,7 +12,7 @@
 //!
 //! Harness/model selection comes from oneharness's config, not onejudge. This test
 //! resolves the committed workspace-root `oneharness.toml` to an absolute path for
-//! both the agent and judge sides; `ONEHARNESS_HARNESSES` / `ONEHARNESS_MODEL` can
+//! both the worker and judge sides; `ONEHARNESS_HARNESSES` / `ONEHARNESS_MODEL` can
 //! override its selection.
 
 use std::path::Path;
