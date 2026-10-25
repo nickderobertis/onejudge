@@ -31,7 +31,7 @@ use crate::Error;
 /// Two, matching [`SUPERVISOR_REASK_LIMIT`](crate::SUPERVISOR_REASK_LIMIT), and for
 /// the same reason: one repetition is a slip a fresh turn routinely corrects, while
 /// a second identical, empty-handed exchange is a decision the loop has made. Each
-/// one costs a full agent turn *and* a full supervisor turn, so a higher bound buys
+/// one costs a full worker turn *and* a full supervisor turn, so a higher bound buys
 /// nothing but the bill it was raised to avoid — the loops this exists for ran to
 /// their caps (137 turns in the measured case) doing exactly this.
 pub const NOOP_SETTLE_LIMIT: u32 = 2;
@@ -62,7 +62,7 @@ const NOOP_EXCHANGE_CHARS: usize = 240;
 ///
 /// Keying on the *pair* is what makes this safe. Any leg alone is ordinary: healthy
 /// turns are often toolless, healthy replies are sometimes short, and a healthy
-/// agent may well repeat itself once. Only all three together describe a loop that
+/// worker may well repeat itself once. Only all three together describe a loop that
 /// has nothing left to add — and a real next instruction, being neither tiny nor
 /// answered identically, breaks the streak on the very next turn.
 ///
@@ -130,7 +130,7 @@ fn normalize(text: &str) -> String {
         .join(" ")
 }
 
-/// The skill / agent under test.
+/// The skill the worker runs under test.
 #[derive(Debug, Clone)]
 pub struct Skill {
     /// The skill's name.
@@ -251,7 +251,7 @@ impl Conversation {
 /// Engine settings: the loop's own concerns — the default turn cap and the
 /// caller-owned session-name base threaded across turns.
 ///
-/// Harness and model **selection** is no longer onejudge's concern: the agent side
+/// Harness and model **selection** is no longer onejudge's concern: the worker side
 /// uses oneharness's own discovered config (`oneharness.toml`) and the judge /
 /// simulated-user side uses a separately-named oneharness config (see
 /// [`OneharnessProvider`](crate::OneharnessProvider)), so `Settings` carries no
@@ -341,7 +341,7 @@ pub struct Outcome {
     ///
     /// Mutually exclusive with [`Outcome::completion_reason`], and the difference
     /// matters to whoever reads the run: an incomplete outcome with this set is the
-    /// supervisor having nothing usable to say, not the agent failing the task.
+    /// supervisor having nothing usable to say, not the worker failing the task.
     pub settled_reason: Option<String>,
     /// Timing, per-party usage, and native session linkage, when provided.
     pub telemetry: Option<Telemetry>,
@@ -350,7 +350,7 @@ pub struct Outcome {
     /// provider that spawns nothing.
     pub processes: Vec<SpawnedProcess>,
     /// Where an `oneharness interrupt` process addresses this run's controllable
-    /// **agent** turn, or why there is none. [`ControlOutcome::NotRequested`]
+    /// **worker** turn, or why there is none. [`ControlOutcome::NotRequested`]
     /// unless the provider was asked for control.
     pub control: ControlOutcome,
     /// The same, for the **supervisor** turn. Reported apart from
@@ -501,7 +501,7 @@ fn supervisor_redirect(presented: &[DeliveredNote]) -> String {
 ///
 /// Without a redirect that is the reply and its events. With one, the provider
 /// call held more than one turn: each turn a note interrupted is kept as an
-/// assistant message — the agent's own text and the tool events observed before
+/// assistant message — the worker's own text and the tool events observed before
 /// the redirect was confirmed, which stand, because a redirect throws away a turn's
 /// remaining words, never its effects — followed by the user message the
 /// replacement turn opened with, exactly as the worker was handed it, and the call's
@@ -1019,7 +1019,7 @@ impl<'a> Engine<'a> {
             if skill_done || transcript.assistant_turns() >= max_turns {
                 break;
             }
-            // The work is done and the conversation has stopped moving: the agent
+            // The work is done and the conversation has stopped moving: the worker
             // recorded nothing and gave the same answer again, to an instruction
             // that asked for nothing. Every further turn is a paid re-prompt of a
             // finished dispatch — one measured run spent 137 of them — so settle on
@@ -1052,8 +1052,8 @@ impl<'a> Engine<'a> {
             }
 
             let started_at = observed_at();
-            // The supervisor answers the reply the agent just gave, so that reply is
-            // this turn's instruction — the same relation the agent's own turn has
+            // The supervisor answers the reply the worker just gave, so that reply is
+            // this turn's instruction — the same relation the worker's own turn has
             // to the instruction it was handed.
             let opened = on_observation(&Observation::TurnOpened(TurnOpened {
                 turn: turn_index,
@@ -1273,7 +1273,7 @@ impl<'a> Engine<'a> {
                 // instruction to give, even asked again. Settle the run on the work
                 // it already has rather than raising: the alternative destroyed
                 // finished dispatches, and left the operator unable to tell that
-                // from the agent failing the task.
+                // from the worker failing the task.
                 SupervisorOutcome::NoInstruction { reason } => {
                     let mut why = "the supervisor judged the work incomplete but gave no next \
                                    instruction, even asked again; settled on the work already done"
@@ -1595,7 +1595,7 @@ pub enum Observation<'a> {
     /// Every normalized event the worker's harness reported, as oneharness
     /// reported it: its own `message` and `reasoning` items as well as its tool
     /// activity. A tool event is delivered as [`Tool`](Observation::Tool) first
-    /// and then as this; the agent's words are delivered only as this, and never
+    /// and then as this; the worker's words are delivered only as this, and never
     /// become a [`ToolEvent`] — they are rendered for a reader, not summarized for
     /// a judge.
     Action(TurnAction<'a>),
@@ -1692,7 +1692,7 @@ pub struct TurnOpened<'a> {
     pub role: Role,
     /// The message this turn answers, whole and unbounded — the original task on
     /// the first assistant turn, the supervisor's last instruction afterwards, and
-    /// the agent's last reply for a user turn.
+    /// the worker's last reply for a user turn.
     pub instruction: &'a str,
     /// When the turn began, RFC 3339 with millisecond precision in UTC.
     pub started_at: String,
@@ -2106,7 +2106,7 @@ mod tests {
         // The run this exists for: real work already done, and a supervisor that
         // will not say what comes next. Ending the run keeps that work; raising
         // would have thrown it away, and left the caller unable to tell this apart
-        // from the agent simply failing.
+        // from the worker simply failing.
         struct Speechless;
 
         impl Provider for Speechless {
@@ -2236,9 +2236,9 @@ mod tests {
         assert_eq!(outcome.into_report(vec![]).settled_reason, Some(settled));
     }
 
-    /// A supervisor/agent pair scripted from the measured loop: the agent releases
+    /// A supervisor/worker pair scripted from the measured loop: the worker releases
     /// the dispatch (recording a real command), and from then on the supervisor and
-    /// the agent trade the two verbatim sentences the runs actually produced.
+    /// the worker trade the two verbatim sentences the runs actually produced.
     ///
     /// `instruction` is what the supervisor keeps saying; a caller passes a real
     /// next instruction to prove the loop is *not* settled on one.

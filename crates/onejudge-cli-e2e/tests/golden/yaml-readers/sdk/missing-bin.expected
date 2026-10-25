@@ -5,6 +5,7 @@ Config {
             "definitely-not-a-binary-xyz",
         ),
         judge_config: None,
+        worker_config: None,
         instructions: None,
         events: None,
         allow_writable_judges: None,

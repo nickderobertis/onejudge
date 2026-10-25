@@ -51,7 +51,7 @@ pub struct Config {
     #[serde(default)]
     pub task: Option<String>,
     /// The simulated user / supervisor that drives the loop. Omit for a
-    /// single-turn run (the agent answers once).
+    /// single-turn run (the worker answers once).
     #[serde(default)]
     pub user: Option<UserConfig>,
     /// The caller-owned session name threaded across turns; defaults to
@@ -66,7 +66,7 @@ pub struct Config {
     pub assessment: Option<String>,
 }
 
-/// The simulated user that supervises the agent and drives the loop.
+/// The simulated user that supervises the worker and drives the loop.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[cfg_attr(feature = "sdk-schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
@@ -75,7 +75,7 @@ pub struct UserConfig {
     #[serde(default)]
     pub persona: String,
     /// A plain-English completion condition; when the judge decides it holds, the
-    /// loop ends. Without it the loop ends at `max_turns` or when the agent
+    /// loop ends. Without it the loop ends at `max_turns` or when the worker
     /// declares itself done.
     #[serde(default)]
     pub done_when: Option<String>,
@@ -174,7 +174,7 @@ pub struct ProviderConfig {
     /// the worker continues from. A single writable judge needs no permission.
     #[serde(default)]
     pub allow_writable_judges: Option<bool>,
-    /// `oneharness`: the agent-side binary speaks the **streamed provider
+    /// `oneharness`: the worker-side binary speaks the **streamed provider
     /// protocol** (`docs/streaming.md`) — NDJSON tool events as they occur, then a
     /// terminal report line. Default `false` (one buffered report document).
     #[serde(default)]
@@ -183,7 +183,7 @@ pub struct ProviderConfig {
     /// `oneharness run --control`, opening an out-of-band socket each that a
     /// separate `oneharness interrupt` process can redirect the in-flight turn
     /// through. Default `false`, and `false` changes nothing about the run. The
-    /// addresses land on the report's `control` (agent) and `supervisor_control`
+    /// addresses land on the report's `control` (worker) and `supervisor_control`
     /// (judge) blocks — separate sockets, separately refusable. onejudge redirects
     /// a live turn itself only for a note sent into its own conversation. See
     /// `docs/control.md`.
@@ -195,7 +195,7 @@ pub struct ProviderConfig {
     ///
     /// This is how an acceptance proof that needs a real multi-turn chain runs for
     /// free: only the model is scripted, everything else is the real oneharness. It
-    /// applies to the agent side *and* the judge side, so each id must be one the
+    /// applies to the worker side *and* the judge side, so each id must be one the
     /// config for that side selects (use `kind: split` when the two sides need
     /// different ids), and it makes the run **spawn** `oneharness` — the responder is
     /// oneharness's own binary re-executed, which an in-process run cannot be. See
@@ -220,7 +220,7 @@ pub struct ProviderConfig {
     /// after the ones onejudge composes (`--rule NAME`, `--agent NAME`, …).
     #[serde(default)]
     pub args: Option<Vec<String>>,
-    /// `split`: the backend that runs the agent's turns.
+    /// `split`: the backend that runs the worker's turns.
     #[serde(default)]
     pub skill: Option<Box<ProviderConfig>>,
     /// `split`: the one judge that judges and plays the simulated user — the
@@ -640,7 +640,7 @@ impl ProviderConfig {
             ));
         }
 
-        // An llmlint judge decides; it cannot run the agent's turns. So it is a
+        // An llmlint judge decides; it cannot run the worker's turns. So it is a
         // judge entry and nothing else: refused at the top level (which is also
         // where `--provider llmlint` / `ONEJUDGE_PROVIDER=llmlint` land) and under
         // a split's `skill:`, each naming where it belongs.
@@ -653,7 +653,7 @@ impl ProviderConfig {
                 Place::Judge => unreachable!("a judge entry admits `llmlint`"),
             };
             return Err(CliError::Config(format!(
-                "provider kind `llmlint` is a judge and cannot run the agent's turns: it is \
+                "provider kind `llmlint` is a judge and cannot run the worker's turns: it is \
                  not valid as {where_}; put it under `provider.judges:` (or `provider.judge:`) \
                  of a `kind: split` provider"
             )));
@@ -929,9 +929,9 @@ pub enum ProviderSpec {
         /// Whether the judge side asks for tool events; `None` asks exactly when
         /// its posture is writable.
         events: Option<bool>,
-        /// The agent-side binary speaks the streamed provider protocol.
+        /// The worker-side binary speaks the streamed provider protocol.
         stream: bool,
-        /// Ask for a controllable agent turn (`oneharness run --control`).
+        /// Ask for a controllable worker turn (`oneharness run --control`).
         control: bool,
         /// Harness ids run against oneharness's deterministic responder
         /// (`oneharness run --mock-harness <id>`) instead of a paid model. Empty
@@ -945,7 +945,7 @@ pub enum ProviderSpec {
     },
     /// A composed skill-runner + judge-panel backend.
     Split {
-        /// Runs the agent's turns.
+        /// Runs the worker's turns.
         skill: Box<ProviderSpec>,
         /// The judges, in list order — one or more, every one run concurrently
         /// against each worker turn. A single `judge:` resolves to a list of one.
@@ -1133,6 +1133,7 @@ fn build_skill(skill: Option<PathBuf>, system_prompt: String) -> Result<Skill, C
                 CliError::Config(format!("could not load skill `{}`: {e}", dir.display()))
             }),
         // No skill: the system prompt (possibly empty) is the whole framing.
+        // `agent` names the worker side's skill; the label is kept for consumers.
         None => Ok(Skill::new("agent", ".", system_prompt.trim())),
     }
 }
@@ -1341,9 +1342,9 @@ mod tests {
 
     #[test]
     fn stream_is_rejected_under_a_kind_that_cannot_honor_it() {
-        // `stream` describes the oneharness agent-side call. A `command` backend
+        // `stream` describes the oneharness worker-side call. A `command` backend
         // speaks the request/response protocol, and a `split` declares it on the
-        // child that actually runs the agent.
+        // child that actually runs the worker.
         for yaml in [
             "task: x\nprovider:\n  kind: command\n  command: [p]\n  stream: true\n",
             "task: x\nprovider:\n  kind: split\n  stream: true\n  skill:\n    kind: oneharness\n  judge:\n    kind: oneharness\n",
@@ -1446,7 +1447,7 @@ mod tests {
 
     #[test]
     fn control_is_rejected_under_a_kind_that_cannot_honor_it() {
-        // `control` describes the oneharness agent-side call. A `command` backend
+        // `control` describes the oneharness worker-side call. A `command` backend
         // has no oneharness socket, and a `split` has two backends — so it declares
         // it on the child that runs the controllable turn.
         for yaml in [

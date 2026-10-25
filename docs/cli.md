@@ -4,13 +4,13 @@ The same engine that *tests* a skill can *drive real work*: point it at a harnes
 hand it a task, and let an LLM-driven **simulated user act as a supervisor** that
 keeps the harness going — pushing back, asking for verification, re-prompting —
 until a `done_when` condition holds or `max_turns` is hit. One supervisor harness
-invocation after each ordinary nonterminal agent turn decides completion and, if
+invocation after each ordinary nonterminal worker turn decides completion and, if
 needed, returns the exact next user message. Its prompt contains compact
-normalized tool summaries rather than raw dumps. Agent-side calls are recorded;
+normalized tool summaries rather than raw dumps. Worker-side calls are recorded;
 the worktree-inheriting judge may inspect full events on demand with `oneharness
 history show <session>-skill --project <worktree> --format text`. Stateless final
 boolean/numeric eval calls remain separate. The simulated reviewer
-catches "I'm done" claims that aren't and steers the agent to finish, which is a
+catches "I'm done" claims that aren't and steers the worker to finish, which is a
 practical way to complete longer tasks and get higher accuracy on harder ones than
 a single-shot prompt.
 
@@ -103,7 +103,7 @@ than by the prompt's first words:
 
 | party | history name | a panel of more than one judge |
 |---|---|---|
-| the agent | `<base>-skill` | — |
+| the worker | `<base>-skill` | — |
 | the supervisor (each per-turn decision) | `<base>-user` | `<base>-user-<label>` |
 | an eval verdict (boolean or numeric) | `<base>-judge` | `<base>-judge-<label>` |
 | the assessment | `<base>-assess` | `<base>-assess-<label>` |
@@ -135,7 +135,7 @@ the contract.
   (completed / hit the turn cap / settled — see below), completion check, usage,
   eval verdicts and assessment. The worker's events are drawn by oneharness's own
   renderer (`oneharness_core::domain::render::render_event`), so a command, a
-  file change, the agent's text (`› …`) and its reasoning (`(thinking) …`) read
+  file change, the worker's text (`› …`) and its reasoning (`(thinking) …`) read
   exactly as `oneharness run --stream --format text` prints them; each call is
   drawn once. A judge's tool events go through the same renderer, prefixed with
   its label. For example:
@@ -210,7 +210,7 @@ so `oneharness history watch --label session=<session>` selects one run's
 harness activity without onejudge.
 
 Every judged run reports, under `telemetry.attribution`, which harness identities
-each invocation attempted, on which **side** (agent vs judge), which one ran, and
+each invocation attempted, on which **side** (the worker, recorded as `agent`, vs the judge), which one ran, and
 which a fallback chain routed around and why — so a failure is attributable to a
 side and an identity without parsing a message.
 
@@ -232,7 +232,7 @@ exits `2`.
 Completion is decided by **re-judging `done_when` against the final transcript**
 (the loop's own mid-run check can be preempted by the turn cap), so the exit code
 reflects whether the task actually finished. Without a `done_when`, a run is
-"completed" when the loop ended before the cap (the agent declared done, the user
+"completed" when the loop ended before the cap (the worker declared done, the user
 stopped, or a single-turn run answered once) — with one exception: a **settled**
 run. That is a run whose loop ended on the work it already had: because the
 supervisor judged the work incomplete and then named no next instruction to act on
@@ -332,10 +332,10 @@ call goes through oneharness:
   a real harness (Claude Code, Codex, …). The worker side uses `worker_config`
   when set, else the discovered `oneharness.toml`; the judge side uses
   `judge_config` (`--config`). Set
-  `stream: true` when that binary publishes its agent turn as the
+  `stream: true` when that binary publishes its worker turn as the
   [streamed protocol](streaming.md), and `control: true` to open the out-of-band
   [turn-control socket](control.md) an `oneharness interrupt` can redirect the
-  agent turn through. See [live-tier.md](live-tier.md).
+  worker turn through. See [live-tier.md](live-tier.md).
 
   `mock_harness: [<id>, …]` runs those harness ids against **oneharness's own
   deterministic `MOCK_*` responder** instead of a paid model — the free way to
@@ -360,7 +360,7 @@ call goes through oneharness:
   and as `--provider`; left out of numeric evals and assessments.
   [judges.md](judges.md#the-llmlint-judge) is the contract.
 - **`split`** — compose a skill-runner with a separate judge side (e.g. drive
-  the agent on one harness, judge on another). The judge side is a **list of
+  the worker on one harness, judge on another). The judge side is a **list of
   judges** — `judges:` — every one run concurrently against each worker turn and
   combined into one attributed answer, each judge's decision recorded on the
   report's `judge_decisions` and printed under its turn in the text format;

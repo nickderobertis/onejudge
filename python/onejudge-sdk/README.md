@@ -43,7 +43,7 @@ discarding the exit code or stderr. A caller timeout raises
 
 ## Watching a run as it happens
 
-An agent turn can take 600–2000 seconds. Pass `on_event` to see its tool activity
+A worker turn can take 600–2000 seconds. Pass `on_event` to see its tool activity
 while it is still running: the SDK runs the CLI under `--stream`, reads the NDJSON
 as it arrives, and calls back once per event before returning the same
 `RunResult`.

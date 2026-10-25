@@ -12,7 +12,7 @@ the sum.
 
 A panel of **one** judge — which is what every config written before panels
 existed builds — is byte-identical to a bare provider: the same transcript, the
-same session names, the same usage and the same agent `control` address. It adds
+same session names, the same usage and the same worker `control` address. It adds
 the per-judge record below, and — under `control: true` — the judge's own
 `supervisor_control` address, which the release before panels wrote as `null`
 (a defect; see [how a panel decides](#how-a-panel-decides)).
@@ -29,7 +29,7 @@ and the [`llmlint` judge](#the-llmlint-judge)
 ```yaml
 provider:
   kind: split
-  skill: {kind: oneharness, stream: true, control: true}   # the agent side, unchanged
+  skill: {kind: oneharness, stream: true, control: true}   # the worker side, unchanged
   judges:                                   # one or more; exclusive with `judge:`
     - kind: oneharness                      # the LLM simulated user, exactly as today
       judge_config: oneharness.judge.toml
@@ -135,7 +135,7 @@ The engine hands the base to its provider through `Provider::set_history_scope`
 before every judge-side entry point; a panel of more than one hands each judge a
 copy labelled with its own label, and a panel of one hands it through unchanged.
 A provider nothing scoped — a library caller invoking it directly — sets no name,
-and oneharness derives one from the prompt as it always has. The agent side's
+and oneharness derives one from the prompt as it always has. The worker side's
 `<base>-skill` is unchanged. Only the names are new: onejudge still asks
 oneharness to record every call (the record is where `history_id` comes from),
 so what is recorded, and when, is as it was.

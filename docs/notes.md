@@ -2,7 +2,7 @@
 
 A note is a correction sent into a conversation that is already running. The seam
 exists because the two ways of doing it before reached one party each: a note
-delivered to the live *agent* turn never reached the judge, while an amendment
+delivered to the live *worker* turn never reached the judge, while an amendment
 bound the judge and could not interrupt. Neither did both, so a worker and its
 judge ended up holding two instructions of equal authority — one measured ruling
 was contradicted by the node's own judge seven minutes later, reviewing against a
@@ -27,7 +27,8 @@ notes
 **Where the shapes are declared.** Here. `Note`, `NoteText`, `Criterion`,
 `Addressee`, `Party`, `DeliveredNote`, `Accepted`, `Undelivered`, `Criteria` and the
 two renderings (`supervisor_block`, `worker_block`) are **onejudge's own** note
-contract — the message `agent.note@1`, declared in `crates/onejudge/src/note.rs` and
+contract — the message `agent.note@1` (whose `agent.` prefix is the message-bus
+namespace, kept for compatibility, not the worker party), declared in `crates/onejudge/src/note.rs` and
 published as the schema bundle [`schemas/note.json`](../schemas/note.json), which is
 what a client in another language validates an arriving note against. `oneagentgraph`
 and `onepipeline` import them from `onejudge::note`, so there is still one

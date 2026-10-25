@@ -26,7 +26,7 @@ use oneharness_core::io::run::RunRequest;
 /// grow a flag the other's rendering has never seen.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct TurnSpec {
-    /// The system prompt (the skill's instructions). Agent side only.
+    /// The system prompt (the skill's instructions). Worker side only.
     pub(crate) system: Option<String>,
     /// The working directory the harness runs in, and where oneharness starts its
     /// own project-config discovery.
@@ -50,7 +50,7 @@ pub(crate) struct TurnSpec {
     /// turn, role and judge it belongs to — so `oneharness history watch --label
     /// session=<session>` selects one onejudge run's harness activity.
     pub(crate) labels: BTreeMap<String, String>,
-    /// Ask for normalized tool events. Agent side only.
+    /// Ask for normalized tool events. Worker side only.
     pub(crate) events: bool,
     /// Publish those events as they occur rather than only on the finished report.
     pub(crate) stream: bool,

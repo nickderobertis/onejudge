@@ -190,9 +190,9 @@ pub struct SupervisorQuery<'a> {
     pub persona: &'a str,
     /// The completion criterion, when the caller supplied one.
     pub done_when: Option<&'a str>,
-    /// Agent worktree used by oneharness and by the history command.
+    /// Worker worktree used by oneharness and by the history command.
     pub worktree: &'a str,
-    /// Agent-side oneharness history name.
+    /// Worker-side oneharness history name.
     pub history_name: &'a str,
     /// Every note delivered into this run so far, in delivery order.
     ///
@@ -231,7 +231,7 @@ pub enum TurnOutcome {
     },
 }
 
-/// A unified supervisor decision after an ordinary, nonterminal agent turn.
+/// A unified supervisor decision after an ordinary, nonterminal worker turn.
 #[derive(Debug, Clone, PartialEq)]
 pub enum SupervisorOutcome {
     /// The task is complete; the reason is retained on the engine outcome/report.
@@ -254,7 +254,7 @@ pub enum SupervisorOutcome {
     /// work, and aborting it would destroy that work along with every commit of
     /// context behind it. The engine settles the run on what it has and records why
     /// ([`Outcome::settled_reason`](crate::Outcome::settled_reason)), which is also
-    /// what keeps "the agent could not do it" distinguishable from "the supervisor
+    /// what keeps "the worker could not do it" distinguishable from "the supervisor
     /// had nothing to say".
     NoInstruction {
         /// Whatever justification the supervisor did give, possibly empty.
@@ -402,7 +402,7 @@ pub struct Assessment {
 ///
 /// A provider owns harness/model *selection* itself (onejudge no longer passes a
 /// platform or model): the [`OneharnessProvider`](crate::OneharnessProvider) relies
-/// on oneharness's discovered config for the agent side and a separately-named
+/// on oneharness's discovered config for the worker side and a separately-named
 /// config for the judge side, and a [`CommandProvider`](crate::CommandProvider)
 /// backend chooses however it likes.
 pub trait Provider {
@@ -429,7 +429,7 @@ pub trait Provider {
     }
 
     /// Where an `oneharness interrupt` process addresses the controllable turn
-    /// this provider's **agent side** opened, if one was asked for.
+    /// this provider's **worker side** opened, if one was asked for.
     ///
     /// The default is [`ControlOutcome::NotRequested`](crate::ControlOutcome): a backend with no
     /// out-of-band turn control never claims one. A composing provider forwards
@@ -585,14 +585,14 @@ pub trait Provider {
 
     /// Like [`Provider::respond_streaming`], but delivers **every** normalized
     /// event the harness reported as it is observed, in oneharness's own
-    /// [`ActionEvent`] shape — the agent's own `message` and `reasoning` items as
+    /// [`ActionEvent`] shape — the worker's own `message` and `reasoning` items as
     /// well as its tool activity, and the lifecycle fields (a call's `status`) a
     /// [`ToolEvent`] does not keep. It is what a reader rendering the turn for a
     /// person needs; [`AssistantTurn::events`] still holds the tool activity alone.
     ///
     /// The default runs [`Provider::respond_streaming`] and hands each tool event
     /// on as the [`ActionEvent`] it describes, with the lifecycle fields unknown: a
-    /// backend that reports only tool events has no agent text to deliver. The
+    /// backend that reports only tool events has no worker text to deliver. The
     /// oneharness backend overrides it with what oneharness reported.
     ///
     /// # Errors
@@ -663,7 +663,7 @@ pub trait Provider {
     /// under the same empty-continue policy the real seams use: a simulated user
     /// with nothing to say is re-asked up to [`SUPERVISOR_REASK_LIMIT`] times and
     /// then reported as [`SupervisorOutcome::NoInstruction`], never delivered to
-    /// the agent as a blank user turn.
+    /// the worker as a blank user turn.
     ///
     /// # Errors
     /// Propagates a failure of the underlying `judge` / `simulate_user` call.
@@ -947,10 +947,10 @@ fn parse_supervisor_shape(text: &str) -> std::result::Result<SupervisorOutcome, 
     } else {
         // A `continue` with nothing in it used to be refused here, which killed the
         // whole run: a `Protocol` error aborts the dispatch and takes every commit
-        // of context with it, however much finished work the agent had produced.
+        // of context with it, however much finished work the worker had produced.
         // The supervisor having nothing to say is not the same failure as a broken
         // transport, so it is reported rather than raised. The blank `message` is
-        // still never delivered to the agent as a user turn.
+        // still never delivered to the worker as a user turn.
         match message.filter(|m| !m.trim().is_empty()) {
             Some(message) => Ok(SupervisorOutcome::Continue {
                 message: message.to_string(),
@@ -1435,7 +1435,7 @@ mod tests {
     struct DefaultSupervisor {
         complete: bool,
         /// The simulated user has nothing to say — the legacy shape of the same
-        /// defect, since a blank next turn is as useless to the agent as none.
+        /// defect, since a blank next turn is as useless to the worker as none.
         blank_user: bool,
     }
 
@@ -1643,7 +1643,7 @@ mod tests {
     fn supervisor_prompt_states_what_message_is_for_and_that_it_is_required() {
         // The whole defect starts here: a supervisor that is never told what
         // `message` does has no reason to write one, and "not done" with nothing
-        // in it leaves the agent — which receives that string and nothing else —
+        // in it leaves the worker — which receives that string and nothing else —
         // with no path forward.
         let prompt = build_supervisor_prompt(
             &SupervisorQuery {

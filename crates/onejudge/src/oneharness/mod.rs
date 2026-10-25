@@ -53,8 +53,8 @@
 //! reached only by naming a binary or installing such a hook. The gap is written
 //! up, with a proposal against oneharness, in `docs/oneharness-library.md`.
 //!
-//! It can also ask for a **controllable** agent turn (`with_control`): the
-//! agent-side call adds `--control`, oneharness opens an out-of-band socket for the
+//! It can also ask for a **controllable** worker turn (`with_control`): the
+//! worker-side call adds `--control`, oneharness opens an out-of-band socket for the
 //! turn, and the address an `oneharness interrupt` process would use is reported on
 //! [`Provider::control`]. onejudge redirects that turn itself only for a note sent
 //! into its own conversation ([`Provider::turn_control`] names where). A oneharness
@@ -339,11 +339,11 @@ enum Execution {
 /// What **one party** of a run can say about out-of-band turn control.
 ///
 /// Two of these, one per party, because the two sides are separately addressable
-/// and separately refusable: the agent and the supervisor run under different
+/// and separately refusable: the worker and the supervisor run under different
 /// configs, on different session names — `<base>-skill` and `<base>-user`, so
 /// different sockets — and a harness that can be interrupted on one side is not
 /// thereby interruptible on the other. Collapsing them into one field would make
-/// a judge-side refusal read as an agent-side one.
+/// a judge-side refusal read as a worker-side one.
 struct PartyControl {
     /// Which party this is, for the warning a degraded ask prints.
     party: &'static str,
@@ -404,7 +404,7 @@ struct JudgeRecord {
 /// Which party a oneharness run is made for, as its `role=` history label says.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LabelledRole {
-    /// The agent's own turn.
+    /// The worker's own turn.
     Worker,
     /// A supervisor decision or a simulated-user turn.
     Supervisor,
@@ -454,7 +454,7 @@ pub struct OneharnessProvider {
     mock_harness: Vec<String>,
     stream: bool,
     control: bool,
-    /// The agent side's control state, reported on [`Provider::control`].
+    /// The worker side's control state, reported on [`Provider::control`].
     agent: PartyControl,
     /// The supervisor side's, reported on [`Provider::supervisor_control`].
     supervisor: PartyControl,
@@ -498,6 +498,7 @@ impl OneharnessProvider {
             mock_harness: Vec::new(),
             stream: false,
             control: false,
+            // `agent` is the worker side's label, kept for what already reads it.
             agent: PartyControl::new("agent"),
             supervisor: PartyControl::new("judge"),
             telemetry: RefCell::new(Vec::new()),
@@ -566,7 +567,7 @@ impl OneharnessProvider {
     /// a mock harness therefore runs `oneharness` from `PATH` unless
     /// [`with_bin`](Self::with_bin) named one.
     ///
-    /// It applies to **both sides** of the conversation — the agent turn and the
+    /// It applies to **both sides** of the conversation — the worker turn and the
     /// judge / simulated-user turn — since either one otherwise bills a model. The
     /// two sides run under different oneharness configs, so an id one config selects
     /// and the other does not is oneharness's own loud `--mock-harness` error rather
@@ -646,7 +647,7 @@ impl OneharnessProvider {
 
     /// Append `instructions` to every evaluator prompt this provider's judge
     /// side is handed — what to verify and how, for a judge whose posture lets it
-    /// act — the way a system prompt frames the agent. The answer format each
+    /// act — the way a system prompt frames the worker. The answer format each
     /// prompt ends with is unchanged: it is the protocol.
     #[must_use]
     pub fn with_judge_instructions(mut self, instructions: impl Into<String>) -> Self {
@@ -705,7 +706,7 @@ impl OneharnessProvider {
         }
     }
 
-    /// Declare that the agent side **streams**: the turn asks oneharness to
+    /// Declare that the worker side **streams**: the turn asks oneharness to
     /// publish incrementally, so a tool event reaches the caller's sink the
     /// instant it is observed and the finished report is read exactly as a
     /// buffered one is. On the spawning seam the same contract arrives as the
@@ -723,7 +724,7 @@ impl OneharnessProvider {
         self
     }
 
-    /// Ask for a **controllable** agent turn: the agent-side call adds
+    /// Ask for a **controllable** worker turn: the worker-side call adds
     /// `oneharness run --control`, which opens an out-of-band unix socket for the
     /// turn's lifetime so a separate `oneharness interrupt` process can redirect
     /// it in flight. The address is reported on [`Provider::control`] and on
@@ -738,7 +739,7 @@ impl OneharnessProvider {
     /// refusal is reported as [`ControlOutcome::Unavailable`] rather than failing
     /// a run the caller asked to have judged.
     ///
-    /// **Both parties are controlled**, on separate addresses: the agent's turn
+    /// **Both parties are controlled**, on separate addresses: the worker's turn
     /// under `<base>-skill` and the supervisor's decision under `<base>-user`. The
     /// two are reported apart, on [`Provider::control`] and
     /// [`Provider::supervisor_control`], because a harness that can be interrupted
@@ -915,7 +916,7 @@ impl OneharnessProvider {
         }
     }
 
-    /// One agent-side invocation: streamed when the provider declared streaming,
+    /// One worker-side invocation: streamed when the provider declared streaming,
     /// otherwise the buffered call with the finished turn's events replayed.
     fn respond_once(
         &self,
@@ -1014,7 +1015,7 @@ impl OneharnessProvider {
     /// alone, exactly as it always has.
     ///
     /// `control` asks for a **controllable supervisor turn**, and rides exactly the
-    /// ladder the agent side does: the most capable call first, and each retry
+    /// ladder the worker side does: the most capable call first, and each retry
     /// drops the one thing the previous attempt was refused for. Both refusals cost
     /// no model tokens — oneharness validates the flags before it spawns a harness
     /// — so retrying is cheaper than making the caller pre-declare what its judge
@@ -1356,7 +1357,7 @@ impl OneharnessProvider {
     }
 
     /// Record one invocation's telemetry and per-candidate attribution against the
-    /// party that made the call — and, on the agent side, the control socket the
+    /// party that made the call — and, on the worker side, the control socket the
     /// report named.
     fn record(&self, op: &str, invocation: &Invocation) {
         let role = if op == "respond" {
@@ -1594,17 +1595,17 @@ fn judge_side_spec(
         system: None,
         cwd: cwd.map(str::to_string),
         config: configs,
-        // As on the agent side: `OneharnessProvider::mocked` folds it in.
+        // As on the worker side: `OneharnessProvider::mocked` folds it in.
         mock_harness: Vec::new(),
         session: session.map(str::to_string),
         history_name: history_name.map(str::to_string),
         // Set by the caller, which knows the run, turn and role this is.
         labels: BTreeMap::new(),
         events,
-        // Streaming is about the long agent turn, not the short judgement calls:
+        // Streaming is about the long worker turn, not the short judgement calls:
         // a judge's events arrive on its finished report.
         stream: false,
-        // The same expression the agent side uses, for the same reason: turn
+        // The same expression the worker side uses, for the same reason: turn
         // control is addressed by the `--session` name, so it only ever rides
         // alongside one and is dropped when the session is.
         control: control && session.is_some(),
@@ -2385,7 +2386,7 @@ mod tests {
         assert!(agent.stream);
         assert!(argv_of(&agent).iter().any(|a| a == "--stream"));
         // The judge / simulated-user side stays buffered: streaming is about the
-        // long agent turn, not the short judgement calls.
+        // long worker turn, not the short judgement calls.
         let judge = judge_side_spec(Vec::new(), Some("s"), None, None, false, false, "p");
         assert!(!judge.stream);
         assert!(!argv_of(&judge).iter().any(|a| a == "--stream"));
@@ -2763,7 +2764,7 @@ mod tests {
         .iter()
         .any(|a| a == "--control"));
         // Asked for, but with no session to be addressed by: dropped, exactly as it
-        // is on the agent side, because the socket is keyed on the session name.
+        // is on the worker side, because the socket is keyed on the session name.
         assert!(!judge_side_spec(Vec::new(), None, None, None, true, false, "p").control);
         assert!(!argv_of(&judge_side_spec(
             Vec::new(),

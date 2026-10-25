@@ -32,13 +32,13 @@ pub enum AnyProvider {
     /// A custom JSON-lines command backend.
     Command(CommandProvider),
     /// A judge whose verdict is one `llmlint` run over the worker's tree. Only
-    /// ever built as a judge of a [`AnyProvider::Split`] panel; every agent-side
+    /// ever built as a judge of a [`AnyProvider::Split`] panel; every worker-side
     /// call on it is [`crate::Error::Invalid`].
     Llmlint(LlmlintProvider),
     /// A composed skill-runner + judge-panel backend, dispatched like
     /// [`crate::SplitProvider`].
     Split {
-        /// Runs the agent's turns.
+        /// Runs the worker's turns.
         skill: Box<AnyProvider>,
         /// The judges — one or more, run concurrently and combined — that judge
         /// and play the simulated user.

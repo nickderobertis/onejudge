@@ -9,7 +9,8 @@ use crate::Usage;
 #[cfg_attr(feature = "sdk-schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "lowercase")]
 pub enum TelemetryRole {
-    /// The skill/agent under evaluation.
+    /// The worker side: the skill under evaluation. Serialized `agent`, a name
+    /// kept for the consumers that already read it.
     Agent,
     /// The simulated user, supervisor, or final evaluator.
     Judge,
@@ -104,7 +105,7 @@ impl JudgePosture {
 /// and stops at the first that runs the task, so an invocation can have several of
 /// these: the ones it fell through, then the one that ran. This is the typed form
 /// of oneharness's per-candidate record — the thing that lets a consumer attribute
-/// a failure to a *side* (agent vs judge) and an *identity* (which harness, which
+/// a failure to a *side* (the worker, recorded as `agent`, vs the judge) and an *identity* (which harness, which
 /// account) instead of grepping a message.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "sdk-schema", derive(schemars::JsonSchema))]
@@ -203,19 +204,20 @@ pub struct HarnessAttribution {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub judge: Option<String>,
     /// The permission posture this invocation ran under, for an evaluator
-    /// judge-side call; absent for the agent's turns and for a judge-side call
+    /// judge-side call; absent for the worker's turns and for a judge-side call
     /// with no worktree, whose mode onejudge does not set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub posture: Option<JudgePosture>,
 }
 
-/// Timing, usage, and native linkage for the complete agent+judge run.
+/// Timing, usage, and native linkage for the complete worker+judge run.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "sdk-schema", derive(schemars::JsonSchema))]
 pub struct Telemetry {
     /// Monotonic duration from task-loop entry through final result assembly.
     pub wall_ms: u64,
-    /// Agent-side measurements.
+    /// Worker-side measurements, under the `agent` key, which denotes the worker
+    /// side.
     pub agent: PartyTelemetry,
     /// Simulated-user, supervisor, and evaluator measurements.
     pub judge: PartyTelemetry,

@@ -53,7 +53,7 @@
 //!   `provider.control: true`) and off by default, it reports the
 //!   [`ControlAddress`] an `oneharness interrupt` process would use — or why the
 //!   ask could not be honored. One per party: [`Provider::control`] for the
-//!   agent's turn and [`Provider::supervisor_control`] for the supervisor's
+//!   worker's turn and [`Provider::supervisor_control`] for the supervisor's
 //!   decision, on separate sockets and separately refusable. onejudge redirects
 //!   a live turn itself only for a note sent into its own conversation; see
 //!   `docs/control.md`.

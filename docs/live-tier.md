@@ -28,7 +28,7 @@ just test-live
 ```
 
 Harness/model selection lives in oneharness's config, not onejudge. The live test
-uses the committed workspace-root `oneharness.toml` for both the agent and judge
+uses the committed workspace-root `oneharness.toml` for both the worker and judge
 sides, resolving it independently of Cargo's process CWD. To target a specific
 harness/model, edit that file or use oneharness's own `ONEHARNESS_HARNESSES` /
 `ONEHARNESS_MODEL` env overrides (which oneharness reads) — onejudge itself passes

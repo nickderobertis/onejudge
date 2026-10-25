@@ -167,7 +167,7 @@ pub struct RunArgs {
     pub artifacts: Vec<String>,
     /// The caller-owned session name threaded across turns (default
     /// `onejudge`). Every party's oneharness history is named after it: the
-    /// agent's `<session>-skill`, the supervisor's `<session>-user`, eval verdicts
+    /// worker's `<session>-skill`, the supervisor's `<session>-user`, eval verdicts
     /// `<session>-judge` and the assessment `<session>-assess`, each suffixed
     /// `-<label>` in a panel of more than one judge — so `oneharness history show
     /// <session>-user-<label> --project <worktree> --all` finds one judge's turns
@@ -711,7 +711,7 @@ fn init(args: InitArgs) -> Result<i32, CliError> {
 
     // Harness/model selection lives in oneharness's own config files now, so
     // scaffold them by shelling out to `oneharness init` (see [`MIN_ONEHARNESS`]):
-    // the discovered `oneharness.toml` drives the agent side, and
+    // the discovered `oneharness.toml` drives the worker side, and
     // `oneharness.judge.toml` drives the judge / simulated-user side
     // (`provider.judge_config`).
     oneharness_init(&args.oneharness_bin, "oneharness.toml", args.force)?;
@@ -1566,7 +1566,7 @@ mod tests {
 
     #[test]
     fn human_render_says_why_a_settled_run_is_incomplete() {
-        // "incomplete" alone reads as "the agent could not do it". A run the
+        // "incomplete" alone reads as "the worker could not do it". A run the
         // supervisor left without a next instruction has to say so.
         let mut s = summary(false, true, vec![]);
         s.report.settled_reason = Some("the supervisor gave no next instruction".into());

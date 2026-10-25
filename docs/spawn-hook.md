@@ -13,7 +13,7 @@ removes that. The `oneharness` processes are now created by the embedder's own
 process, inside whatever group it happens to be in, and a cancel can no longer
 name a tree to terminate.
 
-The consequence is not cosmetic. An agent harness that survives a cancellation
+The consequence is not cosmetic. A harness that survives a cancellation
 keeps calling the model and keeps billing tokens for a run nobody is watching. On
 Windows in particular, `cancel --kill` cannot reap a two-party (worker + judge)
 harness tree at all, because the processes are in no job object the canceller
@@ -132,6 +132,9 @@ instead ([contract.md](contract.md)):
   { "role": "judge", "op": "judge", "program": "oneharness", "pid": 41244 }
 ]
 ```
+
+`role` is the side that spawned the process: `agent` denotes the worker side, and
+`judge` the judge side.
 
 `Engine::spawned_processes()` returns the same records mid-run and after a
 *failed* run, so a caller that has to clean up knows what was created.

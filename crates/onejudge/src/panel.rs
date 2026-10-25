@@ -558,7 +558,7 @@ impl<J: Provider + Send> JudgePanel<J> {
             .ok_or_else(|| Error::Invalid("no judge in the panel can play the user".into()))
     }
 
-    /// The panel is the judge side only: it runs no agent turn.
+    /// The panel is the judge side only: it runs no worker turn.
     fn no_agent_side<T>() -> Result<T> {
         Err(Error::Invalid(
             "a judge panel runs no agent turn; compose it as the judge half of a `SplitProvider`"

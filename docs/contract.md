@@ -53,13 +53,13 @@ and re-export, so onejudge — not its consumers — owns the shape of a judged 
   },
   "telemetry": {                        // omitted when nothing was measured
     "wall_ms": 40,
-    "agent": { "model_ms": 20, "tool_ms": 5, "session_ids": ["native-agent-1"] },
+    "agent": { "model_ms": 20, "tool_ms": 5, "session_ids": ["native-agent-1"] },  // the worker side
     "judge": { "model_ms": 10, "tool_ms": 0 },
     "orchestration_ms": 5,
     "sessions": [ /* one link per invocation that exposed a native session id; `judge` names the panel judge, when there is one */ ],
     "attribution": [                    // omitted when the provider names no candidate
       {
-        "role": "agent",               // "agent" | "judge" — which SIDE made the call
+        "role": "agent",               // "agent" (the worker side) | "judge" — which SIDE made the call
         "turn_index": 1,               // joins to `sessions` by (role, turn_index)
         "ran": "claude-code",          // the candidate that ran; null when none could
         "fell_through": [              // a fallback chain's routed-around candidates
@@ -98,9 +98,9 @@ and re-export, so onejudge — not its consumers — owns the shape of a judged 
 }
 ```
 
-`telemetry.attribution` is what makes a failure attributable to a **side** (agent
-vs judge) and an **identity** (which harness, which account) without parsing a
-message. `status`, `failure_kind`, and each `fell_through.reason` are oneharness's
+`telemetry.attribution` is what makes a failure attributable to a **side** (the
+worker, recorded as `agent`, vs the judge) and an **identity** (which harness,
+which account) without parsing a message. `status`, `failure_kind`, and each `fell_through.reason` are oneharness's
 own wire tokens — `failure_kind` is one of `auth`, `rate_limit`,
 `server_overloaded`, `model_not_found`, `quota`, `tool_deferred`,
 `session_not_found`, `untrusted_directory`, `input_too_large`, `model_mismatch`,
@@ -165,7 +165,7 @@ completion decision, and it has three causes — the text says which:
 Neither is a failure, and a run that simply hit `max_turns` carries neither.
 
 The distinction is the point: without it, a supervisor with nothing to say is
-indistinguishable from an agent that could not do the task, and an operator acts
+indistinguishable from a worker that could not do the task, and an operator acts
 on the wrong one. The three settle causes, a genuine provider failure (an
 `Error`, and under the CLI a `FailureReport`), and a completion are each
 distinguishable for the same reason. See [protocol.md](protocol.md#supervisor--decide-completion-or-produce-the-next-user-turn).
@@ -179,7 +179,7 @@ reason beside it means it was asked for and could not be honored — a different
 fact, and the one a supervisor has to route around. See
 [control.md](control.md).
 
-**Two pairs, one per party** (v11). `control` is the agent's turn, addressed by the
+**Two pairs, one per party** (v11). `control` is the worker's turn, addressed by the
 `<base>-skill` session; `supervisor_control` is the judge's decision, addressed by
 `<base>-user`. They are different sockets and are refused independently — a harness
 that can be interrupted on one side is not thereby interruptible on the other — so
@@ -274,7 +274,8 @@ named JSON Schema roots:
   when the run fails (see below);
 - `frames`: the command-provider request frames, one per operation, keyed by the
   id each is registered under — `agent.onejudge-frame.<op>@8` for `respond`,
-  `user`, `supervisor`, `judge` and `assess`. They are the declaration of the
+  `user`, `supervisor`, `judge` and `assess` (the `agent.` prefix is the
+  message-bus namespace, kept for compatibility, not the worker party). They are the declaration of the
   frames, and `sdk_schema::register_frames` registers them in a `onemessagebus`
   registry.
 

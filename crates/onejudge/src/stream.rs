@@ -4,7 +4,7 @@
 //! carrying the same report a buffered provider writes at the end. See
 //! `docs/streaming.md`.
 //!
-//! It exists so a 600–2000 second agent turn is *visible while it runs* instead of
+//! It exists so a 600–2000 second worker turn is *visible while it runs* instead of
 //! only when it ends. The reader is a pure function over a [`BufRead`], separate
 //! from the `spawn + wait` shell in [`oneharness`](crate::OneharnessProvider), so
 //! every protocol decision below is unit-tested directly.
@@ -63,7 +63,7 @@ fn protocol(op: &str, message: impl std::fmt::Display) -> Error {
 }
 
 /// Consume a streamed provider's stdout, delivering each normalized event to
-/// `on_event` as it arrives — the agent's `message` and `reasoning` items as well
+/// `on_event` as it arrives — the worker's `message` and `reasoning` items as well
 /// as its tool activity — and collecting the tool activity into `events`, until
 /// the terminal report line (or an abort) ends the turn.
 ///

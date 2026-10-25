@@ -4,7 +4,7 @@
 //! onejudge draws only its own framing — a rule per turn, each judge's decision,
 //! the feedback handed back, and a closing summary. The worker's events are
 //! drawn by oneharness's public renderer ([`render_event`]), so a command, a file
-//! change, the agent's text and its reasoning read the same whether the run came
+//! change, the worker's text and its reasoning read the same whether the run came
 //! through oneharness or through onejudge; a judge's tool events go through the
 //! same renderer under that judge's label. `ToolEvent::summary` is not used here:
 //! it is the compact form a judge prompt carries, not a view for a person.

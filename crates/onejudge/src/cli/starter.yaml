@@ -24,7 +24,7 @@ provider:
   # instructions: "Run the tests yourself."  # oneharness: appended to this judge's prompts
   # events: true                         # oneharness: record the judge's tool events
   #                                      # (default: on for a writable mode)
-  # stream: true                         # oneharness: the agent binary publishes
+  # stream: true                         # oneharness: the worker binary publishes
   #                                      # NDJSON tool events as they happen, then a
   #                                      # terminal report (see docs/streaming.md)
   # control: true                        # oneharness: open an out-of-band turn-control
