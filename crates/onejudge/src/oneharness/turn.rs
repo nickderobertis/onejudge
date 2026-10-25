@@ -20,10 +20,10 @@ use oneharness_core::io::run::RunRequest;
 
 /// Everything one `oneharness run` invocation needs, independent of *how* it runs.
 ///
-/// The agent side and the judge/simulated-user side are the same shape with
-/// different fields set — the agent carries `system` and asks for `events`, the
-/// judge side carries `config` — so one type describes both and neither can grow a
-/// flag the other's rendering has never seen.
+/// The worker side and the judge/simulated-user side are the same shape with
+/// different fields set — the worker carries `system` and asks for `events`, each
+/// side carries its own `config` — so one type describes both and neither can
+/// grow a flag the other's rendering has never seen.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct TurnSpec {
     /// The system prompt (the skill's instructions). Agent side only.
@@ -33,8 +33,10 @@ pub(crate) struct TurnSpec {
     pub(crate) cwd: Option<String>,
     /// The oneharness config files this turn layers, earliest first: each later
     /// file overrides the ones before it, field by field, and an empty list is
-    /// oneharness's own discovery. Judge side only — the agent side uses
-    /// oneharness's discovered default.
+    /// oneharness's own discovery. Both sides: the judge side's config list, and
+    /// on the worker side the worker config alone — or nothing, leaving the
+    /// worker to discovery, when none was given. onejudge's history default is
+    /// layered beneath either when the turn runs.
     pub(crate) config: Vec<PathBuf>,
     /// Harness ids whose provider process oneharness replaces with its own
     /// deterministic `MOCK_*`-scripted responder. Empty for an ordinary turn; see

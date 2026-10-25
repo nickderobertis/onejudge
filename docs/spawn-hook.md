@@ -54,6 +54,20 @@ request object of the JSON-lines protocol on a `CommandProvider`
 ([protocol.md](protocol.md)). So a child observed in `spawned` has not run a
 harness and has not created a descendant that could escape the assignment.
 
+### Group the process; never reconfigure it
+
+`spawning` hands you the whole `Command`, but a hook is for placing the process,
+not for changing what it runs. In particular a hook **must not add `--config`**:
+oneharness layers *every* `--config` it receives, in order, so an appended file
+does not replace the configuration onejudge passed — it lands on top of the
+history defaults and whatever user and project files onejudge resolved for that
+side, and any of those can still refuse the turn or reroute it. To run the
+worker side under exactly one file, set `worker_config`
+(`OneharnessProvider::with_worker_config`, or `provider.worker_config` /
+`--worker-config` on the CLI): onejudge then passes that file alone above its
+history default, on both execution seams and every retry, and discovers nothing
+from the worktree. The judge side's counterpart is `judge_config`.
+
 ## Installing one
 
 ```rust

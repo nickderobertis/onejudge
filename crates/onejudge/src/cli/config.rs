@@ -5,6 +5,12 @@
 //! wins over file, file wins over defaults), and the result is validated into a
 //! [`Plan`] the run driver executes. A malformed config — or an invalid env
 //! override — is a loud, actionable error, never a silent default.
+//!
+//! Each side's oneharness configuration is named here: `provider.judge_config`
+//! for the judge side, and `provider.worker_config` for the worker side, valid
+//! only on the `kind: oneharness` provider that runs the worker (the top-level
+//! provider or a split's `skill:`). `--worker-config` / `ONEJUDGE_WORKER_CONFIG`
+//! land on that same provider, and anywhere else either key is refused.
 
 use std::path::PathBuf;
 
@@ -23,10 +29,11 @@ use super::CliError;
 pub struct Config {
     /// Which backend runs the harness (and judges / plays the user).
     ///
-    /// Harness/model **selection** is no longer a onejudge concern: the agent side
-    /// uses oneharness's discovered `oneharness.toml`, and the judge side uses the
-    /// `provider.judge_config` file (default `oneharness.judge.toml`). Scaffold both
-    /// with `onejudge init`.
+    /// Harness/model **selection** is no longer a onejudge concern: the worker
+    /// side uses oneharness's discovered `oneharness.toml`, or exactly the
+    /// `provider.worker_config` file when one is named, and the judge side uses
+    /// the `provider.judge_config` file (default `oneharness.judge.toml`).
+    /// Scaffold both with `onejudge init`.
     #[serde(default)]
     pub provider: ProviderConfig,
     /// Path to a **skill** directory (containing a `SKILL.md`) whose instruction

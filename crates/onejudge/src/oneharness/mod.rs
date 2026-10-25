@@ -6,11 +6,16 @@
 //! call and [`Execution`] for the one seam that still spawns.
 //!
 //! **Harness/model selection lives in oneharness's config, not onejudge.** The
-//! agent side passes no `--harness`/`--model`, so it uses oneharness's discovered
-//! default config (`oneharness.toml`). The judge / simulated-user side passes
-//! `--config <judge_config>` (default `oneharness.judge.toml`) so it can run on a
-//! separately-configured harness/model — again without `--harness`/`--model`.
-//! Scaffold both with `onejudge init` (which shells out to `oneharness init`).
+//! worker side passes no `--harness`/`--model`. Without a worker config it uses
+//! oneharness's discovered config — the user file, then the project
+//! `oneharness.toml` found from the worktree; with one
+//! ([`OneharnessProvider::with_worker_config`]) it passes `--config
+//! <worker_config>` and that file alone, so nothing in the worktree reaches its
+//! routing. The judge / simulated-user side passes `--config <judge_config>`
+//! (default `oneharness.judge.toml`) so it can run on a separately-configured
+//! harness/model — again without `--harness`/`--model`. Either side's list has
+//! onejudge's history default layered beneath it. Scaffold both with `onejudge
+//! init` (which shells out to `oneharness init`).
 //!
 //! It targets **oneharness v0.26.0+**, whose `run-started` stream line announces
 //! each candidate's history before its events. Older streams remain readable,
