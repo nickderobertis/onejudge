@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.22.1](https://github.com/nickderobertis/onejudge/compare/onejudge-v0.22.0...onejudge-v0.22.1) - 2026-10-29
+
+### Fixed
+
+- *(engine)* never report a turn its own shutdown cancelled as lost ([#203](https://github.com/nickderobertis/onejudge/pull/203))
+
 ## [0.22.0](https://github.com/nickderobertis/onejudge/compare/onejudge-v0.21.0...onejudge-v0.22.0) - 2026-10-25
 
 ### Added
