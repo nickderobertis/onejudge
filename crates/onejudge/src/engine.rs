@@ -919,6 +919,24 @@ impl<'a> Engine<'a> {
                     let Some(user) = &conversation.user else {
                         return Err(error);
                     };
+                    // The recovery turn opens like any supervisor turn, and an
+                    // observer stopping the run is answered before the judge side is
+                    // asked: a member being stopped tears its harness down, and the
+                    // turn that fails of it is the stop's doing, whatever its kind —
+                    // `cancelled` included. Absent that stop, a cancelled turn is lost
+                    // like any other and the judge side is told so.
+                    let started_at = observed_at();
+                    if broke
+                        || on_observation(&Observation::TurnOpened(TurnOpened {
+                            turn: turn_index,
+                            role: Role::User,
+                            instruction: "",
+                            started_at: started_at.clone(),
+                        }))
+                        .is_break()
+                    {
+                        return Err(error);
+                    }
                     let delivered = self.delivered_notes();
                     let criteria = Criteria::compose(user.done_when.as_deref(), &delivered);
                     let rendered = criteria.rendered();
@@ -931,7 +949,7 @@ impl<'a> Engine<'a> {
                             worktree: &conversation.skill.dir,
                             history_name: &skill_session,
                             notes: &delivered,
-                            turn: self.lost_turn(&error),
+                            turn: self.lost_turn(&error, invoked),
                             turn_index,
                         },
                         &transcript.messages,
@@ -952,6 +970,32 @@ impl<'a> Engine<'a> {
                     };
                     if let Some(usage) = &decision.usage {
                         totals.add(usage);
+                    }
+                    let mut stopped = match &decision.outcome {
+                        SupervisorOutcome::Continue { message, .. } => {
+                            on_observation(&Observation::Message(TurnMessage {
+                                turn: turn_index,
+                                role: Role::User,
+                                text: message,
+                            }))
+                            .is_break()
+                        }
+                        _ => false,
+                    };
+                    if !stopped {
+                        stopped = on_observation(&Observation::TurnClosed(TurnClosed {
+                            turn: turn_index,
+                            role: Role::User,
+                            usage: decision.usage.as_ref(),
+                            started_at,
+                            finished_at: observed_at(),
+                            harness: None,
+                            model: None,
+                        }))
+                        .is_break();
+                    }
+                    if stopped {
+                        return Ok(self.finish(transcript, totals, true, None, None));
                     }
                     match decision.outcome {
                         SupervisorOutcome::Completed { reason } => {
@@ -1329,12 +1373,17 @@ impl<'a> Engine<'a> {
         }
     }
 
-    fn lost_turn(&self, error: &Error) -> TurnOutcome {
+    /// The lost worker turn as the judge side is told of it: the cause and
+    /// harness of the invocation this turn recorded past the `before` already
+    /// there, else the error's own kind. A turn that died before it reported
+    /// recorded none, and an earlier turn's candidate is not its own.
+    fn lost_turn(&self, error: &Error, before: usize) -> TurnOutcome {
         let telemetry = self.provider.invocation_telemetry();
         let invocation = telemetry
             .iter()
-            .rev()
-            .find(|entry| entry.role == Some(crate::TelemetryRole::Agent));
+            .filter(|entry| entry.role == Some(crate::TelemetryRole::Agent))
+            .skip(before)
+            .last();
         let candidate = invocation.and_then(|entry| {
             entry
                 .candidates
@@ -1692,7 +1741,8 @@ pub struct TurnOpened<'a> {
     pub role: Role,
     /// The message this turn answers, whole and unbounded — the original task on
     /// the first assistant turn, the supervisor's last instruction afterwards, and
-    /// the worker's last reply for a user turn.
+    /// the worker's last reply for a user turn — empty for the user turn that
+    /// follows a lost worker turn, which left no reply.
     pub instruction: &'a str,
     /// When the turn began, RFC 3339 with millisecond precision in UTC.
     pub started_at: String,

@@ -19,9 +19,12 @@
 //! add the worker's own `message` and `reasoning` events (all three repeatable,
 //! reported in the order they appear), `[[fail:KIND]]` returns a classified
 //! `failure_kind`, `[[status:TOKEN]]` returns a terminal status that carries no
-//! `failure_kind` at all (`timeout`, `spawn-error`, `skipped`), and
-//! `[[reject-session]]` (in `--system` on the worker side, in the prompt on the
-//! judge side) makes a `--session` run exit non-zero with oneharness's
+//! `failure_kind` at all (`timeout`, `spawn-error`, `skipped`),
+//! `[[later:PATH]]` splits `--system` in two — the first worker turn reads
+//! the markers before it and leaves PATH behind, every later turn reads only the
+//! markers after it, so one conversation's turns can differ — and
+//! `[[reject-session]]` (in `--system` on
+//! the worker side, in the prompt on the judge side) makes a `--session` run exit non-zero with oneharness's
 //! `does not support --session` text (the graceful-retry path).
 //! `[[echo-mock-harness]]` replies with the `--mock-harness` ids the run was
 //! spawned with (`none` for an unmocked one), so the deterministic-harness
@@ -240,7 +243,11 @@ fn main() {
             "`--format {format}` is not machine-readable (the fake prints only json)"
         ));
     }
-    let system = flags.value("--system").unwrap_or("");
+    let is_agent = !(prompt.contains("completion supervisor")
+        || prompt.contains("role-playing the USER")
+        || prompt.contains("Assessment request:")
+        || prompt.contains("Criterion:") && prompt.contains(onejudge::EVIDENCE_PROMPT_MARKER));
+    let system = later_turns(flags.value("--system").unwrap_or(""), is_agent);
     let session = flags.value("--session").map(str::to_string);
 
     // Marker for the e2e non-zero-exit error path: a real oneharness process
@@ -249,10 +256,6 @@ fn main() {
         emit_error("deliberate non-zero exit for the e2e error path");
     }
 
-    let is_agent = !(prompt.contains("completion supervisor")
-        || prompt.contains("role-playing the USER")
-        || prompt.contains("Assessment request:")
-        || prompt.contains("Criterion:") && prompt.contains(onejudge::EVIDENCE_PROMPT_MARKER));
     // The process-grouping and control journeys (`docs/spawn-hook.md`,
     // `docs/control.md`). Read from `--system` on the worker side and from the
     // prompt on the judge side, because those are the two texts a caller controls
@@ -811,6 +814,22 @@ fn emit_stream(system: &str, report: &Value) {
 /// hanging the suite forever.
 fn wait_for(path: &str) {
     wait_for_path(path, "the streamed events never reached a live consumer");
+}
+
+/// The markers this worker turn reads under `[[later:PATH]]`: those before it on
+/// the first turn, which leaves PATH behind, and those after it on every later one.
+fn later_turns(system: &str, is_agent: bool) -> &str {
+    let Some(path) = marker(system, "later").filter(|_| is_agent) else {
+        return system;
+    };
+    let tag = format!("[[later:{path}]]");
+    let (first, later) = system.split_once(&tag).unwrap_or((system, ""));
+    if std::path::Path::new(path).exists() {
+        return later;
+    }
+    std::fs::write(path, "")
+        .unwrap_or_else(|e| emit_error(&format!("could not mark the first turn: {e}")));
+    first
 }
 
 /// Block until `path` exists, failing loudly after 30s rather than hanging.

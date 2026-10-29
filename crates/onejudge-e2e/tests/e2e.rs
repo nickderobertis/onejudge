@@ -762,6 +762,196 @@ fn oneharness_process_failure_is_a_protocol_error() {
     assert_eq!(err.kind(), Some(ProviderErrorKind::Protocol));
 }
 
+/// The `supervisor` frames a recording echo judge was sent, in order.
+fn supervisor_frames(path: &std::path::Path) -> Vec<serde_json::Value> {
+    std::fs::read_to_string(path)
+        .unwrap_or_default()
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+        .filter(|request| request["op"] == "supervisor")
+        .collect()
+}
+
+/// `worker` judged by a command judge recording to the returned log that
+/// completes on a lost turn, running a skill whose instructions are `system` with
+/// every `{later}` replaced by a `[[later:…]]` marker of this journey's own.
+fn judged_lost_turns(
+    name: &str,
+    worker: OneharnessProvider,
+    system: &str,
+) -> (
+    SplitProvider<OneharnessProvider, CommandProvider>,
+    Skill,
+    std::path::PathBuf,
+) {
+    let later = scratch_path(&format!("{name}.later"));
+    let log = scratch_path(&format!("{name}.jsonl"));
+    let split = SplitProvider::new(
+        worker,
+        echo_with(&[
+            &format!("[[record:{}]]", log.display()),
+            "[[supervisor-complete-on-lost:the lost turn was reported]]",
+        ]),
+    );
+    let skill = skill_with(&system.replace("{later}", &format!("[[later:{}]]", later.display())));
+    (split, skill, log)
+}
+
+fn reviewed(skill: Skill) -> Conversation {
+    Conversation::multi_turn(
+        skill,
+        "go",
+        SimulatedUser::new("A tester.")
+            .done_when("never said")
+            .max_turns(4),
+    )
+}
+
+fn frame_turns(log: &std::path::Path) -> Vec<serde_json::Value> {
+    supervisor_frames(log)
+        .iter()
+        .map(|frame| frame["turn"].clone())
+        .collect()
+}
+
+#[test]
+fn a_lost_turn_after_a_taken_one_is_reported_with_its_own_cause() {
+    // The second turn's oneharness dies before it reports, so it recorded no
+    // invocation of its own: the judge is told the failure's own kind and no
+    // harness, never the first turn's `ok` on `codex:primary`. Driven both
+    // unobserved and under an observer that never stops, which see the same.
+    for observed in [false, true] {
+        let (split, skill, log) = judged_lost_turns(
+            &format!("lost-own-cause-{observed}"),
+            fake_oneharness(),
+            "[[harness:codex:primary]]{later}[[proc-exit]]",
+        );
+        let engine = Engine::new(&split, settings());
+        let mut seen = Vec::new();
+        let outcome = if observed {
+            engine.run_observing(&reviewed(skill), &mut |observation| {
+                if let Observation::TurnOpened(opened) = observation {
+                    seen.push((opened.turn, opened.role, opened.instruction.to_string()));
+                }
+                ControlFlow::Continue(())
+            })
+        } else {
+            engine.run(&reviewed(skill))
+        }
+        .unwrap();
+        assert_eq!(
+            outcome.completion_reason.as_deref(),
+            Some("the lost turn was reported")
+        );
+        assert_eq!(
+            frame_turns(&log),
+            [
+                serde_json::json!({"outcome": "taken"}),
+                serde_json::json!({"outcome": "lost", "cause": "protocol"}),
+            ],
+            "observed: {observed}"
+        );
+        if observed {
+            // The recovery turn opens like any supervisor turn, answering no reply.
+            assert_eq!(
+                seen.last(),
+                Some(&(2, Role::User, String::new())),
+                "{seen:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_cancelled_turn_its_observer_did_not_stop_reaches_the_judge_with_its_own_cause() {
+    // A cancellation that is not the run's shutdown — oneharness reports the turn
+    // `cancelled` while the observer keeps going — is a lost turn like any other,
+    // told with the cancelled candidate's own cause and harness, never the first
+    // turn's `ok` on `codex:primary`.
+    let (split, skill, log) = judged_lost_turns(
+        "lost-cancelled",
+        fake_oneharness(),
+        "[[harness:codex:primary]]{later}[[harness:claude-code:backup]][[status:cancelled]]",
+    );
+    let outcome = Engine::new(&split, settings())
+        .run_observing(&reviewed(skill), &mut |_| ControlFlow::Continue(()))
+        .unwrap();
+    assert_eq!(
+        outcome.completion_reason.as_deref(),
+        Some("the lost turn was reported")
+    );
+    assert_eq!(
+        frame_turns(&log),
+        [
+            serde_json::json!({"outcome": "taken"}),
+            serde_json::json!({"outcome": "lost", "cause": "cancelled", "harness": "claude-code:backup"}),
+        ]
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_turn_torn_down_because_its_member_is_stopping_is_not_put_to_the_judge_as_lost() {
+    // The real shutdown, in order: the worker's turn is live and silent (its
+    // oneharness holds before writing a byte), its member is condemned — the
+    // observer will answer stop from now on — and the member's group is killed,
+    // exactly as an embedder reaps a member it is stopping. The turn fails of the
+    // kill, and the judge is never told it was lost.
+    let hold = scratch_path("lost-while-stopping.never");
+    let holding = scratch_path("lost-while-stopping.argv");
+    let groups = std::sync::Arc::new(OwnedProcessGroups::default());
+    let (split, skill, log) = judged_lost_turns(
+        "lost-while-stopping",
+        fake_oneharness().with_spawn_hook(groups.clone()),
+        &format!(
+            "[[record-argv:{}]][[hold:{}]]",
+            holding.display(),
+            hold.display()
+        ),
+    );
+    let stopping = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let member = std::thread::spawn({
+        let (groups, stopping) = (groups.clone(), stopping.clone());
+        move || {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+            let group = loop {
+                if let Some(group) = groups.groups.lock().unwrap().first().copied() {
+                    break group;
+                }
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "the worker's turn never started"
+                );
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            };
+            // Written immediately before the hold: the turn is live and silent.
+            await_path(&holding, "the worker's turn never reached its hold");
+            stopping.store(true, std::sync::atomic::Ordering::SeqCst);
+            kill_group(group);
+        }
+    });
+    let err = Engine::new(&split, settings())
+        .run_observing(&reviewed(skill), &mut |_| {
+            if stopping.load(std::sync::atomic::Ordering::SeqCst) {
+                ControlFlow::Break(())
+            } else {
+                ControlFlow::Continue(())
+            }
+        })
+        .unwrap_err();
+    member.join().unwrap();
+    assert!(
+        !hold.exists(),
+        "the turn was released rather than torn down"
+    );
+    assert_eq!(err.kind(), Some(ProviderErrorKind::Protocol), "{err}");
+    assert!(
+        frame_turns(&log).is_empty(),
+        "{:?}",
+        supervisor_frames(&log)
+    );
+}
+
 #[test]
 fn oneharness_empty_assessment_is_a_provider_error() {
     // An empty assessment reply from the judge side surfaces as a provider error

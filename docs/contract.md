@@ -290,7 +290,11 @@ Fallback candidates each receive their own opening and distinct history id.
 Both the spawned CLI (`run-started`) and the in-process library (`run_began`)
 deliver it while the turn is live. History-disabled sides, command judges and
 llmlint judges emit none. Existing observations keep their fields and relative
-order. The lost-turn recovery supervisor remains unobserved, including history.
+order. The lost-turn recovery supervisor turn is observed as its `TurnOpened`
+(role `user`, empty `instruction`: the lost turn left no reply) and, once the
+judge side answers, its `Message` / `TurnClosed`; its judge decisions, judge
+tools and history stay unobserved. A `Break` at that opening ends the run with
+the lost turn's own error, and the judge side is never asked.
 
 ## Note shapes are onejudge's
 
