@@ -816,7 +816,6 @@ fn wait_for(path: &str) {
     wait_for_path(path, "the streamed events never reached a live consumer");
 }
 
-/// Block until `path` exists, failing loudly after 30s rather than hanging.
 /// The markers this worker turn reads under `[[later:PATH]]`: those before it on
 /// the first turn, which leaves PATH behind, and those after it on every later one.
 fn later_turns(system: &str, is_agent: bool) -> &str {
@@ -833,6 +832,7 @@ fn later_turns(system: &str, is_agent: bool) -> &str {
     first
 }
 
+/// Block until `path` exists, failing loudly after 30s rather than hanging.
 fn wait_for_path(path: &str, why: &str) {
     let deadline = Instant::now() + Duration::from_secs(30);
     while !std::path::Path::new(path).exists() {
