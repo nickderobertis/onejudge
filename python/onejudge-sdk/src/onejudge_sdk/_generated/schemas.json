@@ -2211,7 +2211,7 @@
         "description": "A turn beginning, and the message it was given to answer.\n\nThe conversation's opening input is never a [`TurnMessage`] \u2014 it is already in\nthe transcript before the loop runs \u2014 so it reaches an observer here, as the\n`instruction` of the first assistant turn.",
         "properties": {
           "instruction": {
-            "description": "The message this turn answers, whole and unbounded \u2014 the original task on\nthe first assistant turn, the supervisor's last instruction afterwards, and\nthe worker's last reply for a user turn.",
+            "description": "The message this turn answers, whole and unbounded \u2014 the original task on\nthe first assistant turn, the supervisor's last instruction afterwards, and\nthe worker's last reply for a user turn \u2014 empty for the user turn that\nfollows a lost worker turn, which left no reply.",
             "type": "string"
           },
           "role": {

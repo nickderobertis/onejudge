@@ -159,7 +159,9 @@ follows. A successful invocation is taken even when its reply text is empty:
 ```
 
 For `lost`, `cause` is the candidate's `failure_kind`, otherwise its `status`,
-or—when no candidate ran—the classified provider-error token. It is non-empty,
+of the invocation that lost turn recorded, or—when it recorded none, as a run
+torn down before it reported—the classified provider-error token; an earlier
+turn's candidate is never reported for it. It is non-empty,
 one line, and at most 80 characters. `harness` is the composed id of the
 candidate that ran, otherwise the last attempted candidate, and is omitted only
 when no candidate was attempted.
@@ -170,7 +172,10 @@ lost turn's classified failure. A continue answer opens the next worker turn
 with its `message` and counts toward the turn cap; a completion answer completes
 the run with its `reason`. Model-backed and all other non-command supervisors
 are not asked about a lost turn, spend no supervisor turn, and the run fails with
-the original classified error. A panel receives this exchange only when every
+the original classified error. Nor is any supervisor asked about a turn that was
+stopped rather than lost: a `cancelled` one, or one whose run's observer answers
+the recovery turn's opening with a stop (a member being stopped tears its harness
+down, and the turn that fails of it is the stop's doing, whatever its kind). A panel receives this exchange only when every
 judge is a command provider.
 
 Return exactly one discriminated shape. Completed requires a non-empty reason and

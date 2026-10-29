@@ -762,6 +762,148 @@ fn oneharness_process_failure_is_a_protocol_error() {
     assert_eq!(err.kind(), Some(ProviderErrorKind::Protocol));
 }
 
+/// The `supervisor` frames a recording echo judge was sent, in order.
+fn supervisor_frames(path: &std::path::Path) -> Vec<serde_json::Value> {
+    std::fs::read_to_string(path)
+        .unwrap_or_default()
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+        .filter(|request| request["op"] == "supervisor")
+        .collect()
+}
+
+/// A worker on the fake oneharness whose first turn runs on `codex:primary` and
+/// reports, and whose every later turn dies before reporting — what a reaped,
+/// silent harness leaves — judged by a command judge recording to `log` that
+/// completes on a lost turn.
+fn first_turn_then_torn_down(
+    name: &str,
+) -> (
+    SplitProvider<OneharnessProvider, CommandProvider>,
+    Skill,
+    std::path::PathBuf,
+) {
+    let once = scratch_path(&format!("{name}.once"));
+    let log = scratch_path(&format!("{name}.jsonl"));
+    let split = SplitProvider::new(
+        fake_oneharness(),
+        echo_with(&[
+            &format!("[[record:{}]]", log.display()),
+            "[[supervisor-complete-on-lost:the lost turn was reported]]",
+        ]),
+    );
+    let skill = skill_with(&format!(
+        "[[harness:codex:primary]][[proc-exit-after-once:{}]]",
+        once.display()
+    ));
+    (split, skill, log)
+}
+
+fn reviewed(skill: Skill) -> Conversation {
+    Conversation::multi_turn(
+        skill,
+        "go",
+        SimulatedUser::new("A tester.")
+            .done_when("never said")
+            .max_turns(4),
+    )
+}
+
+#[test]
+fn a_lost_turn_after_a_taken_one_is_reported_with_its_own_cause() {
+    // The second turn's oneharness dies before it reports, so it recorded no
+    // invocation of its own: the judge is told the failure's own kind and no
+    // harness, never the first turn's `ok` on `codex:primary`. Driven both
+    // unobserved and under an observer that never stops, which see the same.
+    for observed in [false, true] {
+        let (split, skill, log) = first_turn_then_torn_down(&format!("lost-own-cause-{observed}"));
+        let engine = Engine::new(&split, settings());
+        let mut seen = Vec::new();
+        let outcome = if observed {
+            engine.run_observing(&reviewed(skill), &mut |observation| {
+                if let Observation::TurnOpened(opened) = observation {
+                    seen.push((opened.turn, opened.role, opened.instruction.to_string()));
+                }
+                ControlFlow::Continue(())
+            })
+        } else {
+            engine.run(&reviewed(skill))
+        }
+        .unwrap();
+        assert_eq!(
+            outcome.completion_reason.as_deref(),
+            Some("the lost turn was reported")
+        );
+        let frames = supervisor_frames(&log);
+        let turns: Vec<_> = frames.iter().map(|frame| frame["turn"].clone()).collect();
+        assert_eq!(
+            turns,
+            [
+                serde_json::json!({"outcome": "taken"}),
+                serde_json::json!({"outcome": "lost", "cause": "protocol"}),
+            ],
+            "observed: {observed}"
+        );
+        if observed {
+            // The recovery turn opens like any supervisor turn, answering no reply.
+            assert_eq!(
+                seen.last(),
+                Some(&(2, Role::User, String::new())),
+                "{seen:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_turn_torn_down_while_its_observer_stops_the_run_is_not_put_to_the_judge_as_lost() {
+    // The stop lands while the second turn is in flight and silent; the harness is
+    // reaped and the turn fails with a `protocol` error. The next observation is
+    // answered with a stop, so the judge is never asked about that turn and the
+    // run ends with the turn's own failure.
+    let (split, skill, log) = first_turn_then_torn_down("lost-while-stopping");
+    let engine = Engine::new(&split, settings());
+    let mut stopping = false;
+    let err = engine
+        .run_observing(&reviewed(skill), &mut |observation| {
+            if stopping {
+                return ControlFlow::Break(());
+            }
+            if let Observation::TurnOpened(opened) = observation {
+                stopping = opened.turn == 2 && opened.role == Role::Assistant;
+            }
+            ControlFlow::Continue(())
+        })
+        .unwrap_err();
+    assert_eq!(err.kind(), Some(ProviderErrorKind::Protocol));
+    let turns: Vec<_> = supervisor_frames(&log)
+        .iter()
+        .map(|frame| frame["turn"].clone())
+        .collect();
+    assert_eq!(turns, [serde_json::json!({"outcome": "taken"})]);
+}
+
+#[test]
+fn a_cancelled_turn_is_not_put_to_the_judge_as_lost() {
+    let log = scratch_path("lost-cancelled.jsonl");
+    let split = SplitProvider::new(
+        fake_oneharness(),
+        echo_with(&[
+            &format!("[[record:{}]]", log.display()),
+            "[[supervisor-complete-on-lost:the lost turn was reported]]",
+        ]),
+    );
+    let err = Engine::new(&split, settings())
+        .run(&reviewed(skill_with("[[status:cancelled]]")))
+        .unwrap_err();
+    assert_eq!(err.kind(), Some(ProviderErrorKind::Cancelled));
+    assert!(
+        supervisor_frames(&log).is_empty(),
+        "{:?}",
+        supervisor_frames(&log)
+    );
+}
+
 #[test]
 fn oneharness_empty_assessment_is_a_provider_error() {
     // An empty assessment reply from the judge side surfaces as a provider error

@@ -19,9 +19,10 @@
 //! add the worker's own `message` and `reasoning` events (all three repeatable,
 //! reported in the order they appear), `[[fail:KIND]]` returns a classified
 //! `failure_kind`, `[[status:TOKEN]]` returns a terminal status that carries no
-//! `failure_kind` at all (`timeout`, `spawn-error`, `skipped`), and
-//! `[[reject-session]]` (in `--system` on the worker side, in the prompt on the
-//! judge side) makes a `--session` run exit non-zero with oneharness's
+//! `failure_kind` at all (`timeout`, `spawn-error`, `skipped`),
+//! `[[proc-exit-after-once:PATH]]` reports the first worker turn and exits non-zero
+//! with no report on every later one, and `[[reject-session]]` (in `--system` on
+//! the worker side, in the prompt on the judge side) makes a `--session` run exit non-zero with oneharness's
 //! `does not support --session` text (the graceful-retry path).
 //! `[[echo-mock-harness]]` replies with the `--mock-harness` ids the run was
 //! spawned with (`none` for an unmocked one), so the deterministic-harness
@@ -259,6 +260,17 @@ fn main() {
     // per party — which is what lets ONE run drive both halves of a two-party tree,
     // and what makes the judge side's own socket reachable now that it has one.
     let steering = if is_agent { system } else { prompt.as_str() };
+
+    // The same exit as `[[proc-exit]]` on every worker turn after the first, which
+    // reports normally and leaves PATH behind: a oneharness torn down mid-turn,
+    // before it wrote a report, once an earlier turn of the conversation succeeded.
+    if let Some(path) = marker(system, "proc-exit-after-once").filter(|_| is_agent) {
+        if std::path::Path::new(path).exists() {
+            emit_error("torn down before reporting, after a turn that succeeded");
+        }
+        std::fs::write(path, "")
+            .unwrap_or_else(|e| emit_error(&format!("could not mark the first turn: {e}")));
+    }
 
     // Session-degradation path: mimic oneharness rejecting `--session` on a harness
     // that exposes no session id headlessly. onejudge must retry without --session.

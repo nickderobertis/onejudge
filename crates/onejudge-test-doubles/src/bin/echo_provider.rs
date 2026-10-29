@@ -39,6 +39,8 @@
 //!
 //! * `[[supervisor-continue:MSG]]` — always `completion:false` with `MSG`;
 //! * `[[supervisor-complete:REASON]]` — always `completion:true` with `REASON`;
+//! * `[[supervisor-complete-on-lost:REASON]]` — `completion:true` with `REASON`
+//!   on a lost turn, and the persona's own answer on a taken one;
 //! * `[[supervisor-sleep:MS]]` — hold the decision for `MS` milliseconds first;
 //! * `[[supervisor-stamp:PATH]]` — append `<start> <end>` (ms since the epoch)
 //!   for the decision to `PATH`, so a journey can prove two judges overlapped;
@@ -352,6 +354,11 @@ fn supervisor(request: &Decision<'_>, argv: &str) -> Value {
         } else {
             json!({"completion": true, "reason": "the recovery turn was taken"})
         };
+    }
+    if let Some(reason) = marker(argv, "supervisor-complete-on-lost") {
+        if matches!(request.turn, Turn::Lost { .. }) {
+            return json!({"completion": true, "reason": reason});
+        }
     }
     if argv.contains("[[supervisor-no-instruction]]") {
         return json!({"completion": false, "reason": "no instruction"});
