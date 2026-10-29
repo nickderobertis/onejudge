@@ -11,7 +11,7 @@ use oneharness_core::domain::events::ActionEvent;
 use onemessagebus::{Closed, Delivered};
 
 use crate::control::ControlOutcome;
-use crate::error::{ProviderErrorKind, Result};
+use crate::error::Result;
 use crate::history_name::{HistoryScope, JudgeSideCall};
 use crate::interrupt::{Framing, Redirect, Watch};
 use crate::note::{Accepted, Criteria, DeliveredNote, Note, NoteInbox, Party, Undelivered};
@@ -913,11 +913,7 @@ impl<'a> Engine<'a> {
             let turn = match turn {
                 Ok(turn) => turn,
                 Err(error) => {
-                    // A cancelled turn was stopped, not lost: there is nothing for
-                    // the judge side to decide about work its member is not doing.
-                    if !self.provider.supervises_lost_turns()
-                        || matches!(error.kind(), None | Some(ProviderErrorKind::Cancelled))
-                    {
+                    if !self.provider.supervises_lost_turns() || error.kind().is_none() {
                         return Err(error);
                     }
                     let Some(user) = &conversation.user else {
@@ -926,7 +922,9 @@ impl<'a> Engine<'a> {
                     // The recovery turn opens like any supervisor turn, and an
                     // observer stopping the run is answered before the judge side is
                     // asked: a member being stopped tears its harness down, and the
-                    // turn that fails of it is the stop's doing, whatever its kind.
+                    // turn that fails of it is the stop's doing, whatever its kind —
+                    // `cancelled` included. Absent that stop, a cancelled turn is lost
+                    // like any other and the judge side is told so.
                     let started_at = observed_at();
                     if broke
                         || on_observation(&Observation::TurnOpened(TurnOpened {

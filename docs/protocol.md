@@ -173,9 +173,10 @@ with its `message` and counts toward the turn cap; a completion answer completes
 the run with its `reason`. Model-backed and all other non-command supervisors
 are not asked about a lost turn, spend no supervisor turn, and the run fails with
 the original classified error. Nor is any supervisor asked about a turn that was
-stopped rather than lost: a `cancelled` one, or one whose run's observer answers
-the recovery turn's opening with a stop (a member being stopped tears its harness
-down, and the turn that fails of it is the stop's doing, whatever its kind). A panel receives this exchange only when every
+stopped rather than lost: one whose run's observer answers the recovery turn's
+opening with a stop (a member being stopped tears its harness down, and the turn
+that fails of it is the stop's doing, whatever its kind). A `cancelled` turn whose
+observer does not stop is lost like any other, with its own cause and harness. A panel receives this exchange only when every
 judge is a command provider.
 
 Return exactly one discriminated shape. Completed requires a non-empty reason and
