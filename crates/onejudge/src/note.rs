@@ -67,9 +67,9 @@
 //!   ([`Accepted::JudgedWith`]).
 //!
 //! A note is taken from the inbox only when it is about to be presented, so a
-//! sender's withdrawal and deadline stay effective until then. `docs/notes.md`
-//! states the whole contract, including the two limits a take-to-read inbox puts
-//! on it.
+//! sender's withdrawal and deadline stay effective until then: a live turn claims
+//! only the interrupt notes it can present, and leaves every other note queued.
+//! `docs/notes.md` states the whole contract.
 //!
 //! # Example
 //!

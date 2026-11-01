@@ -15,20 +15,25 @@
 //! * Until a socket is listening at the address, it takes nothing. A turn opened
 //!   without control never has one, so a note sent to it stays untaken — still
 //!   withdrawable, its deadline still running — until the turn ends.
+//! * It claims only an [`Delivery::Interrupt`] note addressed to the live party
+//!   (`Inbox::take_if_within`). Every other note — a [`Delivery::TurnEnd`] note, a
+//!   note to the other party — is never taken while the turn runs: it keeps its
+//!   place, its sender can still withdraw it, and it never stands in the way of a
+//!   later note. It is taken once the turn ends, as a turn-end delivery.
 //! * A note it takes is redirected at once. Only `Served { redirected: true }`
 //!   counts: oneharness says that only once the replacement turn has opened with
 //!   the text, and on every other answer it never writes the text later.
-//! * A note it cannot present — a refused redirect, a [`Delivery::TurnEnd`] note,
-//!   a note addressed to the other party — is handed back untaken with
-//!   `Delivered::release`, and the watch stops for the rest of the turn: the note
-//!   is taken again only once the turn ends, as a turn-end delivery. A released
-//!   note whose deadline has passed expires in that same moment.
+//! * A note it cannot present is handed back untaken with `Delivered::release`. A
+//!   redirect oneharness does not confirm ends the watch: each refusal it gives
+//!   (`no_active_turn`, `not_running`, `unsupported`) means no redirect can land in
+//!   this turn any more, so the note waits for the next turn. A note whose framing
+//!   is no redirect at all (past the size a redirect carries) is handed back and
+//!   passed over for the rest of the turn, and the watch goes on waiting for the
+//!   next one. A released note whose deadline has passed expires in that same
+//!   moment.
 //!
-//! Two limits follow from the bus's inbox offering no way to read a note without
-//! taking it, and both are stated in `docs/notes.md`: a sender withdrawing a note
-//! in the instant the watch holds it to read its delivery is refused (the note is
-//! then delivered at the turn's end), and a released note at the head of the
-//! queue keeps every note behind it from interrupting for the rest of that turn.
+//! So until the turn ends, an interrupt note to the live party is presented as it
+//! arrives, whatever is queued ahead of it and whatever was withdrawn.
 
 use std::path::PathBuf;
 use std::sync::{Condvar, Mutex, PoisonError};
@@ -171,14 +176,15 @@ impl<'a> Watch<'a> {
                 return redirected;
             }
         }
+        // Notes whose framing could not be a redirect: handed back, and passed
+        // over for the rest of the turn rather than claimed again on every poll.
+        let mut unframeable: Vec<Note> = Vec::new();
         while !self.ended() {
-            let Some(delivered) = self.inbox.take_within(POLL) else {
+            let Some(delivered) = self.inbox.take_if_within(POLL, |note| {
+                self.interrupts(note) && !unframeable.contains(note)
+            }) else {
                 continue;
             };
-            if !self.interrupts(delivered.message()) {
-                delivered.release();
-                break;
-            }
             presented.push(DeliveredNote {
                 note: delivered.message().clone(),
                 delivered_to: self.party,
@@ -186,8 +192,10 @@ impl<'a> Watch<'a> {
             let input = (self.framing)(&presented);
             let Ok(request) = RedirectInput::new(input.clone()).map(ControlRequest::redirect)
             else {
+                presented.pop();
+                unframeable.push(delivered.message().clone());
                 delivered.release();
-                break;
+                continue;
             };
             let response = oneharness_core::io::control::send(&self.socket, &request);
             if !response.is_redirected() {

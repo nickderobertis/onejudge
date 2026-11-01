@@ -61,10 +61,10 @@ compose a four-point "manager ruling" in-conversation and instruct the worker to
 post it over the run channel, and the worker complied.
 
 **A note is taken only when it is presented.** onejudge takes a note from its
-inbox (`Inbox::take`) only at the moment it commits to presenting it, so a sender
-that offered it (`Notes::offer`) can still withdraw it, and its `wait_until`
-deadline still applies, until then. A note to an uncontrolled turn stays untaken
-until the turn ends; a note whose redirect is refused is handed back untaken
+inbox only at the moment it commits to presenting it, so a sender that offered it
+(`Notes::offer`) can still withdraw it, and its `wait_until` deadline still
+applies, until then. A note to an uncontrolled turn stays untaken
+until the turn ends; a note whose redirect is refused is handed back
 (`Delivered::release`) and taken again only once the turn ends — and expires in
 that same moment if its deadline has passed. oneharness never delivers the text of
 a refused redirect later, so the turn that refused it never receives a note that
@@ -149,23 +149,26 @@ as it is sent, and the work already done is kept:
 A turn opened without control is never interrupted, and nothing is taken from the
 inbox while it runs: its notes reach it once it ends, as they always did.
 
-**Two limits of the take-to-read inbox.** The `onemessagebus` inbox offers no way
-to read a queued note without taking it, so to learn a note's `delivery` and
-addressee during a controlled live turn onejudge takes the note at the head of the
-queue, and hands it straight back when it cannot present it. Two consequences
-follow, and both apply only during a controlled live turn:
+**A live turn claims only what it can present.** During a controlled live turn
+onejudge claims from the inbox with `Inbox::take_if_within`, accepting only an
+`Interrupt` note addressed to the live party. Every other note — a `TurnEnd` note,
+a note to the other party — is never taken while the turn runs: it keeps its place
+in the queue, its sender can withdraw it and its deadline runs, and it never
+stands in front of a later note. So, for as long as the turn is live:
 
-* in the instant onejudge holds a note it is about to hand back, a sender's
-  `Offer::withdraw` is refused (taking and withdrawing never both succeed); the
-  note is then delivered at the end of the turn. A deadline is unaffected: a note
-  handed back past its deadline expires as it is handed back;
-* once a note has been handed back, onejudge stops looking at the queue for the
-  rest of that turn, so a `TurnEnd` note (or any note it could not present) at the
-  head of the queue keeps every note behind it — `Interrupt` notes included — from
-  interrupting that turn. They reach the party when the turn ends.
+* an `Interrupt` note to the live party is presented as it arrives, whatever
+  `TurnEnd` notes are queued ahead of it and whatever has been withdrawn;
+* a `TurnEnd` note stays withdrawable throughout; one that was not withdrawn is
+  delivered once the turn ends.
 
-When every queued note is an `Interrupt` note addressed to the live party, nothing
-is taken and handed back at all.
+Queued notes, withdrawals and expiries never stop the watch. It stops when the turn
+ends, or when oneharness refuses a redirect, because each refusal says no redirect
+can land in this turn any more: the turn it addressed is over (`no_active_turn`,
+`not_running`), or the harness has no redirect at all (`unsupported`). The note it
+was redirecting is then handed back and delivered once the turn ends. An `Interrupt`
+note too long to frame as a redirect (past oneharness's `MAX_REDIRECT_INPUT_CHARS`)
+is handed back and delivered once the turn ends too, and the watch goes on
+presenting the notes after it.
 
 ## A note that moves the bar
 
