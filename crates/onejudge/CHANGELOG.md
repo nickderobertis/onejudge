@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.22.2](https://github.com/nickderobertis/onejudge/compare/onejudge-v0.22.1...onejudge-v0.22.2) - 2026-11-01
+
+### Fixed
+
+- *(interrupt)* skip turn-end notes and keep waiting for interrupts ([#209](https://github.com/nickderobertis/onejudge/pull/209))
+
 ## [0.22.1](https://github.com/nickderobertis/onejudge/compare/onejudge-v0.22.0...onejudge-v0.22.1) - 2026-10-29
 
 ### Fixed
