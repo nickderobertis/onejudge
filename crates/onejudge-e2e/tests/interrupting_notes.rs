@@ -522,3 +522,247 @@ fn a_refused_redirect_hands_the_note_back_and_its_deadline_still_expires_it() {
         run.worker
     );
 }
+
+/// A turn-end note's text, distinct from [`NOTE`] so a journey can tell which of
+/// two notes a prompt carried.
+const LATER: &str = "once this turn is done, also update the changelog";
+
+/// How long a journey waits for a note to interrupt a held turn before deciding it
+/// did not: far longer than a redirect takes, far shorter than [`HOLD_MS`].
+const INTERRUPT_WITHIN: Duration = Duration::from_secs(5);
+
+fn turn_end_note(text: &str) -> Note {
+    Note::to(Addressee::Worker, text).with_delivery(Delivery::TurnEnd)
+}
+
+/// Offer an interrupt note and wait for it to redirect the held turn, while that
+/// turn is still held: the answer, and whether nothing but the redirect could
+/// have ended the hold.
+fn interrupt_while_held(notes: &Notes, held: &std::path::Path) -> Result<Accepted, String> {
+    let offer = notes
+        .offer(Note::to(Addressee::Worker, NOTE))
+        .map_err(|e| format!("{e:?}"))?;
+    let answer = offer
+        .wait_until(Instant::now() + INTERRUPT_WITHIN)
+        .map_err(|e| format!("the interrupt note was not presented during the live turn: {e:?}"));
+    assert!(
+        !release_exists(held),
+        "the hold was released before the interrupt was answered"
+    );
+    answer
+}
+
+/// The worker's held turn was aborted by the interrupt note, and the replacement
+/// turn opened with it — once.
+fn assert_redirected_by_the_interrupt(run: &HeldRun) {
+    assert_eq!(
+        run.answer,
+        Ok(Accepted::Interrupted {
+            party: Party::Worker
+        })
+    );
+    assert_eq!(run.worker[1], Logged::Aborted, "{:?}", run.worker);
+    assert!(!run.worker.contains(&Logged::Finished), "{:?}", run.worker);
+    let handed = prompts(&run.worker);
+    assert!(!handed[0].contains(NOTE), "{}", handed[0]);
+    assert_eq!(handed[1].matches(NOTE).count(), 1, "{}", handed[1]);
+}
+
+#[test]
+fn an_interrupt_note_queued_behind_a_turn_end_note_still_redirects_the_live_turn() {
+    let run = held_worker_turn("note-behind-turn-end", true, dwell, |notes, held| {
+        await_path(held, "the worker's turn never opened");
+        let later = notes
+            .offer(turn_end_note(LATER))
+            .map_err(Undelivered::from)?;
+        // Long enough that the watch has seen the turn-end note at the head of the
+        // queue before the interrupt note joins it.
+        std::thread::sleep(Duration::from_millis(300));
+        let interrupted = interrupt_while_held(notes, held);
+        release(held);
+        assert_eq!(
+            later.wait().map_err(Undelivered::from)?,
+            Accepted::AtTurnEnd {
+                party: Party::Worker
+            },
+            "the turn-end note is delivered once the turn ends"
+        );
+        interrupted.map_err(|e| panic!("{e}"))
+    });
+    assert_redirected_by_the_interrupt(&run);
+    // The turn-end note reached neither the held turn nor its replacement: it is
+    // the next thing handed once the replacement turn ended, and only then.
+    let handed = prompts(&run.worker);
+    assert!(handed[..2].iter().all(|p| !p.contains(LATER)), "{handed:?}");
+    assert_eq!(handed[2].matches(LATER).count(), 1, "{}", handed[2]);
+    assert_eq!(
+        run.delivered
+            .iter()
+            .map(|d| d.note.text.as_str())
+            .collect::<Vec<_>>(),
+        [NOTE, LATER]
+    );
+}
+
+#[test]
+fn an_interrupt_note_sent_after_a_turn_end_note_is_withdrawn_redirects_the_live_turn() {
+    let run = held_worker_turn("note-after-withdrawal", true, dwell, |notes, held| {
+        await_path(held, "the worker's turn never opened");
+        let later = notes
+            .offer(turn_end_note(LATER))
+            .map_err(Undelivered::from)?;
+        std::thread::sleep(Duration::from_millis(300));
+        assert!(
+            later.withdraw().is_ok(),
+            "a turn-end note not yet presented can be taken back"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+        let interrupted = interrupt_while_held(notes, held);
+        release(held);
+        interrupted.map_err(|e| panic!("{e}"))
+    });
+    assert_redirected_by_the_interrupt(&run);
+    assert!(
+        prompts(&run.worker).iter().all(|p| !p.contains(LATER)),
+        "{:?}",
+        run.worker
+    );
+    assert_eq!(run.delivered.len(), 1, "{:?}", run.delivered);
+    assert_eq!(run.delivered[0].note.text.as_str(), NOTE);
+}
+
+#[test]
+fn a_queued_turn_end_note_stays_withdrawable_throughout_the_live_turn() {
+    // Turn-end notes queued as the turn opens are withdrawn one at a time across
+    // it while the watch waits on the queue, and then an interrupt note sent
+    // behind the last of them still redirects the turn. Every withdrawal
+    // succeeds, and none of the withdrawn notes is ever presented.
+    const QUEUED: usize = 12;
+    let run = held_worker_turn("note-withdrawable", true, dwell, |notes, held| {
+        await_path(held, "the worker's turn never opened");
+        let queued = (0..QUEUED)
+            .map(|i| notes.offer(turn_end_note(&format!("{LATER} #{i}"))))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(Undelivered::from)?;
+        for (index, offer) in queued.into_iter().enumerate() {
+            std::thread::sleep(Duration::from_millis(25));
+            assert!(
+                offer.withdraw().is_ok(),
+                "turn-end note #{index} could not be withdrawn during the live turn"
+            );
+        }
+        let interrupted = interrupt_while_held(notes, held);
+        release(held);
+        interrupted.map_err(|e| panic!("{e}"))
+    });
+    assert_redirected_by_the_interrupt(&run);
+    assert!(
+        prompts(&run.worker).iter().all(|p| !p.contains(LATER)),
+        "{:?}",
+        run.worker
+    );
+    assert_eq!(run.delivered.len(), 1, "{:?}", run.delivered);
+}
+
+#[test]
+fn an_interrupt_note_too_long_to_redirect_with_waits_and_does_not_stop_a_later_one() {
+    // A note past the size a redirect may carry cannot open a replacement turn, so
+    // it is handed back and delivered once the turn ends — and the interrupt note
+    // sent after it still redirects the live turn.
+    let oversized = format!(
+        "{LATER}: {}",
+        "the full review thread, pasted.\n"
+            .repeat(oneharness_core::domain::control::MAX_REDIRECT_INPUT_CHARS / 16)
+    )
+    .trim_end()
+    .to_string();
+    let run = held_worker_turn("note-oversized", true, dwell, {
+        let oversized = oversized.clone();
+        move |notes, held| {
+            await_path(held, "the worker's turn never opened");
+            let big = notes
+                .offer(Note::to(Addressee::Worker, oversized))
+                .map_err(Undelivered::from)?;
+            std::thread::sleep(Duration::from_millis(300));
+            let interrupted = interrupt_while_held(notes, held);
+            release(held);
+            assert_eq!(
+                big.wait().map_err(Undelivered::from)?,
+                Accepted::AtTurnEnd {
+                    party: Party::Worker
+                }
+            );
+            interrupted.map_err(|e| panic!("{e}"))
+        }
+    });
+    assert_redirected_by_the_interrupt(&run);
+    let handed = prompts(&run.worker);
+    assert!(handed[..2].iter().all(|p| !p.contains(LATER)), "{handed:?}");
+    assert_eq!(
+        handed[2].matches(oversized.as_str()).count(),
+        1,
+        "{}",
+        &handed[2][..400.min(handed[2].len())]
+    );
+}
+
+#[test]
+fn an_interrupt_note_refused_during_a_live_turn_waits_and_does_not_stop_a_later_one() {
+    // While the turn is held, its control socket is moved aside and a stand-in
+    // answers the first redirect with oneharness's own `unsupported` refusal; the
+    // real socket is then put back. The refusal says nothing about the turn having
+    // ended — it is still held — so the watch hands that note back for the turn's
+    // end and goes on: the interrupt note sent after it redirects the live turn.
+    use oneharness_core::domain::control::{ControlReason, ControlResponse};
+    use std::io::{BufRead, Write};
+
+    const REFUSED: &str = "drop the parser change, it conflicts with main";
+    let store = use_private_session_store("note-refused-live");
+    let socket = oneharness_core::domain::control::socket_path(&store, "note-refused-live-skill")
+        .expect("the store fits a socket address");
+    let run = held_worker_turn("note-refused-live", true, dwell, move |notes, held| {
+        await_path(held, "the worker's turn never opened");
+        assert!(socket.exists(), "the controlled turn opened its socket");
+        let aside = socket.with_extension("aside");
+        std::fs::rename(&socket, &aside).unwrap();
+        let stand_in = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+        let refused = notes
+            .offer(Note::to(Addressee::Worker, REFUSED))
+            .map_err(Undelivered::from)?;
+        let (stream, _) = stand_in.accept().expect("the watch dialled the turn");
+        let mut request = String::new();
+        std::io::BufReader::new(&stream)
+            .read_line(&mut request)
+            .unwrap();
+        assert!(request.contains(REFUSED), "{request}");
+        (&stream)
+            .write_all(
+                ControlResponse::refused("no redirect here", ControlReason::Unsupported)
+                    .to_line()
+                    .as_bytes(),
+            )
+            .unwrap();
+        drop(stream);
+        drop(stand_in);
+        std::fs::rename(&aside, &socket).unwrap();
+        let interrupted = interrupt_while_held(notes, held);
+        release(held);
+        assert_eq!(
+            refused.wait().map_err(Undelivered::from)?,
+            Accepted::AtTurnEnd {
+                party: Party::Worker
+            },
+            "the refused note is delivered once the turn ends"
+        );
+        interrupted.map_err(|e| panic!("{e}"))
+    });
+    assert_redirected_by_the_interrupt(&run);
+    // The refused note was never in front of the worker, so the redirect that
+    // landed did not frame it; it is the next thing handed once the turn ended.
+    let handed = prompts(&run.worker);
+    assert!(
+        handed[..2].iter().all(|p| !p.contains(REFUSED)),
+        "{handed:?}"
+    );
+    assert_eq!(handed[2].matches(REFUSED).count(), 1, "{}", handed[2]);
+}
