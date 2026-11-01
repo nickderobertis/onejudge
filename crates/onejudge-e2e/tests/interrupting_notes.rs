@@ -705,3 +705,64 @@ fn an_interrupt_note_too_long_to_redirect_with_waits_and_does_not_stop_a_later_o
         &handed[2][..400.min(handed[2].len())]
     );
 }
+
+#[test]
+fn an_interrupt_note_refused_during_a_live_turn_waits_and_does_not_stop_a_later_one() {
+    // While the turn is held, its control socket is moved aside and a stand-in
+    // answers the first redirect with oneharness's own `unsupported` refusal; the
+    // real socket is then put back. The refusal says nothing about the turn having
+    // ended — it is still held — so the watch hands that note back for the turn's
+    // end and goes on: the interrupt note sent after it redirects the live turn.
+    use oneharness_core::domain::control::{ControlReason, ControlResponse};
+    use std::io::{BufRead, Write};
+
+    const REFUSED: &str = "drop the parser change, it conflicts with main";
+    let store = use_private_session_store("note-refused-live");
+    let socket = oneharness_core::domain::control::socket_path(&store, "note-refused-live-skill")
+        .expect("the store fits a socket address");
+    let run = held_worker_turn("note-refused-live", true, dwell, move |notes, held| {
+        await_path(held, "the worker's turn never opened");
+        assert!(socket.exists(), "the controlled turn opened its socket");
+        let aside = socket.with_extension("aside");
+        std::fs::rename(&socket, &aside).unwrap();
+        let stand_in = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+        let refused = notes
+            .offer(Note::to(Addressee::Worker, REFUSED))
+            .map_err(Undelivered::from)?;
+        let (stream, _) = stand_in.accept().expect("the watch dialled the turn");
+        let mut request = String::new();
+        std::io::BufReader::new(&stream)
+            .read_line(&mut request)
+            .unwrap();
+        assert!(request.contains(REFUSED), "{request}");
+        (&stream)
+            .write_all(
+                ControlResponse::refused("no redirect here", ControlReason::Unsupported)
+                    .to_line()
+                    .as_bytes(),
+            )
+            .unwrap();
+        drop(stream);
+        drop(stand_in);
+        std::fs::rename(&aside, &socket).unwrap();
+        let interrupted = interrupt_while_held(notes, held);
+        release(held);
+        assert_eq!(
+            refused.wait().map_err(Undelivered::from)?,
+            Accepted::AtTurnEnd {
+                party: Party::Worker
+            },
+            "the refused note is delivered once the turn ends"
+        );
+        interrupted.map_err(|e| panic!("{e}"))
+    });
+    assert_redirected_by_the_interrupt(&run);
+    // The refused note was never in front of the worker, so the redirect that
+    // landed did not frame it; it is the next thing handed once the turn ended.
+    let handed = prompts(&run.worker);
+    assert!(
+        handed[..2].iter().all(|p| !p.contains(REFUSED)),
+        "{handed:?}"
+    );
+    assert_eq!(handed[2].matches(REFUSED).count(), 1, "{}", handed[2]);
+}

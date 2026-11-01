@@ -161,14 +161,13 @@ stands in front of a later note. So, for as long as the turn is live:
 * a `TurnEnd` note stays withdrawable throughout; one that was not withdrawn is
   delivered once the turn ends.
 
-Queued notes, withdrawals and expiries never stop the watch. It stops when the turn
-ends, or when oneharness refuses a redirect, because each refusal says no redirect
-can land in this turn any more: the turn it addressed is over (`no_active_turn`,
-`not_running`), or the harness has no redirect at all (`unsupported`). The note it
-was redirecting is then handed back and delivered once the turn ends. An `Interrupt`
-note too long to frame as a redirect (past oneharness's `MAX_REDIRECT_INPUT_CHARS`)
-is handed back and delivered once the turn ends too, and the watch goes on
-presenting the notes after it.
+Only the turn's end stops the watch — never a queued note, a withdrawal, an
+expiry, or a note it could not present. An `Interrupt` note whose redirect
+oneharness does not confirm (`no_active_turn`, `not_running`, `unsupported`), or one
+too long to frame as a redirect (past oneharness's `MAX_REDIRECT_INPUT_CHARS`), is
+handed back and delivered once the turn ends. It is passed over for the rest of the
+turn and left out of every later redirect's text, since the party never saw it, and
+the watch goes on presenting the notes after it.
 
 ## A note that moves the bar
 

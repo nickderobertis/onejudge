@@ -23,14 +23,14 @@
 //! * A note it takes is redirected at once. Only `Served { redirected: true }`
 //!   counts: oneharness says that only once the replacement turn has opened with
 //!   the text, and on every other answer it never writes the text later.
-//! * A note it cannot present is handed back untaken with `Delivered::release`. A
-//!   redirect oneharness does not confirm ends the watch: each refusal it gives
-//!   (`no_active_turn`, `not_running`, `unsupported`) means no redirect can land in
-//!   this turn any more, so the note waits for the next turn. A note whose framing
-//!   is no redirect at all (past the size a redirect carries) is handed back and
-//!   passed over for the rest of the turn, and the watch goes on waiting for the
-//!   next one. A released note whose deadline has passed expires in that same
-//!   moment.
+//! * A note it cannot present is handed back untaken with `Delivered::release`,
+//!   and taken again only once the turn ends, as a turn-end delivery: a note whose
+//!   framing is no redirect at all (past the size a redirect carries), and a note
+//!   whose redirect oneharness did not confirm (`no_active_turn`, `not_running`,
+//!   `unsupported`). The watch passes over it for the rest of the turn, leaves it
+//!   out of every later redirect's framing, and goes on waiting for the next note:
+//!   only the turn's end stops it. A released note whose deadline has passed
+//!   expires in that same moment.
 //!
 //! So until the turn ends, an interrupt note to the live party is presented as it
 //! arrives, whatever is queued ahead of it and whatever was withdrawn.
@@ -176,12 +176,14 @@ impl<'a> Watch<'a> {
                 return redirected;
             }
         }
-        // Notes whose framing could not be a redirect: handed back, and passed
-        // over for the rest of the turn rather than claimed again on every poll.
-        let mut unframeable: Vec<Note> = Vec::new();
+        // Notes this turn could not be redirected with — their framing was no
+        // redirect, or oneharness did not confirm the redirect: handed back for
+        // the turn's end, and passed over for the rest of the turn rather than
+        // claimed again on every poll.
+        let mut passed_over: Vec<Note> = Vec::new();
         while !self.ended() {
             let Some(delivered) = self.inbox.take_if_within(POLL, |note| {
-                self.interrupts(note) && !unframeable.contains(note)
+                self.interrupts(note) && !passed_over.contains(note)
             }) else {
                 continue;
             };
@@ -190,17 +192,18 @@ impl<'a> Watch<'a> {
                 delivered_to: self.party,
             });
             let input = (self.framing)(&presented);
-            let Ok(request) = RedirectInput::new(input.clone()).map(ControlRequest::redirect)
-            else {
+            let confirmed = RedirectInput::new(input.clone())
+                .map(ControlRequest::redirect)
+                .is_ok_and(|request| {
+                    oneharness_core::io::control::send(&self.socket, &request).is_redirected()
+                });
+            if !confirmed {
+                // Never in front of the party, so never in a later redirect's
+                // framing either.
                 presented.pop();
-                unframeable.push(delivered.message().clone());
+                passed_over.push(delivered.message().clone());
                 delivered.release();
                 continue;
-            };
-            let response = oneharness_core::io::control::send(&self.socket, &request);
-            if !response.is_redirected() {
-                delivered.release();
-                break;
             }
             let at = self.state().observed.clone();
             let note = delivered.message().clone();
