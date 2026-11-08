@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.22.3](https://github.com/nickderobertis/onejudge/compare/onejudge-v0.22.2...onejudge-v0.22.3) - 2026-11-08
+
+### Other
+
+- update Cargo.toml dependencies
+
 ## [0.22.2](https://github.com/nickderobertis/onejudge/compare/onejudge-v0.22.1...onejudge-v0.22.2) - 2026-11-01
 
 ### Fixed
