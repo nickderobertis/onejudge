@@ -1,0 +1,100 @@
+{
+  "opened": [
+    "Assistant",
+    "User",
+    "Assistant"
+  ],
+  "outcome": {
+    "transcript": {
+      "messages": [
+        {
+          "role": "user",
+          "content": "start the job"
+        },
+        {
+          "role": "assistant",
+          "content": "echo: start the job"
+        },
+        {
+          "role": "user",
+          "content": "Thanks — and what about the next step?"
+        },
+        {
+          "role": "assistant",
+          "content": "echo: Thanks — and what about the next step?"
+        }
+      ]
+    },
+    "usage": {
+      "input_tokens": 54,
+      "output_tokens": 3,
+      "cache_read_tokens": 6,
+      "cache_write_tokens": 2
+    },
+    "stopped_early": false,
+    "completion_reason": null,
+    "settled_reason": null,
+    "judge_decisions": []
+  },
+  "requests": [
+    {
+      "op": "respond",
+      "skill": {
+        "name": "demo",
+        "path": "/skills/demo",
+        "instructions": "[[record:{{TMP}}/notes-cap-no-note.log]]"
+      },
+      "messages": [
+        {
+          "role": "user",
+          "content": "start the job"
+        }
+      ],
+      "session": "onejudge-skill"
+    },
+    {
+      "op": "supervisor",
+      "task": "start the job",
+      "persona": "A reviewer. [[record:{{TMP}}/notes-cap-no-note.log]]",
+      "worktree": "/skills/demo",
+      "history_name": "onejudge-skill",
+      "turn": {
+        "outcome": "taken"
+      },
+      "messages": [
+        {
+          "role": "user",
+          "content": "start the job"
+        },
+        {
+          "role": "assistant",
+          "content": "echo: start the job"
+        }
+      ],
+      "session": "onejudge-user"
+    },
+    {
+      "op": "respond",
+      "skill": {
+        "name": "demo",
+        "path": "/skills/demo",
+        "instructions": "[[record:{{TMP}}/notes-cap-no-note.log]]"
+      },
+      "messages": [
+        {
+          "role": "user",
+          "content": "start the job"
+        },
+        {
+          "role": "assistant",
+          "content": "echo: start the job"
+        },
+        {
+          "role": "user",
+          "content": "Thanks — and what about the next step?"
+        }
+      ],
+      "session": "onejudge-skill"
+    }
+  ]
+}

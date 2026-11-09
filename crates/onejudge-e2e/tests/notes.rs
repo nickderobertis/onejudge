@@ -1601,3 +1601,253 @@ fn a_note_arriving_after_an_observation_short_circuited_the_run_raises_naming_th
         }),
     );
 }
+
+/// What one conversation capped at two worker turns did, for a note sent at the
+/// boundary after the first supervisor turn — so the second, last worker turn is
+/// the one that takes it.
+struct CappedRun {
+    accepted: Accepted,
+    outcome: onejudge::Outcome,
+    requests: Vec<serde_json::Value>,
+    opened: Vec<Role>,
+}
+
+fn note_taken_by_the_last_turn(addressee: Addressee, name: &str, persona: &str) -> CappedRun {
+    let log = scratch_path(&format!("notes-last-turn-{name}.log"));
+    let (notes, inbox) = Notes::channel();
+    let (open, wait) = mpsc::channel::<()>();
+    let sender = std::thread::spawn(move || {
+        wait.recv().expect("the run reached a turn boundary");
+        notes.send(Note::to(addressee, NOTE))
+    });
+
+    let provider = echo();
+    let engine = Engine::new(&provider, Settings::new()).with_notes(inbox);
+    let mut signalled = false;
+    let mut opened = Vec::new();
+    let mut at_the_boundary = |observation: &Observation<'_>| {
+        if let Observation::TurnOpened(turn) = observation {
+            opened.push(turn.role);
+        }
+        if let Observation::TurnClosed(closed) = observation {
+            if closed.role == Role::User && !signalled {
+                signalled = true;
+                open.send(()).expect("the sending thread is waiting");
+                std::thread::sleep(Duration::from_millis(400));
+            }
+        }
+        ControlFlow::Continue(())
+    };
+    let outcome = engine
+        .run_observing(
+            &Conversation::multi_turn(
+                Skill::new(
+                    "demo",
+                    "/skills/demo",
+                    format!("[[record:{}]]", log.display()),
+                ),
+                "start the job",
+                SimulatedUser::new(format!("{persona} [[record:{}]]", log.display())).max_turns(2),
+            ),
+            &mut at_the_boundary,
+        )
+        .expect("a note taken by the last turn does not fail the run");
+    let accepted = sender
+        .join()
+        .expect("the sending thread finished")
+        .expect("the conversation was running, so the note was accepted");
+    CappedRun {
+        accepted,
+        outcome,
+        requests: requests(&log),
+        opened,
+    }
+}
+
+/// The note reached one supervisor decision past the turn cap, and nothing opened
+/// after it.
+fn assert_one_final_supervisor_turn(run: &CappedRun) {
+    assert_eq!(run.accepted, Accepted::Queued);
+    let decisions = of_op(&run.requests, "supervisor");
+    assert_eq!(decisions.len(), 2, "one per worker turn: {decisions:?}");
+    assert!(notes_shown(&decisions[0]).is_empty());
+    assert_eq!(notes_shown(&decisions[1]), vec![NOTE.to_string()]);
+    assert_eq!(of_op(&run.requests, "respond").len(), 2);
+    assert_eq!(
+        run.opened,
+        vec![Role::Assistant, Role::User, Role::Assistant, Role::User],
+        "the final supervisor turn is the last turn opened"
+    );
+    assert_eq!(run.outcome.transcript.assistant_turns(), 2);
+}
+
+#[test]
+fn a_supervisor_note_taken_by_the_last_turn_is_judged_by_one_final_supervisor_turn() {
+    let run = note_taken_by_the_last_turn(
+        Addressee::Supervisor,
+        "supervisor",
+        "A reviewer. [[complete-on-note]]",
+    );
+    assert_one_final_supervisor_turn(&run);
+    assert_eq!(
+        run.outcome.completion_reason.as_deref(),
+        Some("the note was in hand when the work was passed"),
+        "the final turn's verdict is the conversation's"
+    );
+    assert_eq!(run.outcome.settled_reason, None);
+}
+
+#[test]
+fn a_note_to_both_taken_by_the_last_turn_is_judged_by_one_final_supervisor_turn() {
+    let run =
+        note_taken_by_the_last_turn(Addressee::Both, "both", "A reviewer. [[complete-on-note]]");
+    assert_one_final_supervisor_turn(&run);
+    assert_eq!(
+        run.outcome.completion_reason.as_deref(),
+        Some("the note was in hand when the work was passed"),
+    );
+}
+
+#[test]
+fn a_final_supervisor_turn_that_wants_more_work_settles_without_another_worker_turn() {
+    let run = note_taken_by_the_last_turn(Addressee::Supervisor, "wants-more", "A reviewer.");
+    assert_one_final_supervisor_turn(&run);
+    assert_eq!(run.outcome.completion_reason, None);
+    let settled = run
+        .outcome
+        .settled_reason
+        .as_deref()
+        .expect("the final turn's verdict is recorded");
+    assert!(
+        settled.contains("Thanks — and what about the next step?"),
+        "the verdict's own words are the record: {settled}"
+    );
+    assert!(
+        !run.outcome
+            .transcript
+            .messages
+            .last()
+            .is_some_and(|m| m.role == Role::User),
+        "an instruction no worker turn will answer is not left in the transcript"
+    );
+}
+
+#[test]
+fn a_worker_note_taken_by_the_last_turn_opens_no_extra_supervisor_turn() {
+    let run = note_taken_by_the_last_turn(Addressee::Worker, "worker", "A reviewer.");
+    assert_eq!(run.accepted, Accepted::Queued);
+    assert_eq!(of_op(&run.requests, "supervisor").len(), 1);
+    assert_eq!(
+        run.opened,
+        vec![Role::Assistant, Role::User, Role::Assistant]
+    );
+    assert!(
+        handed_to_worker(of_op(&run.requests, "respond").last().unwrap()).contains(NOTE),
+        "the worker note still reaches the last worker turn"
+    );
+    assert_eq!(run.outcome.completion_reason, None);
+    assert_eq!(run.outcome.settled_reason, None);
+}
+
+#[test]
+fn a_supervisor_note_already_held_in_a_decision_is_not_handed_to_a_final_turn_again() {
+    let log = scratch_path("notes-already-held.log");
+    let (notes, inbox) = Notes::channel();
+    let sending = queue_before_the_run(&notes, &inbox, Note::to(Addressee::Supervisor, NOTE));
+    let provider = echo();
+    let engine = Engine::new(&provider, Settings::new()).with_notes(inbox);
+    let outcome = engine
+        .run(&Conversation::multi_turn(
+            Skill::new(
+                "demo",
+                "/skills/demo",
+                format!("[[record:{}]]", log.display()),
+            ),
+            "start the job",
+            SimulatedUser::new(format!("A reviewer. [[record:{}]]", log.display())).max_turns(2),
+        ))
+        .expect("the run reaches its cap");
+    assert_eq!(
+        sending.join().expect("the sender finished"),
+        Ok(Accepted::Queued)
+    );
+    let all = requests(&log);
+    let decisions = of_op(&all, "supervisor");
+    assert_eq!(decisions.len(), 1, "no decision past the one that held it");
+    assert_eq!(notes_shown(&decisions[0]), vec![NOTE.to_string()]);
+    assert_eq!(of_op(&all, "respond").len(), 2);
+    assert_eq!(outcome.completion_reason, None);
+    assert_eq!(outcome.settled_reason, None);
+}
+
+#[test]
+fn a_conversation_reaching_the_cap_with_no_note_records_what_it_always_did() {
+    let log = scratch_path("notes-cap-no-note.log");
+    let (_notes, inbox) = Notes::channel();
+    let provider = echo();
+    let engine = Engine::new(&provider, Settings::new()).with_notes(inbox);
+    let mut opened = Vec::new();
+    let outcome = engine
+        .run_observing(
+            &Conversation::multi_turn(
+                Skill::new(
+                    "demo",
+                    "/skills/demo",
+                    format!("[[record:{}]]", log.display()),
+                ),
+                "start the job",
+                SimulatedUser::new(format!("A reviewer. [[record:{}]]", log.display()))
+                    .max_turns(2),
+            ),
+            &mut |observation: &Observation<'_>| {
+                if let Observation::TurnOpened(turn) = observation {
+                    opened.push(format!("{:?}", turn.role));
+                }
+                ControlFlow::Continue(())
+            },
+        )
+        .expect("the run reaches its cap");
+    assert_baseline(
+        "cap-without-note",
+        &json!({
+            "opened": opened,
+            "outcome": outcome_json(&outcome),
+            "requests": requests(&log),
+        }),
+    );
+}
+
+#[test]
+fn a_plan_with_no_criterion_reports_completed_when_the_final_supervisor_turn_completes() {
+    let (notes, inbox) = Notes::channel();
+    // Queued before the run: the first turn is the last, and it takes the note.
+    let sender = queue_before_the_run(&notes, &inbox, Note::to(Addressee::Supervisor, NOTE));
+    let plan = cli::Plan {
+        provider: cli::ProviderSpec::Command {
+            command: vec![doubles::echo_provider().to_string()],
+        },
+        settings: Settings::new(),
+        conversation: Conversation::multi_turn(
+            Skill::new("demo", "/skills/demo", ""),
+            "ship the change",
+            SimulatedUser::new("A reviewer. [[complete-on-note]]").max_turns(1),
+        ),
+        evals: Vec::new(),
+        done_when: None,
+        assessment: None,
+        spawn_hook: None,
+        notes: None,
+    }
+    .with_notes(inbox);
+    let mut progress = |_: &str| {};
+    let summary = cli::run_plan(plan, cli::Format::Json, &mut progress).expect("the plan runs");
+    assert_eq!(
+        sender.join().expect("the sender finished"),
+        Ok(Accepted::Queued)
+    );
+    assert!(summary.hit_max_turns);
+    assert!(
+        summary.completed,
+        "the final supervisor turn passed the work with the note in hand"
+    );
+}
