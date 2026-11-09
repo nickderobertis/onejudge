@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.22.4](https://github.com/nickderobertis/onejudge/compare/onejudge-v0.22.3...onejudge-v0.22.4) - 2026-11-09
+
+### Fixed
+
+- *(posture)* give each concurrent defaults initialization its own staging file ([#225](https://github.com/nickderobertis/onejudge/pull/225))
+
 ## [0.22.3](https://github.com/nickderobertis/onejudge/compare/onejudge-v0.22.2...onejudge-v0.22.3) - 2026-11-08
 
 ### Other
