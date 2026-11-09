@@ -5274,6 +5274,63 @@ fn a_judges_events_setting_switches_its_events_either_way() {
 }
 
 #[test]
+fn judges_first_using_an_empty_defaults_directory_together_all_start_and_evaluate() {
+    // `allow_writable_judges` skips the serial posture check that would otherwise
+    // publish the defaults before the panel opens, so every judge's thread is
+    // the first to want the file. A race, so several fresh directories per seam.
+    const JUDGES: usize = 12;
+    const ROUNDS: usize = 8;
+    let labels: Vec<String> = (0..JUDGES).map(|judge| format!("judge-{judge}")).collect();
+    for seam in Seam::BOTH {
+        for round in 0..ROUNDS {
+            let mut run = PostureRun::new(&format!("first-use-{round}"), seam);
+            let defaults_home = run.dir.join("empty-defaults-home");
+            std::fs::create_dir_all(&defaults_home).unwrap();
+            let home = defaults_home.to_str().unwrap().to_string();
+            run = run
+                .with_env("XDG_RUNTIME_DIR", &home)
+                .with_env("LOCALAPPDATA", &home);
+            let judge = judge_config_line(&run.judge_config("judge.toml", ""));
+            let lines: Vec<[String; 2]> = labels
+                .iter()
+                .map(|label| [judge.clone(), format!("label: {label}")])
+                .collect();
+            let judges: Vec<Vec<&str>> = lines
+                .iter()
+                .map(|[config, label]| vec![config.as_str(), label.as_str()])
+                .collect();
+            let judges: Vec<&[&str]> = judges.iter().map(Vec::as_slice).collect();
+            let provider = run.split(&["allow_writable_judges: true"], &judges);
+            let outcome = run.run(&provider, "", &[]);
+            assert_eq!(
+                outcome.code,
+                Some(0),
+                "{seam:?} round {round}: {}",
+                outcome.stderr
+            );
+            for label in &labels {
+                let decision = outcome.decision(label);
+                assert_eq!(
+                    decision["posture"]["mode"], "read-only",
+                    "{seam:?} round {round}: {decision}"
+                );
+            }
+            assert_eq!(
+                outcome.judge_side().len(),
+                JUDGES * 4,
+                "{seam:?} round {round}: every judge evaluates"
+            );
+            let published: Vec<_> = std::fs::read_dir(defaults_home.join("onejudge"))
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+                .filter(|name| name.contains(".partial"))
+                .collect();
+            assert!(published.is_empty(), "stranded staging: {published:?}");
+        }
+    }
+}
+
+#[test]
 fn a_panel_with_a_writable_judge_is_refused_before_any_harness_runs() {
     for seam in Seam::BOTH {
         let run = PostureRun::new("refused", seam);
