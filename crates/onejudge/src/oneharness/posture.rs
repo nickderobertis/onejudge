@@ -25,7 +25,11 @@
 //! in principle resolve differently; the list it is handed is the same one, which
 //! is what keeps the two from drifting in practice.
 
+use std::fs::File;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 
 use oneharness_core::domain::config::{explain, DEFAULT_SOURCE};
 use oneharness_core::domain::mode::PermissionMode;
@@ -42,25 +46,38 @@ pub(crate) const JUDGE_DEFAULTS: &str = "mode = \"read-only\"\n";
 /// new file rather than a rewrite of one another process may be reading.
 const DEFAULTS_FILE: &str = "judge-defaults-v1.toml";
 
+/// How many times a refused publish is tried before it is an error, and the wait
+/// between tries. Only Windows refuses, and only for as long as another caller
+/// holds the destination open or is itself replacing it.
+const PUBLISH_ATTEMPTS: u32 = 20;
+const PUBLISH_RETRY: Duration = Duration::from_millis(10);
+
+/// Numbers this process's staging files, so no two calls share one.
+static STAGING_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
 /// Where onejudge keeps [`JUDGE_DEFAULTS`] on disk, writing it the first time.
 ///
 /// The directory is the invoking user's own — the runtime directory, else the
 /// cache directory, else the temp directory — because a file every evaluator
 /// call trusts for its mode must not sit where another user could replace it.
-/// The file is written to a sibling and renamed into place, so a concurrent
-/// reader never sees it half-written, and an existing file is rewritten only if
-/// its content is not exactly the defaults.
+/// Each call that has to write stages into a sibling of its own and renames it
+/// into place, so concurrent callers — the judges of one panel, first — never
+/// touch each other's staging and a reader never sees the file half-written. An
+/// existing file is rewritten only if its content is not exactly the defaults.
 pub(crate) fn defaults_file() -> Result<PathBuf> {
     write_defaults(DEFAULTS_FILE, JUDGE_DEFAULTS)
 }
 
 fn write_defaults(file: &str, content: &str) -> Result<PathBuf> {
-    let dir = defaults_dir().join("onejudge");
+    publish_defaults(&defaults_dir().join("onejudge"), file, content)
+}
+
+fn publish_defaults(dir: &Path, file: &str, content: &str) -> Result<PathBuf> {
     let path = dir.join(file);
-    if std::fs::read_to_string(&path).is_ok_and(|text| text == content) {
+    if is_published(&path, content) {
         return Ok(path);
     }
-    let unwritable = |e: std::io::Error| {
+    let unwritable = |e: io::Error| {
         Error::provider_classified(
             "judge-defaults",
             format!(
@@ -70,11 +87,69 @@ fn write_defaults(file: &str, content: &str) -> Result<PathBuf> {
             ProviderErrorKind::Protocol,
         )
     };
-    std::fs::create_dir_all(&dir).map_err(unwritable)?;
-    let staging = dir.join(format!("{file}.{}.partial", std::process::id()));
-    std::fs::write(&staging, content).map_err(unwritable)?;
-    std::fs::rename(&staging, &path).map_err(unwritable)?;
+    std::fs::create_dir_all(dir).map_err(unwritable)?;
+    let (staging, mut staged) = open_staging(dir, file).map_err(unwritable)?;
+    let written = staged.write_all(content.as_bytes());
+    // Closed before the rename: Windows will not move a file that is open.
+    drop(staged);
+    let outcome = written.and_then(|()| {
+        install(&staging, &path, content, |from, to| {
+            std::fs::rename(from, to)
+        })
+    });
+    // Already gone once it was renamed, and the name is this call's alone.
+    let _ = std::fs::remove_file(&staging);
+    outcome.map_err(unwritable)?;
     Ok(path)
+}
+
+/// Whether `path` already holds exactly `content`.
+fn is_published(path: &Path, content: &str) -> bool {
+    std::fs::read_to_string(path).is_ok_and(|text| text == content)
+}
+
+/// A new staging file beside the defaults, named for this call. Created
+/// exclusively, so a file a crashed process left under a reused pid is stepped
+/// over rather than written through.
+fn open_staging(dir: &Path, file: &str) -> io::Result<(PathBuf, File)> {
+    loop {
+        let sequence = STAGING_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let staging = dir.join(format!("{file}.{}.{sequence}.partial", std::process::id()));
+        match File::options().write(true).create_new(true).open(&staging) {
+            Ok(staged) => return Ok((staging, staged)),
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
+            Err(e) => return Err(e),
+        }
+    }
+}
+
+/// Move the complete `staging` file to `path`, leaving it unmoved if a concurrent
+/// caller published the same content first. A refused rename is only a failure
+/// once it has outlasted the retries with the content still not there.
+fn install(
+    staging: &Path,
+    path: &Path,
+    content: &str,
+    mut rename: impl FnMut(&Path, &Path) -> io::Result<()>,
+) -> io::Result<()> {
+    if is_published(path, content) {
+        return Ok(());
+    }
+    let mut attempts = PUBLISH_ATTEMPTS;
+    loop {
+        let refused = match rename(staging, path) {
+            Ok(()) => return Ok(()),
+            Err(e) => e,
+        };
+        if is_published(path, content) {
+            return Ok(());
+        }
+        attempts -= 1;
+        if attempts == 0 {
+            return Err(refused);
+        }
+        std::thread::sleep(PUBLISH_RETRY);
+    }
 }
 
 /// The invoking user's own directory for the defaults file.
@@ -208,6 +283,214 @@ mod tests {
         );
         // Written once, then reused as it stands.
         assert_eq!(defaults_file().unwrap(), path);
+    }
+
+    /// How long a race may take before the test fails instead of waiting on it.
+    const RACE_DEADLINE: Duration = Duration::from_secs(30);
+
+    /// Run `calls` publishes of `content` into `dir` released together, returning
+    /// each outcome, and fail the test if they do not all finish by the deadline.
+    /// Detached threads, because a scoped one that never returned would hang the
+    /// scope the failure has to unwind through.
+    fn race(dir: &Path, calls: usize, content: &str) -> Vec<Result<PathBuf>> {
+        let start = std::sync::Arc::new(std::sync::Barrier::new(calls));
+        let (finished, outcomes) = std::sync::mpsc::channel();
+        for _ in 0..calls {
+            let (start, finished) = (start.clone(), finished.clone());
+            let (dir, content) = (dir.to_path_buf(), content.to_string());
+            std::thread::spawn(move || {
+                start.wait();
+                let _ = finished.send(publish_defaults(&dir, DEFAULTS_FILE, &content));
+            });
+        }
+        let deadline = std::time::Instant::now() + RACE_DEADLINE;
+        (0..calls)
+            .map(|done| {
+                let left = deadline.saturating_duration_since(std::time::Instant::now());
+                outcomes
+                    .recv_timeout(left)
+                    .unwrap_or_else(|e| panic!("{done} of {calls} publishes finished: {e}"))
+            })
+            .collect()
+    }
+
+    fn entries(dir: &Path) -> Vec<String> {
+        std::fs::read_dir(dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .collect()
+    }
+
+    #[test]
+    fn concurrent_initializations_all_succeed_and_publish_what_one_alone_writes() {
+        let root = scratch("race");
+        let alone = publish_defaults(&root.join("alone"), DEFAULTS_FILE, JUDGE_DEFAULTS).unwrap();
+        let expected = std::fs::read(&alone).unwrap();
+        for round in 0..50 {
+            let dir = root.join(format!("round-{round}"));
+            for outcome in race(&dir, 32, JUDGE_DEFAULTS) {
+                assert_eq!(outcome.unwrap(), dir.join(DEFAULTS_FILE));
+            }
+            assert_eq!(std::fs::read(dir.join(DEFAULTS_FILE)).unwrap(), expected);
+            assert_eq!(entries(&dir), [DEFAULTS_FILE], "round {round}");
+        }
+    }
+
+    #[test]
+    fn a_reader_during_concurrent_publishes_sees_no_file_or_the_complete_defaults() {
+        // The real defaults, and a body large enough that a write that was not
+        // atomic would be caught part-way.
+        let large = "# padding\n".repeat(100_000) + JUDGE_DEFAULTS;
+        let root = scratch("reader");
+        for (name, content) in [("small", JUDGE_DEFAULTS), ("large", large.as_str())] {
+            for round in 0..20 {
+                let dir = root.join(format!("{name}-{round}"));
+                let path = dir.join(DEFAULTS_FILE);
+                let done = std::sync::atomic::AtomicBool::new(false);
+                let deadline = std::time::Instant::now() + RACE_DEADLINE;
+                std::thread::scope(|scope| {
+                    let reader = scope.spawn(|| {
+                        let mut complete = 0;
+                        while !done.load(Ordering::Acquire) && std::time::Instant::now() < deadline
+                        {
+                            match std::fs::read(&path) {
+                                Ok(bytes) => {
+                                    assert!(
+                                        bytes == content.as_bytes(),
+                                        "read {} of {} bytes",
+                                        bytes.len(),
+                                        content.len()
+                                    );
+                                    complete += 1;
+                                }
+                                // Windows refuses an open while the file is replaced.
+                                Err(e) => assert!(
+                                    e.kind() == io::ErrorKind::NotFound
+                                        || (cfg!(windows)
+                                            && e.kind() == io::ErrorKind::PermissionDenied),
+                                    "{e}"
+                                ),
+                            }
+                        }
+                        complete
+                    });
+                    // The reader is released before any outcome is judged, so a
+                    // failed publish fails the test rather than leaving it spinning.
+                    let outcomes = race(&dir, 8, content);
+                    done.store(true, Ordering::Release);
+                    reader.join().unwrap();
+                    for outcome in outcomes {
+                        outcome.unwrap();
+                    }
+                });
+                assert_eq!(std::fs::read(&path).unwrap(), content.as_bytes());
+            }
+        }
+    }
+
+    #[test]
+    fn equivalent_defaults_already_published_are_not_rewritten() {
+        let dir = scratch("equivalent");
+        let path = dir.join(DEFAULTS_FILE);
+        std::fs::write(&path, JUDGE_DEFAULTS).unwrap();
+        let old = std::time::UNIX_EPOCH + Duration::from_secs(1_000_000_000);
+        File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
+        assert_eq!(
+            publish_defaults(&dir, DEFAULTS_FILE, JUDGE_DEFAULTS).unwrap(),
+            path
+        );
+        assert_eq!(std::fs::metadata(&path).unwrap().modified().unwrap(), old);
+        assert_eq!(entries(&dir), [DEFAULTS_FILE]);
+    }
+
+    #[test]
+    fn different_content_under_the_name_is_replaced() {
+        let dir = scratch("different");
+        let path = dir.join(DEFAULTS_FILE);
+        std::fs::write(&path, "mode = \"auto\"\n").unwrap();
+        publish_defaults(&dir, DEFAULTS_FILE, JUDGE_DEFAULTS).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), JUDGE_DEFAULTS);
+        assert_eq!(entries(&dir), [DEFAULTS_FILE]);
+    }
+
+    #[test]
+    fn a_staging_name_left_by_a_crashed_process_is_stepped_over() {
+        let dir = scratch("stale");
+        let next = STAGING_SEQUENCE.load(Ordering::Relaxed);
+        let stale: Vec<PathBuf> = (next..next + 32)
+            .map(|n| {
+                dir.join(format!(
+                    "{DEFAULTS_FILE}.{}.{n}.partial",
+                    std::process::id()
+                ))
+            })
+            .collect();
+        for path in &stale {
+            std::fs::write(path, "left behind").unwrap();
+        }
+        publish_defaults(&dir, DEFAULTS_FILE, JUDGE_DEFAULTS).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dir.join(DEFAULTS_FILE)).unwrap(),
+            JUDGE_DEFAULTS
+        );
+        for path in &stale {
+            assert_eq!(std::fs::read_to_string(path).unwrap(), "left behind");
+        }
+    }
+
+    /// The refusal Windows gives a rename onto a file another caller has open;
+    /// no other platform produces it, so these tests supply it.
+    fn refused() -> io::Error {
+        io::Error::from(io::ErrorKind::PermissionDenied)
+    }
+
+    #[test]
+    fn a_refused_publish_is_success_once_a_concurrent_caller_has_published() {
+        let dir = scratch("refused-published");
+        let (staging, path) = (dir.join("staged"), dir.join(DEFAULTS_FILE));
+        std::fs::write(&staging, JUDGE_DEFAULTS).unwrap();
+        install(&staging, &path, JUDGE_DEFAULTS, |_, to| {
+            std::fs::write(to, JUDGE_DEFAULTS)?;
+            Err(refused())
+        })
+        .unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), JUDGE_DEFAULTS);
+    }
+
+    #[test]
+    fn a_transiently_refused_publish_is_tried_again() {
+        let dir = scratch("refused-transient");
+        let (staging, path) = (dir.join("staged"), dir.join(DEFAULTS_FILE));
+        std::fs::write(&staging, JUDGE_DEFAULTS).unwrap();
+        let mut tries = 0;
+        install(&staging, &path, JUDGE_DEFAULTS, |from, to| {
+            tries += 1;
+            if tries < 3 {
+                Err(refused())
+            } else {
+                std::fs::rename(from, to)
+            }
+        })
+        .unwrap();
+        assert_eq!(tries, 3);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), JUDGE_DEFAULTS);
+    }
+
+    #[test]
+    fn a_publish_that_can_never_land_is_a_classified_error_and_strands_no_staging() {
+        // A directory squatting on the name: the rename cannot replace it and
+        // nothing equivalent ever appears.
+        let dir = scratch("squatted");
+        std::fs::create_dir_all(dir.join(DEFAULTS_FILE).join("occupied")).unwrap();
+        let err = publish_defaults(&dir, DEFAULTS_FILE, JUDGE_DEFAULTS).unwrap_err();
+        assert!(err.to_string().contains("could not write"), "{err}");
+        assert_eq!(err.kind(), Some(ProviderErrorKind::Protocol));
+        assert_eq!(entries(&dir), [DEFAULTS_FILE]);
     }
 
     #[test]
