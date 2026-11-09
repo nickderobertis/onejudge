@@ -1047,8 +1047,12 @@ fn execute(
             // A run that *settled* is the exception: it ended because the supervisor
             // judged the work incomplete and then named no next instruction, which
             // is the opposite of the task being done, and reporting it as completed
-            // would hide exactly the case `settled_reason` exists to surface.
-            None => !hit_max_turns && outcome.settled_reason.is_none(),
+            // would hide exactly the case `settled_reason` exists to surface. A
+            // run at the cap completed only if its final supervisor turn said so.
+            None => {
+                (!hit_max_turns || outcome.completion_reason.is_some())
+                    && outcome.settled_reason.is_none()
+            }
         };
 
         let mut eval_results = Vec::with_capacity(evals.len());

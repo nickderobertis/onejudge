@@ -14,7 +14,9 @@ use crate::control::ControlOutcome;
 use crate::error::Result;
 use crate::history_name::{HistoryScope, JudgeSideCall};
 use crate::interrupt::{Framing, Redirect, Watch};
-use crate::note::{Accepted, Criteria, DeliveredNote, Note, NoteInbox, Party, Undelivered};
+use crate::note::{
+    Accepted, Addressee, Criteria, DeliveredNote, Note, NoteInbox, Party, Undelivered,
+};
 use crate::provider::{
     Assessment, AssistantTurn, EvidenceContext, JudgeKind, JudgeQuery, JudgeVerdict, Provider,
     SkillRef, SupervisorOutcome, SupervisorQuery, TurnOutcome,
@@ -640,6 +642,17 @@ impl<'a> Engine<'a> {
             .collect()
     }
 
+    /// Whether a note addressed to the supervisor was delivered past the first
+    /// `held`, so that no supervisor decision has had it in hand.
+    fn supervisor_note_unheld(&self, held: usize) -> bool {
+        self.delivered.borrow()[held..].iter().any(|delivered| {
+            matches!(
+                delivered.note.addressee,
+                Addressee::Supervisor | Addressee::Both
+            )
+        })
+    }
+
     /// A watch over `party`'s next turn on `session` in `cwd`, when a note can
     /// arrive and the provider opens that turn with control — `None` otherwise, and
     /// then nothing is taken from the inbox until the turn ends.
@@ -815,6 +828,9 @@ impl<'a> Engine<'a> {
         // them *with* the supervisor's response, and never at all when that response
         // is completion — the judge passed the work with the note in hand.
         let mut for_worker: Vec<DeliveredNote> = Vec::new();
+        // How many of the delivered notes some supervisor decision has held. The
+        // record only ever grows, so everything past this has reached no judge.
+        let mut held = self.delivered.borrow().len();
 
         loop {
             // A note that arrived between turns reaches the next turn to open.
@@ -968,6 +984,7 @@ impl<'a> Engine<'a> {
                         Ok(decision) => decision,
                         Err(_) => return Err(error),
                     };
+                    held = delivered.len();
                     if let Some(usage) = &decision.usage {
                         totals.add(usage);
                     }
@@ -1060,39 +1077,47 @@ impl<'a> Engine<'a> {
             let Some(user) = &conversation.user else {
                 break;
             };
-            if skill_done || transcript.assistant_turns() >= max_turns {
-                break;
-            }
-            // The work is done and the conversation has stopped moving: the worker
-            // recorded nothing and gave the same answer again, to an instruction
-            // that asked for nothing. Every further turn is a paid re-prompt of a
-            // finished dispatch — one measured run spent 137 of them — so settle on
-            // the work already there. Checked before the supervisor is asked again,
-            // because that call is one of the two this loop keeps paying for.
-            if should_settle {
-                settled_reason = Some(format!(
-                    "the agent and the supervisor repeated {NOOP_SETTLE_LIMIT} no-op exchanges \
-                     (no tool activity, and the same agent reply each time); settled on the work \
-                     already done"
-                ));
-                break;
-            }
-            // A note that arrived while the worker's turn was live and did not
-            // redirect it reaches the worker now that the turn has ended: the next
-            // turn opens carrying it, before the supervisor is consulted, so the
-            // judge receives it *together with* the worker's response to it rather
-            // than ahead of one. The finished reply is kept — it is real work.
-            let arrived = self.take_notes();
-            if !arrived.is_empty() {
-                let delivered = self.deliver(
-                    arrived,
-                    Party::Worker,
-                    &Accepted::AtTurnEnd {
-                        party: Party::Worker,
-                    },
-                );
-                transcript.push(Message::user(crate::note::worker_block(&delivered)));
-                continue;
+            let at_cap = transcript.assistant_turns() >= max_turns;
+            // A note addressed to the supervisor that the capped turn took was
+            // answered as delivered, and only a supervisor decision can read it — so
+            // the cap costs the worker its next turn, never the judge its note. One
+            // closing decision is taken with it in hand, and nothing opens after.
+            let closing = at_cap && self.supervisor_note_unheld(held);
+            if !closing {
+                if skill_done || at_cap {
+                    break;
+                }
+                // The work is done and the conversation has stopped moving: the worker
+                // recorded nothing and gave the same answer again, to an instruction
+                // that asked for nothing. Every further turn is a paid re-prompt of a
+                // finished dispatch — one measured run spent 137 of them — so settle on
+                // the work already there. Checked before the supervisor is asked again,
+                // because that call is one of the two this loop keeps paying for.
+                if should_settle {
+                    settled_reason = Some(format!(
+                        "the agent and the supervisor repeated {NOOP_SETTLE_LIMIT} no-op exchanges \
+                         (no tool activity, and the same agent reply each time); settled on the work \
+                         already done"
+                    ));
+                    break;
+                }
+                // A note that arrived while the worker's turn was live and did not
+                // redirect it reaches the worker now that the turn has ended: the next
+                // turn opens carrying it, before the supervisor is consulted, so the
+                // judge receives it *together with* the worker's response to it rather
+                // than ahead of one. The finished reply is kept — it is real work.
+                let arrived = self.take_notes();
+                if !arrived.is_empty() {
+                    let delivered = self.deliver(
+                        arrived,
+                        Party::Worker,
+                        &Accepted::AtTurnEnd {
+                            party: Party::Worker,
+                        },
+                    );
+                    transcript.push(Message::user(crate::note::worker_block(&delivered)));
+                    continue;
+                }
             }
 
             let started_at = observed_at();
@@ -1254,6 +1279,7 @@ impl<'a> Engine<'a> {
                     awaiting.at_turn_end(delivered);
                 }
             };
+            held = self.delivered.borrow().len();
             let usage = turn_usage;
             // Answer every sender whose note reached the judge's live turn. Settled
             // here rather than at the bottom of the loop because an observation that
@@ -1298,6 +1324,18 @@ impl<'a> Engine<'a> {
             match decision.outcome {
                 SupervisorOutcome::Completed { reason } => {
                     completion_reason = Some(reason);
+                    break;
+                }
+                // The closing decision wants more work and the cap allows none. Its
+                // words are its verdict, recorded here rather than left in the
+                // transcript as an instruction no turn will ever answer.
+                SupervisorOutcome::Continue { message, .. } if closing => {
+                    settled_reason = Some(format!(
+                        "the conversation reached its turn cap ({max_turns}) and the final \
+                         supervisor turn, taken with a delivered note in hand, judged the work \
+                         incomplete: {}",
+                        message.trim()
+                    ));
                     break;
                 }
                 SupervisorOutcome::Continue { message, .. } => {

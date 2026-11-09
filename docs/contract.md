@@ -143,7 +143,7 @@ fn build_report(
 At most one of the two is present, and they say different things. A
 `completion_reason` is the supervisor deciding the task is done. A
 `settled_reason` is the loop ending on the work it already had, **without** a
-completion decision, and it has three causes — the text says which:
+completion decision, and it has four causes — the text says which:
 
 * the supervisor judged the work incomplete and then named no next instruction to
   act on, even when asked again (`no next instruction`);
@@ -160,13 +160,17 @@ completion decision, and it has three causes — the text says which:
   the run *earlier* than the cap would. A conversation whose contract *is* to
   report nothing says so with `user.settle_on_noop: false`
   (`Settings::with_settle_on_noop`) and is never settled this way — it ends at
-  `max_turns` like any other run.
+  `max_turns` like any other run; or
+* the conversation reached `max_turns` holding a delivered note no supervisor
+  decision had seen, and the one final supervisor turn taken with it in hand asked
+  for more work the cap cannot allow (`final supervisor turn`). The reason carries
+  the supervisor's words ([notes.md](notes.md)).
 
 Neither is a failure, and a run that simply hit `max_turns` carries neither.
 
 The distinction is the point: without it, a supervisor with nothing to say is
 indistinguishable from a worker that could not do the task, and an operator acts
-on the wrong one. The three settle causes, a genuine provider failure (an
+on the wrong one. The four settle causes, a genuine provider failure (an
 `Error`, and under the CLI a `FailureReport`), and a completion are each
 distinguishable for the same reason. See [protocol.md](protocol.md#supervisor--decide-completion-or-produce-the-next-user-turn).
 

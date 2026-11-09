@@ -82,6 +82,18 @@ an error.
 
 **Between turns, the next turn gets it** (`Accepted::Queued`).
 
+**A note the conversation's last turn took still reaches the judge.** When the
+worker's turn reaches `max_turns` and a delivered note addressed `Supervisor` or
+`Both` has been in no supervisor decision yet, onejudge takes one final supervisor
+turn with it in hand and opens no further worker turn. That turn's verdict is the
+conversation's: `Completed` is the `completion_reason`, an answer of `Continue` —
+more work the cap cannot allow — ends the run with a `settled_reason` carrying the
+supervisor's words, and an unusable answer settles as it does on any turn. A
+conversation reaching the cap with no such note ends exactly as it always did: a
+`Worker` note taken by the last turn costs no supervisor turn, and a note a decision
+already held is not handed to a final one. A note that arrives during the final
+turn has the decision re-taken like any other; no worker turn follows to carry it.
+
 **A note that arrives once the conversation has completed raises.** `Notes::send`
 answers `Err`, which `Undelivered::from` reads as `Undelivered::…`, naming that it
 was not delivered and why, so the
@@ -99,7 +111,7 @@ completion report that preceded its own subsequent commits.
 | **during the worker's turn**, reaching it at the end | the next turn opens carrying the note, before the supervisor is consulted | as above | `Accepted::AtTurnEnd { party: Worker }` |
 | **during the judge's turn**, answering `Continue` | receives it **with** the response: one user turn carrying the note's framing and then the supervisor's own words | its live turn is redirected with the note — or, reaching it at the end, its decision is re-taken with the note in hand; either way that decision is the one that counts | `Accepted::Interrupted { party: Supervisor }`, or `Accepted::AtTurnEnd { party: Supervisor }` when it reached the judge at the end |
 | **during the judge's turn**, answering `Completed` | **nothing is delivered** | as above, and the completion was decided with the note in hand | `Accepted::JudgedWith { completion_reason }` |
-| **between turns** | the next turn's prompt carries it | the next `supervise` carries it | `Accepted::Queued` |
+| **between turns** | the next turn's prompt carries it | the next `supervise` carries it — a final one past `max_turns`, if the turn that took the note was the last and it is addressed to the judge | `Accepted::Queued` |
 | **after the conversation ended** | — | — | `Err(Undelivered::…)` |
 
 `Accepted::Interrupted` is answered only when oneharness confirmed the redirect —
