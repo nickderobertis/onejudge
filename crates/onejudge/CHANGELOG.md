@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.22.5](https://github.com/nickderobertis/onejudge/compare/onejudge-v0.22.4...onejudge-v0.22.5) - 2026-11-09
+
+### Fixed
+
+- *(engine)* hand a supervisor note taken by the last turn to a final supervisor turn ([#228](https://github.com/nickderobertis/onejudge/pull/228))
+
 ## [0.22.4](https://github.com/nickderobertis/onejudge/compare/onejudge-v0.22.3...onejudge-v0.22.4) - 2026-11-09
 
 ### Fixed
