@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.23.0](https://github.com/nickderobertis/onejudge/compare/onejudge-v0.22.5...onejudge-v0.23.0) - 2026-11-10
+
+### Added
+
+- judge an input with no agent side as a mode of run ([#231](https://github.com/nickderobertis/onejudge/pull/231))
+
 ## [0.22.5](https://github.com/nickderobertis/onejudge/compare/onejudge-v0.22.4...onejudge-v0.22.5) - 2026-11-09
 
 ### Fixed
