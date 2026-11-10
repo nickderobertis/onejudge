@@ -457,6 +457,10 @@ fn a_repository_of_its_own_adopts_judge_only_by_configuration_alone() {
         .env("XDG_CONFIG_HOME", repo.join(".config"))
         .env("APPDATA", repo.join(".config"))
         .env("XDG_STATE_HOME", repo.join(".state"))
+        // Windows resolves oneharness's session store under %LOCALAPPDATA%,
+        // not XDG_STATE_HOME; with the host's cleared it has no store at all.
+        .env("LOCALAPPDATA", repo.join(".state"))
+        .env("USERPROFILE", &repo)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
