@@ -7,9 +7,10 @@
 //! the run's task. A judge whose verdict is a run over files — an `llmlint` judge
 //! — needs the text *on disk* and inside the directory it lints from, because a
 //! file outside that root matches none of its globs and would pass vacuously. So
-//! the engine places it: a file already under the worktree is judged where it
-//! lies, and anything else is written to a scratch root of its own for the length
-//! of the judgement. [`JudgedFile`] is what a judge is told
+//! the engine places it: a file under the worktree that still holds the text read
+//! from it is judged where it lies, and anything else — that text included, once
+//! the file has changed — is written to a scratch root of its own for the length
+//! of the judgement, so every judge judges the same captured material. [`JudgedFile`] is what a judge is told
 //! ([`Provider::set_judged_file`](crate::Provider::set_judged_file)).
 
 use std::path::{Path, PathBuf};
@@ -143,13 +144,19 @@ fn canonical(path: &Path) -> std::io::Result<PathBuf> {
 }
 
 /// Place `input` for judging against `worktree`: in place when it is a file under
-/// the worktree, otherwise written into a fresh scratch root of its own.
+/// the worktree that still holds exactly the captured text, otherwise that text
+/// written into a fresh scratch root of its own under the same file name.
 pub(crate) fn place(input: &JudgeInput, worktree: &str) -> Result<Placed> {
     let name = input.file_name()?;
     let worktree = canonical(Path::new(worktree)).ok();
     if let (Some(path), Some(worktree)) = (&input.path, &worktree) {
         if let Ok(file) = canonical(path) {
-            if file.starts_with(worktree) && file.is_file() {
+            // Judged where it lies only while it still holds the text that was
+            // captured: every judge must judge the same material, and a model
+            // judge is handed `input.text`, so a file that changed since is
+            // judged from a snapshot of the captured text instead.
+            let unchanged = std::fs::read(&file).is_ok_and(|now| now == input.text.as_bytes());
+            if file.starts_with(worktree) && unchanged {
                 return Ok(Placed {
                     file: JudgedFile {
                         file,
@@ -219,6 +226,21 @@ mod tests {
         assert!(!placed.file.scratch);
         drop(placed);
         assert!(worktree.join("docs/plan.md").exists(), "never removed");
+    }
+
+    #[test]
+    fn a_file_changed_since_it_was_read_is_judged_from_a_snapshot_of_what_was_read() {
+        let worktree = scratch("changed");
+        std::fs::write(worktree.join("plan.md"), "the captured plan").unwrap();
+        let input = JudgeInput::from_path(worktree.join("plan.md")).unwrap();
+        std::fs::write(worktree.join("plan.md"), "an edited plan").unwrap();
+        let placed = place(&input, worktree.to_str().unwrap()).unwrap();
+        assert!(placed.file.scratch);
+        assert_eq!(placed.file.file.file_name().unwrap(), "plan.md");
+        assert_eq!(
+            std::fs::read_to_string(&placed.file.file).unwrap(),
+            "the captured plan"
+        );
     }
 
     #[test]

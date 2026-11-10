@@ -293,3 +293,82 @@ fn material_read_from_a_file_under_the_worktree_is_judged_as_written() {
     assert!(judged(&sandbox, "alpha")[0].contains("# Plan from disk"));
     assert!(Path::new(&path).exists(), "the caller's file is left alone");
 }
+
+/// Material read from a file is judged as it was read: a file that changes after
+/// `JudgeInput::from_path` captured it reaches neither a harness judge nor an
+/// llmlint judge in its changed form — both judge the captured text.
+#[test]
+fn a_file_changed_after_it_was_read_is_judged_as_read_by_every_backend() {
+    let sandbox = Sandbox::new("judge-only-library-snapshot");
+    let alpha = sandbox.harness_config("alpha", "pass");
+    let llmlint_config = sandbox.worktree.join("llmlint.yml");
+    std::fs::write(&llmlint_config, "rules: []\n").unwrap();
+    let seen = sandbox.root.join("llmlint-seen.jsonl");
+    let argv = sandbox.root.join("llmlint-argv.jsonl");
+    std::env::set_var("ONEJUDGE_FAKE_LLMLINT_SEEN", &seen);
+    std::env::set_var("ONEJUDGE_FAKE_LLMLINT_ARGV", &argv);
+    std::env::set_var("ONEJUDGE_FAKE_LLMLINT_RULE", "no_placeholders:TBD");
+    let yaml = format!(
+        "provider:\n  kind: split\n  skill:\n    kind: oneharness\n    worker_config: {worker:?}\n  \
+         judges:\n    - label: alpha\n      kind: oneharness\n      judge_config: {alpha:?}\n    \
+         - label: lint\n      kind: llmlint\n      bin: {llmlint:?}\n      config: {config:?}\n\
+         skill: {skill:?}\ntask: Write the rollout plan for the payments service.\n\
+         session: judge-only-snapshot\nuser:\n  persona: {PERSONA:?}\n  done_when: {DONE_WHEN:?}\n",
+        worker = sandbox.root.join("worker.toml").display().to_string(),
+        alpha = alpha.display().to_string(),
+        llmlint = doubles::fake_llmlint(),
+        config = llmlint_config.display().to_string(),
+        skill = sandbox.worktree.display().to_string(),
+    );
+
+    let path = sandbox.worktree.join("plan.md");
+    let captured = "# Rollout plan\n1. Deploy to canary.\n2. Roll back by reverting the tag.\n";
+    std::fs::write(&path, captured).unwrap();
+    let input = JudgeInput::from_path(&path).unwrap();
+    // Edited between capture and the run — and into material the llmlint rule
+    // fails, so judging the file as it now stands would change the verdict.
+    let edited = "# Rollout plan\nRollback: TBD.\n";
+    std::fs::write(&path, edited).unwrap();
+
+    sandbox.clear_logs();
+    let plan = Config::from_yaml(&yaml)
+        .unwrap()
+        .into_plan()
+        .unwrap()
+        .with_judge_input(input);
+    let summary = run_plan(plan, Format::Json, &mut |_| {}).unwrap();
+
+    let prompts = judged(&sandbox, "alpha");
+    assert_eq!(prompts.len(), 1);
+    assert!(prompts[0].contains(captured.trim_end()), "{}", prompts[0]);
+    assert!(!prompts[0].contains("Rollback: TBD"), "{}", prompts[0]);
+    let linted: Vec<String> = std::fs::read_to_string(&seen)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+        .map(|line| line["text"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(linted, [captured], "llmlint judged the captured text");
+    assert_eq!(exit_code(&summary), 0, "{:?}", summary.report.verdicts);
+    assert_eq!(summary.report.transcript.messages[1].content, captured);
+    // Judged from a snapshot under the file's own name; the caller's edited file
+    // is left exactly as they left it.
+    let run: Vec<String> = serde_json::from_str(
+        std::fs::read_to_string(&argv)
+            .unwrap()
+            .lines()
+            .find(|line| line.starts_with("[\"lint\""))
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        Path::new(run.last().unwrap()).file_name().unwrap(),
+        "plan.md"
+    );
+    assert_ne!(
+        Path::new(run.last().unwrap()).canonicalize().ok(),
+        path.canonicalize().ok()
+    );
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), edited);
+    assert!(sandbox.prompts("worker").is_empty());
+}

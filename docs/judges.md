@@ -336,7 +336,7 @@ judge entry:
   --judge-only` (`Engine::judge_only`) the one decision runs `<bin> lint --cwd
   <root> … [-c <config>] [--label …] [<args>…] <file>`: `<file>` is the judge
   input and `<root>` the directory it lies under — the worktree for a file under
-  it, else a scratch directory holding only that file, removed afterwards — and
+  it that still holds the text read from it, else a scratch directory holding only that file, removed afterwards — and
   `--diff` is never passed, because the material is not a change to any tree. A
   relative `config` still names the file it named from where onejudge runs. A
   scratch root holds no llmlint configuration to discover, so material off the

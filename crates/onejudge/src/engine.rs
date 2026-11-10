@@ -803,8 +803,8 @@ impl<'a> Engine<'a> {
     ///
     /// A conversation with no simulated user is judged against its task alone,
     /// under a reviewer persona. A judge that reads files is told where `input`
-    /// lies ([`Provider::set_judged_file`]): a file under the skill's worktree is
-    /// judged in place, and anything else from a scratch directory removed when
+    /// lies ([`Provider::set_judged_file`]): a file under the skill's worktree that
+    /// still holds `input.text` is judged in place, and anything else from a scratch directory removed when
     /// the decision returns.
     ///
     /// # Errors

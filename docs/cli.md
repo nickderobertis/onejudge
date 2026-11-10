@@ -124,9 +124,11 @@ keeps its meaning, and the result is the one a normal run returns.
   reason or the judges' combined finding as its reason. Configured `evals` and
   the `assessment` are scored against that transcript as in a normal run.
 - **An `llmlint` judge** lints the judge input itself, as the one file it is
-  named (`llmlint lint … <file>`), never `--diff`. A file under the worktree is
+  named (`llmlint lint … <file>`), never `--diff`. Every judge judges the text
+  read when the run started: a file under the worktree that still holds it is
   linted where it lies, from the worktree; anything else (stdin, a file outside
-  the worktree) is written under its own name — `judge-input.md` for stdin — to a
+  the worktree, or one that changed after it was read) is that text written under
+  its own name — `judge-input.md` for stdin — to a
   scratch directory removed afterwards, and linted from there, so that judge
   needs its own `config:` (there is nothing to discover in a scratch directory).
   An llmlint run that judged no rule against the input — none of its globs
