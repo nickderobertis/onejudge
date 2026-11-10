@@ -38,6 +38,7 @@ use std::process::{Child, Command, ExitStatus, Output, Stdio};
 use std::time::Instant;
 
 use crate::error::{Error, ProviderErrorKind, Result};
+use crate::judge_input::JudgedFile;
 use crate::provider::{
     Assessment, AssistantTurn, EvidenceContext, JudgeKind, JudgeLink, JudgeQuery, JudgeValue,
     JudgeVerdict, Provider, SkillRef, SupervisorOutcome, SupervisorQuery, SupervisorTurn, UserTurn,
@@ -93,6 +94,8 @@ pub struct LlmlintProvider {
     judge_label: RefCell<Option<String>>,
     /// What links the latest run to its llmlint history record.
     link: RefCell<Option<JudgeLink>>,
+    /// The material of a judge-only run, while one is being judged.
+    judged: RefCell<Option<JudgedFile>>,
 }
 
 /// What one `llmlint lint` run decided.
@@ -129,6 +132,7 @@ impl LlmlintProvider {
             session: RefCell::new(None),
             judge_label: RefCell::new(None),
             link: RefCell::new(None),
+            judged: RefCell::new(None),
         };
         provider.probe()?;
         Ok(provider)
@@ -312,11 +316,39 @@ impl LlmlintProvider {
     /// [-c <config>] [--diff --diff-base <ref>] [--label session=<base>]
     /// --label judge=<label> --label turn=<n> [<args>…]` — the caller's `args`
     /// last, so a caller's `--label` of the same key wins.
+    ///
+    /// While a judge-only run's material is being judged
+    /// ([`Provider::set_judged_file`]) the run lints exactly that file instead:
+    /// `--cwd` is the [`JudgedFile::root`] it lies under — a file outside the
+    /// directory llmlint lints from matches none of its globs — the file is the
+    /// one positional argument, after the caller's `args`, and `--diff` is never
+    /// passed, because the material is not a change to any tree. A scratch root
+    /// holds no llmlint configuration to discover, so it needs this provider's
+    /// own `config`.
     fn lint(&self, op: &str, worktree: &str, turn: usize) -> Result<Lint> {
         *self.link.borrow_mut() = None;
+        let judged = self.judged.borrow().clone();
+        if let Some(judged) = &judged {
+            if judged.scratch && self.config.is_none() {
+                return Err(Error::provider_classified(
+                    op.to_string(),
+                    format!(
+                        "an llmlint judge cannot judge `{}`: judge-only material that is not a file \
+                         under the worktree is linted from a scratch directory, which holds no \
+                         llmlint configuration to discover. Give the judge its own `config:`, or \
+                         judge a file under the worktree",
+                        judged.file.display()
+                    ),
+                    ProviderErrorKind::Other,
+                ));
+            }
+        }
         let labels = self.labels(op, turn)?;
         let mut command = Command::new(&self.bin);
-        command.arg("lint").arg("--cwd").arg(worktree).args([
+        let cwd = judged
+            .as_ref()
+            .map_or_else(|| PathBuf::from(worktree), |judged| judged.root.clone());
+        command.arg("lint").arg("--cwd").arg(&cwd).args([
             "--format",
             "human",
             "--color",
@@ -325,15 +357,23 @@ impl LlmlintProvider {
             "never",
         ]);
         if let Some(config) = &self.config {
-            command.arg("-c").arg(config);
+            // A relative config names a file from where onejudge runs; linting
+            // from another root must not move it.
+            match (&judged, config.is_relative(), std::env::current_dir()) {
+                (Some(_), true, Ok(here)) => command.arg("-c").arg(here.join(config)),
+                _ => command.arg("-c").arg(config),
+            };
         }
-        if let Some(base) = &self.diff_base {
+        if let (Some(base), None) = (&self.diff_base, &judged) {
             command.arg("--diff").arg("--diff-base").arg(base);
         }
         for (key, value) in &labels {
             command.arg("--label").arg(format!("{key}={value}"));
         }
         command.args(&self.args);
+        if let Some(judged) = &judged {
+            command.arg(&judged.file);
+        }
 
         let started = Instant::now();
         let output = self.run(&mut command, op)?;
@@ -369,6 +409,21 @@ impl LlmlintProvider {
                         ProviderErrorKind::Protocol,
                     )
                 })?;
+                // A judge-only run names the one file to judge, and a rule whose
+                // globs do not select it is skipped — so a run that judged no rule
+                // at all said nothing about the material, and reading its clean
+                // exit as a pass would be the vacuous pass this boundary refuses.
+                if let Some(judged) = judged.as_ref().filter(|_| judged_nothing(&summary)) {
+                    return Err(Error::provider_classified(
+                        op.to_string(),
+                        format!(
+                            "llmlint judged no rule against `{}` ({summary}): no rule's globs \
+                             select it. Name the judge input so the rules meant for it match it",
+                            judged.file.display()
+                        ),
+                        ProviderErrorKind::Other,
+                    ));
+                }
                 Ok(Lint::Clean { summary })
             }
             Some(1) => {
@@ -529,6 +584,19 @@ fn latest_assistant_turn(messages: &[Message]) -> usize {
         .count()
 }
 
+/// Whether llmlint's summary line says no rule was judged at all: it reads
+/// `<n> failed, <m> passed, …` and both counts are zero. A summary that does not
+/// read that way is not claimed to be empty.
+fn judged_nothing(summary: &str) -> bool {
+    let count = |label: &str| {
+        summary.split(',').find_map(|part| {
+            let (number, word) = part.trim().split_once(' ')?;
+            (word.trim() == label).then(|| number.parse::<u64>().ok())?
+        })
+    };
+    matches!((count("failed"), count("passed")), (Some(0), Some(0)))
+}
+
 /// The report's summary line: the last non-empty line of stdout.
 fn summary_line(stdout: &str) -> Option<String> {
     stdout
@@ -594,6 +662,10 @@ impl Provider for LlmlintProvider {
 
     fn take_judge_link(&self) -> Option<JudgeLink> {
         self.link.borrow_mut().take()
+    }
+
+    fn set_judged_file(&self, file: Option<&JudgedFile>) {
+        *self.judged.borrow_mut() = file.cloned();
     }
 
     fn respond(
@@ -693,6 +765,21 @@ impl Provider for LlmlintProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_summary_with_no_rule_judged_is_told_from_one_that_judged() {
+        assert!(judged_nothing(
+            "0 failed, 0 passed, 2 skipped, 0 not relevant"
+        ));
+        assert!(!judged_nothing(
+            "0 failed, 4 passed, 0 skipped, 0 not relevant"
+        ));
+        assert!(!judged_nothing(
+            "1 failed, 0 passed, 0 skipped, 0 not relevant"
+        ));
+        // A summary in another shape is never claimed to be empty.
+        assert!(!judged_nothing("all good"));
+    }
 
     #[test]
     fn a_blank_bin_is_invalid() {

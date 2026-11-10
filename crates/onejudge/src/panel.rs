@@ -655,6 +655,13 @@ impl<J: Provider + Send> Provider for JudgePanel<J> {
         }
     }
 
+    // Every judge of the panel judges the same material.
+    fn set_judged_file(&self, file: Option<&crate::JudgedFile>) {
+        for judge in &self.judges {
+            judge.with(|provider| provider.set_judged_file(file));
+        }
+    }
+
     // Each judge's records, stamped with its label when the panel holds more than
     // one — a panel of one writes exactly the records its judge wrote.
     fn invocation_telemetry(&self) -> Vec<InvocationTelemetry> {

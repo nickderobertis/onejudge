@@ -14,6 +14,7 @@ use crate::control::ControlOutcome;
 use crate::error::Result;
 use crate::history_name::{HistoryScope, JudgeSideCall};
 use crate::interrupt::{Framing, Redirect, Watch};
+use crate::judge_input::JudgeInput;
 use crate::note::{
     Accepted, Addressee, Criteria, DeliveredNote, Note, NoteInbox, Party, Undelivered,
 };
@@ -499,6 +500,36 @@ fn supervisor_redirect(presented: &[DeliveredNote]) -> String {
     out
 }
 
+/// The persona a judge-only run's supervisor decision is taken under when its
+/// conversation names no simulated user to supply one.
+const JUDGE_ONLY_PERSONA: &str =
+    "A reviewer judging the agent's reply against the original task and the completion criterion.";
+
+/// Why a run settled on a supervisor that judged the work incomplete and named no
+/// next instruction, with its own reason when it gave one.
+fn no_instruction(reason: &str) -> String {
+    let mut why = "the supervisor judged the work incomplete but gave no next instruction, even \
+                   asked again; settled on the work already done"
+        .to_string();
+    if !reason.trim().is_empty() {
+        why.push_str(&format!(" (supervisor's reason: {})", reason.trim()));
+    }
+    why
+}
+
+/// Why a run settled on a supervisor whose answer never parsed as a decision,
+/// carrying that answer for whoever reads the run.
+fn unparseable(problem: &str, answer: &str) -> String {
+    let mut why = format!(
+        "the supervisor's answer did not parse as a decision ({problem}), even asked again; \
+         settled on the work already done"
+    );
+    if !answer.trim().is_empty() {
+        why.push_str(&format!(" (supervisor's last answer: {})", answer.trim()));
+    }
+    why
+}
+
 /// Append one worker turn to `transcript`, as the turns it really was.
 ///
 /// Without a redirect that is the reply and its events. With one, the provider
@@ -705,7 +736,7 @@ impl<'a> Engine<'a> {
     /// Propagates the first provider failure.
     pub fn run(&self, conversation: &Conversation) -> Result<Outcome> {
         let mut discard = |_: &Observation<'_>| ControlFlow::Continue(());
-        self.converse(conversation, false, &mut discard)
+        self.converse(conversation, None, false, &mut discard)
     }
 
     /// Like [`Engine::run`], but drives each turn through
@@ -729,7 +760,7 @@ impl<'a> Engine<'a> {
             Observation::Tool(event) => on_event(event),
             _ => ControlFlow::Continue(()),
         };
-        self.converse(conversation, true, &mut tools_only)
+        self.converse(conversation, None, true, &mut tools_only)
     }
 
     /// Like [`Engine::run_streaming`], but delivers the *whole* of each turn as it
@@ -752,7 +783,54 @@ impl<'a> Engine<'a> {
         conversation: &Conversation,
         on_observation: &mut dyn FnMut(&Observation<'_>) -> ControlFlow<()>,
     ) -> Result<Outcome> {
-        self.converse(conversation, true, on_observation)
+        self.converse(conversation, None, true, on_observation)
+    }
+
+    /// Judge `input` once, with **no agent side run**: the judge side — a bare
+    /// provider, or every judge of a [`JudgePanel`](crate::JudgePanel), `llmlint`
+    /// judges included — takes one supervisor decision on `input` as the reply to
+    /// `conversation`'s task, against the bar its [`SimulatedUser`] states
+    /// (persona, `done_when`, the criteria a delivered note bound) with its
+    /// artifacts as evidence.
+    ///
+    /// The [`Outcome`] is the one a run whose worker had answered with `input`
+    /// would have reached on that decision: the transcript is the task, `input` as
+    /// the assistant's reply, and — when the judge side judged it incomplete — its
+    /// message, as the user turn a worker would have been handed; a completion
+    /// sets [`Outcome::completion_reason`], and an answer with no usable decision
+    /// [`Outcome::settled_reason`]. Nothing else is invoked: no worker turn, and no
+    /// second decision.
+    ///
+    /// A conversation with no simulated user is judged against its task alone,
+    /// under a reviewer persona. A judge that reads files is told where `input`
+    /// lies ([`Provider::set_judged_file`]): a file under the skill's worktree that
+    /// still holds `input.text` is judged in place, and anything else from a scratch directory removed when
+    /// the decision returns.
+    ///
+    /// # Errors
+    /// A judge-side failure, as a run's supervisor failure is — never a pass; and
+    /// [`Error::Invalid`] for a judge input whose name is not a bare file name or
+    /// that cannot be written out.
+    pub fn judge_only(&self, conversation: &Conversation, input: &JudgeInput) -> Result<Outcome> {
+        let mut discard = |_: &Observation<'_>| ControlFlow::Continue(());
+        self.converse(conversation, Some(input), false, &mut discard)
+    }
+
+    /// [`Engine::judge_only`], delivering the judgement as it happens: the
+    /// supervisor turn's opening (its instruction is `input`), each judge's tool
+    /// events and decision, the message handed back when there is one, and the
+    /// turn's close — the same observations a normal run's supervisor turn yields.
+    /// Returning [`ControlFlow::Break`] stops the run as it does there.
+    ///
+    /// # Errors
+    /// As [`Engine::judge_only`].
+    pub fn judge_only_observing(
+        &self,
+        conversation: &Conversation,
+        input: &JudgeInput,
+        on_observation: &mut dyn FnMut(&Observation<'_>) -> ControlFlow<()>,
+    ) -> Result<Outcome> {
+        self.converse(conversation, Some(input), true, on_observation)
     }
 
     /// Drive the loop, then close the note channel on what actually happened: a
@@ -761,11 +839,15 @@ impl<'a> Engine<'a> {
     fn converse(
         &self,
         conversation: &Conversation,
+        judged: Option<&JudgeInput>,
         streaming: bool,
         on_observation: &mut dyn FnMut(&Observation<'_>) -> ControlFlow<()>,
     ) -> Result<Outcome> {
         self.conversed.set(true);
-        let result = self.drive(conversation, streaming, on_observation);
+        let result = match judged {
+            Some(input) => self.judge_input(conversation, input, streaming, on_observation),
+            None => self.drive(conversation, streaming, on_observation),
+        };
         if let Some(inbox) = &self.notes {
             // The close carries the refusal itself, so every sender still waiting —
             // and every later one — reads back exactly this variant.
@@ -1211,55 +1293,7 @@ impl<'a> Engine<'a> {
                 // ended: recorded on the engine first, so a failed run still reports
                 // it, and observed before the error propagates, so a supervisor
                 // watching the run sees which judge failed and what the others said.
-                let decided = self.record_judge_decisions(turn_index);
-                let bare = self.provider.take_judge_tools();
-                let mut broke = false;
-                // A bare provider's judge events first — it records no decision to
-                // follow them — then each panel judge's, right before its decision.
-                'observed: for tools in &bare {
-                    for event in &tools.events {
-                        if on_observation(&Observation::JudgeTool(JudgeTool {
-                            turn: turn_index,
-                            judge: &tools.judge,
-                            event,
-                        }))
-                        .is_break()
-                        {
-                            broke = true;
-                            break 'observed;
-                        }
-                    }
-                }
-                'decided: for decision in &decided {
-                    if broke {
-                        break;
-                    }
-                    for event in &decision.events {
-                        if on_observation(&Observation::JudgeTool(JudgeTool {
-                            turn: turn_index,
-                            judge: &decision.judge,
-                            event,
-                        }))
-                        .is_break()
-                        {
-                            broke = true;
-                            break 'decided;
-                        }
-                    }
-                    if on_observation(&Observation::JudgeDecided(JudgeDecided {
-                        turn: turn_index,
-                        judge: &decision.judge,
-                        kind: &decision.kind,
-                        decision: decision.decision,
-                        reason: &decision.reason,
-                        run_id: decision.run_id.as_deref(),
-                    }))
-                    .is_break()
-                    {
-                        broke = true;
-                        break;
-                    }
-                }
+                let broke = self.observe_judges(turn_index, on_observation);
                 let attempt = attempt?;
                 if broke {
                     return Ok(self.finish(transcript, totals, true, None, None));
@@ -1357,13 +1391,7 @@ impl<'a> Engine<'a> {
                 // finished dispatches, and left the operator unable to tell that
                 // from the worker failing the task.
                 SupervisorOutcome::NoInstruction { reason } => {
-                    let mut why = "the supervisor judged the work incomplete but gave no next \
-                                   instruction, even asked again; settled on the work already done"
-                        .to_string();
-                    if !reason.trim().is_empty() {
-                        why.push_str(&format!(" (supervisor's reason: {})", reason.trim()));
-                    }
-                    settled_reason = Some(why);
+                    settled_reason = Some(no_instruction(&reason));
                     break;
                 }
                 // The supervisor answered, but not in a shape that can be read as a
@@ -1373,20 +1401,202 @@ impl<'a> Engine<'a> {
                 // say — it may well have argued a real point, which is why its last
                 // answer is carried here for whoever reads the run.
                 SupervisorOutcome::Unparseable { problem, answer } => {
-                    let mut why = format!(
-                        "the supervisor's answer did not parse as a decision ({problem}), even \
-                         asked again; settled on the work already done"
-                    );
-                    if !answer.trim().is_empty() {
-                        why.push_str(&format!(" (supervisor's last answer: {})", answer.trim()));
-                    }
-                    settled_reason = Some(why);
+                    settled_reason = Some(unparseable(&problem, &answer));
                     break;
                 }
             }
         }
 
         Ok(self.finish(transcript, totals, false, completion_reason, settled_reason))
+    }
+
+    /// [`Engine::judge_only`]'s one decision. See there.
+    fn judge_input(
+        &self,
+        conversation: &Conversation,
+        input: &JudgeInput,
+        streaming: bool,
+        on_observation: &mut dyn FnMut(&Observation<'_>) -> ControlFlow<()>,
+    ) -> Result<Outcome> {
+        self.provider.reset_telemetry();
+        self.scope_history();
+        *self.started.borrow_mut() = Some(Instant::now());
+        *self.worktree.borrow_mut() = Some(conversation.skill.dir.clone());
+        let user = conversation.user.as_ref();
+        let artifacts = user.map(|u| u.artifacts.clone()).unwrap_or_default();
+        *self.artifacts.borrow_mut() = artifacts.clone();
+        self.judge_decisions.borrow_mut().clear();
+
+        // The material stands where a worker's reply would, answering the task.
+        let mut transcript = Transcript::from_input(&conversation.input);
+        transcript.push(Message::assistant(input.text.clone()));
+        let placed = crate::judge_input::place(input, &conversation.skill.dir)?;
+        let turn_index = 1;
+        let skill_session = format!("{}-skill", self.settings.session_name);
+        let user_session = self.history_scope().name(JudgeSideCall::User);
+        let persona = user.map_or(JUDGE_ONLY_PERSONA, |u| u.persona.as_str());
+        let delivered = self.delivered_notes();
+        let rendered =
+            Criteria::compose(user.and_then(|u| u.done_when.as_deref()), &delivered).rendered();
+
+        let started_at = observed_at();
+        if on_observation(&Observation::TurnOpened(TurnOpened {
+            turn: turn_index,
+            role: Role::User,
+            instruction: &input.text,
+            started_at: started_at.clone(),
+        }))
+        .is_break()
+        {
+            return Ok(self.finish(transcript, Usage::default(), true, None, None));
+        }
+        let query = SupervisorQuery {
+            task: &conversation.input,
+            persona,
+            done_when: rendered.as_deref(),
+            worktree: &conversation.skill.dir,
+            history_name: &skill_session,
+            notes: &delivered,
+            turn: TurnOutcome::Taken,
+            turn_index,
+        };
+        let evidence = EvidenceContext {
+            worktree: Some(&conversation.skill.dir),
+            history_files: &[],
+            artifacts: &artifacts,
+        };
+        let mut history_stopped = false;
+        self.provider.set_judged_file(Some(&placed.file));
+        let attempt = if streaming {
+            self.provider.supervise_observing(
+                &query,
+                &transcript.messages,
+                Some(user_session.as_str()),
+                evidence,
+                &mut |begun| {
+                    let flow = on_observation(&Observation::HistoryBegun(HistoryBegun::new(
+                        Role::User,
+                        turn_index,
+                        begun,
+                    )));
+                    history_stopped |= flow.is_break();
+                    flow
+                },
+            )
+        } else {
+            self.provider.supervise_with_evidence(
+                &query,
+                &transcript.messages,
+                Some(user_session.as_str()),
+                evidence,
+            )
+        };
+        self.provider.set_judged_file(None);
+        drop(placed);
+        if history_stopped {
+            return Ok(self.finish(transcript, Usage::default(), true, None, None));
+        }
+        let broke = self.observe_judges(turn_index, on_observation);
+        let decision = attempt?;
+        let mut totals = Usage::default();
+        if let Some(usage) = &decision.usage {
+            totals.add(usage);
+        }
+        if broke {
+            return Ok(self.finish(transcript, totals, true, None, None));
+        }
+        let mut broke = match &decision.outcome {
+            SupervisorOutcome::Continue { message, .. } => {
+                on_observation(&Observation::Message(TurnMessage {
+                    turn: turn_index,
+                    role: Role::User,
+                    text: message,
+                }))
+                .is_break()
+            }
+            _ => false,
+        };
+        if !broke {
+            broke = on_observation(&Observation::TurnClosed(TurnClosed {
+                turn: turn_index,
+                role: Role::User,
+                usage: decision.usage.as_ref(),
+                started_at,
+                finished_at: observed_at(),
+                harness: None,
+                model: None,
+            }))
+            .is_break();
+        }
+        if broke {
+            return Ok(self.finish(transcript, totals, true, None, None));
+        }
+        let (completion_reason, settled_reason) = match decision.outcome {
+            SupervisorOutcome::Completed { reason } => (Some(reason), None),
+            // The judges' finding, kept as the user turn a worker would have been
+            // handed — where a normal run's report carries it too.
+            SupervisorOutcome::Continue { message, .. } => {
+                transcript.push(Message::user(message));
+                (None, None)
+            }
+            SupervisorOutcome::NoInstruction { reason } => (None, Some(no_instruction(&reason))),
+            SupervisorOutcome::Unparseable { problem, answer } => {
+                (None, Some(unparseable(&problem, &answer)))
+            }
+        };
+        Ok(self.finish(transcript, totals, false, completion_reason, settled_reason))
+    }
+
+    /// Drain the judge side's decisions and tool events for `turn_index` onto the
+    /// run's record and deliver them to `on_observation`: a bare provider's judge
+    /// events first — it records no decision to follow them — then each panel
+    /// judge's, right before its decision. Whether the observer asked to stop.
+    fn observe_judges(
+        &self,
+        turn_index: usize,
+        on_observation: &mut dyn FnMut(&Observation<'_>) -> ControlFlow<()>,
+    ) -> bool {
+        let decided = self.record_judge_decisions(turn_index);
+        let bare = self.provider.take_judge_tools();
+        for tools in &bare {
+            for event in &tools.events {
+                if on_observation(&Observation::JudgeTool(JudgeTool {
+                    turn: turn_index,
+                    judge: &tools.judge,
+                    event,
+                }))
+                .is_break()
+                {
+                    return true;
+                }
+            }
+        }
+        for decision in &decided {
+            for event in &decision.events {
+                if on_observation(&Observation::JudgeTool(JudgeTool {
+                    turn: turn_index,
+                    judge: &decision.judge,
+                    event,
+                }))
+                .is_break()
+                {
+                    return true;
+                }
+            }
+            if on_observation(&Observation::JudgeDecided(JudgeDecided {
+                turn: turn_index,
+                judge: &decision.judge,
+                kind: &decision.kind,
+                decision: decision.decision,
+                reason: &decision.reason,
+                run_id: decision.run_id.as_deref(),
+            }))
+            .is_break()
+            {
+                return true;
+            }
+        }
+        false
     }
 
     fn finish(

@@ -44,6 +44,8 @@ built — so build from source there with `cargo install`.
 
 ```
 onejudge run [CONFIG.yaml] [overrides]   # drive one task to completion
+onejudge run [CONFIG.yaml] --judge-only --judge-input <PATH|->
+                                         # judge a document, no agent side
 onejudge init [PATH]                     # scaffold onejudge.yaml + oneharness configs
 onejudge schema                          # print the annotated config
 onejudge --help
@@ -81,6 +83,8 @@ file, which beats the built-in default**:
 | `--format` | — | `text` (default; `human` is an alias) or `json` |
 | `--stream` | — | stream the run as it happens: under `--format json` the [streamed protocol](streaming.md) on stdout (refuses `--output`); `text` is already live |
 | `--output`, `-o` | — | write the final result to a file instead of stdout: the report under `json`, the whole text of the run under `text` (whose live lines then go to stderr) |
+| `--judge-only` | — | run no agent side: the judge side judges `--judge-input` once ([judge-only mode](#judge-only-mode)); needs `--judge-input` |
+| `--judge-input` (`-` = stdin) | — | the material a `--judge-only` run judges: a file's path, or `-` for stdin; needs `--judge-only` |
 
 Each `ONEJUDGE_*` variable is the flag name in upper-snake-case, except that the
 repeatable `--artifact` takes its whole list from the plural `ONEJUDGE_ARTIFACTS`.
@@ -93,6 +97,58 @@ configures the loop, `ONEHARNESS_*` configures the harness/model underneath it.
 
 Supplying `--persona` / `--done-when` / `--max-turns` / `--artifact` (by flag or
 env) implies a simulated user even if the config had none.
+
+## Judge-only mode
+
+`onejudge run [CONFIG] --judge-only --judge-input <PATH|->` asks the judge side
+for one verdict on a document — a plan, a mid-run correction, any material held
+to a bar — with **no agent side**: no worker turn is run, and no worker harness
+is started. It is the same command reading the same config: every flag above
+keeps its meaning, and the result is the one a normal run returns.
+
+- **Who judges:** the judge side the config declares — a `split`'s `judge:` or
+  `judges:` panel, `llmlint` judges included (or the single provider of a
+  non-`split` config). A panel judges concurrently and combines exactly as it
+  does after a worker turn ([judges.md](judges.md)).
+- **What they judge:** the judge input — the file's text, or stdin under `-` —
+  stands where a worker's reply would, answering the task (`--task` / `task:`;
+  optional here, defaulting to `Produce the material under review.`). The bar is
+  the run's: the persona, `done_when` and any criterion a note bound, and the
+  `--artifact` / `user.artifacts` paths are named as evidence exactly as in a
+  normal run. A config with no `user:` is judged against its task under a
+  reviewer persona.
+- **Once:** one supervisor decision, and it is the verdict. `done_when` is not
+  re-judged — that would be a second judgement of the same material — so the
+  decision is recorded as the report's boolean verdict on the bar (its criterion
+  the `done_when`, else `the original task is complete`), with the completion
+  reason or the judges' combined finding as its reason. Configured `evals` and
+  the `assessment` are scored against that transcript as in a normal run.
+- **An `llmlint` judge** lints the judge input itself, as the one file it is
+  named (`llmlint lint … <file>`), never `--diff`. Every judge judges the text
+  read when the run started: a file under the worktree that still holds it is
+  linted where it lies, from the worktree; anything else (stdin, a file outside
+  the worktree, or one that changed after it was read) is that text written under
+  its own name — `judge-input.md` for stdin — to a
+  scratch directory removed afterwards, and linted from there, so that judge
+  needs its own `config:` (there is nothing to discover in a scratch directory).
+  An llmlint run that judged no rule against the input — none of its globs
+  select the file — is an error, never a pass.
+
+The **report** is the versioned `Report` a normal run writes, with no new field:
+the transcript is the task, the judge input as the assistant's turn, and — when
+the judges found the work incomplete — their finding as the user turn a worker
+would have been handed; `completion_reason` on a pass; `judge_decisions` per
+judge; `telemetry` attributing no agent invocation. The **exit codes** are a
+normal run's: `0` when the judges declared it complete (and every boolean eval
+passed), `1` when they did not, `2` when it could not be judged (a judge that
+failed or never answered, a judge input that cannot be read). `--format text`,
+`--stream` and `onejudge watch` show the one supervisor turn as they show any.
+
+In the library the same mode is `Plan::with_judge_input(JudgeInput)` on any
+`onejudge::cli::run_plan*` entry point, or `Engine::judge_only` /
+`Engine::judge_only_observing` for an embedder that builds its providers itself;
+`JudgeInput::text` takes in-memory material (`.named("plan.md")` to choose the
+file name a linter sees) and `JudgeInput::from_path` a file.
 
 ## Finding each party's turns
 

@@ -219,6 +219,15 @@ impl Provider for AnyProvider {
         }
     }
 
+    fn set_judged_file(&self, file: Option<&crate::JudgedFile>) {
+        match self {
+            AnyProvider::Oneharness(p) => p.set_judged_file(file),
+            AnyProvider::Command(p) => p.set_judged_file(file),
+            AnyProvider::Llmlint(p) => p.set_judged_file(file),
+            AnyProvider::Split { judges, .. } => judges.set_judged_file(file),
+        }
+    }
+
     fn take_judge_link(&self) -> Option<crate::JudgeLink> {
         match self {
             AnyProvider::Oneharness(p) => p.take_judge_link(),

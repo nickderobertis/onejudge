@@ -28,6 +28,10 @@
 //!   `done_when` / the skill declaring itself done, threading one caller-owned
 //!   session name across turns (the provider degrades gracefully where a harness
 //!   cannot continue a session).
+//! - [`Engine::judge_only`] is the **judge-only** mode of a run: no agent side,
+//!   the judge side handed a [`JudgeInput`] — a document's text — as the reply to
+//!   judge once against the run's bar, returning the same [`Outcome`] and so the
+//!   same [`Report`] a run reaches on that decision.
 //! - [`Transcript`] carries each turn plus the normalized [`ToolEvent`]s the skill
 //!   took, so the judge — and a [`ToolQuery`] — can reason over *what the skill
 //!   did*, not just what it said.
@@ -86,6 +90,7 @@ mod engine;
 mod error;
 mod history_name;
 mod interrupt;
+mod judge_input;
 mod llmlint;
 pub mod note;
 mod oneharness;
@@ -112,6 +117,7 @@ pub use engine::{
 };
 pub use error::{Error, ProviderErrorKind, Result};
 pub use history_name::{HistoryScope, JudgeSideCall};
+pub use judge_input::{JudgeInput, JudgedFile, DEFAULT_JUDGE_INPUT_NAME};
 pub use llmlint::{LlmlintProvider, DEFAULT_LLMLINT_BIN, LLMLINT_MIN_VERSION};
 pub use note::{
     supervisor_block, Accepted, Addressee, Criteria, Criterion, CriterionRefused, DeliveredNote,

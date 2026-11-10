@@ -527,6 +527,10 @@ impl Config {
             // Likewise: a note channel is opened in process by whoever supervises
             // the run, and installed with `Plan::with_notes`.
             notes: None,
+            // Judge-only material is the run's input, not its configuration: the
+            // same config drives either mode, and the caller picks with
+            // `Plan::with_judge_input` (`onejudge run --judge-only`).
+            judge_input: None,
         })
     }
 }
@@ -1062,6 +1066,13 @@ pub struct Plan {
     /// below behaves as it did before the channel existed. Set it with
     /// [`Plan::with_notes`].
     pub notes: Option<crate::note::NoteInbox>,
+    /// The material a **judge-only** run judges. `None` — the only thing a config
+    /// file can produce — is a normal run. `Some` runs no agent side: the judge
+    /// side judges this once, as the reply to the plan's task, against the bar the
+    /// plan states, and the run returns the same [`RunSummary`](super::RunSummary)
+    /// and [`Report`](crate::Report) a normal run does. Set it with
+    /// [`Plan::with_judge_input`].
+    pub judge_input: Option<crate::JudgeInput>,
 }
 
 impl std::fmt::Debug for Plan {
@@ -1077,6 +1088,7 @@ impl std::fmt::Debug for Plan {
             .field("assessment", &self.assessment)
             .field("spawn_hook", &self.spawn_hook.is_some())
             .field("notes", &self.notes.is_some())
+            .field("judge_input", &self.judge_input)
             .finish()
     }
 }
@@ -1114,6 +1126,22 @@ impl Plan {
     #[must_use]
     pub fn with_notes(mut self, inbox: crate::note::NoteInbox) -> Self {
         self.notes = Some(inbox);
+        self
+    }
+
+    /// Run this plan in **judge-only** mode on `input` (builder style): no agent
+    /// side is run, and the judge side the plan builds — its `judge:` / `judges:`
+    /// panel, `llmlint` judges included — judges `input` once as the reply to the
+    /// task, against the plan's persona, `done_when` and bound criteria, with its
+    /// artifacts as evidence. Every `run_plan*` entry point honours it and returns
+    /// the same [`RunSummary`](super::RunSummary) a normal run does: completed when
+    /// the judge side declared the work complete, else not, with the judges'
+    /// finding as the run's boolean verdict on the bar. Evals and the assessment
+    /// are scored against that transcript as a normal run's are. See
+    /// [`Engine::judge_only`](crate::Engine::judge_only) and `docs/cli.md`.
+    #[must_use]
+    pub fn with_judge_input(mut self, input: crate::JudgeInput) -> Self {
+        self.judge_input = Some(input);
         self
     }
 }

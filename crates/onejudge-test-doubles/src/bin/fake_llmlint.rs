@@ -41,6 +41,17 @@
 //!   a panel run at once, and each judge's own runs are serial, so the id is
 //!   deterministic — and `fake-<n>` over every lint run for an unlabelled one.
 //!   Both counts read the argv record, so a stable id needs it set.
+//! * `ONEJUDGE_FAKE_LLMLINT_RULE` — `RULE:NEEDLE`, a fixture rule judged over the
+//!   files a run is **named** positionally (a judge-only run's material), the way
+//!   llmlint judges them: a named file outside `--cwd` matches no glob and is not
+//!   judged at all, a file containing `NEEDLE` violates `RULE` (exit 1, a report
+//!   naming the rule, the file and the needle), and a file without it passes (exit
+//!   0). A run judging no file reports `0 failed, 0 passed` and exits 0 — the
+//!   vacuous clean run the provider must not read as a pass. It decides only runs
+//!   that name a file; a whole-tree run keeps `ONEJUDGE_FAKE_LLMLINT_EXIT`.
+//! * `ONEJUDGE_FAKE_LLMLINT_SEEN` — a path; every file a run judged under the rule
+//!   above is appended as one JSON line, `{"file": …, "text": …}`, so a test
+//!   asserts the content llmlint read rather than the name it was handed.
 //!
 //! Lives in the `publish = false` `onejudge-test-doubles` crate; never shipped to a
 //! consumer.
@@ -127,6 +138,7 @@ fn main() {
         std::process::exit(env_int("ONEJUDGE_FAKE_LLMLINT_VERSION_EXIT").unwrap_or(0));
     }
 
+    let ruled = judge_named_files(&args);
     let scripted = std::env::var("ONEJUDGE_FAKE_LLMLINT_EXIT")
         .ok()
         .filter(|v| !v.is_empty())
@@ -136,11 +148,14 @@ fn main() {
         .map(str::trim)
         .map(Outcome::parse)
         .collect();
-    let outcome = outcomes
-        .get(lint_runs_so_far)
-        .or_else(|| outcomes.last())
-        .copied()
-        .unwrap_or(Outcome::Exit(0));
+    let outcome = match &ruled {
+        Some((code, _)) => Outcome::Exit(*code),
+        None => outcomes
+            .get(lint_runs_so_far)
+            .or_else(|| outcomes.last())
+            .copied()
+            .unwrap_or(Outcome::Exit(0)),
+    };
     let completed = matches!(outcome, Outcome::Exit(0 | 1));
 
     let default_stdout = match outcome {
@@ -149,10 +164,11 @@ fn main() {
         _ => "",
     };
     let default_stderr = if completed { "" } else { INCOMPLETE_STDERR };
-    let stdout = match std::env::var("ONEJUDGE_FAKE_LLMLINT_STDOUT") {
-        Ok(text) if text == "none" => String::new(),
-        Ok(text) => text,
-        Err(_) => default_stdout.to_string(),
+    let stdout = match (ruled, std::env::var("ONEJUDGE_FAKE_LLMLINT_STDOUT")) {
+        (Some((_, report)), _) => report,
+        (None, Ok(text)) if text == "none" => String::new(),
+        (None, Ok(text)) => text,
+        (None, Err(_)) => default_stdout.to_string(),
     };
     let mut stderr = std::env::var("ONEJUDGE_FAKE_LLMLINT_STDERR")
         .unwrap_or_else(|_| default_stderr.to_string());
@@ -181,6 +197,96 @@ fn main() {
         Outcome::Signal => std::process::abort(),
         Outcome::Exit(code) => std::process::exit(code),
     }
+}
+
+/// The options a `lint` run is given whose next argument is their value, so a
+/// path given as one (a `-c` config) is never read as a file to judge.
+const VALUED: [&str; 8] = [
+    "--cwd",
+    "--format",
+    "--color",
+    "--progress",
+    "-c",
+    "--config",
+    "--diff-base",
+    "--label",
+];
+
+/// Judge the files `args` names under `ONEJUDGE_FAKE_LLMLINT_RULE`, when it is
+/// set and the run names any: the exit code and the report, as llmlint writes
+/// them. `None` leaves the run to the scripted outcome.
+fn judge_named_files(args: &[String]) -> Option<(i32, String)> {
+    let spec = std::env::var("ONEJUDGE_FAKE_LLMLINT_RULE")
+        .ok()
+        .filter(|v| !v.is_empty())?;
+    let Some((rule, needle)) = spec.split_once(':') else {
+        fail(&format!(
+            "ONEJUDGE_FAKE_LLMLINT_RULE is `{spec}`, not RULE:NEEDLE"
+        ));
+    };
+    let mut cwd = None;
+    let mut files = Vec::new();
+    let mut rest = args.iter().skip(1);
+    while let Some(arg) = rest.next() {
+        if VALUED.contains(&arg.as_str()) {
+            let value = rest.next();
+            if arg == "--cwd" {
+                cwd = value.cloned();
+            }
+        } else if !arg.starts_with('-') {
+            files.push(arg.clone());
+        }
+    }
+    if files.is_empty() {
+        return None;
+    }
+    let root = std::fs::canonicalize(cwd.unwrap_or_else(|| ".".into())).ok();
+    let mut violations = Vec::new();
+    let mut judged = 0;
+    for file in &files {
+        let path = std::fs::canonicalize(file)
+            .unwrap_or_else(|e| fail(&format!("cannot read `{file}` as a file: {e}")));
+        // llmlint's globs are rooted at `--cwd`: a file outside it matches none.
+        let Some(relative) = root
+            .as_ref()
+            .and_then(|root| path.strip_prefix(root).ok())
+            .map(|relative| relative.display().to_string())
+        else {
+            continue;
+        };
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| fail(&format!("cannot read `{file}` as text: {e}")));
+        judged += 1;
+        if let Ok(seen) = std::env::var("ONEJUDGE_FAKE_LLMLINT_SEEN") {
+            let line = serde_json::json!({"file": path, "text": text}).to_string() + "\n";
+            std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&seen)
+                .and_then(|mut out| out.write_all(line.as_bytes()))
+                .unwrap_or_else(|e| fail(&format!("could not record `{seen}`: {e}")));
+        }
+        if text.contains(needle) {
+            violations.push(relative);
+        }
+    }
+    if judged == 0 {
+        return Some((0, "0 failed, 0 passed, 1 skipped, 0 not relevant\n".into()));
+    }
+    if violations.is_empty() {
+        return Some((
+            0,
+            format!("0 failed, {judged} passed, 0 skipped, 0 not relevant\n"),
+        ));
+    }
+    let mut report = format!("FAIL  {rule}\n");
+    for file in &violations {
+        report.push_str(&format!("  {file}: contains `{needle}`\n"));
+    }
+    report.push_str(&format!(
+        "  rationale: `{needle}` must not appear\n1 failed, 0 passed, 0 skipped, 0 not relevant\n"
+    ));
+    Some((1, report))
 }
 
 /// Report a scripting or I/O error and exit 2 — llmlint's own "could not run"

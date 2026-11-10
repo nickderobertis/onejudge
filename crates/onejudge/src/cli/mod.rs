@@ -196,7 +196,27 @@ pub struct RunArgs {
     /// lines then go to stderr).
     #[arg(long, short)]
     pub output: Option<PathBuf>,
+
+    /// Judge-only mode: start no agent side. The judge side the config declares
+    /// (its `judge:` / `judges:` panel, `llmlint` judges included) judges the
+    /// `--judge-input` once, as the reply to the task, against the same bar
+    /// (persona, done-when, criteria) with any `--artifact`s, and the run prints
+    /// the same result and exits with the same codes a normal run does.
+    #[arg(long, requires = "judge_input")]
+    pub judge_only: bool,
+    /// The material a `--judge-only` run judges: a file's path, or `-` to read it
+    /// from stdin.
+    #[arg(long, value_name = "PATH|-", requires = "judge_only")]
+    pub judge_input: Option<String>,
 }
+
+/// The task a judge-only run's material answers when the config and flags name
+/// none: the judge side is told the material is the work it judges.
+pub const JUDGE_ONLY_TASK: &str = "Produce the material under review.";
+
+/// The criterion a judge-only run's verdict is recorded under when no
+/// `done_when` states one — the bar the judge side then applies.
+const JUDGE_ONLY_BAR: &str = "the original task is complete";
 
 /// Arguments for `onejudge watch`.
 #[derive(Debug, Parser)]
@@ -291,6 +311,8 @@ fn run_task(args: RunArgs) -> Result<i32, CliError> {
         format,
         stream,
         output,
+        judge_only,
+        judge_input,
     } = args;
 
     // Validate the output surface before doing any work: `--format json --stream`
@@ -311,7 +333,13 @@ fn run_task(args: RunArgs) -> Result<i32, CliError> {
     if let Some(base) = cfg_path.as_ref().and_then(|p| p.parent()) {
         rebase_skill(&mut cfg, base);
     }
+    if judge_only && task.as_deref() == Some("-") && judge_input.as_deref() == Some("-") {
+        return Err(CliError::Config(
+            "--task - and --judge-input - both read stdin; give one of them a value".into(),
+        ));
+    }
     let task = task.map(resolve_task).transpose()?;
+    let judge_input = judge_input.map(resolve_judge_input).transpose()?;
 
     // Precedence: flags > `ONEJUDGE_*` env > config file > defaults. Apply the env
     // layer first so a flag (applied next) wins over it, and both win over the file.
@@ -330,7 +358,15 @@ fn run_task(args: RunArgs) -> Result<i32, CliError> {
         provider_kind: provider,
     });
 
-    let plan = cfg.into_plan()?;
+    // A judge-only run judges material against a bar; a task is what the
+    // material answers, and is not required to name one.
+    if judge_input.is_some() && cfg.task.as_deref().is_none_or(|t| t.trim().is_empty()) {
+        cfg.task = Some(JUDGE_ONLY_TASK.into());
+    }
+    let mut plan = cfg.into_plan()?;
+    if let Some(input) = judge_input {
+        plan = plan.with_judge_input(input);
+    }
 
     // Every run is published for `onejudge watch <session>`, whatever it prints.
     // A stream that cannot be opened is a side channel lost, never a run refused.
@@ -684,6 +720,18 @@ fn resolve_task(task: String) -> Result<String, CliError> {
     }
 }
 
+/// Read `--judge-input`: the file at the path, or stdin when it is exactly `-` —
+/// verbatim either way, because the material is judged as written.
+fn resolve_judge_input(input: String) -> Result<crate::JudgeInput, CliError> {
+    if input == "-" {
+        let mut buf = String::new();
+        std::io::stdin().read_to_string(&mut buf)?;
+        return Ok(crate::JudgeInput::text(buf));
+    }
+    crate::JudgeInput::from_path(&input)
+        .map_err(|e| CliError::Config(format!("could not read --judge-input `{input}`: {e}")))
+}
+
 /// Write `content` to `output` (a file) or stdout.
 fn write_output(output: Option<&PathBuf>, content: &str) -> Result<(), CliError> {
     match output {
@@ -976,6 +1024,7 @@ fn execute(
         assessment,
         spawn_hook,
         notes,
+        judge_input,
     } = plan;
 
     let multi_turn = conversation.user.is_some();
@@ -1005,12 +1054,49 @@ fn execute(
     // Read the engine's telemetry once the loop is done, whichever way it ended, so
     // a failure still carries which harness identities the run attempted.
     let drive = || -> Result<RunSummary, CliError> {
-        let mut outcome = match on_observation {
-            Some(sink) => engine.run_observing(&conversation, sink)?,
-            None => engine.run(&conversation)?,
+        let outcome = match (&judge_input, on_observation) {
+            (Some(input), Some(sink)) => engine.judge_only_observing(&conversation, input, sink)?,
+            (Some(input), None) => engine.judge_only(&conversation, input)?,
+            (None, Some(sink)) => engine.run_observing(&conversation, sink)?,
+            (None, None) => engine.run(&conversation)?,
         };
 
         let mut verdicts: Vec<NamedVerdict> = Vec::new();
+
+        // A judge-only run's one decision IS its verdict on the bar: re-judging
+        // the material would be a second judgement of the same thing. It is
+        // recorded as the boolean verdict a normal run's re-judge records, so a
+        // reader of either report finds the outcome and its reason in one place.
+        if judge_input.is_some() {
+            let criterion = engine.criteria(done_when.as_deref()).rendered();
+            let satisfied = outcome.completion_reason.is_some() && !outcome.stopped_early;
+            verdicts.push(NamedVerdict::new(
+                criterion.clone().unwrap_or_else(|| JUDGE_ONLY_BAR.into()),
+                JudgeKind::Boolean,
+                crate::JudgeVerdict {
+                    value: JudgeValue::Bool(satisfied),
+                    reason: judge_only_reason(&outcome),
+                    usage: outcome.usage.clone(),
+                },
+            ));
+            let done = criterion.map(|criterion| DoneWhen {
+                criterion,
+                satisfied,
+            });
+            return finish_summary(
+                &engine,
+                outcome,
+                verdicts,
+                &evals,
+                assessment,
+                RunStatus {
+                    completed: satisfied,
+                    hit_max_turns: false,
+                    max_turns,
+                    done,
+                },
+            );
+        }
 
         // Re-judge the completion condition against the FINAL transcript: this is the
         // authoritative "did the task actually complete?" signal that drives the exit
@@ -1055,71 +1141,19 @@ fn execute(
             }
         };
 
-        let mut eval_results = Vec::with_capacity(evals.len());
-        for eval in &evals {
-            let result = match eval.kind {
-                EvalKind::Boolean => {
-                    let verdict = engine.judge_boolean(&eval.criterion, &outcome.transcript)?;
-                    let passed = matches!(verdict.value, JudgeValue::Bool(true));
-                    let reason = verdict.reason.clone();
-                    verdicts.push(NamedVerdict::new(
-                        eval.criterion.clone(),
-                        JudgeKind::Boolean,
-                        verdict,
-                    ));
-                    EvalResult {
-                        criterion: eval.criterion.clone(),
-                        outcome: EvalOutcome::Boolean(passed),
-                        reason,
-                    }
-                }
-                EvalKind::Numeric { scale: (min, max) } => {
-                    let verdict =
-                        engine.judge_numeric(&eval.criterion, min, max, &outcome.transcript)?;
-                    // A numeric query yields a number; treat a contract-violating bool
-                    // as the scale floor rather than inventing a separate empty state.
-                    let score = match verdict.value {
-                        JudgeValue::Number(n) => n,
-                        JudgeValue::Bool(_) => min,
-                    };
-                    let reason = verdict.reason.clone();
-                    verdicts.push(NamedVerdict::new(
-                        eval.criterion.clone(),
-                        JudgeKind::Numeric,
-                        verdict,
-                    ));
-                    EvalResult {
-                        criterion: eval.criterion.clone(),
-                        outcome: EvalOutcome::Numeric(score),
-                        reason,
-                    }
-                }
-            };
-            eval_results.push(result);
-        }
-
-        let assessment = match assessment {
-            Some(prompt) => {
-                let result = engine.assess(&prompt, &outcome.transcript)?;
-                if let Some(usage) = result.usage {
-                    outcome.usage.get_or_insert_with(Usage::default).add(&usage);
-                }
-                Some(result.text)
-            }
-            None => None,
-        };
-        outcome.telemetry = engine.telemetry();
-        outcome.processes = engine.spawned_processes();
-        let report = outcome.into_report_with_assessment(verdicts, assessment);
-
-        Ok(RunSummary {
-            report,
-            completed,
-            hit_max_turns,
-            max_turns,
-            done_when: done,
-            eval_results,
-        })
+        finish_summary(
+            &engine,
+            outcome,
+            verdicts,
+            &evals,
+            assessment,
+            RunStatus {
+                completed,
+                hit_max_turns,
+                max_turns,
+                done,
+            },
+        )
     };
     drive().map_err(|error| {
         Box::new(RunFailure {
@@ -1129,6 +1163,110 @@ fn execute(
             judge_decisions: engine.judge_decisions(),
         })
     })
+}
+
+/// What decides a run's exit code and closing summary, beside its report.
+struct RunStatus {
+    completed: bool,
+    hit_max_turns: bool,
+    max_turns: u32,
+    done: Option<DoneWhen>,
+}
+
+/// Score `evals` and the `assessment` against the finished `outcome` and bundle
+/// everything into the [`RunSummary`] — the same tail for a normal run and a
+/// judge-only one.
+fn finish_summary(
+    engine: &Engine<'_>,
+    mut outcome: crate::Outcome,
+    mut verdicts: Vec<NamedVerdict>,
+    evals: &[Eval],
+    assessment: Option<String>,
+    status: RunStatus,
+) -> Result<RunSummary, CliError> {
+    let mut eval_results = Vec::with_capacity(evals.len());
+    for eval in evals {
+        let result = match eval.kind {
+            EvalKind::Boolean => {
+                let verdict = engine.judge_boolean(&eval.criterion, &outcome.transcript)?;
+                let passed = matches!(verdict.value, JudgeValue::Bool(true));
+                let reason = verdict.reason.clone();
+                verdicts.push(NamedVerdict::new(
+                    eval.criterion.clone(),
+                    JudgeKind::Boolean,
+                    verdict,
+                ));
+                EvalResult {
+                    criterion: eval.criterion.clone(),
+                    outcome: EvalOutcome::Boolean(passed),
+                    reason,
+                }
+            }
+            EvalKind::Numeric { scale: (min, max) } => {
+                let verdict =
+                    engine.judge_numeric(&eval.criterion, min, max, &outcome.transcript)?;
+                // A numeric query yields a number; treat a contract-violating bool
+                // as the scale floor rather than inventing a separate empty state.
+                let score = match verdict.value {
+                    JudgeValue::Number(n) => n,
+                    JudgeValue::Bool(_) => min,
+                };
+                let reason = verdict.reason.clone();
+                verdicts.push(NamedVerdict::new(
+                    eval.criterion.clone(),
+                    JudgeKind::Numeric,
+                    verdict,
+                ));
+                EvalResult {
+                    criterion: eval.criterion.clone(),
+                    outcome: EvalOutcome::Numeric(score),
+                    reason,
+                }
+            }
+        };
+        eval_results.push(result);
+    }
+
+    let assessment = match assessment {
+        Some(prompt) => {
+            let result = engine.assess(&prompt, &outcome.transcript)?;
+            if let Some(usage) = result.usage {
+                outcome.usage.get_or_insert_with(Usage::default).add(&usage);
+            }
+            Some(result.text)
+        }
+        None => None,
+    };
+    outcome.telemetry = engine.telemetry();
+    outcome.processes = engine.spawned_processes();
+    let report = outcome.into_report_with_assessment(verdicts, assessment);
+
+    Ok(RunSummary {
+        report,
+        completed: status.completed,
+        hit_max_turns: status.hit_max_turns,
+        max_turns: status.max_turns,
+        done_when: status.done,
+        eval_results,
+    })
+}
+
+/// The reason a judge-only run's verdict carries: the judges' completion reason,
+/// else the finding they handed back (the user turn after the material), else why
+/// the decision settled without one.
+fn judge_only_reason(outcome: &crate::Outcome) -> String {
+    if let Some(reason) = &outcome.completion_reason {
+        return reason.clone();
+    }
+    let finding = outcome
+        .transcript
+        .messages
+        .get(2)
+        .filter(|message| message.role == crate::Role::User)
+        .map(|message| message.content.clone());
+    finding
+        .or_else(|| outcome.settled_reason.clone())
+        .unwrap_or_else(|| "the run stopped before the judge side decided".into())
 }
 
 /// The process exit code for a run: `0` when the task completed and every boolean

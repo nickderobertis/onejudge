@@ -332,6 +332,18 @@ judge entry:
   judgement; a judgement handed no worktree is `Error::Invalid`. onejudge does
   **no base auto-detection: a host wiring a stack passes its own comparison base
   in `diff_base`**, and without one llmlint judges the whole tree.
+- **A judge-only run lints the material, not the tree.** Under `onejudge run
+  --judge-only` (`Engine::judge_only`) the one decision runs `<bin> lint --cwd
+  <root> … [-c <config>] [--label …] [<args>…] <file>`: `<file>` is the judge
+  input and `<root>` the directory it lies under — the worktree for a file under
+  it that still holds the text read from it, else a scratch directory holding only that file, removed afterwards — and
+  `--diff` is never passed, because the material is not a change to any tree. A
+  relative `config` still names the file it named from where onejudge runs. A
+  scratch root holds no llmlint configuration to discover, so material off the
+  worktree needs the judge's own `config`, refused before llmlint runs otherwise.
+  A clean exit whose summary judged no rule (`0 failed, 0 passed, …`) — none of
+  its globs select the file — is an error, never a pass
+  ([cli.md](cli.md#judge-only-mode)).
 - **Every run is labelled** so it can be found in llmlint's own history
   (`llmlint history --label session=<base>`): `session` is the run's base session
   (`--session`, default `onejudge` — the base the history names above derive
