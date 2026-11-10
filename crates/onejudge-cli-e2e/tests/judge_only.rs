@@ -572,3 +572,57 @@ fn material_off_the_worktree_needs_the_llmlint_judge_to_have_its_own_config() {
     );
     assert!(journey.lint_runs().is_empty(), "refused before llmlint ran");
 }
+
+#[test]
+fn the_task_and_the_judge_input_cannot_both_be_read_from_stdin() {
+    let journey = Journey::new("judge-only-cli-two-stdins");
+    let ran = journey.run(
+        &[
+            "onejudge.yaml",
+            "--judge-only",
+            "--judge-input",
+            "-",
+            "--task",
+            "-",
+        ],
+        "# Plan\n",
+    );
+    assert_eq!(ran.code, Some(2), "{}", ran.stdout);
+    assert!(
+        ran.stderr
+            .contains("--task - and --judge-input - both read stdin"),
+        "{}",
+        ran.stderr
+    );
+    assert!(journey.prompts("reviewer").is_empty(), "nothing was judged");
+}
+
+#[test]
+fn material_judged_with_no_task_configured_answers_the_default_task() {
+    let journey = Journey::new("judge-only-cli-no-task");
+    let yaml = journey.yaml().replace(
+        "task: Write the rollout plan for the payments service.\n",
+        "",
+    );
+    assert!(!yaml.contains("task:"), "{yaml}");
+    std::fs::write(journey.worktree.join("taskless.yaml"), yaml).unwrap();
+    std::fs::write(
+        journey.worktree.join("plan.md"),
+        "# Plan\nRollback: revert.\n",
+    )
+    .unwrap();
+    let ran = journey.run(
+        &["taskless.yaml", "--judge-only", "--judge-input", "plan.md"],
+        "",
+    );
+    assert_eq!(ran.code, Some(0), "{}", ran.stderr);
+    let report = ran.report();
+    let task = onejudge::cli::JUDGE_ONLY_TASK;
+    assert_eq!(report.transcript.messages[0].role, Role::User);
+    assert_eq!(report.transcript.messages[0].content, task);
+    assert!(journey.prompts("reviewer")[0].contains(task));
+    // The same config, run normally, still needs a task: nothing to work on.
+    let normal = journey.run(&["taskless.yaml"], "");
+    assert_eq!(normal.code, Some(2));
+    assert!(normal.stderr.contains("no task given"), "{}", normal.stderr);
+}
