@@ -1067,9 +1067,9 @@ dependencies = [
 
 [[package]]
 name = "onemessagebus"
-version = "0.10.0"
+version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "949aa9f076e710679ff61a44d253d815b873a81c57cce5ca2074a1cef4f59947"
+checksum = "4bef2257422931cc5073695441c1a11d8298e5ddc3cc98b0fc31b8b914855dc8"
 dependencies = [
  "getrandom 0.3.4",
  "jsonschema 0.56.0",
