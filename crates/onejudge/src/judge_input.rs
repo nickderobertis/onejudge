@@ -130,13 +130,25 @@ impl Drop for Placed {
     }
 }
 
+/// `path` canonicalized, without the `\\?\` verbatim prefix Windows puts on a
+/// canonical path: a consumer handed the path — a linter, a prompt — reads the
+/// ordinary spelling.
+fn canonical(path: &Path) -> std::io::Result<PathBuf> {
+    let path = std::fs::canonicalize(path)?;
+    let text = path.to_string_lossy();
+    Ok(match text.strip_prefix(r"\\?\") {
+        Some(rest) if !rest.starts_with("UNC\\") => PathBuf::from(rest),
+        _ => path,
+    })
+}
+
 /// Place `input` for judging against `worktree`: in place when it is a file under
 /// the worktree, otherwise written into a fresh scratch root of its own.
 pub(crate) fn place(input: &JudgeInput, worktree: &str) -> Result<Placed> {
     let name = input.file_name()?;
-    let worktree = std::fs::canonicalize(worktree).ok();
+    let worktree = canonical(Path::new(worktree)).ok();
     if let (Some(path), Some(worktree)) = (&input.path, &worktree) {
-        if let Ok(file) = std::fs::canonicalize(path) {
+        if let Ok(file) = canonical(path) {
             if file.starts_with(worktree) && file.is_file() {
                 return Ok(Placed {
                     file: JudgedFile {
@@ -159,7 +171,7 @@ pub(crate) fn place(input: &JudgeInput, worktree: &str) -> Result<Placed> {
     ));
     let written = (|| {
         std::fs::create_dir_all(&root)?;
-        let root = std::fs::canonicalize(&root)?;
+        let root = canonical(&root)?;
         let file = root.join(&name);
         std::fs::write(&file, &input.text)?;
         Ok::<_, std::io::Error>(JudgedFile {
@@ -201,7 +213,7 @@ mod tests {
         std::fs::write(worktree.join("docs/plan.md"), "the plan").unwrap();
         let input = JudgeInput::from_path(worktree.join("docs/plan.md")).unwrap();
         let placed = place(&input, worktree.to_str().unwrap()).unwrap();
-        let root = std::fs::canonicalize(&worktree).unwrap();
+        let root = canonical(&worktree).unwrap();
         assert_eq!(placed.file.root, root);
         assert_eq!(placed.file.file, root.join("docs/plan.md"));
         assert!(!placed.file.scratch);

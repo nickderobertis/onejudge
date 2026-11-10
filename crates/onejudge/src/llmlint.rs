@@ -357,7 +357,12 @@ impl LlmlintProvider {
             "never",
         ]);
         if let Some(config) = &self.config {
-            command.arg("-c").arg(config);
+            // A relative config names a file from where onejudge runs; linting
+            // from another root must not move it.
+            match (&judged, config.is_relative(), std::env::current_dir()) {
+                (Some(_), true, Ok(here)) => command.arg("-c").arg(here.join(config)),
+                _ => command.arg("-c").arg(config),
+            };
         }
         if let (Some(base), None) = (&self.diff_base, &judged) {
             command.arg("--diff").arg("--diff-base").arg(base);
