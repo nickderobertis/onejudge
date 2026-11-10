@@ -39,6 +39,18 @@
 //!   instead, which this binary also plays (`support/codex_app_server.rs`, with
 //!   markers of its own), after answering the `--version` probe that keys it.
 //!
+//! `ONEJUDGE_FAKE_HARNESS_JUDGE_ANSWER` scripts a judge-side turn (one whose prompt
+//! carries the evidence contract) from the environment — so each judge of a panel
+//! answers differently by its own oneharness config's variant `env`, where a prompt
+//! marker would reach every judge alike: `pass` completes a supervisor decision and
+//! passes a boolean verdict; `fail:FINDING` answers `completion:false` with
+//! `FINDING` as its message and fails a boolean verdict with it as the reason; and
+//! `silent` writes nothing and waits to be reaped — a judge that never answers,
+//! which the judge's oneharness `timeout` turns into a failed turn. Worker turns
+//! ignore it. `ONEJUDGE_FAKE_HARNESS_PROMPT_LOG` names a file every invocation
+//! appends `{"side":"worker"|"judge","prompt":…}` to, so a journey asserts what a
+//! party was handed — and that a party was never invoked at all.
+//!
 //! `ONEJUDGE_FAKE_HARNESS_QUOTA=1` makes a configured candidate emit a refusal
 //! message and then report a quota failure, so a real fallback chain is observable.
 //!
@@ -174,6 +186,18 @@ fn main() {
         record_invocation(&path, &args, &stdin);
     }
     let evaluator = prompt.contains(onejudge::EVIDENCE_PROMPT_MARKER);
+    if let Some(path) = std::env::var("ONEJUDGE_FAKE_HARNESS_PROMPT_LOG")
+        .ok()
+        .filter(|path| !path.is_empty())
+    {
+        let side = if evaluator { "judge" } else { "worker" };
+        log_event(&path, &serde_json::json!({"side": side, "prompt": prompt}));
+    }
+    let scripted = if evaluator {
+        scripted_judge_answer(&prompt)
+    } else {
+        None
+    };
     let invoked = invocation(&args);
     let stream = matches!(invoked, Invocation::ClaudeCode { stream: true });
     let opencode = matches!(invoked, Invocation::OpenCode);
@@ -192,7 +216,8 @@ fn main() {
         std::process::exit(1);
     }
 
-    let mut reply = restrictive_evaluator_reply(&prompt, &args)
+    let mut reply = scripted
+        .or_else(|| restrictive_evaluator_reply(&prompt, &args))
         .or_else(|| artifact_evaluator_reply(&prompt, &args))
         .or_else(|| evaluated_reply(&prompt, evaluator))
         .or_else(|| marker(&prompt, "reply"))
@@ -497,6 +522,47 @@ fn decided_on(text: &str) -> String {
         "reason": "decided with the correction in hand",
     })
     .to_string()
+}
+
+/// A judge-side turn's answer as `ONEJUDGE_FAKE_HARNESS_JUDGE_ANSWER` scripts it,
+/// in the shape the turn asks for; see the module docs.
+fn scripted_judge_answer(prompt: &str) -> Option<String> {
+    let answer = std::env::var("ONEJUDGE_FAKE_HARNESS_JUDGE_ANSWER")
+        .ok()
+        .filter(|answer| !answer.is_empty())?;
+    if answer == "silent" {
+        // A judge that never answers: nothing on stdout, ever, until oneharness's
+        // own turn timeout reaps it — bounded so a broken test cannot leak it.
+        std::thread::sleep(SILENT_LIMIT);
+        fail("the judge never answered, and nothing reaped it");
+    }
+    let finding = match answer.as_str() {
+        "pass" => None,
+        _ => match answer.strip_prefix("fail:") {
+            Some(finding) => Some(finding.to_string()),
+            None => fail(&format!(
+                "ONEJUDGE_FAKE_HARNESS_JUDGE_ANSWER is `{answer}`, not `pass`, `fail:FINDING` or `silent`"
+            )),
+        },
+    };
+    let supervisor = prompt.contains("completion supervisor");
+    Some(match (supervisor, finding) {
+        (true, None) => r#"{"completion":true,"reason":"the material meets the bar"}"#.into(),
+        (true, Some(finding)) => serde_json::json!({
+            "completion": false,
+            "message": finding,
+            "reason": finding,
+        })
+        .to_string(),
+        (false, None) if prompt.contains("Assessment request:") => "no follow-up".into(),
+        (false, None) if prompt.contains("Score how well") => {
+            r#"{"value":10,"reason":"the material meets the bar"}"#.into()
+        }
+        (false, None) => r#"{"value":true,"reason":"the material meets the bar"}"#.into(),
+        (false, Some(finding)) => {
+            serde_json::json!({"value": false, "reason": finding}).to_string()
+        }
+    })
 }
 
 /// Append one JSON line to a turn log, in one write.

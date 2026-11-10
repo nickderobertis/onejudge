@@ -1168,6 +1168,7 @@ fn a_bound_criterion_reaches_the_authoritative_re_judge_a_plan_settles_on() {
         assessment: None,
         spawn_hook: None,
         notes: None,
+        judge_input: None,
     }
     .with_notes(inbox);
 
@@ -1337,6 +1338,7 @@ fn a_note_sent_to_a_plan_whose_provider_never_built_raises_that_no_conversation_
         assessment: None,
         spawn_hook: None,
         notes: None,
+        judge_input: None,
     }
     .with_notes(inbox);
     let mut progress = |_: &str| {};
@@ -1837,6 +1839,7 @@ fn a_plan_with_no_criterion_reports_completed_when_the_final_supervisor_turn_com
         assessment: None,
         spawn_hook: None,
         notes: None,
+        judge_input: None,
     }
     .with_notes(inbox);
     let mut progress = |_: &str| {};

@@ -82,6 +82,11 @@ impl<S: Provider, J: Provider> Provider for SplitProvider<S, J> {
         self.judge.set_judge_label(label);
     }
 
+    // Only the judge side judges a judge-only run's material.
+    fn set_judged_file(&self, file: Option<&crate::JudgedFile>) {
+        self.judge.set_judged_file(file);
+    }
+
     fn take_judge_link(&self) -> Option<crate::JudgeLink> {
         self.judge.take_judge_link()
     }

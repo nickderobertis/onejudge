@@ -510,6 +510,19 @@ pub trait Provider {
     /// nothing, which is the truth for a backend that labels nothing.
     fn set_judge_label(&self, _label: &str) {}
 
+    /// Tell this provider which file holds the material a **judge-only** run is
+    /// judging, or — `None` — that the judgement is over.
+    ///
+    /// The engine sets it around the one supervisor decision of
+    /// [`Engine::judge_only`](crate::Engine::judge_only). A model judge needs
+    /// nothing from it — the material is the reply in the transcript it is handed
+    /// — but a backend whose verdict is a run over files judges exactly this
+    /// file, from [`JudgedFile::root`](crate::JudgedFile::root), instead of the
+    /// worktree (an [`LlmlintProvider`](crate::LlmlintProvider)). A composing
+    /// provider forwards it to its judge side. Defaulted to do nothing, which is
+    /// the truth for a backend that reads no files of its own.
+    fn set_judged_file(&self, _file: Option<&crate::JudgedFile>) {}
+
     /// Take what links this provider's latest judge-side call to the record its
     /// backend kept of it, if that call left one.
     ///
