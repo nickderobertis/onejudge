@@ -65,6 +65,12 @@ single source of truth for every field.
 Flags override the file (flags > file > defaults), so one config serves many tasks:
 `onejudge run --task - < task.txt`, `--max-turns 8`, `--format json -o result.json`.
 
+The same config also judges a document with no agent side at all: `onejudge run
+--judge-only --judge-input plan.md` (or `-` for stdin) hands the material to the
+configured judge side — its `judges:` panel, `llmlint` judges included — once,
+against the run's bar, and returns the same report and exit codes
+([judge-only mode](docs/cli.md#judge-only-mode)).
+
 ### Config
 
 A run is a YAML file carrying only the loop's own concerns. The fields that make it
