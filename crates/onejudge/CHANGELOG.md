@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.23.3](https://github.com/nickderobertis/onejudge/compare/onejudge-v0.23.2...onejudge-v0.23.3) - 2026-11-13
+
+### Fixed
+
+- *(deps)* link the oneharness-core that keeps an interrupt's redirection ([#245](https://github.com/nickderobertis/onejudge/pull/245))
+
 ## [0.23.2](https://github.com/nickderobertis/onejudge/compare/onejudge-v0.23.1...onejudge-v0.23.2) - 2026-11-13
 
 ### Other
