@@ -40,6 +40,8 @@ pub(crate) fn result(harness_id: &str, text: &str) -> RunResult {
         text_source: Some("json:result".into()),
         usage: Usage::default(),
         usage_source: None,
+        calls: None,
+        diagnostics: Vec::new(),
         session_id: None,
         events: None,
         events_source: None,

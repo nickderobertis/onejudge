@@ -579,6 +579,8 @@ fn base_result(harness_id: &str) -> RunResult {
         text_source: Some("json:result".into()),
         usage: Usage::default(),
         usage_source: Some("json".into()),
+        calls: None,
+        diagnostics: Vec::new(),
         session_id: None,
         events: None,
         events_source: None,

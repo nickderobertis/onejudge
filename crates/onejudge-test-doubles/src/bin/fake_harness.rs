@@ -91,7 +91,8 @@
 //!   so a journey gets more than one judge-side turn to compare.
 //! * `[[record-harness:PATH]]` — append one JSON line per invocation to `PATH`:
 //!   `{"argv": [...], "stdin": "..."}`, exactly what oneharness spawned this
-//!   harness with. It is how a journey holds the *harness* argv and the prompt a
+//!   harness with, plus `"system_file": "..."` — the contents of the file
+//!   `--append-system-prompt-file` names — when it passed one. It is how a journey holds the *harness* argv and the prompt a
 //!   judge was handed to a recorded baseline, on either seam.
 //! * `[[evaluate]]` — on a judge-side turn (one whose prompt carries the evidence
 //!   contract, the same in every posture), answer in that turn's shape — a completed
@@ -183,7 +184,7 @@ fn main() {
     }
     let (prompt, stdin) = steering(&args);
     if let Some(path) = marker(&prompt, "record-harness") {
-        record_invocation(&path, &args, &stdin);
+        record_invocation(&path, &args, &stdin, system_file(&args).as_deref());
     }
     let evaluator = prompt.contains(onejudge::EVIDENCE_PROMPT_MARKER);
     if let Some(path) = std::env::var("ONEJUDGE_FAKE_HARNESS_PROMPT_LOG")
@@ -643,8 +644,11 @@ fn restrictive_evaluator_reply(prompt: &str, args: &[String]) -> Option<String> 
 }
 
 /// Append what this invocation was spawned with; see `[[record-harness:PATH]]`.
-fn record_invocation(path: &str, args: &[String], stdin: &str) {
-    let line = serde_json::json!({ "argv": args, "stdin": stdin });
+fn record_invocation(path: &str, args: &[String], stdin: &str, system: Option<&str>) {
+    let mut line = serde_json::json!({ "argv": args, "stdin": stdin });
+    if let Some(system) = system {
+        line["system_file"] = system.into();
+    }
     let mut file = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
@@ -731,12 +735,13 @@ fn exact_read_only_tools(args: &[String]) -> bool {
 /// Everything this run was told, as one string to scan for markers.
 ///
 /// The whole argv rather than just the `-p` positional, because oneharness
-/// delivers a onejudge turn's two halves through two different flags — the
-/// prompt positionally and the skill's instructions on `--append-system-prompt` —
-/// and a journey may steer the double from either. Stdin is folded in for the
-/// cases where the command layer moved the prompt off the argv: a large prompt
-/// (`--input-format text`), and every `--control` turn, whose prompt is a JSON
-/// frame on stdin so the handle can stay open for the interrupt frame afterwards.
+/// delivers a onejudge turn's two halves through two different routes — the
+/// prompt, and the skill's instructions in the file `--append-system-prompt-file`
+/// names (oneharness-core 0.30+ never inlines either) — and a journey may steer
+/// the double from either, so that file's contents are folded in. Stdin is
+/// folded in because the command layer moves the prompt off the argv: a blob
+/// (`--input-format text`), or on every `--control` turn a JSON frame on stdin,
+/// so the handle can stay open for the interrupt frame afterwards.
 ///
 /// **One line, never to EOF, for a control stream.** A controlled turn's stdin is
 /// held open by oneharness for the whole turn precisely so it can deliver that
@@ -750,6 +755,10 @@ fn exact_read_only_tools(args: &[String]) -> bool {
 /// prompt exactly as it was delivered.
 fn steering(args: &[String]) -> (String, String) {
     let mut text = args.join("\u{1f}");
+    if let Some(system) = system_file(args) {
+        text.push('\u{1f}');
+        text.push_str(&system);
+    }
     let mut buffer = String::new();
     if let Some(format) = args.windows(2).find(|w| w[0] == "--input-format") {
         let read = match format[1].as_str() {
@@ -767,8 +776,52 @@ fn steering(args: &[String]) -> (String, String) {
         }
         text.push('\u{1f}');
         text.push_str(&buffer);
+    } else if prompt_on_stdin(args) {
+        if let Err(e) = std::io::Read::read_to_string(&mut std::io::stdin().lock(), &mut buffer) {
+            fail(&format!("could not read the prompt from stdin: {e}"));
+        }
+        text.push('\u{1f}');
+        text.push_str(&buffer);
     }
     (text, buffer)
+}
+
+/// Whether oneharness piped an opencode or codex turn's prompt to stdin as one
+/// blob, which oneharness-core 0.30+ does for every such turn: codex is handed
+/// the `-` sentinel as its prompt (`exec … -`), and opencode's `run` is given no
+/// positional message at all.
+fn prompt_on_stdin(args: &[String]) -> bool {
+    match args.first().map(String::as_str) {
+        Some("exec") => args.last().map(String::as_str) == Some("-"),
+        Some("run") => {
+            // The flags oneharness's opencode argv gives a value; every other
+            // flag it builds is a switch. Anything left over is the message.
+            const VALUED: [&str; 4] = ["--format", "-m", "--session", "--agent"];
+            let mut rest = args[1..].iter();
+            while let Some(arg) = rest.next() {
+                if VALUED.contains(&arg.as_str()) {
+                    rest.next();
+                } else if !arg.starts_with('-') {
+                    return false;
+                }
+            }
+            true
+        }
+        _ => false,
+    }
+}
+
+/// The contents of the file `--append-system-prompt-file` names, if it names
+/// one: where oneharness delivers a claude-code turn's system text.
+fn system_file(args: &[String]) -> Option<String> {
+    let path = &args
+        .windows(2)
+        .find(|w| w[0] == "--append-system-prompt-file")?[1];
+    Some(std::fs::read_to_string(path).unwrap_or_else(|e| {
+        fail(&format!(
+            "could not read the system prompt file {path}: {e}"
+        ))
+    }))
 }
 
 /// Which harness oneharness spawned this binary as, read from the argv shape its

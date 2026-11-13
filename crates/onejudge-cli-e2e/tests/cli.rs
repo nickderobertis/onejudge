@@ -4279,6 +4279,37 @@ impl PostureOutcome {
     }
 }
 
+/// Fold a claude-code invocation's off-argv prompt delivery back into the inline
+/// shape the posture baselines were recorded in: `--input-format text` plus a
+/// stdin blob becomes `-p <prompt>`, and `--append-system-prompt-file <path>` (its
+/// contents recorded beside the argv) becomes `--append-system-prompt <text>`.
+/// oneharness-core 0.30 moved every prompt off the argv; which route a prompt
+/// rides is oneharness's choice, not onejudge's, while everything a mode decides
+/// — the permission flags and tool allowlist — stays compared byte for byte.
+fn inline_delivery(call: &mut serde_json::Value) {
+    let mut argv = argv_of(call);
+    if let Some(at) = argv
+        .windows(2)
+        .position(|w| w[0] == "--input-format" && w[1] == "text")
+    {
+        let stdin = call["stdin"].as_str().unwrap_or_default().to_string();
+        argv.splice(at..at + 2, [stdin]);
+        call["stdin"] = "".into();
+    }
+    if let Some(at) = argv
+        .iter()
+        .position(|arg| arg == "--append-system-prompt-file")
+    {
+        let system = call["system_file"]
+            .as_str()
+            .expect("the double records the system file it was handed")
+            .to_string();
+        argv.splice(at..at + 2, ["--append-system-prompt".to_string(), system]);
+        call.as_object_mut().unwrap().remove("system_file");
+    }
+    call["argv"] = serde_json::json!(argv);
+}
+
 /// The text a harness invocation was prompted with: `-p`'s value, or the stdin a
 /// long prompt was moved to.
 fn prompt_of(call: &serde_json::Value) -> String {
@@ -4484,6 +4515,7 @@ impl PostureRun {
             .iter()
             .map(|line| {
                 let mut call: serde_json::Value = serde_json::from_str(line).unwrap();
+                inline_delivery(&mut call);
                 self.normalize_value(&mut call);
                 call
             })

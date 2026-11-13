@@ -56,11 +56,11 @@ pub const STARTER_CONFIG: &str = include_str!("starter.yaml");
 /// report changed. The linked core may be newer than the one this floor embeds
 /// so long as both write the same report schema: what ties the two is
 /// [`MIN_ONEHARNESS_REPORT_SCHEMA`], and the gate below is written against that.
-const MIN_ONEHARNESS: &str = "0.26.0";
+const MIN_ONEHARNESS: &str = "0.27.0";
 
 /// The oneharness **report schema** the [`MIN_ONEHARNESS`] CLI writes, read off
-/// the `oneharness-core` that release embeds (`oneharness` 0.26.0 depends on
-/// `^0.29.0`, whose `domain::report::SCHEMA_VERSION` is `0.12`). The gate holds
+/// the `oneharness-core` that release embeds (`oneharness` 0.27.0 depends on
+/// `^0.30.0`, whose `domain::report::SCHEMA_VERSION` is `0.13`). The gate holds
 /// the linked core's declared schema equal to it (see [`MIN_ONEHARNESS`] for why
 /// the schema, not a version, is what ties the two), so a relink that moves the
 /// report fails until the floor and this constant follow.
@@ -69,17 +69,18 @@ const MIN_ONEHARNESS: &str = "0.26.0";
 /// operator sees names a schema, and a second number in a CLI message would be
 /// one more copy to drift.
 #[cfg(test)]
-const MIN_ONEHARNESS_REPORT_SCHEMA: &str = "0.12";
+const MIN_ONEHARNESS_REPORT_SCHEMA: &str = "0.13";
 
-/// The oldest `oneharness-core` this crate can be built against: the release
-/// carrying `EventSink::run_began` and `RunBegun`, so an embedder learns a
-/// candidate's history address before its events. It also carries the public
-/// event renderer, layered config list and per-run history pointer reader.
-/// The manifest
-/// requirement is held to it by the gate below. The production bridge names
-/// the history-opening symbols, so a lock resolved below it fails to compile.
+/// The oldest `oneharness-core` this crate may be built against: the release
+/// that writes a redirect's replacement before the interrupted turn can end,
+/// which the engine's `Interrupted` answer to a note relies on (`interrupt.rs`).
+/// Below it a redirected turn could finish unredirected, and below 0.30.0 the
+/// lock fails to compile (`classify` names the `unsupported_input` kind). It
+/// also carries `EventSink::run_began` / `RunBegun`, the public event renderer,
+/// layered config list and per-run history pointer reader. The manifest requirement is held to it by
+/// the gate below.
 #[cfg(test)]
-const MIN_ONEHARNESS_CORE: &str = "0.29.0";
+const MIN_ONEHARNESS_CORE: &str = "0.31.2";
 
 /// Errors surfaced by the CLI. Config/validation problems are separated from IO
 /// and engine failures so the entrypoint can exit with a fitting code.

@@ -44,7 +44,7 @@ onejudge init                           # scaffold onejudge.yaml + oneharness co
 onejudge run                            # reads ./onejudge.yaml, drives to completion
 ```
 
-`init` shells out to `oneharness init` (needs oneharness **0.26.0+**) to scaffold
+`init` shells out to `oneharness init` (needs oneharness **0.27.0+**) to scaffold
 `oneharness.toml` (the worker side) and `oneharness.judge.toml` (the judge side),
 then writes a fully-commented loop-only `onejudge.yaml`. The fields that make a run
 yours are `task` (what to do), the system framing — a `skill` (a `SKILL.md`
@@ -122,7 +122,7 @@ to publish tool events on stdout as they occur, ahead of that same report
   model call goes through `oneharness`, and harness/model *selection* lives in
   oneharness's config files, not onejudge.
   - **`OneharnessProvider`** (default) shells out to the `oneharness` CLI
-    (v0.26.0+): the worker side uses the discovered `oneharness.toml`, and the judge
+    (v0.27.0+): the worker side uses the discovered `oneharness.toml`, and the judge
     side uses a separate `--config` file (default `oneharness.judge.toml`). With
     `stream: true` it consumes the worker turn as it happens — NDJSON tool events,
     then a terminal report — instead of only when it ends
