@@ -17,7 +17,8 @@
 //! onejudge's history default layered beneath it. Scaffold both with `onejudge
 //! init` (which shells out to `oneharness init`).
 //!
-//! It targets **oneharness v0.26.0+**, whose `run-started` stream line announces
+//! It targets **oneharness v0.27.0+**, the first release writing the report
+//! schema the linked core parses. Its `run-started` stream line announces
 //! each candidate's history before its events. Older streams remain readable,
 //! but emit no history opening. The CLI also accepts the repeated `run --config`
 //! that layers onejudge's defaults beneath each side's own configuration.

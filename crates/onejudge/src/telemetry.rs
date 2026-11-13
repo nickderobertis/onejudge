@@ -134,7 +134,8 @@ pub struct CandidateAttempt {
     /// oneharness's normalized failure reason (`auth`, `rate_limit`,
     /// `server_overloaded`, `model_not_found`, `quota`, `tool_deferred`,
     /// `session_not_found`, `untrusted_directory`, `input_too_large`,
-    /// `model_mismatch`, `app_server_lost`), when it classified one.
+    /// `model_mismatch`, `app_server_lost`, `unsupported_input`), when it
+    /// classified one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub failure_kind: Option<String>,
     /// Where that reason was read (`stderr`, `stdout`, `config:env_from`).
@@ -169,7 +170,7 @@ pub struct CandidateAttempt {
 /// One candidate a fallback chain fell through, with oneharness's reason token
 /// (`not-installed`, `spawn-error`, `auth`, `quota`, `model-not-found`,
 /// `rate-limit`, `session-not-found`, `untrusted-directory`, `input-too-large`,
-/// `model-mismatch`, `server-overloaded`, `app-server-lost`).
+/// `model-mismatch`, `server-overloaded`, `app-server-lost`, `unsupported-input`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "sdk-schema", derive(schemars::JsonSchema))]
 pub struct FellThrough {

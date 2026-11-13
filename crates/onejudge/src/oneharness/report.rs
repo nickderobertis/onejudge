@@ -347,6 +347,12 @@ pub(crate) fn classify(kind: FailureKind) -> ProviderErrorKind {
         // onejudge names, and not `Overloaded`, which reports a server that
         // refused for capacity rather than one that crashed or restarted.
         FailureKind::AppServerLost => ProviderErrorKind::Other,
+        // The request carried an input (an image) this harness cannot take, and
+        // it was refused before it started. Nothing is wrong with the
+        // environment onejudge would retry in, and the harness did not fail to
+        // start, so neither `Spawn` nor a capacity kind fits: `Other`, with the
+        // `unsupported_input` token reaching the attribution verbatim.
+        FailureKind::UnsupportedInput => ProviderErrorKind::Other,
     }
 }
 
@@ -522,8 +528,11 @@ fn reason_kind(reason: FallThroughReason) -> ProviderErrorKind {
         | FallThroughReason::UntrustedDirectory
         | FallThroughReason::InputTooLarge
         | FallThroughReason::ModelMismatch => ProviderErrorKind::Other,
-        // As in `classify`: the shared app-server went away, not the candidate.
-        FallThroughReason::AppServerLost => ProviderErrorKind::Other,
+        // As in `classify`: the shared app-server went away, not the candidate,
+        // or the candidate cannot take an input the request carried.
+        FallThroughReason::AppServerLost | FallThroughReason::UnsupportedInput => {
+            ProviderErrorKind::Other
+        }
         FallThroughReason::ServerOverloaded => ProviderErrorKind::Overloaded,
     }
 }
@@ -887,6 +896,10 @@ mod tests {
             (FallThroughReason::ModelMismatch, ProviderErrorKind::Other),
             (FallThroughReason::AppServerLost, ProviderErrorKind::Other),
             (
+                FallThroughReason::UnsupportedInput,
+                ProviderErrorKind::Other,
+            ),
+            (
                 FallThroughReason::ServerOverloaded,
                 ProviderErrorKind::Overloaded,
             ),
@@ -914,6 +927,7 @@ mod tests {
             (FailureKind::InputTooLarge, ProviderErrorKind::Other),
             (FailureKind::ModelMismatch, ProviderErrorKind::Other),
             (FailureKind::AppServerLost, ProviderErrorKind::Other),
+            (FailureKind::UnsupportedInput, ProviderErrorKind::Other),
         ] {
             assert_eq!(classify(kind), expected);
             // The token onejudge surfaces is oneharness's own wire spelling.

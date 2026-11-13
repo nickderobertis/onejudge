@@ -7,9 +7,10 @@ expressed as a typed call — **including the invocation itself**. A turn is
 
 The pin is in the workspace manifest; everything below is verified against it.
 The **CLI** floor an operator installs is a different number — currently
-**0.26.0+**, the first release carrying the `run-started` history opening. It
-also accepts the repeated `run --config` that layers onejudge's defaults beneath
-the side's own config and writes the report schema the pinned core parses — because
+**0.27.0+**, the first release writing report schema `0.13`, the one the pinned
+core parses. It also carries the `run-started` history opening and accepts the
+repeated `run --config` that layers onejudge's defaults beneath the side's own
+config — because
 the two crates version independently: the pin may be newer than the core that
 CLI embeds so long as the report is the same, and `cli/mod.rs` gates the floor
 on the schema, not on the two numbers. Never read one off the other.

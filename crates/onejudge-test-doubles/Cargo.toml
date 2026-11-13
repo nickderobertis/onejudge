@@ -20,7 +20,7 @@ publish = false
 onejudge = { path = "../onejudge" }
 oneharness-core = { workspace = true }
 # Exercise the spawning seam through the released CLI parser and dispatcher.
-oneharness = "=0.26.0"
+oneharness = "=0.28.6"
 serde = { workspace = true }
 serde_json = { workspace = true }
 

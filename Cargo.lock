@@ -369,7 +369,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -947,9 +947,9 @@ checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
 name = "oneharness"
-version = "0.26.0"
+version = "0.28.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a99c603d96d9b8b63278fc8c3d0cfe3ada5ede38810a2854a1c231123072fd48"
+checksum = "0b1da74dd5e90e662d85aa1e534b97a11ea44d4e8aa60c8e814c1bc13602c3f4"
 dependencies = [
  "clap",
  "libc",
@@ -961,9 +961,9 @@ dependencies = [
 
 [[package]]
 name = "oneharness-core"
-version = "0.29.0"
+version = "0.31.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "53c8414fb530a6337b795b0346660f463927e264af8b75fc71e4946aa7e195d2"
+checksum = "aeafd737331b7ba1d6f9bf8f7ef94f025c8e12a26f0c80c64a6e6a693f74db3e"
 dependencies = [
  "fs2",
  "jsonschema 0.33.0",
@@ -1292,7 +1292,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1938,7 +1938,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
