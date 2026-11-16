@@ -55,6 +55,8 @@ pub(crate) fn result(harness_id: &str, text: &str) -> RunResult {
         stdout: String::new(),
         stderr: String::new(),
         error: None,
+        overlay_env: std::collections::BTreeMap::new(),
+        overlay_timings: None,
     }
     // oneharness derives the published work reading from the finished envelope,
     // and every one of its own constructors ends here — so the fixture does too,
