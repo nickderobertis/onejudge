@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.23.4](https://github.com/nickderobertis/onejudge/compare/onejudge-v0.23.3...onejudge-v0.23.4) - 2026-11-16
+
+### Fixed
+
+- *(deps)* link the oneharness-core that closes the redirect race and give every test process its own scratch ([#251](https://github.com/nickderobertis/onejudge/pull/251))
+
 ## [0.23.3](https://github.com/nickderobertis/onejudge/compare/onejudge-v0.23.2...onejudge-v0.23.3) - 2026-11-13
 
 ### Fixed
