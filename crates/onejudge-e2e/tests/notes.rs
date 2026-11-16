@@ -181,19 +181,25 @@ fn with_the_one_evidence_contract(capture: &mut serde_json::Value) {
     *tokens = json!(tokens.as_i64().expect("input tokens are a count") + growth);
 }
 
+/// This process's scratch dir as the doubles are handed it.
+fn scratch_tmp() -> String {
+    support::scratch_dir().display().to_string()
+}
+
 /// Replace this host's scratch dir and double path in a journey's serialized output
 /// with the placeholders the captures hold.
 ///
-/// Every scratch file a journey names sits directly under `CARGO_TARGET_TMPDIR`,
-/// and the separator joining it is the host's: `\` on Windows, which serializes as
+/// Every scratch file a journey names sits directly under this process's
+/// [`support::scratch_dir`], and the separator joining it is the host's: `\` on Windows, which serializes as
 /// `\\`. The captures hold `/`, so that separator is normalized too — without it
 /// every capture naming a scratch file fails on Windows alone, with the transcript,
 /// criteria and dispositions identical and only `{{TMP}}\\` against `{{TMP}}/`
 /// differing.
 fn normalize_paths(serialized: &str) -> String {
     let mut text = serialized.to_string();
+    let tmp = scratch_tmp();
     for (path, placeholder) in [
-        (env!("CARGO_TARGET_TMPDIR"), "{{TMP}}"),
+        (tmp.as_str(), "{{TMP}}"),
         (doubles::echo_provider(), "{{ECHO}}"),
     ] {
         let escaped = serde_json::to_string(path).unwrap();
@@ -206,7 +212,7 @@ fn normalize_paths(serialized: &str) -> String {
 
 #[test]
 fn a_capture_names_a_scratch_file_the_same_way_whatever_separator_the_host_joins_it_with() {
-    let tmp = env!("CARGO_TARGET_TMPDIR");
+    let tmp = scratch_tmp();
     for separator in ['/', '\\'] {
         let produced = json!({
             "judge_prompts": format!("A reviewer. [[record-prompt:{tmp}{separator}notes-criteria-judge.log]]"),
@@ -249,12 +255,13 @@ fn a_capture_names_a_provider_exit_the_same_way_whatever_host_rendered_it() {
 ///
 /// The fake-oneharness double reports a prompt's byte length as its input tokens,
 /// and a party told to `[[record-prompt:…]]` is handed that path inside its prompt,
-/// so the raw count grows with the length of `CARGO_TARGET_TMPDIR`: a capture taken
+/// so the raw count grows with the length of [`scratch_tmp`]: a capture taken
 /// here would hold only on a host whose tmp dir is exactly as long. Each occurrence
 /// in the prompts the doubles recorded is one the count included, so it is
 /// normalized by the same placeholder the text is.
 fn normalize_input_tokens(produced: &mut serde_json::Value) {
-    let tmp = env!("CARGO_TARGET_TMPDIR");
+    let tmp = scratch_tmp();
+    let tmp = tmp.as_str();
     let occurrences: usize = ["judge_prompts", "agent_prompts"]
         .iter()
         .filter_map(|field| produced.get(field).and_then(serde_json::Value::as_str))

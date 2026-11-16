@@ -594,6 +594,8 @@ fn base_result(harness_id: &str) -> RunResult {
         stdout: String::new(),
         stderr: String::new(),
         error: None,
+        overlay_env: std::collections::BTreeMap::new(),
+        overlay_timings: None,
     }
 }
 
