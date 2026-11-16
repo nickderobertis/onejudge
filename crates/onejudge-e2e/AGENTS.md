@@ -6,7 +6,8 @@
   not mock the layer under test — the model is the only faked thing, and it is
   faked by a *real subprocess*, not a stub. Add the happy path **and** a
   failure/recovery path for every journey.
-- **Nothing here is `#[ignore]`-d.** A judge of a **panel** is handed the same
+- **Nothing here is `#[ignore]`-d** but a probe its own parent test re-executes
+  the binary to run (`scratch.rs`). A judge of a **panel** is handed the same
   persona and transcript as every other judge, so a journey that needs two judges
   to differ steers each through its own **argv** — the echo double scans its
   arguments for markers too.
@@ -14,6 +15,10 @@
   the coverage report.
 - **A helper more than one suite needs goes in `onejudge_test_doubles::support`**
   (both e2e projects depend on it), never copied into each suite.
+- **Scratch is per process.** Take every file a journey writes from
+  `support::scratch_path` / `scratch_dir`, never a fixed name joined onto
+  `CARGO_TARGET_TMPDIR` or `temp_dir()`: concurrent test processes over one target
+  dir share those, so one's hold marker ends another's wait before its turn opens.
 - **A control socket's address has a byte budget, and it differs per platform.**
   `sun_path` is 108 bytes on Linux, 104 on the macOS/BSD lineage, and absent off
   unix — and a macOS runner's temp dir (`/var/folders/<ab>/<hash>/T`) spends half
