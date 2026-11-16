@@ -68,11 +68,10 @@ const _: fn(&RunFailure) -> &Option<Telemetry> = |failure| &failure.telemetry;
 
 use onejudge_test_doubles::{self as doubles, support};
 
-use support::scratch_path;
+use support::{await_path, scratch_dir, scratch_path};
 #[cfg(unix)]
 use support::{
-    await_path, descendant_handle, descendant_is_running, kill_group, process_exists,
-    OwnedProcessGroups,
+    descendant_handle, descendant_is_running, kill_group, process_exists, OwnedProcessGroups,
 };
 
 fn echo_bin() -> String {
@@ -400,7 +399,7 @@ fn split_provider_kind_composes_two_backends() {
 
 #[test]
 fn protocol_v8_reports_taken_and_lost_turns_to_a_command_supervisor() {
-    let dir = Path::new(env!("CARGO_TARGET_TMPDIR"));
+    let dir = &scratch_dir();
     let echo = serde_json::to_string(&echo_bin()).unwrap();
     let harness = serde_json::to_string(&fake_oneharness_bin()).unwrap();
 
@@ -511,18 +510,31 @@ fn protocol_v8_reports_taken_and_lost_turns_to_a_command_supervisor() {
     assert_supervisor_v8_frames_validate(&[frame]);
 }
 
-#[test]
-fn protocol_v8_lost_turn_can_continue_and_command_failure_preserves_the_loss() {
-    let dir = Path::new(env!("CARGO_TARGET_TMPDIR"));
+/// The names the protocol-v8 recovery journey holds its scratch at: the
+/// worker's one-time exit marker, the command judge's recorded frames and the
+/// run's config.
+const PROTOCOL_V8_RECOVERY: [&str; 3] = [
+    "protocol-v8-once",
+    "protocol-v8-recovery.jsonl",
+    "protocol-v8-recovery.yaml",
+];
+
+/// The protocol-v8 recovery journey's scratch, private to this process: the
+/// once marker, the frame log and the config, in [`PROTOCOL_V8_RECOVERY`] order.
+fn protocol_v8_recovery_paths() -> [std::path::PathBuf; 3] {
+    PROTOCOL_V8_RECOVERY.map(scratch_path)
+}
+
+/// Run the built `onejudge` through a worker that exits once (leaving `once`)
+/// and a command judge that records every supervisor frame into `log` and
+/// continues the lost turn, returning the frames the judge recorded.
+fn run_protocol_v8_recovery(
+    [once, log, config]: &[std::path::PathBuf; 3],
+) -> Vec<serde_json::Value> {
     let echo = serde_json::to_string(&echo_bin()).unwrap();
-    let once = dir.join("protocol-v8-once");
-    let log = dir.join("protocol-v8-recovery.jsonl");
-    let _ = std::fs::remove_file(&once);
-    let _ = std::fs::remove_file(&log);
     let record = serde_json::to_string(&format!("[[record:{}]]", log.display())).unwrap();
-    let config = dir.join("protocol-v8-recovery.yaml");
     std::fs::write(
-        &config,
+        config,
         format!(
             "provider:\n  kind: split\n  skill:\n    kind: command\n    command: [{echo}]\n  judge:\n    kind: command\n    command: [{echo}, {record}, '[[supervisor-continue-on-lost:retry now]]']\ntask: '[[emit-exit-once:{}]]'\nsystem_prompt: work\nuser:\n  persona: reviewer\n  max_turns: 3\n",
             once.display()
@@ -534,18 +546,30 @@ fn protocol_v8_lost_turn_can_continue_and_command_failure_preserves_the_loss() {
         .output()
         .unwrap();
     assert!(output.status.success(), "{output:?}");
-    let frames: Vec<serde_json::Value> = std::fs::read_to_string(&log)
+    std::fs::read_to_string(log)
         .unwrap()
         .lines()
         .map(|line| serde_json::from_str(line).unwrap())
-        .collect();
+        .collect()
+}
+
+/// The frames one recovery run records: the lost turn, then the continued one.
+fn assert_protocol_v8_recovery_frames(frames: &[serde_json::Value]) {
+    assert_eq!(frames.len(), 2, "{frames:#?}");
     assert_eq!(
         frames[0]["turn"],
         serde_json::json!({"outcome": "lost", "cause": "protocol"})
     );
     assert_eq!(frames[1]["turn"], serde_json::json!({"outcome": "taken"}));
     assert_eq!(frames[1]["messages"][1]["content"], "retry now");
-    assert_supervisor_v8_frames_validate(&frames);
+    assert_supervisor_v8_frames_validate(frames);
+}
+
+#[test]
+fn protocol_v8_lost_turn_can_continue_and_command_failure_preserves_the_loss() {
+    let dir = &scratch_dir();
+    let echo = serde_json::to_string(&echo_bin()).unwrap();
+    assert_protocol_v8_recovery_frames(&run_protocol_v8_recovery(&protocol_v8_recovery_paths()));
 
     let harness = serde_json::to_string(&fake_oneharness_bin()).unwrap();
     let config = dir.join("protocol-v8-supervisor-exit.yaml");
@@ -585,9 +609,129 @@ fn protocol_v8_lost_turn_can_continue_and_command_failure_preserves_the_loss() {
     assert_eq!(std::fs::read_to_string(log).unwrap().lines().count(), 1);
 }
 
+/// The coordination directory and role a [`protocol_v8_recovery_probe`] child
+/// is handed.
+const RECOVERY_PROBE_COORD: &str = "ONEJUDGE_RECOVERY_PROBE_COORD";
+const RECOVERY_PROBE_ROLE: &str = "ONEJUDGE_RECOVERY_PROBE_ROLE";
+
+/// Which of [`PROTOCOL_V8_RECOVERY`]'s names already stand in this process's
+/// scratch before it takes them — each one another process's file it could see.
+fn protocol_v8_recovery_left_by_another() -> Vec<&'static str> {
+    PROTOCOL_V8_RECOVERY
+        .into_iter()
+        .filter(|name| scratch_dir().join(name).exists())
+        .collect()
+}
+
+/// Run as a child of
+/// [`two_cli_test_processes_keep_their_protocol_v8_recovery_scratch_apart`]
+/// only: alone it has no coordination directory to report to.
+#[test]
+#[ignore = "a child process of two_cli_test_processes_keep_their_protocol_v8_recovery_scratch_apart"]
+fn protocol_v8_recovery_probe() {
+    let coord = std::path::PathBuf::from(
+        std::env::var(RECOVERY_PROBE_COORD).expect("spawned with a coordination dir"),
+    );
+    let role = std::env::var(RECOVERY_PROBE_ROLE).expect("spawned with a role");
+    match role.as_str() {
+        // Runs the whole journey, leaving its once marker and frame log standing,
+        // then holds them until the other process has run the same journey.
+        "first" => {
+            let paths = protocol_v8_recovery_paths();
+            assert_protocol_v8_recovery_frames(&run_protocol_v8_recovery(&paths));
+            std::fs::write(coord.join("first.path"), paths[1].display().to_string()).unwrap();
+            await_path(&coord.join("second.done"), "the second process never ran");
+            let [once, log, config] = &paths;
+            for path in [once, log, config] {
+                assert!(
+                    path.exists(),
+                    "another process's recovery journey removed this process's {}",
+                    path.display()
+                );
+            }
+            let frames: Vec<serde_json::Value> = std::fs::read_to_string(log)
+                .unwrap()
+                .lines()
+                .map(|line| serde_json::from_str(line).unwrap())
+                .collect();
+            assert_protocol_v8_recovery_frames(&frames);
+        }
+        // Starts once the first's files stand, and must find none of them in its
+        // own scratch: a shared once marker would satisfy this run's one-time
+        // exit, so its worker would never lose the turn the journey is about.
+        "second" => {
+            await_path(
+                &coord.join("first.path"),
+                "the first process never finished its journey",
+            );
+            let seen = protocol_v8_recovery_left_by_another();
+            let paths = protocol_v8_recovery_paths();
+            std::fs::write(coord.join("second.path"), paths[1].display().to_string()).unwrap();
+            let frames = run_protocol_v8_recovery(&paths);
+            std::fs::write(coord.join("second.done"), b"done\n").unwrap();
+            assert!(
+                seen.is_empty(),
+                "another process's recovery scratch already stands in this process's \
+                 ({seen:?} under {})",
+                scratch_dir().display()
+            );
+            assert_protocol_v8_recovery_frames(&frames);
+        }
+        other => panic!("unknown probe role {other}"),
+    }
+}
+
+#[test]
+fn two_cli_test_processes_keep_their_protocol_v8_recovery_scratch_apart() {
+    // Two real processes of this test binary over one target dir, each driving the
+    // built `onejudge` through the recovery journey. When the journey's names were
+    // joined onto `CARGO_TARGET_TMPDIR`, the second found the first's once marker
+    // and frame log and removed both as an earlier run's.
+    let coord = scratch_path("protocol-v8-recovery-probe-coord");
+    let _ = std::fs::remove_dir_all(&coord);
+    std::fs::create_dir_all(&coord).unwrap();
+    let exe = std::env::current_exe().unwrap();
+    let spawn = |role: &str| {
+        Command::new(&exe)
+            .args([
+                "--exact",
+                "protocol_v8_recovery_probe",
+                "--ignored",
+                "--nocapture",
+            ])
+            .env(RECOVERY_PROBE_COORD, &coord)
+            .env(RECOVERY_PROBE_ROLE, role)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("the test binary re-executes itself")
+    };
+    let children = [("first", spawn("first")), ("second", spawn("second"))];
+    for (role, child) in children {
+        let out = child.wait_with_output().unwrap();
+        let said = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(out.status.success(), "the {role} process failed:\n{said}");
+        // libtest exits 0 when a filter matches nothing; the probe must have run.
+        assert!(
+            said.contains("1 passed"),
+            "the {role} probe never ran:\n{said}"
+        );
+    }
+    let log = |role: &str| std::fs::read_to_string(coord.join(format!("{role}.path"))).unwrap();
+    assert_ne!(
+        log("first"),
+        log("second"),
+        "two concurrent processes recorded into one recovery log"
+    );
+}
+
 #[test]
 fn protocol_v8_mixed_panel_does_not_supervise_a_lost_turn() {
-    let dir = Path::new(env!("CARGO_TARGET_TMPDIR"));
+    let dir = &scratch_dir();
     let echo = serde_json::to_string(&echo_bin()).unwrap();
     let harness = serde_json::to_string(&fake_oneharness_bin()).unwrap();
     let log = dir.join("protocol-v8-mixed-panel.jsonl");
@@ -657,7 +801,7 @@ fn split_kind_json_covers_buffered_respond_and_judge() {
 }
 
 fn write_config(name: &str, body: &str) -> std::path::PathBuf {
-    let dir = Path::new(env!("CARGO_TARGET_TMPDIR"));
+    let dir = &scratch_dir();
     let path = dir.join(name);
     std::fs::write(&path, config_yaml(body)).unwrap();
     path
@@ -786,7 +930,7 @@ system_prompt: Be helpful.
 
 #[test]
 fn binary_reports_a_bad_config_and_exits_two() {
-    let dir = Path::new(env!("CARGO_TARGET_TMPDIR"));
+    let dir = &scratch_dir();
     let path = dir.join("bad.yaml");
     std::fs::write(&path, "task: x\nnot_a_key: 1\n").unwrap();
     let output = Command::new(onejudge_bin())
@@ -805,7 +949,7 @@ fn binary_reports_a_bad_config_and_exits_two() {
 fn binary_refuses_a_config_without_echoing_its_text() {
     // A config's prompts are the user's, so the refusal names where the bad node
     // is and never quotes the document back into stderr, in either format.
-    let dir = Path::new(env!("CARGO_TARGET_TMPDIR"));
+    let dir = &scratch_dir();
     let path = dir.join("unterminated-prompt.yaml");
     let prompt = "Keep the launch codes in the vault";
     std::fs::write(
@@ -834,7 +978,7 @@ fn binary_refuses_a_config_without_echoing_its_text() {
 fn binary_refuses_a_skill_whose_front_matter_is_malformed() {
     // The `skill:` a config names is read through the same reader: a malformed
     // front matter fails the run naming the SKILL.md, what was wrong, and where.
-    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("skill-malformed");
+    let dir = scratch_dir().join("skill-malformed");
     let skill = dir.join("skills/greeter");
     std::fs::create_dir_all(&skill).unwrap();
     std::fs::write(
@@ -862,7 +1006,7 @@ fn binary_refuses_a_skill_whose_front_matter_is_malformed() {
 #[test]
 fn binary_reports_a_config_refused_for_its_syntax_naming_the_file_and_position() {
     // Refused before any key exists, so the position is all there is to name.
-    let dir = Path::new(env!("CARGO_TARGET_TMPDIR"));
+    let dir = &scratch_dir();
     let path = dir.join("unterminated.yaml");
     std::fs::write(&path, "[\n").unwrap();
     let output = Command::new(onejudge_bin())
@@ -883,7 +1027,7 @@ fn binary_init_scaffolds_onejudge_and_oneharness_configs() {
     // config files, then writes the loop-only onejudge.yaml. Point --oneharness-bin
     // at the fake double (which mirrors `oneharness init`) and run in a fresh cwd so
     // the scaffolded files land there.
-    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("init-scaffold");
+    let dir = scratch_dir().join("init-scaffold");
     std::fs::create_dir_all(&dir).unwrap();
     for f in ["onejudge.yaml", "oneharness.toml", "oneharness.judge.toml"] {
         let _ = std::fs::remove_file(dir.join(f));
@@ -918,7 +1062,7 @@ task: greet me
 system_prompt: Be warm.
 ",
     );
-    let out_path = Path::new(env!("CARGO_TARGET_TMPDIR")).join("report.json");
+    let out_path = scratch_dir().join("report.json");
     let _ = std::fs::remove_file(&out_path);
     let output = Command::new(onejudge_bin())
         .args([
@@ -941,7 +1085,7 @@ system_prompt: Be warm.
 #[test]
 fn binary_run_discovers_default_config_in_cwd() {
     // `onejudge run` with no path reads ./onejudge.yaml from the working dir.
-    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("default-cfg");
+    let dir = scratch_dir().join("default-cfg");
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(
         dir.join("onejudge.yaml"),
@@ -965,7 +1109,7 @@ fn binary_run_without_a_config_falls_back_to_defaults() {
     // whose default provider runs the turn through the linked oneharness engine.
     // With an empty PATH no harness can be found, so the turn fails — a classified
     // engine error, exit 2 — proving the flags-only path reached the run.
-    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("no-cfg");
+    let dir = scratch_dir().join("no-cfg");
     std::fs::create_dir_all(&dir).unwrap();
     let _ = std::fs::remove_file(dir.join("onejudge.yaml"));
     let output = Command::new(onejudge_bin())
@@ -982,7 +1126,7 @@ fn binary_run_without_a_config_falls_back_to_defaults() {
 
 #[test]
 fn binary_run_missing_config_path_errors() {
-    let missing = Path::new(env!("CARGO_TARGET_TMPDIR")).join("does-not-exist.yaml");
+    let missing = scratch_dir().join("does-not-exist.yaml");
     let output = Command::new(onejudge_bin())
         .args(["run", missing.to_str().unwrap()])
         .output()
@@ -1066,7 +1210,7 @@ fn binary_env_selects_the_provider_backend() {
     // error (exit 2), and with `ONEJUDGE_PROVIDER=command` the kind flips and it
     // runs. This exercises the env → ProviderKind parse through the real process.
     let echo = serde_json::to_string(&echo_bin()).unwrap();
-    let dir = Path::new(env!("CARGO_TARGET_TMPDIR"));
+    let dir = &scratch_dir();
     let path = dir.join("env-provider.yaml");
     std::fs::write(
         &path,
@@ -1169,7 +1313,7 @@ fn binary_run_loads_a_skill_from_a_config_relative_path() {
     // the loaded SKILL.md body becomes the system prompt the provider sees (here the
     // echo double emits the body's `[[event]]`), so `done_when` holds and the run
     // completes — exercising the rebase + load_skill path through the real binary.
-    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("skill-cfg");
+    let dir = scratch_dir().join("skill-cfg");
     std::fs::create_dir_all(dir.join("skills/committer")).unwrap();
     std::fs::write(
         dir.join("skills/committer/SKILL.md"),
@@ -1201,7 +1345,7 @@ fn binary_run_skill_and_system_prompt_flags_drive_the_run() {
     // `--skill` (relative to the working dir) and `--system-prompt` supply the
     // framing with no `skill`/`system_prompt` in the file — the flag skill's body
     // still reaches the provider and drives the loop to completion.
-    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("skill-flags");
+    let dir = scratch_dir().join("skill-flags");
     std::fs::create_dir_all(dir.join("committer")).unwrap();
     std::fs::write(
         dir.join("committer/SKILL.md"),
@@ -1240,7 +1384,7 @@ fn binary_env_supplies_skill_and_system_prompt() {
     // real process with nothing in the file. The env system prompt carries the
     // `[[event]]` that satisfies `done_when`, proving the env-derived system prompt
     // reaches the provider; the env skill (a plain body) loads alongside it.
-    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("skill-env");
+    let dir = scratch_dir().join("skill-env");
     std::fs::create_dir_all(dir.join("worker")).unwrap();
     std::fs::write(
         dir.join("worker/SKILL.md"),
@@ -1275,7 +1419,7 @@ fn binary_skill_body_and_system_prompt_both_reach_the_harness() {
     // `[[event]]` fires (drawn in the run's text) and the skill body's `[[done]]` ends
     // the multi-turn loop on turn one — so a run that would otherwise hit the cap
     // completes, proving the skill body was delivered too.
-    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("skill-both");
+    let dir = scratch_dir().join("skill-both");
     std::fs::create_dir_all(dir.join("finisher")).unwrap();
     std::fs::write(
         dir.join("finisher/SKILL.md"),
@@ -1311,7 +1455,7 @@ fn binary_skill_body_and_system_prompt_both_reach_the_harness() {
 fn binary_rejects_a_missing_skill_and_exits_two() {
     // A `skill:` pointing at a directory with no SKILL.md is a loud config error
     // (exit 2) through the real binary, never a silent empty prompt.
-    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("skill-missing");
+    let dir = scratch_dir().join("skill-missing");
     std::fs::create_dir_all(&dir).unwrap();
     let config = dir.join("missing-skill.yaml");
     std::fs::write(&config, config_yaml("task: go\nskill: does-not-exist\n")).unwrap();
@@ -1341,7 +1485,7 @@ fn binary_stream_publishes_events_then_the_terminal_report() {
     // on stdout as `event` lines before the terminal `result` line. The double
     // blocks until this test's reader has consumed an event line, so a build that
     // buffered the run could not finish (it fails on the double's own timeout).
-    let dir = Path::new(env!("CARGO_TARGET_TMPDIR"));
+    let dir = &scratch_dir();
     let release = dir.join("cli-stream-release.marker");
     let _ = std::fs::remove_file(&release);
     let config = dir.join("stream.yaml");
@@ -1404,7 +1548,7 @@ fn binary_stream_publishes_events_then_the_terminal_report() {
 fn binary_run_json_carries_the_backend_telemetry() {
     // The CLI's runtime-dispatched provider has to forward telemetry from whichever
     // backend made the call; without that the report silently drops it.
-    let config = Path::new(env!("CARGO_TARGET_TMPDIR")).join("telemetry.yaml");
+    let config = scratch_dir().join("telemetry.yaml");
     let bin = serde_json::to_string(&fake_oneharness_bin()).unwrap();
     std::fs::write(
         &config,
@@ -1434,7 +1578,7 @@ fn binary_run_json_reports_the_processes_it_spawned_and_names_no_group() {
     // the run created, on which side, and whether a group claimed them — is
     // machine-readable from the CLI too. The CLI installs no hook, so every record
     // says so by carrying no `group` rather than inventing one.
-    let config = Path::new(env!("CARGO_TARGET_TMPDIR")).join("processes.yaml");
+    let config = scratch_dir().join("processes.yaml");
     let bin = serde_json::to_string(&fake_oneharness_bin()).unwrap();
     std::fs::write(
         &config,
@@ -1476,7 +1620,7 @@ fn binary_run_json_reports_the_processes_it_spawned_and_names_no_group() {
 fn binary_stream_exits_one_when_the_run_is_incomplete() {
     // The stream is an output format, not a status: the exit code still reports
     // whether the task completed.
-    let config = Path::new(env!("CARGO_TARGET_TMPDIR")).join("stream-incomplete.yaml");
+    let config = scratch_dir().join("stream-incomplete.yaml");
     std::fs::write(
         &config,
         streaming_config_yaml(
@@ -1512,7 +1656,7 @@ fn binary_stream_rejects_an_output_surface_it_cannot_honor() {
         .arg("run")
         .arg(config.to_str().unwrap())
         .args(["--stream", "--format", "json", "--output", "report.json"])
-        .current_dir(Path::new(env!("CARGO_TARGET_TMPDIR")))
+        .current_dir(scratch_dir())
         .output()
         .unwrap();
     assert_eq!(output.status.code(), Some(2));
@@ -1524,7 +1668,7 @@ fn binary_stream_rejects_an_output_surface_it_cannot_honor() {
 fn binary_reports_a_malformed_provider_stream_and_exits_two() {
     // A provider that declared streaming and then wrote a line the protocol does
     // not model fails the run loudly, naming the violation.
-    let config = Path::new(env!("CARGO_TARGET_TMPDIR")).join("stream-bad.yaml");
+    let config = scratch_dir().join("stream-bad.yaml");
     std::fs::write(
         &config,
         streaming_config_yaml(
@@ -1549,7 +1693,7 @@ fn binary_rejects_a_provider_that_writes_past_its_terminal_line() {
     // Through the real binary: a streamed provider whose report is complete but
     // which then keeps writing is a loud failure, not a run that quietly succeeds
     // on the report it did produce.
-    let config = Path::new(env!("CARGO_TARGET_TMPDIR")).join("stream-trailing.yaml");
+    let config = scratch_dir().join("stream-trailing.yaml");
     std::fs::write(
         &config,
         streaming_config_yaml(
@@ -1582,8 +1726,8 @@ fn binary_schema_prints_the_annotated_config() {
 fn binary_run_json_reports_which_harness_identities_were_attempted() {
     // Everything the library learns about the candidates oneharness attempted has
     // to be readable off the CLI's JSON, not just off an in-process `Telemetry`.
-    let config = Path::new(env!("CARGO_TARGET_TMPDIR")).join("attribution.yaml");
-    let history = Path::new(env!("CARGO_TARGET_TMPDIR")).join("cli-attribution-history.jsonl");
+    let config = scratch_dir().join("attribution.yaml");
+    let history = scratch_dir().join("cli-attribution-history.jsonl");
     let _ = std::fs::remove_file(&history);
     let bin = serde_json::to_string(&fake_oneharness_bin()).unwrap();
     std::fs::write(
@@ -1628,7 +1772,7 @@ fn binary_run_json_writes_a_structured_failure_document_when_the_run_fails() {
     // A failed run produces no report, but it is exactly the case a caller needs
     // attribution for. Under `--format json` the failure and the identities that
     // were tried go where the report would have — machine-readable, exit code 2.
-    let config = Path::new(env!("CARGO_TARGET_TMPDIR")).join("attribution-failure.yaml");
+    let config = scratch_dir().join("attribution-failure.yaml");
     let bin = serde_json::to_string(&fake_oneharness_bin()).unwrap();
     std::fs::write(
         &config,
@@ -1673,7 +1817,7 @@ fn binary_stream_reports_a_failure_as_json_on_stderr_leaving_the_protocol_intact
     // stdout under `--stream` is the `event* result EOF` protocol, so a failure
     // cannot be published there without inventing an envelope every consumer would
     // have to learn. It goes to stderr as one JSON document instead.
-    let config = Path::new(env!("CARGO_TARGET_TMPDIR")).join("stream-attribution-failure.yaml");
+    let config = scratch_dir().join("stream-attribution-failure.yaml");
     std::fs::write(
         &config,
         streaming_config_yaml(
@@ -1819,7 +1963,7 @@ fn binary_run_json_reports_both_sides_processes_of_a_two_party_plan() {
     // both sides, each naming the group that claimed it — none, here, because a
     // command line cannot install an in-process hook and onejudge never invents
     // a group it did not observe.
-    let config = Path::new(env!("CARGO_TARGET_TMPDIR")).join("split-processes.yaml");
+    let config = scratch_dir().join("split-processes.yaml");
     std::fs::write(
         &config,
         split_plan_yaml(
@@ -1964,7 +2108,7 @@ fn binary_run_publishes_the_control_address_in_the_json_report() {
          system_prompt: {}\n",
         serde_json::to_string(&system).unwrap(),
     );
-    let path = Path::new(env!("CARGO_TARGET_TMPDIR")).join("control.yaml");
+    let path = scratch_dir().join("control.yaml");
     std::fs::write(&path, yaml).unwrap();
 
     let output = Command::new(onejudge_bin())
@@ -2320,7 +2464,7 @@ fn binary_run_json_reports_each_judges_decision_and_labels_the_judge_side() {
     // The report a real run writes: `judge_decisions` one entry per supervisor
     // turn with each judge attributed, and the panel label riding every judge-side
     // process record — absent from the worker side's.
-    let config = Path::new(env!("CARGO_TARGET_TMPDIR")).join("panel.yaml");
+    let config = scratch_dir().join("panel.yaml");
     std::fs::write(&config, reviewer_and_lint(TWO_TURN_BODY)).unwrap();
     let output = Command::new(onejudge_bin())
         .args(["run", config.to_str().unwrap(), "--format", "json"])
@@ -2393,7 +2537,7 @@ fn binary_run_json_reports_each_judges_decision_and_labels_the_judge_side() {
 
 #[test]
 fn binary_run_text_prints_each_judges_decision_and_the_feedback_under_its_turn() {
-    let config = Path::new(env!("CARGO_TARGET_TMPDIR")).join("panel-human.yaml");
+    let config = scratch_dir().join("panel-human.yaml");
     std::fs::write(&config, reviewer_and_lint(TWO_TURN_BODY)).unwrap();
     let output = Command::new(onejudge_bin())
         .args(["run", config.to_str().unwrap()])
@@ -2455,7 +2599,7 @@ fn binary_run_text_prints_each_judges_decision_and_the_feedback_under_its_turn()
 fn binary_stream_result_line_carries_the_judge_decisions() {
     // The NDJSON protocol is unchanged — `event* result EOF` — and the decisions
     // reach a consumer on the `result` line's report.
-    let config = Path::new(env!("CARGO_TARGET_TMPDIR")).join("panel-stream.yaml");
+    let config = scratch_dir().join("panel-stream.yaml");
     std::fs::write(&config, reviewer_and_lint(TWO_TURN_BODY)).unwrap();
     let output = Command::new(onejudge_bin())
         .args([
@@ -2485,7 +2629,7 @@ fn binary_run_json_writes_both_judges_decisions_into_the_failure_report() {
     // One judge fails its supervisor call while the other decides: the run fails
     // (exit 2) naming the judge, and the failure document carries the turn that
     // failed with BOTH judges' decisions — the failed one as `error`.
-    let config = Path::new(env!("CARGO_TARGET_TMPDIR")).join("panel-failure.yaml");
+    let config = scratch_dir().join("panel-failure.yaml");
     std::fs::write(
         &config,
         panel_config_yaml(
@@ -2566,7 +2710,7 @@ fn binary_refuses_a_malformed_judge_list_naming_the_field() {
         let yaml = format!(
             "provider:\n  kind: split\n  skill:\n    kind: command\n    command: [{echo}]\n{skill_label}{judges}task: go\n"
         );
-        let config = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("panel-bad-{name}.yaml"));
+        let config = scratch_dir().join(format!("panel-bad-{name}.yaml"));
         std::fs::write(&config, yaml).unwrap();
         let output = Command::new(onejudge_bin())
             .args(["run", config.to_str().unwrap()])
@@ -2875,7 +3019,7 @@ fn binary_run_hands_the_worker_llmlints_report_under_its_header_and_composes_its
     // re-judge is the conjunction (true), and every `lint` run's argv is exactly
     // what the contract spells.
     let echo = serde_json::to_string(&echo_bin()).unwrap();
-    let config = Path::new(env!("CARGO_TARGET_TMPDIR")).join("llmlint-reviewer.yaml");
+    let config = scratch_dir().join("llmlint-reviewer.yaml");
     std::fs::write(
         &config,
         llmlint_panel_yaml(
@@ -3033,7 +3177,7 @@ fn binary_text_output_prints_the_llmlint_history_command_under_each_llmlint_deci
     // <run_id>` on the line under it, tied to the turn it decided on — and no
     // such line under the reviewer's.
     let echo = serde_json::to_string(&echo_bin()).unwrap();
-    let config = Path::new(env!("CARGO_TARGET_TMPDIR")).join("llmlint-human.yaml");
+    let config = scratch_dir().join("llmlint-human.yaml");
     std::fs::write(
         &config,
         llmlint_panel_yaml(
@@ -3078,7 +3222,7 @@ fn binary_run_stacks_an_llm_judge_on_an_llmlint_judge_and_hands_the_worker_only_
     // judge and `continue` for the other on that turn; and the numeric eval and
     // assessment the config also asks for are answered by the LLM judge alone.
     let oh = serde_json::to_string(&fake_oneharness_bin()).unwrap();
-    let config = Path::new(env!("CARGO_TARGET_TMPDIR")).join("llmlint-stacked.yaml");
+    let config = scratch_dir().join("llmlint-stacked.yaml");
     std::fs::write(
         &config,
         llmlint_panel_yaml(
@@ -3168,7 +3312,7 @@ fn an_absent_llmlint_is_a_config_error_when_the_run_builds_its_provider() {
     assert!(failure.judge_decisions.is_empty());
     assert!(!skill_log.exists(), "the agent never ran a turn");
 
-    let config = Path::new(env!("CARGO_TARGET_TMPDIR")).join("llmlint-absent.yaml");
+    let config = scratch_dir().join("llmlint-absent.yaml");
     std::fs::write(&config, &yaml).unwrap();
     let output = Command::new(onejudge_bin())
         .args(["run", config.to_str().unwrap()])
@@ -3269,8 +3413,7 @@ fn binary_refuses_llmlint_anywhere_but_a_judge_entry_and_every_foreign_field() {
         ),
     ];
     for (name, provider, needle) in cases {
-        let config =
-            Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("llmlint-bad-{name}.yaml"));
+        let config = scratch_dir().join(format!("llmlint-bad-{name}.yaml"));
         std::fs::write(&config, format!("{provider}task: go\n")).unwrap();
         let output = Command::new(onejudge_bin())
             .args(["run", config.to_str().unwrap()])
@@ -3373,7 +3516,7 @@ fn a_single_judge_config_runs_exactly_as_the_released_0_8_1_did() {
     let yaml = template
         .replace("{{ECHO}}", &echo)
         .replace("{{RECORD}}", &record.display().to_string());
-    let config = Path::new(env!("CARGO_TARGET_TMPDIR")).join("single-judge-baseline.yaml");
+    let config = scratch_dir().join("single-judge-baseline.yaml");
     std::fs::write(&config, yaml).unwrap();
 
     let output = Command::new(onejudge_bin())
@@ -3453,7 +3596,7 @@ fn a_single_judge_controlled_config_runs_as_0_8_1_did_except_the_supervisor_addr
         .replace("{{AGENT_STORE}}", agent_store.to_str().unwrap())
         .replace("{{JUDGE_STORE}}", judge_store.to_str().unwrap())
         .replace("{{RECORD}}", record.to_str().unwrap());
-    let config = Path::new(env!("CARGO_TARGET_TMPDIR")).join("single-judge-control.yaml");
+    let config = scratch_dir().join("single-judge-control.yaml");
     std::fs::write(&config, yaml).unwrap();
 
     let output = Command::new(onejudge_bin())
@@ -3636,7 +3779,7 @@ fn binary_asks_the_spawned_oneharness_for_its_json_report_by_name() {
     // `--format json` rather than relying on the default. Driven through the real
     // binary at the spawning seam (`bin:`): both parties record the argv the
     // double was spawned with, and the run still reads the report it answered.
-    let dir = Path::new(env!("CARGO_TARGET_TMPDIR"));
+    let dir = &scratch_dir();
     let agent_log = dir.join("format-json-agent.argv");
     let judge_log = dir.join("format-json-judge.argv");
     let _ = std::fs::remove_file(&agent_log);
@@ -4373,8 +4516,7 @@ impl PostureRun {
     /// A fresh run directory named for `name` and `seam`, holding the worker's
     /// own discovered `oneharness.toml` and an empty user-config home.
     fn new(name: &str, seam: Seam) -> Self {
-        let dir =
-            Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("posture-{name}-{}", seam.name()));
+        let dir = scratch_dir().join(format!("posture-{name}-{}", seam.name()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("xdg")).unwrap();
         std::fs::create_dir_all(dir.join("state")).unwrap();
@@ -5517,7 +5659,7 @@ fn a_bare_oneharness_providers_judge_publishes_its_events_under_its_own_label() 
 /// The `onejudge watch` stream directory for one journey, with any earlier test
 /// run's streams cleared away.
 fn watch_dir(name: &str) -> std::path::PathBuf {
-    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("watch-dir-{name}"));
+    let dir = scratch_dir().join(format!("watch-dir-{name}"));
     let _ = std::fs::remove_dir_all(&dir);
     dir
 }
