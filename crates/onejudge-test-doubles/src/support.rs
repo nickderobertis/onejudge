@@ -10,24 +10,42 @@
 //! depend on rather than being copied into each.
 
 // llmlint: ignore-block[no_panics_on_recoverable_errors] test support linked only by the suites' test binaries of this `publish = false` crate: each panic is the failed assertion the calling test reports, naming what was missing, exactly as an `assert!` in the test would; a `Result` here would only move the same `unwrap` into every journey that calls it.
-/// `<target>/tmp`: the directory Cargo hands an integration test as
-/// `CARGO_TARGET_TMPDIR`, derived at run time because that variable is set only
-/// while compiling the test itself, never this library.
-fn target_tmpdir() -> std::path::PathBuf {
-    let exe = std::env::current_exe().expect("the running test binary has a path");
-    let target = exe
-        .ancestors()
-        .nth(3)
-        .unwrap_or_else(|| panic!("{} is not under <target>/<profile>/deps", exe.display()));
-    let dir = target.join("tmp");
-    std::fs::create_dir_all(&dir).unwrap_or_else(|e| panic!("creating {}: {e}", dir.display()));
-    dir
+/// This process's own directory under `<target>/tmp` — the directory Cargo hands
+/// an integration test as `CARGO_TARGET_TMPDIR`, derived at run time because that
+/// variable is set only while compiling the test itself, never this library.
+///
+/// Private to the process because concurrent runs of one test binary over one
+/// target dir otherwise share every scratch file: one process's hold marker
+/// satisfied another's wait for its own turn to open, and each removed the
+/// other's files as "an earlier run's". The leaf is the pid plus the time the
+/// process first asked, so a reused pid never lands in a dead process's
+/// directory, and nothing ever removes a directory it did not create.
+pub fn scratch_dir() -> std::path::PathBuf {
+    static DIR: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+    DIR.get_or_init(|| {
+        let exe = std::env::current_exe().expect("the running test binary has a path");
+        let target = exe
+            .ancestors()
+            .nth(3)
+            .unwrap_or_else(|| panic!("{} is not under <target>/<profile>/deps", exe.display()));
+        let since_epoch = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("the clock is after 1970");
+        let dir = target.join("tmp").join(format!(
+            "p{}-{}",
+            std::process::id(),
+            since_epoch.as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap_or_else(|e| panic!("creating {}: {e}", dir.display()));
+        dir
+    })
+    .clone()
 }
 
-/// A unique path under the integration-test tmp dir, removed if it survived an
-/// earlier run.
+/// A unique path under this process's integration-test tmp dir, removed if it
+/// survived an earlier use in this process.
 pub fn scratch_path(name: &str) -> std::path::PathBuf {
-    let path = target_tmpdir().join(name);
+    let path = scratch_dir().join(name);
     let _ = std::fs::remove_file(&path);
     // …and the coverage marker published beside it, so an earlier run's marker can
     // never satisfy this run's `assert_profile_is_detached`.
