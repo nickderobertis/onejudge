@@ -72,16 +72,18 @@ const MIN_ONEHARNESS: &str = "0.30.0";
 const MIN_ONEHARNESS_REPORT_SCHEMA: &str = "0.15";
 
 /// The oldest `oneharness-core` this crate may be built against: the release
-/// that writes a redirect's replacement before the harness's stdin closes (and so
+/// that declares `[harness.codex] skip_git_repo_check`, without which every
+/// config onejudge reads with the linked loader refuses that key. From 0.33.1 it
+/// writes a redirect's replacement before the harness's stdin closes (and so
 /// before the interrupted turn can end),
 /// which the engine's `Interrupted` answer to a note relies on (`interrupt.rs`).
-/// Below it a redirected turn could finish unredirected, and below 0.30.0 the
+/// Below that a redirected turn could finish unredirected, and below 0.30.0 the
 /// lock fails to compile (`classify` names the `unsupported_input` kind). It
 /// also carries `EventSink::run_began` / `RunBegun`, the public event renderer,
 /// layered config list and per-run history pointer reader. The manifest requirement is held to it by
 /// the gate below.
 #[cfg(test)]
-const MIN_ONEHARNESS_CORE: &str = "0.33.1";
+const MIN_ONEHARNESS_CORE: &str = "0.34.0";
 
 /// Errors surfaced by the CLI. Config/validation problems are separated from IO
 /// and engine failures so the entrypoint can exit with a fitting code.
