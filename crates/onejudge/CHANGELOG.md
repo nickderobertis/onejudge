@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.23.5](https://github.com/nickderobertis/onejudge/compare/onejudge-v0.23.4...onejudge-v0.23.5) - 2026-11-18
+
+### Fixed
+
+- *(deps)* link the oneharness-core whose Codex config can skip the git-repository check ([#255](https://github.com/nickderobertis/onejudge/pull/255))
+
 ## [0.23.4](https://github.com/nickderobertis/onejudge/compare/onejudge-v0.23.3...onejudge-v0.23.4) - 2026-11-16
 
 ### Fixed
