@@ -1643,6 +1643,32 @@ mod tests {
     }
 
     /// The `oneharness-core` requirement as the workspace manifest states it.
+    #[test]
+    fn the_lock_resolves_exactly_one_oneharness_core() {
+        // The test doubles pin the `oneharness` CLI crate exactly, and it shares
+        // no types with the core this workspace requires, so a stale pin still
+        // compiles: it resolves a second, older core and the spawned seam's double
+        // quietly runs it. Only the lock shows that.
+        let lock = include_str!("../../../../Cargo.lock");
+        let cores: Vec<&str> = lock
+            .split("[[package]]")
+            .filter(|package| package.contains("\nname = \"oneharness-core\"\n"))
+            .filter_map(|package| {
+                package
+                    .lines()
+                    .find_map(|line| line.strip_prefix("version = "))
+                    .map(|version| version.trim_matches('"'))
+            })
+            .collect();
+        let pinned = pinned_oneharness_core();
+        assert!(
+            cores.len() == 1 && version_parts(cores[0]) >= version_parts(&pinned),
+            "Cargo.lock resolves oneharness-core {cores:?}, not one release at or above the \
+             {pinned} the workspace requires; move `oneharness` in \
+             crates/onejudge-test-doubles/Cargo.toml to the release that requires it"
+        );
+    }
+
     fn pinned_oneharness_core() -> String {
         include_str!("../../../../Cargo.toml")
             .lines()
