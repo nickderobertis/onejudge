@@ -5290,6 +5290,55 @@ fn an_oneharness_mode_override_in_the_environment_beats_the_judges_config() {
 }
 
 #[test]
+fn worker_and_judge_configs_carrying_codex_skip_git_repo_check_load_on_both_seams() {
+    // `[harness.codex] skip_git_repo_check` is a setting of the linked
+    // oneharness-core, which refuses a key it does not declare. Both sides'
+    // configs are read with that core's `load_layers` — the worker's when its
+    // turn runs, the judge's when onejudge resolves its posture — so a core
+    // without the setting refuses this run as an `invalid config file` naming
+    // the `unknown field`.
+    const CODEX: &str = "\n[harness.codex]\nskip_git_repo_check = true\n";
+    for seam in Seam::BOTH {
+        let run = PostureRun::new("codex-skip-git-repo-check", seam);
+        let worker = run.dir.join("worker.toml");
+        std::fs::write(&worker, format!("{}{CODEX}", harness_toml(&run.dir, ""))).unwrap();
+        let judge = run.dir.join("judge.toml");
+        std::fs::write(&judge, format!("{}{CODEX}", harness_toml(&run.dir, ""))).unwrap();
+        let provider = format!(
+            "provider:\n  kind: split\n  skill:\n    kind: oneharness\n{}    worker_config: {}\n  \
+             judges:\n    - kind: oneharness\n{}      {}\n",
+            seam.bin_line(4),
+            serde_json::to_string(&worker.display().to_string()).unwrap(),
+            seam.bin_line(6),
+            judge_config_line(&judge),
+        );
+        let outcome = run.run(&provider, "", &[]);
+        assert!(
+            !outcome
+                .stderr
+                .contains("unknown field `skip_git_repo_check`"),
+            "{seam:?}: {}",
+            outcome.stderr
+        );
+        assert_eq!(outcome.code, Some(0), "{seam:?}: {}", outcome.stderr);
+        let report: serde_json::Value = serde_json::from_str(&outcome.stdout).unwrap();
+        assert_eq!(
+            report["completion_reason"], "evaluated",
+            "{seam:?}: {report}"
+        );
+
+        // The worker ran, and every evaluator call ran under the read-only mode
+        // onejudge's defaults set beneath the judge's config, which names none.
+        assert!(!outcome.harness.is_empty(), "{seam:?}");
+        let posture = &outcome.decision("oneharness")["posture"];
+        assert_eq!(posture["mode"], "read-only", "{seam:?}: {posture}");
+        assert_defaults_file(&posture["source"]);
+        let files = posture["config_files"].as_array().unwrap();
+        assert_same_file(files.last().unwrap(), &judge);
+    }
+}
+
+#[test]
 fn with_no_judge_config_the_discovered_files_follow_the_defaults() {
     // No `judge_config:` and no `oneharness.judge.toml` in the working directory:
     // the judge runs under the defaults, then the user file, then the project

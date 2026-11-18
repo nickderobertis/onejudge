@@ -510,6 +510,27 @@ mod tests {
     }
 
     #[test]
+    fn a_judge_config_carrying_codex_skip_git_repo_check_resolves_read_only() {
+        // The linked core refuses a key it does not declare, so this setting
+        // resolves only once onejudge links a core that carries it.
+        let dir = scratch("codex-skip-git-repo-check");
+        let judge = dir.join("judge.toml");
+        std::fs::write(&judge, "[harness.codex]\nskip_git_repo_check = true\n").unwrap();
+        let configs = evaluator_configs(Some(&judge), &dir).unwrap();
+        let posture = resolve(&configs, &dir).unwrap();
+        assert_eq!(posture.mode, "read-only");
+        assert_eq!(
+            posture.source,
+            defaults_file().unwrap().display().to_string()
+        );
+        assert!(
+            posture.config_files.contains(&judge.display().to_string()),
+            "{:?}",
+            posture.config_files
+        );
+    }
+
+    #[test]
     fn a_judge_config_that_sets_a_mode_overrides_the_defaults() {
         let dir = scratch("auto");
         let judge = dir.join("judge.toml");
